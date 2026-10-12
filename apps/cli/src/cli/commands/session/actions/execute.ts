@@ -4,14 +4,18 @@ import { randomUUID } from 'node:crypto';
 import type { StoredCredentials } from '@/persistence';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { enrichCliActionApprovalContext } from '@/session/actions/enrichCliActionApprovalContext';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { wantsJson, printJsonEnvelope, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { hasFlag, readCommandPositionals, readFlagValue, readRawFlagValue } from '@/cli/commands/shared/argvFlags';
 import { SESSION_HELP_LINES } from '@/cli/commands/session/shared/sessionCommandUsage';
 import { assertSessionCommandArguments } from '@/cli/commands/session/shared/assertSessionCommandArguments';
 import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import type { ActionId } from '@happier-dev/protocol';
-import { withResolvedSessionInput } from './withResolvedSessionInput';
+import type { ActionId, ActionExecutorContext } from '@happier-dev/protocol';
+import { getActionContextualDefaults } from '@happier-dev/protocol/actions/actionSpecs';
 import { ensureCliActionPolicySettings } from '@/session/actions/ensureCliActionPolicySettings';
 import { configuration } from '@/configuration';
 import {
@@ -23,6 +27,18 @@ import { cmd, fail } from '@happier-dev/cli-common/output';
 
 type CliActionExecutorLike = Pick<ReturnType<typeof createCliActionExecutor>, 'execute'>;
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutor>[0];
+
+function withResolvedSessionInput(actionId: string, input: unknown, sessionId: string): unknown {
+  if (
+    getActionContextualDefaults(actionId, input)?.sessionId !== 'current_session'
+    || !input
+    || typeof input !== 'object'
+    || Array.isArray(input)
+  ) {
+    return input;
+  }
+  return { ...input, sessionId };
+}
 
 function parseInputJsonOrThrow(raw: string | null): unknown {
   const trimmed = (raw ?? '').trim();
@@ -77,7 +93,7 @@ export async function cmdSessionActionsExecute(
   if (actionRequestId && !ExternalActionRequestIdV1Schema.safeParse(actionRequestId).success) {
     throw new Error('Invalid --action-request-id.');
   }
-  const effectiveActionRequestId = actionRequestId || (actionId === 'session.spawn_new' ? randomUUID() : '');
+  const effectiveActionRequestId = actionRequestId || randomUUID();
   const resumeActionRequest = hasFlag(argv, '--resume-action-request');
   if (resumeActionRequest && !actionRequestId) {
     throw new Error('Invalid --resume-action-request without --action-request-id.');
@@ -104,6 +120,7 @@ export async function cmdSessionActionsExecute(
   const usesApiToken = credentials.credentialProvenance === 'api_token';
   let sessionId: string;
   let executor: CliActionExecutorLike;
+  let approvalContext: ActionExecutorContext = { serverId };
   if (usesApiToken) {
     // A PAT intentionally carries no Account E2EE material. Resolve only the
     // selector through the public Action transport, then let the daemon that
@@ -157,6 +174,28 @@ export async function cmdSessionActionsExecute(
       throw new Error(sessionTarget.code);
     }
     sessionId = sessionTarget.sessionId;
+    const locality = readSessionOwnerLocality({
+      metadata: tryDecryptSessionOwnerMetadataView({ credentials,
+        accountEncryptionMode: sessionTarget.accountEncryptionCurrentness.mode,
+        rawSession: sessionTarget.rawSession }),
+      rawSession: sessionTarget.rawSession,
+    });
+    approvalContext = await enrichCliActionApprovalContext({
+      context: approvalContext,
+      machineId: locality?.machineId,
+      fixedServerId: serverId,
+      resolveServerFeaturesSnapshot: async () => serverFeaturesSnapshot,
+    });
+    const accountServerActionDeps = createAccountServerActionDeps({
+      credentials, token: credentials.token, serverId, serverHttpBaseUrl,
+      resolveServerFeaturesSnapshot: () => serverFeaturesSnapshot,
+    });
+    const isApprovalExecutionOriginCurrent = locality?.machineId
+      ? createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
+          credentials, machineId: locality.machineId, serverId, serverApiUrl: serverHttpBaseUrl,
+          resolveServerFeaturesSnapshot: () => serverFeaturesSnapshot,
+        })
+      : undefined;
     const executorParams: CliActionExecutorParams = sessionTarget.mode === 'plain'
       ? {
           token: credentials.token,
@@ -178,7 +217,7 @@ export async function cmdSessionActionsExecute(
           mode: 'e2ee',
           rawSession: sessionTarget.rawSession,
         };
-    executor = createCliActionExecutor(executorParams);
+    executor = createCliActionExecutor({ ...executorParams, accountServerActionDeps, isApprovalExecutionOriginCurrent });
   }
   const input = withResolvedSessionInput(
     actionId,
@@ -189,6 +228,7 @@ export async function cmdSessionActionsExecute(
     actionId as ActionId,
     input,
     {
+      ...approvalContext,
       defaultSessionId: sessionId,
       surface: 'cli',
       ...(effectiveActionRequestId ? { actionRequestId: effectiveActionRequestId } : {}),

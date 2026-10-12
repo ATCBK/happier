@@ -33,6 +33,7 @@ import {
   type ConnectedAccountDaemonClient,
 } from './connect/connectedAccountDaemonClient';
 import { parseConnectArgs, type ConnectParsedOptions } from './connect/parseConnectArgs';
+import { resolveConnectNativeImportIntent } from './connect/resolveConnectNativeImportIntent';
 
 type AttemptResponse = Awaited<
   ReturnType<ConnectedAccountDaemonClient['authenticate']>
@@ -199,6 +200,7 @@ function showConnectHelp(targets: readonly ConnectTarget[]): void {
       `  ${cmd('happier connect status')}                      Show connection status`,
       `  ${cmd('happier connect <service> --account <id>')}    Reconnect an exact account`,
       `  ${cmd('happier connect <service> --mode <mode>')}     Select an authentication mode`,
+      `  ${cmd('happier connect <service> --import --source <id>')} Import a native login on this machine`,
       `  ${cmd('happier connect <service> --oauth')}           Select authorization-code OAuth`,
       `  ${cmd('happier connect <service> --device')}          Select device-code OAuth`,
       `  ${cmd('happier connect <service> --token')}           Select the built-in token mode`,
@@ -210,6 +212,7 @@ function showConnectHelp(targets: readonly ConnectTarget[]): void {
         `Authenticate with Happier first using ${cmd('happier auth login')}`,
         'Authentication state, PKCE, credentials, and settlement stay in the selected daemon',
         'External services use the unambiguous <pluginId>/<localId> command form',
+        'Native import creates a host-owned account; name it afterward in connected-account settings',
       ]),
       '',
     ].join('\n'),
@@ -547,12 +550,14 @@ function controlFailureCode(response: ControlResponse): string {
     : `connected_account_control_${response.status}_unexpected`;
 }
 
-async function continueAuthentication(params: Readonly<{
+export async function continueConnectedAccountAuthentication(params: Readonly<{
   client: ConnectedAccountDaemonClient;
   described: DescribedService;
   intent: AuthenticationIntent;
   initial: AttemptResponse;
   options: ConnectParsedOptions;
+  nativeImportFields?: Readonly<{ source: string }>;
+  signal?: AbortSignal;
 }>): Promise<Extract<AttemptResponse, { status: 'connected' }>> {
   const startedAt = Date.now();
   const timeoutMs = (params.options.timeoutSeconds ?? 10 * 60) * 1000;
@@ -588,6 +593,7 @@ async function continueAuthentication(params: Readonly<{
 
   try {
     for (let step = 0; step < 1_000; step += 1) {
+      params.signal?.throwIfAborted();
       if (Date.now() - startedAt > timeoutMs) {
         if ('attemptId' in response && response.attemptId) {
           await params.client
@@ -613,7 +619,7 @@ async function continueAuthentication(params: Readonly<{
           response = await params.client.authenticate({
             operation: 'submitManual',
             attemptId: response.attemptId,
-            fields: await promptManualFields(mode),
+            fields: params.nativeImportFields ?? await promptManualFields(mode),
           });
           break;
         }
@@ -634,7 +640,7 @@ async function continueAuthentication(params: Readonly<{
           const allowRawAuthorizationCode = mode.allowRawAuthorizationCode === true && Boolean(expectedState);
           const pasted = await promptInput(allowRawAuthorizationCode
             ? 'Paste the authorization code, final redirect URL, or code#state: '
-            : 'Paste the final redirect URL: ');
+            : 'Paste the final redirect URL: ', { signal: params.signal });
           const parsed = parseOauthRedirectPaste({
             pasted,
             redirectUri: mode.callbackUrl ?? response.callbackUrl,
@@ -654,6 +660,7 @@ async function continueAuthentication(params: Readonly<{
               code: parsed.code,
               callbackUrl: response.callbackUrl,
               state,
+              ...(parsed.iss ? { iss: parsed.iss } : {}),
             },
           });
           break;
@@ -763,6 +770,9 @@ async function continueAuthentication(params: Readonly<{
     }
     throw new Error('Connected-account authentication exceeded its operation bound.');
   } catch (error) {
+    if (params.signal?.aborted && 'attemptId' in response && response.attemptId) {
+      await params.client.authenticate({ operation: 'cancel', attemptId: response.attemptId }).catch(() => undefined);
+    }
     if (waiting) {
       waiting = false;
       steps.stop('x', 'Waiting for authorization');
@@ -819,6 +829,7 @@ async function handleConnectTarget(
   );
   const client = await createDaemonClient(signal);
   const described = await describeService(client, target);
+  const nativeImport = options.import ? resolveConnectNativeImportIntent(described.descriptor.authentication.modes, options.source) : null;
   const accountId =
     options.accountId ??
     (options.profileId !== 'default' ? options.profileId : null);
@@ -833,7 +844,7 @@ async function handleConnectTarget(
     : {
         kind: 'connect',
         service: target.service,
-        modeId: modeSelectedByFlags(described, target, options).id,
+        modeId: nativeImport?.modeId ?? modeSelectedByFlags(described, target, options).id,
       };
   const initial =
     intent.kind === 'reconnect'
@@ -846,12 +857,14 @@ async function handleConnectTarget(
           service: intent.service,
           modeId: intent.modeId,
         });
-  const connected = await continueAuthentication({
+  const connected = await continueConnectedAccountAuthentication({
     client,
     described,
     intent,
     initial,
     options,
+    ...(signal ? { signal } : {}),
+    ...(nativeImport ? { nativeImportFields: nativeImport.fields } : {}),
   });
   console.log(
     ok(

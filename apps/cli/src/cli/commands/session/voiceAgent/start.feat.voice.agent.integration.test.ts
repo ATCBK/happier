@@ -5,6 +5,7 @@ import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 
 import {
+  AccountEncryptionCurrentnessResponseSchema,
   deriveBoxPublicKeyFromSeed,
   sealEncryptedDataKeyEnvelopeV1,
 } from '@happier-dev/protocol';
@@ -47,6 +48,15 @@ describe('happier session voice-agent start (integration)', () => {
 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+      if (req.method === 'GET' && url.pathname === '/v1/account/encryption/currentness') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(AccountEncryptionCurrentnessResponseSchema.parse({
+          mode: 'e2ee', version: 1, signingKeyFingerprint: null,
+          contentKeyFingerprint: null, updatedAt: 1,
+        })));
+        return;
+      }
       if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}`) {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
@@ -93,6 +103,7 @@ describe('happier session voice-agent start (integration)', () => {
 
     let callIdx = 0;
     const socket = createApiSessionSocketStub({
+      connected: true,
       emit: (event: string, args: unknown[]) => {
         const [data, cb] = args as [any, ((value: unknown) => void) | undefined];
         if (event !== SOCKET_RPC_EVENTS.CALL) return;
@@ -163,7 +174,7 @@ describe('happier session voice-agent start (integration)', () => {
       );
 
       const parsed = output.json();
-      expect(parsed.ok).toBe(true);
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       expect(parsed.kind).toBe('session_voice_agent_start');
       expect(parsed.data?.sessionId).toBe('sess_integration_voice_agent_start_123');
       expect(parsed.data?.results?.length).toBe(1);

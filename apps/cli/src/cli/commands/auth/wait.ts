@@ -353,7 +353,6 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
       }
       await writeJsonStdout({
         success: true,
-        token,
         encryptionType: opened.type,
         pairingAuthentication: 'v3' as const,
         machineId,

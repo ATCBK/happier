@@ -5,11 +5,12 @@ import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/ac
 import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
-import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, resolveActionExecutionPlacementForInput, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ActionDefinitionV1, ActionExecuteFailure, ActionExecuteResult, SignedRootActionId } from '@happier-dev/protocol';
 import { FilesystemUploadInputSchema, FilesystemDownloadInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createCredentialedFilesystemTransferClient } from '@/machines/transfer/createCredentialedFilesystemTransferClient';
+import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 import {
@@ -438,6 +439,7 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
     ...(fixedServer ? { serverId: fixedServer.serverId } : {}),
     ...(serverIdentityId ? { serverIdentityId } : {}) };
   let invocation: Readonly<{ actionId: SignedRootActionId; input: unknown; requestId: string }>;
+  let contributedExecutionPlacement: ActionDefinitionV1['executionPlacement'];
   if (contributed) {
     const discovery = await executor.execute(
       'action.spec.get',
@@ -456,6 +458,7 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
       input = resolveInvokeActionInput(args, compiled);
     } else {
       const definition = readDiscoveredActionDefinition(discovery, requested);
+      contributedExecutionPlacement = definition.executionPlacement;
       compiled = compileDiscoveredActionFields(definition);
       if (hasInvokeOption(args, ...ACTION_CLI_HELP_FLAGS)) {
         renderInvokeDefinitionHelp(definition, compiled);
@@ -525,6 +528,10 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
   } else {
     data = unwrapOuterActionResult(await executor.execute(invocation.actionId, resolvedInput, invocationOptions));
   }
+  if (await tryHandleApprovalRequestCreated({ envelopeKind: 'actions_invoke', json, result: data,
+    executionPlacement: localInvocation ? resolveActionExecutionPlacementForInput(
+      getActionSpec(localInvocation.actionId), resolvedInput) : contributedExecutionPlacement,
+  })) return;
   if (json) await printJsonEnvelope({ ok: true, kind: 'actions_invoke', data }); else await writeJsonStdout(data, { pretty: true });
 }
 

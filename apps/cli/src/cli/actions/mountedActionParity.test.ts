@@ -13,6 +13,17 @@ const tab = { ...canvas, tabId: 'tab-a' };
 const composer = { scope, ref: { kind: 'newSession', instanceId: 'composer-a' } };
 const position = { anchorId: null, placement: 'before' };
 const cases = [
+  { id: 'session.work.get', input: { sessionId: 'session-a' }, result: { status: 'ready', sessionId: 'session-a',
+    summary: { outstanding: 0, needsYou: 0, stalled: 0, sessions: 0, runs: 0 }, items: [],
+    managedRuns: { phase: 'loaded', refreshFailed: false } } },
+  { id: 'inbox.get', input: {}, result: { status: 'ready', groups: [], approvalIds: [], usageNoticeIds: [],
+    friendRequestIds: [], automationRunIds: [], readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false } },
+  { id: 'inbox.mark_all_read', input: { targets: [{ serverId: 'home-a', sessionId: 'session-a' }] },
+    result: { results: [{ serverId: 'home-a', sessionId: 'session-a', status: 'succeeded' }] } },
+  { id: 'session.draft.append', input: { sessionId: 'session-a', text: 'Follow-up' },
+    result: { status: 'appended', sessionId: 'session-a', createdAtMs: 10 } },
+  { id: 'session.draft.delete', input: { draftId: '00000000-0000-4000-8000-000000000001' }, result: { status: 'deleted' } },
+  { id: 'session.draft.directory.set', input: { ref: composer.ref, directory: { kind: 'path', path: '/checkout' } }, result: { status: 'applied' } },
   { id: 'session.canvas.tabs.list', input: canvas, result: { status: 'listed', focusedLeafId: null, maximizedLeafId: null, leaves: [], tabs: [] } },
   { id: 'session.canvas.tabs.open', input: { ...canvas, sessionId: 'session-a', leafId: 'leaf-a' }, result: { status: 'applied' } },
   { id: 'session.canvas.tabs.activate', input: tab, result: { status: 'applied' } },
@@ -28,6 +39,10 @@ const cases = [
   { id: 'composer.attachments.pick', input: composer, result: { status: 'opened' } },
   { id: 'repository.upload.pick', input: { scope, workspace: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, destinationDir: 'src', kind: 'files' }, result: { status: 'requested' } },
   { id: 'session.presentation.apply', input: { intent: { kind: 'companion.show' } }, result: { status: 'applied', revision: 'client-a:2' } },
+  { id: 'machines.metadata.update', input: { serverId: 'home-a', machineId: 'machine-a', expectedVersion: 2,
+    patch: { displayName: 'Desk' } }, result: { version: 3 } },
+  { id: 'machines.remove', input: { serverId: 'home-a', machineId: 'machine-a' },
+    result: { ok: true, machineAlreadyRevoked: false, providerCleanup: 'complete' } },
 ] as const satisfies readonly { id: ActionId; input: unknown; result: unknown }[];
 
 function cliInput(actionId: ActionId, input: unknown) {
@@ -88,7 +103,8 @@ describe('mounted Action CLI parity', () => {
     });
     const expected = id === 'session.presentation.apply'
       ? { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${id}` }
-      : id === 'workflow.authoring.conversation.bind'
+      : id === 'workflow.authoring.conversation.bind' || id === 'session.work.get' || id === 'inbox.get'
+        || id === 'session.draft.append' || id === 'session.draft.delete' || id === 'session.draft.directory.set'
         ? { ok: true, result: { status: 'unavailable' } }
       : { ok: false, errorCode: 'unavailable', error: 'noClient' };
     await expect(executor.execute(id, normalizedInput, context)).resolves.toEqual(expected);

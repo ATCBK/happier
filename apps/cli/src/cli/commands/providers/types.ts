@@ -2,6 +2,7 @@ import type {
   ProviderCatalogRefreshResult,
 } from '@/providers/probe/catalog';
 import type { SavedSecret } from '@happier-dev/protocol';
+import type { ProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import type {
   DaemonProviderModelSettingsMutationRequestV1,
   DaemonProviderModelSettingsMutationResponseV1,
@@ -26,15 +27,18 @@ export type ProviderCliSnapshot = Readonly<{
 
 export type ProviderCliConnectionDependencies = Pick<
   ReturnType<typeof createProviderConnectionService>,
-  | 'describe'
-  | 'previewCreateContribution'
   | 'create'
   | 'update'
   | 'setEndpointOverride'
   | 'setEnabled'
   | 'bindSecret'
   | 'delete'
->;
+> & Readonly<{
+  describe(input: Extract<ProviderActionRequestV1, { actionId: 'providers.connections.describe' }>['input']):
+    ReturnType<ReturnType<typeof createProviderConnectionService>['describe']>;
+  previewCreateContribution(input: Omit<Parameters<ReturnType<typeof createProviderConnectionService>['previewCreateContribution']>[0], 'machineId'>
+    & Readonly<{ machineId?: string }>): ReturnType<ReturnType<typeof createProviderConnectionService>['previewCreateContribution']>;
+}>;
 
 export type ProviderCliDependencies = Readonly<{
   assertProvidersFeatureEnabled(): void;

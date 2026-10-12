@@ -96,6 +96,7 @@ vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', () =
             modes: [{
               id: 'oauth',
               kind: 'oauthAuthorizationCode',
+              callbackUrl: 'http://127.0.0.1:1455/callback',
               scopes: ['openid'],
               pkce: 'required',
               outcomeReconciliation: 'none',
@@ -159,6 +160,7 @@ function describedCodex(
         modes: [{
           id: 'oauth',
           kind: 'oauthAuthorizationCode',
+          callbackUrl: 'http://127.0.0.1:1455/callback',
           scopes: ['openid'],
           pkce: 'required',
           outcomeReconciliation,

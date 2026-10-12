@@ -16,6 +16,7 @@ const EXAMPLES = [
   { label: 'happier --js-runtime bun', description: 'Use bun instead of node to spawn JavaScript-backed CLIs' },
   { label: 'happier auth login --force', description: 'Authenticate' },
   { label: 'happier profiles list', description: 'List available Agent profiles' },
+  { label: 'happier spawn --title "My session" --prompt "Hello"', description: 'Create a scripted session' },
   { label: 'happier doctor', description: 'Run diagnostics' },
 ] as const;
 

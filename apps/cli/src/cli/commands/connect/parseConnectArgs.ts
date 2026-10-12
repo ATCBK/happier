@@ -10,6 +10,8 @@ export type ConnectParsedOptions = Readonly<{
   oauth: boolean;
   apiKey: boolean;
   token?: boolean;
+  import?: boolean;
+  source?: string | null;
 }>;
 
 export function parseConnectArgs(args: ReadonlyArray<string>): Readonly<{
@@ -25,6 +27,13 @@ export function parseConnectArgs(args: ReadonlyArray<string>): Readonly<{
   const oauth = args.includes('--oauth');
   const apiKey = args.includes('--api-key') || args.includes('--api_key');
   const token = args.includes('--token');
+  const nativeImport = args.includes('--import');
+  const sourceFlagIdx = args.findIndex(arg => arg === '--source');
+  const source = sourceFlagIdx === -1 ? null : String(args[sourceFlagIdx + 1] ?? '').trim();
+  if (sourceFlagIdx !== -1 && (!source || source.startsWith('--'))) throw new Error('Provide a native source after --source.');
+  if (sourceFlagIdx !== -1 && !nativeImport) throw new Error('--source requires --import.');
+  if (nativeImport && args.some(arg => ['--paste', '--device', '--no-open', '--setup-token', '--setup_token', '--oauth', '--api-key', '--api_key', '--token', '--timeout', '--mode'].includes(arg))) throw new Error('Choose native import or an interactive authentication mode.');
+  if (nativeImport && args.some(arg => arg === '--account' || arg === '--profile')) throw new Error('Native import creates a fresh host-owned account. Choose its name in connected-account settings afterward; omit --account and --profile.');
 
   const profileFlagIdx = args.findIndex((a) => a === '--profile');
   const profileId = profileFlagIdx !== -1 ? String(args[profileFlagIdx + 1] ?? '').trim() : '';
@@ -50,12 +59,15 @@ export function parseConnectArgs(args: ReadonlyArray<string>): Readonly<{
     '--api-key',
     '--api_key',
     '--token',
+    '--import',
+    '--source',
     '--profile',
     '--account',
     '--mode',
     '--timeout',
   ]);
   const valuesConsumedByFlags = new Set<number>([
+    sourceFlagIdx !== -1 ? sourceFlagIdx + 1 : -1,
     profileFlagIdx !== -1 ? profileFlagIdx + 1 : -1,
     accountFlagIdx !== -1 ? accountFlagIdx + 1 : -1,
     modeFlagIdx !== -1 ? modeFlagIdx + 1 : -1,
@@ -83,6 +95,8 @@ export function parseConnectArgs(args: ReadonlyArray<string>): Readonly<{
       oauth,
       apiKey,
       token,
+      import: nativeImport,
+      source,
     },
   };
 }

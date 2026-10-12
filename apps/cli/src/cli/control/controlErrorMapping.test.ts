@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
 import { mapUnknownErrorToControlError } from './controlErrorMapping';
+import { ConnectedServicesDefaultUnavailableError } from '@/session/services/spawnConnectedServicesDefaults';
 
 describe('mapUnknownErrorToControlError', () => {
+  it('retains the typed missing capability error at the CLI output boundary', () => {
+    const error = Object.assign(new Error('Capability not found: missing'), { code: 'not_found' });
+    expect(mapUnknownErrorToControlError(error)).toMatchObject({ code: 'not_found', unexpected: false });
+  });
+  it('preserves unavailable connected account defaults as an expected domain refusal', () => {
+    expect(mapUnknownErrorToControlError(new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid')))
+      .toMatchObject({ code: 'connected_services_default_unavailable', unexpected: false });
+  });
   it('preserves an unavailable MCP catalog as an expected domain refusal', () => {
     // This shared boundary accepts unknown errors; reader/store production is
     // exercised through the real MCP command entrypoint owner tests.
     const error = Object.assign(new Error('MCP server catalog is unavailable'), { code: 'mcp_catalog_unavailable' });
     expect(mapUnknownErrorToControlError(error)).toMatchObject({ code: 'mcp_catalog_unavailable', unexpected: false });
+  });
+  it.each(['client_refused', 'no_machine_online', 'mcp_server_not_found'])('retains the MCP command domain refusal %s', code => {
+    expect(mapUnknownErrorToControlError(Object.assign(new Error('MCP command refused'), { code })))
+      .toMatchObject({ code, unexpected: false });
   });
 
   it('preserves an invalid MCP semantic mutation as an expected domain refusal', () => {

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   hasBackendTargetSelectionFromCsv,
   normalizeBackendTargetKeysFromCsv,
-  parseSingleBackendTargetFromFlag,
 } from './normalizeBackendTargetKeys';
 
 describe('normalizeBackendTargetKeysFromCsv', () => {
@@ -13,12 +12,8 @@ describe('normalizeBackendTargetKeysFromCsv', () => {
 
   it('routes provider shorthands with a settings backend to the concrete configured backend target', () => {
     expect(normalizeBackendTargetKeysFromCsv('antigravity')).toEqual([
-      'backend:antigravity:configured:antigravity',
+      'agent:happier.agent.custom-acp/custom-acp:definition:antigravity',
     ]);
-    expect(parseSingleBackendTargetFromFlag('antigravity')).toEqual({
-      kind: 'configuredAcpBackend',
-      backendId: 'antigravity',
-    });
   });
 
   it('preserves explicit V2 backend target keys', () => {

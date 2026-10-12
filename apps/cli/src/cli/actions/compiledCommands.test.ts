@@ -70,6 +70,51 @@ function compileFixture(cli: NonNullable<ActionSpec['cli']> = SEND_CLI, override
 }
 
 describe('compileActionCliCommands', () => {
+  it('parses contextual plugin origin discovery and addressed choices through the canonical commands', () => {
+    const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine', pluginId: 'acme.plugin',
+      sourceCustody: { kind: 'development', registeredRootId: 'root' } } };
+    const inputs = {
+      list: { pluginId: 'acme.plugin', contextual: true },
+      set: { pluginId: 'acme.plugin', contextualTarget: { commandId: 'mounted-command' }, origin },
+      clear: { pluginId: 'acme.plugin', contextualTarget: { commandId: 'mounted-command' } },
+    };
+    const commands = listCompiledActionCliCommands();
+    for (const verb of ['list', 'set', 'clear'] as const) {
+      const path = ['plugins', 'execution-origin', verb];
+      const command = findCompiledActionCliCommand(path, commands);
+      expect(command?.actionId).toBe(`plugins.execution_origin.${verb}`);
+      if (!command) throw new Error('Missing contextual origin command');
+      const result = parseActionCliCommandInput(command, [...path, '--input-json', JSON.stringify(inputs[verb])]);
+      expect(result).toMatchObject({ ok: true, canonicalBase: inputs[verb] });
+      expect(command.spec.inputSchema.safeParse(inputs[verb]).success).toBe(true);
+    }
+  });
+  it('compiles process commands and maps All processes to the revision-bound resources policy', () => {
+    const commands = listCompiledActionCliCommands();
+    const paths = [
+      ['list', 'machines.processes.list'], ['get', 'machines.processes.get'], ['check', 'machines.processes.check'],
+      ['stop', 'machines.processes.stop'], ['start-again', 'machines.processes.startAgain'],
+      ['kill', 'machines.processes.kill'], ['clean-up', 'machines.processes.leftBehind.cleanUp'],
+    ] as const;
+    for (const [leaf, actionId] of paths) {
+      const command = findCompiledActionCliCommand(['machines', 'processes', leaf], commands);
+      expect(command?.actionId).toBe(actionId);
+    }
+    const command = findCompiledActionCliCommand(['machines', 'processes', 'all'], commands)!;
+    expect(command.actionId).toBe('machines.resources.policy.set');
+    for (const [flag, visible] of [['--all-processes-visible', true], ['--no-all-processes-visible', false]] as const) {
+      const parsed = parseActionCliInput(command, ['--machine-id', 'machine-1', '--expected-revision', '7', flag]);
+      if (!parsed.ok) throw new Error(parsed.message);
+      const composed = composeActionCliInput({
+        parsed, canonicalSchema: command.spec.inputSchema, wholeInputSchema: command.wholeInputSchema,
+        callerSchema: command.callerSchema, bindInput: command.spec.cli?.bindInput,
+        context: { actionId: command.actionId, invocationId: 'projection-test', output: 'human' },
+      });
+      expect(composed).toMatchObject({ ok: true, input: {
+        machineId: 'machine-1', expectedRevision: 7, patch: { processes: { allProcessesVisible: visible } },
+      } });
+    }
+  });
   it('projects the declared detached Machine selector through the shared help, completion and argv policy', () => {
     const commands = listCompiledActionCliCommands();
     const command = findCompiledActionCliCommand(['session', 'run', 'start'], commands)!;

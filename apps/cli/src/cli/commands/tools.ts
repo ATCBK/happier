@@ -60,7 +60,7 @@ function resolveToolsCommandDeps(overrides?: Partial<ToolsCommandDeps>): ToolsCo
     initializeBackendApiContext,
     bootstrapAccountSettingsContext,
     listBuiltInHappierTools: async ({ surface, isActionEnabled, isServerFeatureEnabled, actionsSettings }) => {
-      const catalog = await readDaemonPluginCatalog().catch(() => ({
+      const catalog = await readDaemonPluginCatalog({ selection: 'tools' }).catch(() => ({
         kind: 'unavailable' as const,
         code: 'daemon_unavailable',
       }));

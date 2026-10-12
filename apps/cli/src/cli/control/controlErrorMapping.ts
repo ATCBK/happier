@@ -26,6 +26,10 @@ export function mapUnknownErrorToControlError(error: unknown): ControlCliMappedE
     || rawCode === 'machine_inventory_unavailable'
     || rawCode === 'server_identity_unavailable'
     || rawCode === 'mcp_catalog_unavailable'
+    || rawCode === 'client_refused'
+    || rawCode === 'no_machine_online'
+    || rawCode === 'mcp_server_not_found'
+    || rawCode === 'connected_services_default_unavailable'
     || rawCode === 'invalid-mutation'
   ) {
     return { code: rawCode, unexpected: false, ...(error instanceof Error && error.message ? { message: error.message } : {}) };

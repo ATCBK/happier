@@ -4,7 +4,8 @@ import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp
 import { readFlagValue } from '@/cli/commands/shared/argvFlags';
 import { printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
-import { resolveEffectiveMcpServersForDirectory } from '@/mcp/servers/resolveEffectiveMcpServersForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
+import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -48,11 +49,11 @@ export async function cmdMcpServersTest(
     const server = mcpSettings.servers.find((s) => s.id === serverRef || s.name === serverRef) ?? null;
     if (!server) throw new Error(`MCP server not found: ${serverRef}`);
 
-    const resolved = resolveEffectiveMcpServersForDirectory({
+    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
       settings: mcpSettings,
       machineId,
       directory,
-    });
+    }), directory);
     const item = resolved.serversByName[server.name];
     if (!item) throw new Error(`MCP server not enabled for this target: ${server.name}`);
     if (item.enabled !== true) throw new Error(`MCP server disabled for this target: ${server.name}`);

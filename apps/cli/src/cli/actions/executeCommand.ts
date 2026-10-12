@@ -114,7 +114,7 @@ function hasFlagBeforeTerminator(argv: readonly string[], flags: ReadonlySet<str
 }
 
 /** The exact Machine transport value, read without disturbing Action input. */
-function readTransportMachineId(command: CompiledActionCliCommand, argv: readonly string[]): string | null {
+export function readTransportMachineId(command: CompiledActionCliCommand, argv: readonly string[]): string | null {
   if (!command.routesByTransportMachineId) return null;
   let selected: string | null = null;
   for (let index = 0; index < argv.length; index += 1) {
@@ -159,7 +159,7 @@ function requestSignalForCommand(
  * `--` and everything after it survives, so a flag-looking literal message stays
  * a literal.
  */
-function stripTransportTokens(
+export function stripTransportTokens(
   command: CompiledActionCliCommand,
   tokens: readonly string[],
 ): readonly string[] {
@@ -280,6 +280,7 @@ export async function runCompiledActionCliCommand(params: Readonly<{
     context: {
       actionId: command.actionId,
       invocationId,
+      commandPath: command.path,
       output: json ? 'json' : 'human',
     },
   });
@@ -461,7 +462,8 @@ export async function runCompiledActionCliCommand(params: Readonly<{
   }
 
   const payload = unwrapCliActionSuccessPayload(normalized.data);
-  if (await tryHandleApprovalRequestCreated({ envelopeKind: kind, json, result: payload })) return;
+  if (await tryHandleApprovalRequestCreated({ envelopeKind: kind, json, result: payload,
+    executionPlacement: resolveActionExecutionPlacementForInput(command.spec, input) })) return;
   // The Action succeeded; the operation may still not have taken effect. The
   // presenter classifies that once, over the canonical payload, and the result
   // is reported with the same vocabulary as every other failure.

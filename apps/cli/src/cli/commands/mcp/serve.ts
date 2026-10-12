@@ -91,7 +91,7 @@ export async function runMcpServeCommand(
   const daemonCatalog = explicitServerSelection && !daemonControlTarget
     ? { kind: 'unavailable' as const, code: 'daemon_unavailable' }
     : await deps.readDaemonPluginCatalog?.(
-        daemonControlTarget ? { target: daemonControlTarget } : undefined,
+        { selection: 'tools', ...(daemonControlTarget ? { target: daemonControlTarget } : {}) },
       ).catch(() => ({
         kind: 'unavailable' as const,
         code: 'daemon_unavailable',

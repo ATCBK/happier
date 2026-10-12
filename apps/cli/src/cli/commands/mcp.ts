@@ -18,8 +18,8 @@ function printMcpUsage(): void {
   console.log('happier --server <saved-home> mcp serve [--session <session-id>]  # pin one Home for this process');
   console.log('happier mcp servers list [--dir <path>] [--json]');
   console.log('happier mcp servers add --name <name> --transport stdio --command <cmd> [--arg <arg>] [--json]');
-  console.log('happier mcp servers bind --mcp-server <name|id> --all-machines [--json]');
-  console.log('happier mcp servers unbind --binding-id <id> [--json]');
+  console.log('happier mcp on|off|inherit <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
+  console.log('happier mcp servers bind|unbind <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
   console.log('happier mcp servers detect --provider <provider-id> [--json]');
   console.log('happier mcp servers test --mcp-server <name|id> [--dir <path>] [--json]');
 }
@@ -27,8 +27,7 @@ function printMcpUsage(): void {
 function printMcpServersUsage(): void {
   console.log('happier mcp servers list [--dir <path>] [--json]');
   console.log('happier mcp servers add --name <name> --transport stdio --command <cmd> [--arg <arg>] [--json]');
-  console.log('happier mcp servers bind --mcp-server <name|id> --all-machines [--json]');
-  console.log('happier mcp servers unbind --binding-id <id> [--json]');
+  console.log('happier mcp servers bind|unbind <name...> [--everywhere | --machine <id> | --project <key>] [--agent <id>]');
   console.log('happier mcp servers detect --provider <provider-id> [--json]');
   console.log('happier mcp servers test --mcp-server <name|id> [--dir <path>] [--json]');
 }
@@ -42,8 +41,6 @@ function resolveCommandKind(args: readonly string[]): string {
   if (!sub) return 'mcp_servers_unknown';
   if (sub === 'list') return 'mcp_servers_list';
   if (sub === 'add') return 'mcp_servers_add';
-  if (sub === 'bind') return 'mcp_servers_bind';
-  if (sub === 'unbind') return 'mcp_servers_unbind';
   if (sub === 'detect') return 'mcp_servers_detect';
   if (sub === 'test') return 'mcp_servers_test';
   return `mcp_servers_${sub}`;

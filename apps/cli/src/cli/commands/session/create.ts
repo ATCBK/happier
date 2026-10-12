@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { HappierActionError } from '@happier-dev/sdk';
 import { randomUUID } from 'node:crypto';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol';
@@ -54,7 +55,8 @@ async function resolveSessionCreateConnectedServices(params: Readonly<{
         { surface: 'cli', defaultSessionId: null },
       ));
       if (!inventoryResult.ok) {
-        throw new Error(inventoryResult.errorMessage ?? inventoryResult.errorCode);
+        throw new HappierActionError(inventoryResult.errorCode,
+          inventoryResult.errorMessage ?? inventoryResult.errorCode, inventoryResult.details);
       }
       return inventoryResult.data ?? null;
     },

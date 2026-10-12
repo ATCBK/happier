@@ -462,6 +462,11 @@ export async function dispatchCli(params: Readonly<{
       if (await tryHandleTeamLogoFileCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
     }
 
+    if (subcommand === 'mcp') {
+      const { tryHandleMcpServerCliCommand } = await import('@/cli/actions/adapters/mcpServersArgv');
+      if (await tryHandleMcpServerCliCommand({ argv: args, ...(signal ? { signal } : {}) })) return;
+    }
+
     // An exact compiled Action leaf wins only once the one registry has resolved
     // its path owner; every other spelling under the same root — including
     // multi-step workflows and help — still reaches the dedicated root handler.

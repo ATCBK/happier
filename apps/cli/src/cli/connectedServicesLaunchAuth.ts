@@ -1,5 +1,6 @@
-import { ConnectedServiceBindingsV2IngressSchema, ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { ConnectedServiceBindingsV2IngressSchema, ConnectedServiceBindingsV2Schema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedServiceBindingSelectionV2, ConnectedServiceBindingsV2 } from '@happier-dev/protocol';
+import { ConnectedServicesDefaultUnavailableError } from '@/session/services/spawnConnectedServicesDefaults';
 
 export type ConnectedServicesLaunchAuthIntent =
   | Readonly<{ kind: 'default' }>
@@ -154,11 +155,15 @@ export function resolveConnectedServicesLaunchAuth(params: Readonly<{
   }
 
   const connectedIntent = params.intent;
+  // Normalize only the released built-in selector through the existing ingress
+  // owner. Unknown service ids remain exact selectors, never aliases.
+  const selectedServiceId = connectedIntent.serviceId === null ? null
+    : readBuiltInLegacyConnectedAccountServiceKeyIngress(connectedIntent.serviceId) ?? connectedIntent.serviceId;
   const supported = new Set(params.supportedServiceIds);
   const matches = readInventoryCandidates(params.inventory).filter((candidate) => (
     supported.has(candidate.serviceId)
     && candidate.id === connectedIntent.id
-    && (connectedIntent.serviceId === null || candidate.serviceId === connectedIntent.serviceId)
+    && (selectedServiceId === null || candidate.serviceId === selectedServiceId)
     && (connectedIntent.selection === null || candidate.selection === connectedIntent.selection)
   ));
   if (matches.length === 0) {
@@ -202,7 +207,7 @@ export async function resolveConnectedServicesLaunchAuthWithInventory(params: Re
 type ConnectedServicesLaunchDefaultDisposition =
   | Readonly<{ kind: 'connected'; bindings: ConnectedServiceBindingsV2 }>
   | Readonly<{ kind: 'native' }>
-  | Readonly<{ kind: 'unavailable'; reason: string }>;
+  | Readonly<{ kind: 'unavailable'; reason: ConstructorParameters<typeof ConnectedServicesDefaultUnavailableError>[0] }>;
 
 export async function resolveCliConnectedServicesLaunchBindings(params: Readonly<{
   authRaw: string | undefined;
@@ -228,7 +233,7 @@ export async function resolveCliConnectedServicesLaunchBindings(params: Readonly
   const intent = parseConnectedServicesLaunchAuth(params.authRaw ?? 'default');
   if (intent.kind === 'default') {
     if (params.defaultDisposition.kind === 'unavailable') {
-      throw new Error('connected_services_default_unavailable');
+      throw new ConnectedServicesDefaultUnavailableError(params.defaultDisposition.reason);
     }
     return params.defaultDisposition.kind === 'connected'
       ? params.defaultDisposition.bindings

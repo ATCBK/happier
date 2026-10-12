@@ -199,7 +199,7 @@ const staticCommandRegistryEntries: Readonly<Record<string, CommandRegistryEntry
   // Backwards-compatible plural alias; keep the singular command canonical in help.
   sessions: { handler: handleSessionCliCommand, surface: { allowTmux: false } },
   server: { handler: handleServerCliCommand, surface: { rootHelpLabel: 'happier server', rootHelpDescription: 'Manage Happier server profiles', allowTmux: false } },
-  attach: { handler: handleAttachCliCommand, surface: { allowTmux: false } },
+  attach: { handler: handleAttachCliCommand, surface: { rootHelpLabel: 'happier attach <session-id>', rootHelpDescription: 'Attach a terminal to a running session', allowTmux: false } },
   herdr: { handler: handleHerdrCliCommand, surface: { rootHelpLabel: 'happier herdr', rootHelpDescription: 'Open the Herdr terminal host', allowTmux: false } },
   logout: { handler: handleLogoutCliCommand, surface: { allowTmux: false } },
   'acp-catalog': { handler: handleConfiguredAcpCatalogCliCommand, surface: { allowTmux: false } },
@@ -238,8 +238,6 @@ const DEDICATED_STATIC_COMMAND_PATHS: readonly (readonly string[])[] = Object.fr
   Object.freeze(['session', 'run', 'action']),
   Object.freeze(['session', 'voice-agent', 'start']),
   Object.freeze(['session', 'voice_agent', 'start']),
-  Object.freeze(['workflow', 'definition', 'export']),
-  Object.freeze(['workflow', 'definition', 'import']),
 ]);
 
 export function assertComposedCommandPathsAreUnambiguous(
@@ -253,7 +251,10 @@ export function assertComposedCommandPathsAreUnambiguous(
 }
 
 function assertActionCommandPathsFitStaticRegistry(
-  commands: readonly CompiledActionCliCommand[],
+  commands: readonly Readonly<{
+    actionId: CompiledActionCliCommand['actionId'];
+    path: readonly string[];
+  }>[],
 ): void {
   const staticClaims: CliCommandPathClaim[] = Object.keys(staticCommandRegistryEntries)
     .filter((command) => (
@@ -277,11 +278,11 @@ function assertActionCommandPathsFitStaticRegistry(
     source: 'action',
     ownerId: command.actionId,
     path: command.path,
-    // Preview/execute-style members of one canonical Action family may extend
-    // their family's path. Unrelated Action ids still cannot claim a subtree.
+    // Friendly spellings of the same Action and preview/execute-style family
+    // members may extend a path owned by that Action.
     ...(commands.some((candidate) => (
       candidate !== command
-      && candidate.actionId.startsWith(`${command.actionId}.`)
+      && (candidate.actionId === command.actionId || candidate.actionId.startsWith(`${command.actionId}.`))
       && command.path.length < candidate.path.length
       && command.path.every((segment, index) => candidate.path[index] === segment)
     )) ? { allowsDescendants: true } : {}),
@@ -515,7 +516,12 @@ let actionCliRootsRegistered = false;
 async function ensureActionCliRootsRegistered(): Promise<void> {
   if (actionCliRootsRegistered) return;
   const { listActionCliCommandDeclarations } = await import('@happier-dev/protocol/actions/actionSpecs');
-  for (const { binding } of listActionCliCommandDeclarations()) {
+  const declarations = listActionCliCommandDeclarations();
+  assertActionCommandPathsFitStaticRegistry(declarations.map(({ spec, binding }) => ({
+    actionId: spec.id,
+    path: binding.path,
+  })));
+  for (const { binding } of declarations) {
     const root = binding.path[0];
     if (root === undefined) continue;
     dynamicActionCommandKeys.add(root);
@@ -565,6 +571,11 @@ export async function resolveAdmittedActionCliCommand(
 ): Promise<CompiledActionCliCommand | null> {
   const words = readLeadingCommandWords(args);
   if (words.length === 0) return null;
+  const { listActionCliCommandDeclarations } = await import('@happier-dev/protocol/actions/actionSpecs');
+  if (!listActionCliCommandDeclarations().some(({ binding }) => (
+    binding.path.length <= words.length
+    && binding.path.every((segment, index) => words[index] === segment)
+  ))) return null;
   const { findCompiledActionCliCommand } = await import('@/cli/actions/compiledCommands');
   return findCompiledActionCliCommand(words, await loadAdmittedActionCliCommands());
 }
@@ -730,14 +741,13 @@ export async function ensureMergedAgentCommandRegistryLoaded(): Promise<void> {
     // Some command-registry harnesses intentionally replace only the Agent catalog boundary.
     // Production always resolves the merged snapshot; absent snapshots cannot admit plugin roots.
     // Action-owned roots are claimed first so Agent and plugin synchronization
-    // both see one complete reservation set, then the compiled command list is
-    // resolved against the roots those sources actually took.
+    // both see one complete reservation set. Compilation stays deferred until
+    // an Action invocation or completion needs the admitted command fields.
     await ensureActionCliRootsRegistered();
     if (registry) {
       syncAgentCommandRegistryFromCatalogSnapshot(registry);
       synchronizePluginCommandContributions(registry);
     }
-    await loadAdmittedActionCliCommands();
   })();
   mergedAgentCommandRegistryPromise = pending;
   try {

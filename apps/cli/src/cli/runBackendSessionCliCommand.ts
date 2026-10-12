@@ -209,6 +209,20 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
       if (cliArgumentAgentId && parsed.helpRequested) {
         console.log(`${buildRootHelpText()}
 
+Happier session options:
+  happier ${cliArgumentAgentId} [options] [provider options]
+  --model <model-id>              Select the session model
+  --permission-mode <mode>       Set Happier permission intent (read_only, default, auto, yolo)
+  --agent-mode <mode-id>          Select a provider session mode
+  --launch-profile <id-or-name>  Apply a saved launch profile
+  --auth <default|native|cs:id>   Choose session authentication
+  --refresh-settings            Refresh account settings before starting
+  --resume <session-id>          Resume a provider session
+
+For scripted sessions with a title and initial prompt:
+  happier spawn --agent ${cliArgumentAgentId} --title "My session" --prompt "Hello"
+  happier spawn --help
+
 ${'-'.repeat(60)}
 Provider CLI Options:
 `);

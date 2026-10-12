@@ -50,7 +50,11 @@ describe('trusted auth api-tokens commands', () => {
     await removeTempDir(home);
   });
 
-  it.each([false, true])('creates through the shared Action with unattended Team access explicitly selected: %s', async (authorizeUnattendedTeamAccess) => {
+  it.each([
+    { authorizeUnattendedTeamAccess: false, json: false },
+    { authorizeUnattendedTeamAccess: false, json: true },
+    { authorizeUnattendedTeamAccess: true, json: true },
+  ])('creates through the shared Action and shows the new token once; unattended=$authorizeUnattendedTeamAccess json=$json', async ({ authorizeUnattendedTeamAccess, json }) => {
     const app = fastify();
     let capturedRequest: Readonly<{ authorization: string | undefined; body: unknown }> | null = null;
     app.post('/v1/auth/api-tokens/create', async (request) => {
@@ -80,16 +84,14 @@ describe('trusted auth api-tokens commands', () => {
         'api-tokens', 'create', '--label', 'build',
         ...(authorizeUnattendedTeamAccess ? ['--authorize-unattended-team-access'] : []),
         '--yes',
-        '--json',
+        ...(json ? ['--json'] : []),
       ]);
       expect(capturedRequest).not.toBeNull();
-      expect(JSON.parse(output.text())).toMatchObject({
-        ok: true,
-        data: {
-          token: expect.stringMatching(/^hap_v1_[0-9a-f-]{36}_/),
-          apiToken: { hasUnattendedTeamAccess: authorizeUnattendedTeamAccess },
-        },
-      });
+      const result = JSON.parse(output.text());
+      const data = json ? result.data : result;
+      expect(data).toMatchObject({ apiToken: { hasUnattendedTeamAccess: authorizeUnattendedTeamAccess } });
+      expect(data.token).toEqual(expect.stringMatching(/^hap_v1_[0-9a-f-]{36}_/));
+      expect(output.text()).not.toContain('interactive');
       expect(capturedRequest).toEqual({
         authorization: 'Bearer interactive',
         body: {

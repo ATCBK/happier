@@ -7,6 +7,8 @@ import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/acco
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { McpCommandDeps } from './deps';
 import { loadFreshMcpAccountSettingsContext } from './loadFreshMcpAccountSettingsContext';
+import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { ensureMachineIdForCredentials } from '@/ui/auth';
 import type { Settings } from '@/persistence';
@@ -62,6 +64,17 @@ async function commandDeps() {
 async function jsonCommand(run: () => Promise<void>) {
   const output = captureStdoutJsonOutput<unknown>();
   try { await run(); return output.json(); } finally { output.restore(); }
+}
+
+async function changeRules(state: 'on' | 'inherit') {
+  const snapshot = await loadFreshMcpAccountSettingsContext(credentials, commandReadDeps());
+  const store = createCliMcpServerStore({ credentials });
+  const execute = createMcpServerActionExecuteV1({ readCatalog: async () => snapshot.mcpServerCatalog,
+    mutate: (change, expectedRevision) => store.mutate(change, expectedRevision, snapshot.mcpServerCatalog),
+    machine: async () => { throw new Error('Rules do not use a Machine'); } });
+  return execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: server.id }],
+    change: { kind: 'write', write: { place: { t: 'allMachines' }, state } } },
+    context: { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } } }).catch(projectMcpServerActionFailureV1);
 }
 
 describe('MCP command catalog admission', () => {
@@ -126,32 +139,24 @@ describe('MCP command catalog admission', () => {
     expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe('another-account');
   });
 
-  it('adds and binds through catalog row CAS while preserving the existing server', async () => {
+  it('adds with default reach through catalog row CAS while preserving the existing server', async () => {
     const { cmdMcpServersAdd } = await import('./servers/add');
-    const { cmdMcpServersBind } = await import('./servers/bind');
     const deps = await commandDeps();
     expect(await jsonCommand(() => cmdMcpServersAdd(['--name', 'second', '--command', 'second-fixture'], deps, { json: true })))
       .toMatchObject({ ok: true, data: { created: { id: 'created-id', name: 'second' } } });
-    expect(await jsonCommand(() => cmdMcpServersBind(['--mcp-server', 'second', '--all-machines'], deps, { json: true })))
-      .toMatchObject({ ok: true, data: { createdBindingId: 'created-id' } });
     expect(catalog.servers.map(entry => entry.id)).toEqual(['server-1', 'created-id']);
     expect(catalog.bindings).toMatchObject([{ serverId: 'created-id', enabled: true, target: { t: 'allMachines' } }]);
-    expect(writes).toMatchObject([{ expectedRevision: 7 }, { expectedRevision: 8 }]);
+    expect(writes).toMatchObject([{ expectedRevision: 7 }]);
   });
 
-  it('reports a durable row conflict without claiming binding removal succeeded', async () => {
-    const { cmdMcpServersUnbind } = await import('./servers/unbind');
-    const deps = await commandDeps();
+  it('reports a durable row conflict without claiming rules removal succeeded', async () => {
     catalog.bindings = [{ id: 'binding-1', serverId: server.id, enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }];
     rejectWrite = true;
-    expect(await jsonCommand(() => cmdMcpServersUnbind(['--binding-id', 'binding-1'], deps, { json: true })))
-      .toMatchObject({ ok: false, error: { code: 'mcp_catalog_conflict', settlement: { status: 'conflict', revision: 7 } } });
+    expect(await changeRules('inherit')).toEqual({ ok: true, result: { ok: false, code: 'conflict' } });
     expect(catalog.bindings).toHaveLength(1);
-    expect(process.exitCode).toBe(1);
   });
 
   it('reports an unknown row outcome without replaying or exposing transport details', async () => {
-    const { cmdMcpServersUnbind } = await import('./servers/unbind');
     catalog.bindings = [{ id: 'binding-1', serverId: server.id, enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }];
     let submissions = 0;
     vi.mocked(axios.post).mockImplementation(async () => {
@@ -160,11 +165,10 @@ describe('MCP command catalog admission', () => {
       catalog.bindings = [];
       throw Object.assign(new Error('Authorization: Bearer private-token'), { code: 'ECONNRESET' });
     });
-    const output = await jsonCommand(() => cmdMcpServersUnbind(['--binding-id', 'binding-1'], commandReadDeps(), { json: true }));
-    expect(output).toMatchObject({ ok: false, error: { code: 'mcp_catalog_outcome_unknown', settlement: { status: 'outcomeUnknown' } } });
+    const output = await changeRules('inherit');
+    expect(output).toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
     expect(JSON.stringify(output)).not.toContain('private-token');
     expect(submissions).toBe(1);
-    expect(process.exitCode).toBe(1);
   });
 
   describe('real MCP command entrypoint', () => {

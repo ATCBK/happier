@@ -142,10 +142,10 @@ function printDaemonHelp(): void {
     `  Canonical service command: ${cmd('happier service install')}`,
     `  Example: ${cmd('happier --server company service install')}`,
     '',
-    `  If you want to kill all happier related processes run ${cmd('happier doctor clean')}`,
+    `  Stop stale daemons and review confirmed left-behind processes with ${cmd('happier doctor clean')}`,
     '',
     `${sectionTitle('Note:')} The daemon runs in the background and manages Happier sessions.`,
-    `${sectionTitle('To clean up runaway processes:')} Use ${cmd('happier doctor clean')}`,
+    `${sectionTitle('To review left-behind processes:')} Use ${cmd('happier doctor clean')}`,
     '',
   ].join('\n'));
 }
@@ -197,17 +197,13 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   if (daemonSubcommand === 'list') {
-    try {
-      const sessions = await listDaemonSessions();
+    const sessions = await listDaemonSessions();
 
-      if (sessions.length === 0) {
-        console.log(neutral('No active sessions this daemon is aware of (they might have been started by a previous version of the daemon)'));
-      } else {
-        console.log(sectionTitle('Active sessions'));
-        await writeJsonStdout(sessions, { pretty: true });
-      }
-    } catch {
-      console.log(warn('No daemon running'));
+    if (sessions.length === 0) {
+      console.log(neutral('This daemon has no tracked active sessions. Use `happier session list --active` to list active sessions on the relay.'));
+    } else {
+      console.log(sectionTitle('Active sessions'));
+      await writeJsonStdout(sessions, { pretty: true });
     }
     return;
   }

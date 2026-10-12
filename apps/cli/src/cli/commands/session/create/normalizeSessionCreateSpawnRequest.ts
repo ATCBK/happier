@@ -2,16 +2,21 @@ import { DEFAULT_AGENT_ID } from '@happier-dev/agents';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
-import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { BackendTargetKeyV2InputSchema, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { resolveSessionModelSelectionInputRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol';
+import { SessionCapabilitySelectionAuthoringV1Schema, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 import { configuration } from '@/configuration';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
-import { readSettings, type Settings } from '@/persistence';
+import { readSettings, readStoredCredentials, type Settings } from '@/persistence';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
+import { readSkillLibraryItems } from '@/prompts/skills/library/readSkillLibraryItems';
+import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
 
 import type { SessionCreateSpawnRequest } from './parseSessionCreateSpawnOptions';
 
@@ -31,6 +36,10 @@ export type SessionCreateSpawnRequestNormalizerDeps = Readonly<{
   readSettings: () => Promise<SessionCreateMachineSettings>;
   readAgentDefinitions: () => Iterable<SpawnAgentDefinition>;
   now: () => number;
+  readCapabilityCatalogs?: (kinds: Readonly<{ mcp: boolean; skills: boolean }>) => Promise<Readonly<{
+    mcp: readonly Readonly<{ id: string; name: string }>[];
+    skills: readonly Readonly<{ id: string; name: string }>[];
+  }>>;
 }>;
 
 export type NormalizedSessionCreateSpawnRequest = Readonly<{
@@ -54,7 +63,46 @@ function defaultNormalizerDeps(): SessionCreateSpawnRequestNormalizerDeps {
     readSettings,
     readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values(),
     now: () => Date.now(),
+    readCapabilityCatalogs: async (kinds) => {
+      const credentials = await readStoredCredentials();
+      if (!credentials) throw Object.assign(new Error('Capability catalogs unavailable'), { code: 'catalog_unavailable' });
+      if (!await resolveAvailableAccountSettings({ credentials })) throw Object.assign(new Error('Capability catalogs unavailable'), { code: 'catalog_unavailable' });
+      const [mcp, skills] = await Promise.all([
+        kinds.mcp ? createCliMcpServerStore({ credentials }).readCatalog() : null,
+        kinds.skills ? readSkillLibraryItems(createCredentialedAccountArtifactStore(credentials)) : [],
+      ]);
+      if (mcp && mcp.status !== 'ready') throw Object.assign(new Error('MCP catalog unavailable'), { code: 'catalog_unavailable' });
+      return { mcp: mcp?.catalog.servers ?? [], skills };
+    },
   };
+}
+
+async function resolveCapabilityNames(request: SessionCreateSpawnRequest, deps: SessionCreateSpawnRequestNormalizerDeps): Promise<SessionCapabilitySelectionV1 | undefined> {
+  const names = request.capabilitySelectionNames;
+  if (!names) return request.capabilitySelection;
+  const catalogs = await (deps.readCapabilityCatalogs ?? defaultNormalizerDeps().readCapabilityCatalogs!)({
+    mcp: names.mcp.include.length > 0 || names.mcp.exclude.length > 0,
+    skills: names.skills.include.length > 0 || names.skills.exclude.length > 0,
+  });
+  const resolveNames = (kind: 'skill' | 'mcp_server', names: readonly string[]) => names.map(name => {
+    const items = (kind === 'skill' ? catalogs.skills : catalogs.mcp).filter(item => item.name === name);
+    if (items.length !== 1) throw Object.assign(new Error(`Capability not found: ${name}`), { code: 'not_found', kind, name });
+    return items[0]!.id;
+  });
+  const selection = request.capabilitySelection ?? {};
+  return SessionCapabilitySelectionAuthoringV1Schema.parse({
+    ...selection,
+    ...(names.mcp.include.length || names.mcp.exclude.length ? { mcp: {
+      ...selection.mcp, v: 1,
+      forceIncludeServerIds: [...(selection.mcp?.forceIncludeServerIds ?? []), ...resolveNames('mcp_server', names.mcp.include)],
+      forceExcludeServerIds: [...(selection.mcp?.forceExcludeServerIds ?? []), ...resolveNames('mcp_server', names.mcp.exclude)],
+    } } : {}),
+    ...(names.skills.include.length || names.skills.exclude.length ? { skills: {
+      ...selection.skills,
+      v: 1, forceIncludeSkillIds: [...(selection.skills?.forceIncludeSkillIds ?? []), ...resolveNames('skill', names.skills.include)],
+      forceExcludeSkillIds: [...(selection.skills?.forceExcludeSkillIds ?? []), ...resolveNames('skill', names.skills.exclude)],
+    } } : {}),
+  });
 }
 
 function resolveConfiguration(
@@ -110,7 +158,7 @@ function resolveAgentTarget(
   const requestedTarget = request.backendTargetKey
     ? (() => {
         try {
-          const parsed = parseBackendTargetKeyV2(request.backendTargetKey);
+          const parsed = parseBackendTargetKeyV2(BackendTargetKeyV2InputSchema.parse(request.backendTargetKey));
           return parseBackendTargetKeyV2(buildBackendTargetKeyV2(parsed));
         } catch {
           return invalidSessionCreateArgument('--backend does not identify an executable Agent.');
@@ -200,6 +248,7 @@ export async function normalizeSessionCreateSpawnRequest(
   }
   const agentModeId = nonEmptyString(request.agentModeId);
   const profileId = nonEmptyString(request.profileId);
+  const capabilitySelection = await resolveCapabilityNames(request, deps);
   // The `default` reset sentinel is native-only: a Provider connection may serve
   // a model literally named `default`, so the canonical resolver — not this
   // adapter — decides whether a flat argv pair is a real structured selection.
@@ -234,7 +283,7 @@ export async function normalizeSessionCreateSpawnRequest(
     ...(agentModeId ? { agentModeId } : {}),
     ...(configuration ? { configuration } : {}),
     ...(request.connectedServices ? { connectedServices: request.connectedServices } : {}),
-    ...(request.mcpSelection ? { mcpSelection: request.mcpSelection } : {}),
+    ...(capabilitySelection ? { capabilitySelection } : {}),
     ...(request.transcriptStorage ? { transcriptStorage: request.transcriptStorage } : {}),
     ...(request.terminal ? { terminal: request.terminal } : {}),
     ...(profileId ? { profileId } : {}),

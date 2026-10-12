@@ -101,6 +101,27 @@ function withoutLocalId(execution: Execution): Execution {
 }
 
 describe('compiled Action CLI command dispatch', () => {
+  it('dispatches MCP reach commands and retained bind aliases through the rules Action', async () => {
+    const output = captureConsoleText();
+    try {
+      for (const [path, state] of [
+        [['mcp', 'on'], 'on'], [['mcp', 'off'], 'off'], [['mcp', 'inherit'], 'inherit'],
+        [['mcp', 'servers', 'bind'], 'on'], [['mcp', 'servers', 'unbind'], 'inherit'],
+      ] as const) {
+        expect(await run(path, ['linear', '--project', 'project-1', '--agent', 'codex']))
+          .toEqual([{ actionId: 'mcp.rules.set', input: { items: [{ name: 'linear' }],
+            change: { kind: 'write', write: { place: { t: 'project', projectKey: 'project-1' }, agentId: 'codex', state } } } }]);
+      }
+      expect(await run(['mcp', 'off'], ['linear', 'docs', '--folder', 'C:\\repo', '--machine', 'windows']))
+        .toEqual([{ actionId: 'mcp.rules.set', input: { items: [{ name: 'linear' }, { name: 'docs' }],
+          change: { kind: 'write', write: { place: { t: 'workspace', machineId: 'windows', workspaceRoot: 'C:\\repo' }, state: 'off' } } } }]);
+      expect(await run(['mcp', 'rules'], ['linear', '--rules-json', '[]']))
+        .toEqual([{ actionId: 'mcp.rules.set', input: { items: [{ name: 'linear' }], change: { kind: 'replace', rules: [] } } }]);
+      expect(await run(['mcp', 'servers', 'bind'], ['--mcp-server', 'linear', '--all-machines']))
+        .toEqual([{ actionId: 'mcp.rules.set', input: { items: [{ name: 'linear' }],
+          change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } } }]);
+    } finally { output.restore(); }
+  });
   it('fails a provider lifecycle command before credential lookup when --server-id is absent', async () => {
     const command = commandFor(['identity', 'providers', 'list']);
     const readCredentialsFn = vi.fn(async () => ({ token: 'ambient-token' } as never));
@@ -633,6 +654,12 @@ describe('compiled Action CLI command dispatch', () => {
       deps: deps as never,
     });
     expect(executions).toEqual([{ actionId: 'machines.list', input: { limit: 200 } }]);
+  });
+
+  it('refreshes machine inventory through the same canonical list command', async () => {
+    const { executions, deps } = harness();
+    await runCompiledActionCliCommand({ command: commandFor(['machines', 'list']), argv: ['machines', 'list', '--refresh'], deps: deps as never });
+    expect(executions).toEqual([{ actionId: 'machines.list', input: { limit: 200, refresh: true } }]);
   });
 
   it('keeps --machine-id physical routing out of Action input', async () => {

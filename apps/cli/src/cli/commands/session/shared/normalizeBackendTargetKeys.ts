@@ -1,11 +1,9 @@
 import { BackendTargetKeySchema, buildBackendTargetKey } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { BackendTargetKeyV2Schema, convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { BackendTargetKeyV2Schema } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { parseBackendTargetKey } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 import { getAgentCatalogDefinition } from '@happier-dev/agents';
-import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import type { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import {
   normalizeActionExecuteResult,
@@ -180,24 +178,4 @@ export async function resolveBackendTargetKeysFromCsv(params: Readonly<{
 
   const options = readResolvedBackendTargetOptions(unwrapCliActionSuccessPayload(actionResult.data));
   return entries.map((entry) => resolveBackendTargetEntry({ entry, options }));
-}
-
-export function parseSingleBackendTargetFromFlag(value: string | null): BackendTargetRefV1 | null {
-  const backendTargetKeys = normalizeBackendTargetKeysFromCsv(value);
-  if (backendTargetKeys.length !== 1) {
-    return null;
-  }
-
-  const key = backendTargetKeys[0];
-  const parsed = parseBackendTargetKeyV2(key);
-  if (parsed.kind === 'agent') {
-    const definition = [...readAgentCatalogSnapshot().agentDefinitionsById.values()].find((candidate) => (
-      candidate.identity !== undefined
-      && candidate.identity.pluginId === parsed.identity.pluginId
-      && candidate.identity.localId === parsed.identity.localId
-    ));
-    if (!definition) return null;
-    return { kind: 'builtInAgent', agentId: definition.id };
-  }
-  return convertBackendTargetRefV2ToV1(readBackendTargetRefV2(key));
 }

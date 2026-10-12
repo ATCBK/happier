@@ -10,7 +10,7 @@ import {
   type ProviderSettingsV1,
 } from '@happier-dev/protocol';
 import { readRetainedProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { DaemonProviderConnectionViewV1Schema } from '@happier-dev/protocol/rpc';
+import { DaemonProviderConnectionViewV1Schema, DaemonProviderConnectionsDescribeRequestV1Schema, DaemonProviderConnectionsDescribeResponseV1Schema } from '@happier-dev/protocol/rpc';
 
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 import type { ProviderContributionRegistryView } from '@/providers/registry';
@@ -22,9 +22,11 @@ import type { ProviderModelLoadResult } from '@/providers/modelManagement/load';
 import { executeProvidersCommand, ProviderCliError, type ProviderCliDependencies } from './index';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { routeProviderCliActions } from './actionDependencies';
 import { createProviderActionExecuteV1 } from '@happier-dev/protocol/providers/executeProviderActionV1';
 import { createProviderConnectionRpcAdapter } from '@/providers/connections/rpcAdapter';
+import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 
 const contributionKey = 'acme.gateway/gateway';
 const existingSavedSecret = SavedSecretSchema.parse({
@@ -144,7 +146,16 @@ function harness(overrides: Partial<ProviderCliDependencies> = {}, initialSecret
   });
   const deps: ProviderCliDependencies = {
     assertProvidersFeatureEnabled: () => {},
-    connections: connectionService,
+    connections: {
+      ...connectionService,
+      describe: async input => {
+        if (input.machineId) return connectionService.describe({ ...input, machineId: input.machineId });
+        const result = await createInMemoryAccountProviderActions(persistence)(parseProviderActionRequestV1('providers.connections.describe', input));
+        if (!result.ok) throw new Error(result.error);
+        return DaemonProviderConnectionsDescribeResponseV1Schema.parse(result.result);
+      },
+      previewCreateContribution: input => connectionService.previewCreateContribution({ ...input, machineId: input.machineId ?? 'machine-a' }),
+    },
     loadSnapshot: async () => ({ accountSettings: raw, machineId: 'machine-a', registry }),
     allocateConnectionId: () => `pc_${nextId++}`,
     probe: vi.fn(async () => ({ status: 'success' as const, models: [], requestFingerprint: 'probe-request:v1:test' as never })),
@@ -167,7 +178,66 @@ function settings(raw: Record<string, unknown>): ProviderSettingsV1 {
 }
 
 describe('happier providers command domain', () => {
-  it.each(['local-create', 'machine-secret'] as const)('keeps prepared %s secret promotion behind canonical approval', async workflow => {
+  it('reads the target daemon through canonical Actions instead of the standalone process services', async () => {
+    const local = harness();
+    const remote = harness();
+    await executeProvidersCommand(['add', contributionKey, '--name', 'Daemon connection'], remote.deps);
+    const rpc = createProviderConnectionRpcAdapter(remote.connectionService);
+    const executor = createActionExecutor({
+      providerActionExecute: createProviderActionExecuteV1({
+        assertCurrent() {},
+        setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        account: createInMemoryAccountProviderActions(remote.persistence),
+        // Machine RPC is the boundary; the remote connection owner stays real.
+        rpc: async ({ method, request }) => {
+          if (method !== 'daemon.providers.connections.describe') throw new Error('Unexpected machine operation');
+          return rpc.describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input));
+        },
+      }),
+    });
+    const deps = routeProviderCliActions(local.deps,
+      (id, input) => executor.execute(id, input, { surface: 'cli' }));
+
+    await expect(executeProvidersCommand(['show', 'pc_1', '--machine', 'machine-a'], deps)).resolves.toMatchObject({
+      data: { connectionId: 'pc_1', name: 'Daemon connection' },
+    });
+    expect(settings(local.getRaw()).connections).toEqual([]);
+  });
+
+  it('lists, removes and adds Account connections without requiring the local daemon', async () => {
+    const local = harness({ allocateConnectionId: () => 'pc_new' });
+    const account = harness();
+    await executeProvidersCommand(['add', contributionKey, '--name', 'Account connection'], account.deps);
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+      'providers.connections.delete': ['cli'],
+      'providers.connections.create_contribution': ['cli'],
+    } });
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, actionsSettings, context, undefined, undefined, input),
+      providerActionExecute: createProviderActionExecuteV1({
+        assertCurrent() {},
+        setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        account: createInMemoryAccountProviderActions(account.persistence),
+        // Offline machine transport must not prevent Account-only authoring.
+        rpc: async () => { throw new Error('Local daemon is offline'); },
+      }),
+    });
+    const deps = routeProviderCliActions(local.deps,
+      (id, input) => executor.execute(id, input, { surface: 'cli', actionsSettings }));
+
+    await expect(executeProvidersCommand(['list'], deps)).resolves.toMatchObject({
+      data: { connections: [{ connectionId: 'pc_1', name: 'Account connection' }] },
+    });
+    await expect(executeProvidersCommand(['remove', 'pc_1'], deps)).resolves.toMatchObject({ ok: true });
+    expect(settings(account.getRaw()).connections).toEqual([]);
+    await expect(executeProvidersCommand(['add', contributionKey], deps)).resolves.toMatchObject({
+      ok: true, data: { connectionId: 'pc_new', created: true },
+    });
+    expect(settings(account.getRaw()).connections).toHaveLength(1);
+    expect(settings(local.getRaw()).connections).toEqual([]);
+  });
+
+  it.each(['local-create', 'machine-secret', 'account-create'] as const)('keeps prepared %s secret promotion behind canonical approval', async workflow => {
     const prepared = { id: 'secret-prepared', record: SavedSecretSchema.parse({ id: 'secret-prepared',
       name: 'Prepared API key', kind: 'apiKey', encryptedValue: { _isSecretValue: true, value: 'private-prepared-key' },
       createdAt: 100, updatedAt: 100 }) };
@@ -175,37 +245,49 @@ describe('happier providers command domain', () => {
     h.providersByContributionKey.set(contributionKey, workflow === 'local-create'
       ? localContribution(undefined, { credentialRequired: true }) : contribution('Gateway', { credentialRequired: true }));
     let args: readonly string[];
+    let selectedEndpoint: string | undefined;
     if (workflow === 'local-create') {
       const preview = await h.deps.connections.previewCreateContribution({ machineId: 'machine-a',
         connectionId: 'pc_1', contributionKey, displayName: null, selectedCandidateId: null });
       if (preview.status === 'error' || preview.authoringPreview.status !== 'selection_required') throw new Error('Expected local candidates');
       args = ['add', contributionKey, '--candidate-id', preview.authoringPreview.candidates[0]!.candidateId!];
-    } else {
+      selectedEndpoint = preview.authoringPreview.candidates[0]!.endpoints[0]!.normalizedUrl;
+    } else if (workflow === 'machine-secret') {
       await executeProvidersCommand(['add', contributionKey, '--saved-secret-id', 'secret-existing'], h.deps);
       args = ['replace-secret', 'pc_1', '--scope', 'machine'];
+    } else {
+      args = ['add', contributionKey];
     }
     const before = structuredClone(h.getRaw());
-    let decision: 'missing' | 'reject' | 'canceled' | 'approve' = 'missing';
+    let decision: 'missing' | 'reject' | 'canceled' | 'retired' | 'approve' = 'missing';
     const observedInputs: unknown[] = [];
+    const observedPreparedInputs: unknown[] = [];
     const approvalRecords: unknown[] = [];
     const deps = routeProviderCliActions(h.deps, async (actionId, input, options) => {
+      const parsed = parseProviderActionRequestV1(actionId, input);
+      const operand = workflow === 'account-create' && parsed.actionId === 'providers.connections.create_contribution'
+        ? (({ machineId: _machineId, ...accountOperand }) => accountOperand)(parsed.input) : input;
       const rpc = createProviderConnectionRpcAdapter(h.connectionService);
       const signal = new AbortController().signal;
       const approvals = {
         approvalsCreate: async ({ request }) => { approvalRecords.push(request); return { artifactId: 'approval-1' }; },
-        approvalsWaitForDecision: async ({ request }) => ({ decision: decision as 'reject' | 'canceled' | 'approve', request }),
+        approvalsWaitForDecision: async ({ request }) => ({ decision: decision === 'retired' ? 'approve' as const
+          : decision as 'reject' | 'canceled' | 'approve', request }),
         approvalsUpdate: async ({ request }) => { approvalRecords.push(request); return { ok: true as const }; },
       } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsWaitForDecision' | 'approvalsUpdate'>;
       const executor = createActionExecutor({
         isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
         hostActionApprovalLifetime: { actionId, signal },
         // Captured credentials are a genuine host boundary; the Action owner validates their stored origin.
-        isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home'
+        isApprovalExecutionOriginCurrent: async ({ origin }) => decision !== 'retired' && origin.serverId === 'home'
           && origin.accountId === 'account' && origin.requestId === 'request-1',
         ...(decision === 'missing' ? {} : approvals),
         providerActionExecute: createProviderActionExecuteV1({ assertCurrent() {},
-          async rpc({ request, machineId }) {
+          async rpc({ request, machineId, method }) {
             expect(machineId).toBe('machine-a');
+            if (method === 'daemon.providers.connections.describe') {
+              return rpc.describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input));
+            }
             if (!('action' in request.input) || (request.input.action !== 'createContribution' && request.input.action !== 'bindSecret')) {
               throw new Error('Unexpected machine effect');
             }
@@ -215,8 +297,9 @@ describe('happier providers command domain', () => {
           account: (request) => createInMemoryAccountProviderActions(h.persistence)(request, options?.preparedSavedSecret),
         }),
       });
-      observedInputs.push(input);
-      return executor.execute(actionId, input, { surface: 'cli', signal,
+      observedInputs.push(operand);
+      if (options?.preparedSavedSecret) observedPreparedInputs.push(operand);
+      return executor.execute(actionId, operand, { surface: 'cli', signal,
         serverId: 'home', runtimeAccountId: 'account', actionRequestId: 'request-1' });
     });
     await expect(executeProvidersCommand(args, deps)).rejects.toMatchObject({ code: 'approvals_not_supported' });
@@ -227,15 +310,28 @@ describe('happier providers command domain', () => {
     decision = 'canceled';
     await expect(executeProvidersCommand(args, deps)).rejects.toMatchObject({ code: 'approval_canceled' });
     expect(h.getRaw()).toEqual(before);
+    decision = 'retired';
+    await expect(executeProvidersCommand(args, deps)).rejects.toMatchObject({ code: 'approval_stale' });
+    expect(h.getRaw()).toEqual(before);
     decision = 'approve';
     await expect(executeProvidersCommand(args, deps)).resolves.toMatchObject({ ok: true });
     expect((h.getRaw().secrets as readonly unknown[])).toContainEqual(prepared.record);
-    const connectionId = workflow === 'local-create' ? 'pc_4' : 'pc_1';
-    expect(settings(h.getRaw()).secretBindingsByConnectionId[connectionId]?.byMachineId?.['machine-a'])
+    const connectionId = workflow === 'machine-secret' ? 'pc_1' : 'pc_5';
+    const bindings = settings(h.getRaw()).secretBindingsByConnectionId[connectionId];
+    expect(workflow === 'machine-secret' ? bindings?.byMachineId?.['machine-a'] : bindings?.account)
       .toEqual({ apiKey: prepared.id });
+    if (workflow === 'local-create') {
+      expect(settings(h.getRaw()).connections.find(connection => connection.id === connectionId)
+        ?.endpointOverridesByMachineId?.['machine-a'])
+        .toMatchObject([{ baseUrl: selectedEndpoint }]);
+    }
+    if (workflow === 'account-create') expect(JSON.stringify(observedPreparedInputs)).not.toContain('machineId');
     expect(JSON.stringify(observedInputs)).not.toContain('private-prepared-key');
     expect(JSON.stringify(approvalRecords)).not.toContain('private-prepared-key');
-    expect(approvalRecords).toMatchObject([{ requestedSurface: 'cli', approval: { flow: 'blocking' } }]);
+    expect(approvalRecords).not.toEqual([]);
+    for (const record of approvalRecords) {
+      expect(record).toMatchObject({ requestedSurface: 'cli', approval: { flow: 'blocking' } });
+    }
   });
   it('does not delete a connection while canonical CLI Action approval is required', async () => {
     const h = harness();
@@ -243,11 +339,17 @@ describe('happier providers command domain', () => {
     const before = structuredClone(h.getRaw());
     const executor = createActionExecutor({
       isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
-      providerActionExecute: createInMemoryAccountProviderActions({
-        loadSnapshot: async () => ({ accountSettings: AccountSettingsSchema.parse(h.getRaw()),
-          rawAccountSettings: h.getRaw(), providerSettings: settings(h.getRaw()), registry: h.registry }),
-        updateProviderSettings: async () => { throw new Error('Approval must precede persistence'); },
-        now: () => 100,
+      providerActionExecute: createProviderActionExecuteV1({
+        assertCurrent() {},
+        setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
+          .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
+        account: createInMemoryAccountProviderActions({
+          loadSnapshot: async () => ({ accountSettings: AccountSettingsSchema.parse(h.getRaw()),
+            rawAccountSettings: h.getRaw(), providerSettings: settings(h.getRaw()), registry: h.registry }),
+          updateProviderSettings: async () => { throw new Error('Approval must precede persistence'); },
+          now: () => 100,
+        }),
       }),
     });
     const deps = routeProviderCliActions(h.deps,
@@ -255,6 +357,31 @@ describe('happier providers command domain', () => {
 
     await expect(executeProvidersCommand(['remove', 'pc_1'], deps)).rejects.toMatchObject({
       code: 'approvals_not_supported',
+    });
+    expect(h.getRaw()).toEqual(before);
+  });
+  it('keeps ordinary reference-only friendly writes deferred without terminal effects', async () => {
+    const h = harness();
+    await executeProvidersCommand(['add', contributionKey], h.deps);
+    const before = structuredClone(h.getRaw());
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
+      approvalsCreate: async () => ({ artifactId: 'approval-reference' }),
+      approvalsWaitForDecision: async () => { throw new Error('Reference-only CLI must not retain a blocking invocation'); },
+      approvalsUpdate: async () => ({ ok: true }),
+      providerActionExecute: createProviderActionExecuteV1({
+        assertCurrent() {},
+        setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
+          .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
+        account: createInMemoryAccountProviderActions(h.persistence),
+      }),
+    });
+    const deps = routeProviderCliActions(h.deps, (actionId, input) => executor.execute(actionId, input,
+      { surface: 'cli', serverId: 'home', runtimeAccountId: 'account', actionRequestId: 'reference-request' }));
+    await expect(executeProvidersCommand(['remove', 'pc_1'], deps)).rejects.toMatchObject({
+      code: 'approval_required', details: { kind: 'approval_request_created', artifactId: 'approval-reference',
+        actionId: 'providers.connections.delete' },
     });
     expect(h.getRaw()).toEqual(before);
   });

@@ -7,6 +7,7 @@ import { normalizeActionExecuteResult } from '@/cli/commands/session/shared/norm
 import type { StoredCredentials } from '@/persistence';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { resolveSpawnConnectedServicesDefaultDisposition } from '@/session/services/spawnConnectedServicesDefaults';
+import { HappierActionError } from '@happier-dev/sdk';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 
 /**
@@ -53,7 +54,8 @@ export async function resolveDirectCliConnectedServiceBindings(params: Readonly<
         { agentId: params.agentId, includeUnavailable: false },
         { surface: 'cli', defaultSessionId: null },
       ));
-      if (!result.ok) throw new Error(result.errorMessage ?? result.errorCode);
+      if (!result.ok) throw new HappierActionError(result.errorCode,
+        result.errorMessage ?? result.errorCode, result.details);
       return result.data ?? null;
     },
   });

@@ -512,7 +512,7 @@ export async function handleAttachCommand(
       process.exit(1);
     }
 
-    const currentOwnerMetadata = createSessionOwnerMetadataV1({ metadata: context.metadata });
+    const currentOwnerMetadata = createSessionOwnerMetadataV1({ metadata: context.metadata }, 'stored');
     const currentLocalControl = currentOwnerMetadata.ok
       ? currentOwnerMetadata.ownerMetadata.runtime?.agentRuntimeCapabilitiesV1?.localControl : null;
     const recordedTerminal = SessionTerminalMetadataSchema.safeParse(context.metadata?.terminal);
@@ -610,7 +610,7 @@ export async function handleAttachCommand(
       return;
     }
 
-    const ownerMetadata = createSessionOwnerMetadataV1({ metadata: eligibility.metadata });
+    const ownerMetadata = createSessionOwnerMetadataV1({ metadata: eligibility.metadata }, 'stored');
     const localControl = ownerMetadata.ok
       ? ownerMetadata.ownerMetadata.runtime?.agentRuntimeCapabilitiesV1?.localControl
       : null;

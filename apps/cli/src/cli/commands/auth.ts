@@ -69,7 +69,7 @@ export async function handleAuthCommand(args: string[], signal?: AbortSignal): P
       return;
     default:
       const { errorFrame } = await import('@happier-dev/cli-common/output');
-      console.error(errorFrame('Error:', [`Unknown auth subcommand: ${subcommand}`]));
+      console.error(errorFrame('Error:', ['Unknown auth subcommand. Run `happier auth help` for supported commands.']));
       showAuthHelp();
       process.exit(1);
   }

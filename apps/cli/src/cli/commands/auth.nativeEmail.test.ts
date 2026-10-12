@@ -269,6 +269,39 @@ describe('native email and recovery CLI commands', () => {
     // for command initialization and socket cleanup, not a product deadline.
   }, 120_000);
 
+  it.each([true, false])('keeps E2EE provisioning credentials out of default output (json=%s)', async json => {
+    const app = fastify();
+    const verificationToken = 'V'.repeat(43);
+    app.post('/v1/auth/challenge', async () => ({
+      challengeId: 'provision-challenge', nonce: 'provision-nonce',
+      issuedAt: '2026-10-11T12:00:00Z', expiresAt: '2026-10-11T13:00:00Z',
+      audience: { origin: 'http://account.test', serverIdentityId: 'srv_home' },
+    }));
+    app.post('/v1/auth/email/provision', async () => ({ accountId: 'account-1', teamId: null, token: terminalBearer }));
+    const restore = installNativeAuthTransport(app, 'e2ee');
+    const output = captureConsoleText();
+    try {
+      await import('@/ui/auth');
+      const { handleAuthCommand } = await import('./auth');
+      await handleAuthCommand(['email', 'provision', '--email', 'person@example.test', '--mode', 'e2ee',
+        '--password', 'private-password', '--verification-token', verificationToken, ...(json ? ['--json'] : [])]);
+      const { readStoredCredentials } = await import('@/persistence');
+      const credentials = await readStoredCredentials();
+      if (!credentials) throw new Error(`Provisioning fixture failed: ${output.text()}`);
+      expect(credentials).toMatchObject({ token: terminalBearer, encryption: { type: 'legacy' } });
+      if (!credentials?.encryption || credentials.encryption.type !== 'legacy') throw new Error('missing persisted E2EE material');
+      for (const secret of [terminalBearer, formatRecoveryKey(credentials.encryption.secret),
+        Buffer.from(credentials.encryption.secret).toString('base64'), 'private-password', verificationToken]) {
+        expect(output.text()).not.toContain(secret);
+      }
+      if (json) expect(JSON.parse(output.text())).toMatchObject({ ok: true, data: { accountMode: 'e2ee' } });
+    } finally {
+      output.restore();
+      restore();
+      await app.close();
+    }
+  });
+
   it('requests invitation-scoped mailbox proof before transferable invitation provisioning', async () => {
     const app = fastify();
     const invitationToken = 'I'.repeat(43);

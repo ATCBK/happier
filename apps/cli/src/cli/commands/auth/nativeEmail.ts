@@ -5,7 +5,7 @@ import tweetnacl from 'tweetnacl';
 import { NATIVE_AUTH_EMAIL_PRELOGIN_PATH_V1, NATIVE_AUTH_EMAIL_LOGIN_PATH_V1, NATIVE_AUTH_EMAIL_UNLOCK_PATH_V1, NATIVE_AUTH_EMAIL_PROVISION_PATH_V1, NATIVE_AUTH_EMAIL_VERIFY_REQUEST_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_REQUEST_PATH_V1, NativeAuthEmailAcceptedResponseV1Schema, NativeEmailVerifyRequestV1Schema, NativePasswordResetRequestV1Schema, NativeEmailPasswordLoginResponseV1Schema, NativeEmailPasswordErrorResponseV1Schema, NativeEmailPasswordLoginRequestV1Schema, NativeEmailPasswordPreloginRequestV1Schema, NativeEmailPasswordPreloginResponseV1Schema, NativeEmailPasswordUnlockRequestV1Schema, NativeEmailPasswordUnlockResponseV1Schema, NativeEmailPasswordProvisionRequestV1Schema, NativeEmailPasswordProvisionResponseV1Schema } from '@happier-dev/protocol/auth/nativeAuthEmailRoutes';
 import { NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1, PlainPasswordResetSubmitResponseV1Schema, PlainPasswordResetSubmitRequestV1Schema, ACCOUNT_EMAIL_CHANGE_PATH_V1, AccountSecurityRouteErrorV1Schema, AccountPasswordMutationResponseV1Schema, AccountEmailChangeCompleteRequestV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { normalizeVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
-import { parseRecoveryKey, formatRecoveryKey } from '@happier-dev/protocol/auth/recoveryKey';
+import { parseRecoveryKey } from '@happier-dev/protocol/auth/recoveryKey';
 import { KeyChallengeV2AuthRequestSchema, KeyChallengeV2IssueResponseSchema, canonicalizeKeyChallengeV2AudienceOrigin, createKeyChallengeV2SigningInput } from '@happier-dev/protocol/auth/keyChallenge';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
@@ -611,17 +611,12 @@ async function handleNativeProvision(args: string[], signal?: AbortSignal): Prom
       serverId: captured.serverId,
       machineId: registration.machineId,
       accountMode: mode,
-      ...(recoverySecret ? { recoveryKey: formatRecoveryKey(recoverySecret) } : {}),
       ...(captured.invitationToken ? { invitationTokenPreserved: true } : {}),
     };
     if (wantsJson(args)) await printJsonEnvelope({ ok: true, kind, data });
     else {
       console.log('Account created and authenticated');
       console.log(`  Home: ${captured.serverId}`);
-      if (recoverySecret) {
-        console.log(`  Recovery key (shown once): ${formatRecoveryKey(recoverySecret)}`);
-        console.log('  Save it somewhere private before closing this terminal.');
-      }
     }
   } catch (error) {
     const { code, message } = projectNativeCommandFailure(error, 'authentication_failed');

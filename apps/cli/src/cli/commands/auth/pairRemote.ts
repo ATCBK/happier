@@ -8,6 +8,7 @@ import {
   runRemoteHomeEnrollmentRecipe,
   type HappierJsonExecutor,
 } from '@happier-dev/cli-common/systemTasks';
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 
 import { approveTerminalAuthRequest } from '@/auth/terminalAuthApproval';
 import { readTerminalAuthHomeIdentity } from '@/auth/terminalAuthEnrollmentClient';
@@ -137,7 +138,7 @@ export async function handleAuthPairRemote(
   if (parsedTargetArgs.target && remoteUrl.url) {
     fail('Do not combine a Home target with --server-url-for-remote.', 2);
   }
-  if (args.length > 0) fail(`Unknown auth pair-remote arguments: ${args.join(' ')}`, 2);
+  if (args.length > 0) fail('Unknown auth pair-remote arguments. Run `happier auth help` for supported flags.', 2);
 
   const selectedHomeTarget = parsedTargetArgs.target
     ? await resolveCliHomeTarget(parsedTargetArgs.target)
@@ -211,9 +212,11 @@ export async function handleAuthPairRemote(
     const checked = await executor.runHappierText([
       'doctor', 'repair', '--report-only', '--json', '--server', remoteServerId,
     ], { signal: effectiveDeps.signal, includeStdoutInError: false });
+    const diagnosticStdout = redactBugReportSensitiveText(checked.stdout);
+    const diagnosticStderr = redactBugReportSensitiveText(checked.stderr);
     let report: unknown = null;
     try {
-      report = checked.stdout.trim() ? JSON.parse(checked.stdout.trim()) : null;
+      report = diagnosticStdout.trim() ? JSON.parse(diagnosticStdout.trim()) : null;
     } catch {
       report = null;
     }
@@ -221,8 +224,8 @@ export async function handleAuthPairRemote(
       ranWithServerId: remoteServerId,
       exitCode: checked.status,
       report,
-      ...(report === null && checked.stdout ? { rawStdout: checked.stdout } : {}),
-      ...(checked.stderr ? { stderr: checked.stderr } : {}),
+      ...(report === null && diagnosticStdout ? { rawStdout: diagnosticStdout } : {}),
+      ...(diagnosticStderr ? { stderr: diagnosticStderr } : {}),
     };
   } else if (!noPostCheck.present) {
     postCheck = { skipped: true, reason: 'remote-server-id-unavailable' };

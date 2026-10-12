@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { readFlagValue } from '@/cli/commands/shared/argvFlags';
 import { printJsonEnvelope } from '@/cli/output/jsonEnvelope';
@@ -37,6 +38,9 @@ export async function cmdMcpServersAdd(
 
   const id = deps.randomUUID();
   const now = deps.nowMs();
+  const reach = resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'cli' },
+    ctx: { nowMs: now, newId: deps.randomUUID } });
+  if (!reach.ok) throw new Error(reach.code);
   const context = await loadFreshMcpAccountSettingsContext(credentials, deps);
   const mutation = createCliMcpServerStore({ credentials }).mutate({
     kind: 'server-create',
@@ -49,7 +53,7 @@ export async function cmdMcpServersAdd(
       createdAt: now,
       updatedAt: now,
     },
-    bindings: [],
+    rules: reach.rules.map(rule => ({ ...rule, serverId: id })),
   }, context.mcpServerCatalog.revision, context.mcpServerCatalog);
   if (!await reportMcpServerCatalogMutation(mutation, {
     kind: 'mcp_servers_add',

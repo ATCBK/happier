@@ -122,6 +122,8 @@ describe('session actions execute with an API token', () => {
         {
           defaultSessionId: 'session_exact_123',
           surface: 'cli',
+          serverId: expect.any(String),
+          actionRequestId: expect.any(String),
         },
       );
       expect(output.json()).toEqual({

@@ -54,6 +54,23 @@ describe('connectedServicesLaunchAuth', () => {
     });
   });
 
+  it('resolves a released scalar service selector against the qualified inventory', () => {
+    const inventory = { profileOptionsByServiceId: {
+      'happier.agent.claude/claude-subscription': [{ profileId: 'work', status: 'connected' }],
+    } };
+    expect(resolveConnectedServicesLaunchAuth({
+      intent: parseConnectedServicesLaunchAuth('cs:claude-subscription:profile:work'),
+      supportedServiceIds: ['happier.agent.claude/claude-subscription'],
+      inventory,
+    })).toEqual({ v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+    } });
+    expect(() => resolveConnectedServicesLaunchAuth({
+      intent: parseConnectedServicesLaunchAuth('cs:other-service:profile:work'),
+      supportedServiceIds: ['happier.agent.claude/claude-subscription'], inventory,
+    })).toThrow('connected_service_auth_not_found:cs:other-service:profile:work');
+  });
+
   it('fails closed when the exact id is unavailable', () => {
     expect(() => resolveConnectedServicesLaunchAuth({
       intent: parseConnectedServicesLaunchAuth('cs:missing'),
@@ -188,7 +205,7 @@ describe('connectedServicesLaunchAuth', () => {
         reason: 'connected_services_default_settings_invalid',
       },
       listInventory: async () => null,
-    })).rejects.toThrow('connected_services_default_unavailable');
+    })).rejects.toMatchObject({ code: 'connected_services_default_unavailable', reason: 'connected_services_default_settings_invalid' });
   });
 
   it('rejects structured connected-service auth for an unsupported backend', async () => {

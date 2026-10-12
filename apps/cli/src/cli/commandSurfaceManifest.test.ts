@@ -27,8 +27,9 @@ describe('CLI command-surface manifest', () => {
     await ensureMergedAgentCommandRegistryLoaded();
     const entries = listRootHelpCommands();
     const commands = entries.map((entry) => entry.command);
-    expect(commands.slice(0, 37)).toEqual([
+    expect(commands.slice(0, 39)).toEqual([
       null,
+      'browser',
       'setup',
       'auth',
       'automation',
@@ -65,8 +66,9 @@ describe('CLI command-surface manifest', () => {
       'delegate',
       'resume',
       'server',
+      'attach',
     ]);
-    expect(new Set(commands.slice(37))).toEqual(new Set([
+    expect(new Set(commands.slice(39))).toEqual(new Set([
       'teams',
       'identity',
       'credentials',

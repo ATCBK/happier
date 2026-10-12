@@ -4,7 +4,7 @@ export function resolveAuthMethodFlag(args: string[]): 'web' | 'mobile' | null {
     const value = (args[idx + 1] ?? '').toString().trim().toLowerCase();
     if (!value) throw new Error('Missing value for --method (expected: web|mobile)');
     if (value === 'web' || value === 'mobile') return value;
-    throw new Error(`Invalid --method value: ${value} (expected: web|mobile)`);
+    throw new Error('Invalid --method value (expected: web|mobile)');
   }
 
   const withEq = args.find((a) => a.startsWith('--method='));
@@ -12,7 +12,7 @@ export function resolveAuthMethodFlag(args: string[]): 'web' | 'mobile' | null {
     const value = withEq.slice('--method='.length).trim().toLowerCase();
     if (!value) throw new Error('Missing value for --method (expected: web|mobile)');
     if (value === 'web' || value === 'mobile') return value;
-    throw new Error(`Invalid --method value: ${value} (expected: web|mobile)`);
+    throw new Error('Invalid --method value (expected: web|mobile)');
   }
 
   return null;

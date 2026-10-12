@@ -14,6 +14,7 @@ const SESSION_CREATE_HELP = [
   '  [--config-overrides-json <json>] [--launch-profile <profile-id>]',
   '  [--env <KEY=VALUE>]',
   '  [--auth <default|native|cs:<id>>|--connected-services <selector>|--auth-json <json>]',
+  '  [--skill <name>] [--no-skill <name>] [--mcp <name>] [--no-mcp <name>] (repeatable)',
   '  [--mcp-selection-json <json>] [--transcript-storage <persisted|direct>]',
   '  [--terminal-json <json>]',
   '  [--machine-id <machineId>] [--server-id <serverId>]',

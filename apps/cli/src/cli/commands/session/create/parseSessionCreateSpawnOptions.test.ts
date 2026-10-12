@@ -96,7 +96,7 @@ describe('parseSessionCreateSpawnOptions', () => {
       // current one: `{ v: 2, bindingsByServiceId }` is the documented power form
       // (packages/protocol/src/connect/normalizeConnectedServiceSelectionInput.ts:35).
       connectedServices: { ...connectedServices, v: 2 },
-      mcpSelection,
+      capabilitySelection: { mcp: mcpSelection },
       transcriptStorage: 'direct',
       terminal: { mode: 'tmux' },
       machineId: 'machine-1',

@@ -117,8 +117,8 @@ describe('happier session actions (unit)', () => {
       ok: true,
       sessionId: 'team-session',
       rawSession: { id: 'team-session', metadata: {} },
-      accountEncryptionCurrentness: { mode: 'plain' },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({ ok: true, result: { status: 'idle' } });
@@ -156,6 +156,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({ ok: true, result: { started: true } });
@@ -184,6 +185,7 @@ describe('happier session actions (unit)', () => {
           surface: 'cli',
           actionRequestId: 'attempt-1',
           resumeActionRequest: true,
+          serverId: expect.any(String),
         },
       );
     } finally {
@@ -197,6 +199,7 @@ describe('happier session actions (unit)', () => {
       sessionId: 'sess-1',
       rawSession: { id: 'sess-1', metadata: {} },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({ ok: true, result: { started: true } });
@@ -272,6 +275,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({
@@ -322,6 +326,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({
@@ -373,6 +378,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({
@@ -415,6 +421,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({ ok: true, result: { ok: true } });
@@ -441,7 +448,7 @@ describe('happier session actions (unit)', () => {
       expect(execute).toHaveBeenCalledWith(
         'session.terminalComposer.clear',
         { sessionId: 'sess-1', expectedStateAtMs: 42 },
-        { defaultSessionId: 'sess-1', surface: 'cli' },
+        { defaultSessionId: 'sess-1', surface: 'cli', serverId: expect.any(String), actionRequestId: expect.any(String) },
       );
     } finally {
       output.restore();
@@ -457,6 +464,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     execute.mockResolvedValueOnce({ ok: true, result: { sessions: [] } });
@@ -483,7 +491,7 @@ describe('happier session actions (unit)', () => {
       expect(execute).toHaveBeenCalledWith(
         'session.list',
         { limit: 10 },
-        { defaultSessionId: 'sess-1', surface: 'cli' },
+        { defaultSessionId: 'sess-1', surface: 'cli', serverId: expect.any(String), actionRequestId: expect.any(String) },
       );
       expect(createCliActionExecutor).toHaveBeenCalledWith(expect.objectContaining({
         serverId: expect.any(String),
@@ -504,6 +512,7 @@ describe('happier session actions (unit)', () => {
         metadata: {},
       },
       ctx: null,
+      accountEncryptionCurrentness: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 },
       mode: 'plain' as const,
     });
     createCliActionExecutor.mockImplementationOnce(() => {

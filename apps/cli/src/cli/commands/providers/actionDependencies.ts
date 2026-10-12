@@ -7,7 +7,15 @@ import {
 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { DaemonProviderConnectionMutationResponseV1Schema, DaemonProviderModelSettingsMutationResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
-import { ProviderCliError, type ProviderCliDependencies } from './types';
+import type { ProviderSavedModelsRpcResult } from '@/providers/probe/rpc';
+import { ProviderCliError, type ProviderCliDependencies, type ProviderCliModelRow } from './types';
+
+export function unwrapProviderSavedModelsRpcResult(result: ProviderSavedModelsRpcResult): readonly ProviderCliModelRow[] {
+  if (result.status === 'error') {
+    throw new ProviderCliError(result.error.code, `Provider catalog failed: ${result.error.code}`, result.error);
+  }
+  return result.models;
+}
 
 export type ProviderCliActionExecute = (
   actionId: ProviderActionIdV1,
@@ -19,7 +27,7 @@ export type ProviderCliActionExecute = (
 ) => Promise<ActionExecuteResult>;
 
 export function routeProviderCliActions(
-  deps: ProviderCliDependencies,
+  deps: Omit<ProviderCliDependencies, 'connections' | 'probe' | 'models' | 'loadModel' | 'mutateModelSettings'>,
   execute: ProviderCliActionExecute,
 ): ProviderCliDependencies {
   const run = async (id: ProviderActionIdV1, input: unknown,
@@ -45,7 +53,23 @@ export function routeProviderCliActions(
   return {
     ...deps,
     connections: {
-      ...deps.connections,
+      describe: async input => PROVIDER_ACTION_OUTPUT_SCHEMAS_V1['providers.connections.describe']
+        .parse(await run('providers.connections.describe', input)),
+      previewCreateContribution: async input => {
+        const described = PROVIDER_ACTION_OUTPUT_SCHEMAS_V1['providers.connections.describe'].parse(await run(
+          'providers.connections.describe', { machineId: input.machineId, authoringPreview: {
+            connectionId: input.connectionId,
+            contributionKey: input.contributionKey,
+            displayName: input.displayName ?? null,
+            selectedCandidateId: input.selectedCandidateId ?? null,
+            ...(input.endpointOverrides ? { endpointOverrides: input.endpointOverrides } : {}),
+          } },
+        ));
+        if (described.status === 'error') return described;
+        const preview = described.authoringPreview;
+        if (!preview) throw new ProviderCliError('provider_rpc_response_invalid', 'Provider authoring returned no preview');
+        return { status: 'success', connectionId: preview.connectionId, created: preview.created, authoringPreview: preview };
+      },
       create: async input => {
         const { preparedSavedSecret, ...operand } = input;
         const result = DaemonProviderConnectionMutationResponseV1Schema.parse(await run(
@@ -66,6 +90,8 @@ export function routeProviderCliActions(
         throw new ProviderCliError('provider_rpc_response_invalid', 'Provider deletion returned no connection id');
       },
     },
+    models: async input => unwrapProviderSavedModelsRpcResult(PROVIDER_ACTION_OUTPUT_SCHEMAS_V1['providers.models.list']
+      .parse(await run('providers.models.list', input))),
     probe: async input => PROVIDER_ACTION_OUTPUT_SCHEMAS_V1['providers.probe'].parse(await run('providers.probe', input)),
     loadModel: async ({ signal, ...input }) => PROVIDER_ACTION_OUTPUT_SCHEMAS_V1['providers.models.load']
       .parse(await run('providers.models.load', { action: 'load', ...input }, { signal })),

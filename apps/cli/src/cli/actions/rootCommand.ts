@@ -22,18 +22,14 @@ function commandsUnderRoot(root: string): readonly CompiledActionCliCommand[] {
  */
 export function renderActionCliRootHelp(root: string): string {
   const commands = commandsUnderRoot(root);
-  const dedicatedWorkflowUsage = root === 'workflow'
-    ? [
-        { label: 'happier workflow definition import <file|->', description: 'Create a saved definition from portable JSON' },
-        { label: 'happier workflow definition export <definition-id>', description: 'Write portable workflow JSON to stdout' },
-      ]
-    : [];
   return renderHelpPage({
     title: `happier ${root}`,
     subtitle: `Action-backed ${root} commands`,
     usage: [...commands.map((command) => ({
       label: `happier ${command.path.join(' ')}${
-        command.positionals.length || command.variadicPositional
+        command.actionId === 'workflow.definition.import' ? ' <file|->'
+        : command.actionId === 'workflow.definition.export' ? ' <definition-id> [file|-]'
+        : command.positionals.length || command.variadicPositional
           ? ` ${[
               ...command.positionals.map((field) => `<${field.path}>`),
               ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
@@ -41,7 +37,7 @@ export function renderActionCliRootHelp(root: string): string {
           : ''
       }`,
       description: command.spec.title,
-    })), ...dedicatedWorkflowUsage],
+    }))],
     notes: [
       `Use \`happier ${root} <subcommand> --help\` for that command's arguments.`,
       'Every subcommand accepts --input-json for whole structured input and --json for a stable envelope.',

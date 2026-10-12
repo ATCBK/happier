@@ -127,7 +127,7 @@ export async function handleAuthEnrollRemote(
     return !allowed.has(arg);
   });
   if (unexpected.length > 0) {
-    throw new Error(`Unknown auth enroll-remote arguments: ${unexpected.join(' ')}`);
+    throw new Error('Unknown auth enroll-remote arguments. Run `happier auth help` for supported flags.');
   }
   const timeoutMs = parseTimeoutMs(args);
   const deps: EnrollRemoteDeps = {

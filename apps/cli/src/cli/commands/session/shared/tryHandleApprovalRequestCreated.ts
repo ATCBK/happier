@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import type { ActionExecutionPlacement } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 
@@ -21,9 +22,17 @@ export async function tryHandleApprovalRequestCreated(params: Readonly<{
   envelopeKind: string;
   json: boolean;
   result: unknown;
+  executionPlacement?: ActionExecutionPlacement;
 }>): Promise<boolean> {
   if (!isApprovalRequestCreatedResult(params.result)) {
     return false;
+  }
+
+  if (params.executionPlacement === 'session') {
+    const prerequisite = 'This action needs its originating daemon or agent session to run after approval. '
+      + 'A standalone CLI request without that origin cannot execute; request the action from that session instead.';
+    if (params.json) console.error(prerequisite);
+    else console.log(prerequisite);
   }
 
   if (params.json) {

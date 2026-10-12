@@ -230,7 +230,6 @@ describe('auth wait provisioning response', () => {
       ]);
       const envelope = stdout.json<{
         success: boolean;
-        token: string;
         encryptionType: string;
         pairingAuthentication: string;
         machineId: string;
@@ -238,10 +237,14 @@ describe('auth wait provisioning response', () => {
 
       expect(envelope).toEqual(expect.objectContaining({
         success: true,
-        token: 'token-from-claim',
         encryptionType: 'tokenOnly',
         pairingAuthentication: 'v3',
       }));
+      expect(envelope).not.toHaveProperty('token');
+      for (const secret of ['token-from-claim', Buffer.from(keypair.secretKey).toString('base64'),
+        Buffer.from(pairingSecret).toString('base64url'), Buffer.from(sealed).toString('base64')]) {
+        expect(JSON.stringify(envelope)).not.toContain(secret);
+      }
       expect(typeof envelope.machineId).toBe('string');
       expect(envelope.machineId.length > 0).toBe(true);
 

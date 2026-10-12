@@ -12,10 +12,26 @@ import {
 import { listCompiledActionCliCommands } from './actions/compiledCommands';
 
 describe('compiled Action commands in the one command registry', () => {
+  it('admits MCP sign-out through the existing qualified revoke Action', async () => {
+    expect(await resolveAdmittedActionCliCommand(['mcp', 'servers', 'sign-out', 'linear']))
+      .toMatchObject({ actionId: 'connectedServices.accounts.revoke', path: ['mcp', 'servers', 'sign-out'] });
+  });
+  it('admits workflow document file adapters under their canonical Action paths', async () => {
+    for (const operation of ['import', 'export']) {
+      expect(await resolveAdmittedActionCliCommand(['workflow', 'definition', operation]))
+        .toMatchObject({ actionId: `workflow.definition.${operation}` });
+    }
+  });
+
   it('resolves an exact compiled leaf under an existing static root', async () => {
     const command = await resolveAdmittedActionCliCommand(['session', 'send', 'session_1', 'Hello']);
     expect(command?.path.join(' ')).toBe('session send');
     expect(command?.actionId).toBe('session.message.send');
+    for (const leaf of ['bind', 'unbind']) {
+      expect(await resolveAdmittedActionCliCommand(['mcp', 'servers', leaf, 'linear']))
+        .toMatchObject({ actionId: 'mcp.rules.set', path: ['mcp', 'servers', leaf] });
+    }
+    expect(await resolveAdmittedActionCliCommand(['mcp', 'serve'])).toBeNull();
   });
 
   it('leaves an unmigrated spelling to its dedicated owner', async () => {
@@ -34,6 +50,18 @@ describe('compiled Action commands in the one command registry', () => {
     expect(compatibility?.actionId).toBe('session.message.send');
     expect(compatibility?.path.join(' ')).toBe('session run send');
     expect(compatibility?.deprecated?.replacement).toBe('happier send <session> <message> --run <run>');
+  });
+
+  it('admits first-class Action roots and their aliases through the compiler', async () => {
+    for (const [root, actionId] of [
+      ['list', 'session.list'],
+      ['ls', 'session.list'],
+      ['send', 'session.message.send'],
+      ['wait', 'wait'],
+      ['stop', 'session.stop'],
+    ]) {
+      expect(await resolveAdmittedActionCliCommand([root])).toMatchObject({ actionId, path: [root] });
+    }
   });
 
   it('registers a root the Action catalog owns end to end and dispatches its leaves', async () => {
@@ -84,8 +112,13 @@ describe('compiled Action commands in the one command registry', () => {
       ...SHARED_SAVED_SECRET_ACTION_IDS_V1,
     ]));
     expect(commands.every((command) => command.acceptsServerId && command.requiresServerId)).toBe(true);
-    expect(commands.filter((command) => command.actionId.startsWith('teams.credentials.'))
+    // Home credential operations use the friendly credentials root. Host
+    // usage serialization has its own declared Team path below.
+    expect(commands.filter((command) => command.actionId.startsWith('teams.credentials.')
+      && command.actionId !== 'teams.credentials.usage.export')
       .every((command) => command.path[0] === 'credentials')).toBe(true);
+    expect(commands.filter((command) => command.actionId === 'teams.credentials.usage.export')
+      .map((command) => command.path)).toEqual([['teams', 'credentials', 'usage', 'export']]);
     expect(commands.filter((command) => command.actionId.startsWith('secrets.shared.'))
       .every((command) => command.path[0] === 'secrets' && command.path[1] === 'shared')).toBe(true);
 

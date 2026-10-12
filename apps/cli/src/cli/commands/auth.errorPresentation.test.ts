@@ -59,6 +59,16 @@ describe('auth command error presentation', () => {
 });
 
 describe('safe auth error projection', () => {
+  it('redacts credentials embedded in error text through the shared diagnostic owner', () => {
+    const token = `hap_v1_12345678-1234-4234-8234-123456789abc_${'A'.repeat(43)}`;
+    const diagnostic = projectSafeAuthError({ name: `Authorization: Bearer ${token}`,
+      code: `token:${token}`, message: `Request refused Authorization: Bearer ${token}; recovery_secret=private-recovery-key`,
+      response: { status: 401 } });
+    expect(JSON.stringify(diagnostic)).not.toContain(token);
+    expect(JSON.stringify(diagnostic)).not.toContain('private-recovery-key');
+    expect(diagnostic.status).toBe(401);
+  });
+
   it('preserves safe numeric codes and HTTP status without retaining other fields', () => {
     expect(projectSafeAuthError({
       code: Number.MAX_SAFE_INTEGER,

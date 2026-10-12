@@ -11,6 +11,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 import { showAuthHelp } from './help';
 import { resolveAuthMethodFlag } from './methodFlag';
+import { projectSafeAuthError } from './errorDiagnostic';
 
 function readWaitTimeoutSecondsFlag(args: readonly string[]): number | null {
   const index = args.indexOf('--wait-timeout');
@@ -82,7 +83,7 @@ export async function handleAuthLogin(args: string[], signal?: AbortSignal): Pro
       console.log(ok(stopped.status === 'stopped' ? 'Stopped daemon' : 'No daemon was running'));
     } catch (error) {
       if (isDaemonStopIncompleteError(error)) throw error;
-      logger.debug('Daemon was not running or failed to stop:', error);
+      logger.debug('Daemon was not running or failed to stop:', projectSafeAuthError(error));
     }
 
     await clearCredentials();
@@ -112,7 +113,7 @@ export async function handleAuthLogin(args: string[], signal?: AbortSignal): Pro
           console.log(ok(stopped.status === 'stopped' ? 'Stopped daemon' : 'No daemon was running'));
         } catch (error) {
           if (isDaemonStopIncompleteError(error)) throw error;
-          logger.debug('Daemon was not running or failed to stop during auth repair:', error);
+          logger.debug('Daemon was not running or failed to stop during auth repair:', projectSafeAuthError(error));
         }
 
         await clearCredentials();
@@ -161,7 +162,7 @@ export async function handleAuthLogin(args: string[], signal?: AbortSignal): Pro
     ], { indent: '  ' });
     console.log(out.render());
   } catch (error) {
-    console.error(errorFrame('Sign-in failed', [error instanceof Error ? error.message : 'Unknown error']));
+    console.error(errorFrame('Sign-in failed', [projectSafeAuthError(error).message]));
     process.exit(1);
   }
 }

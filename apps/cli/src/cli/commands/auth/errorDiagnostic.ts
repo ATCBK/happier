@@ -1,3 +1,5 @@
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
+
 type SafeAuthErrorDiagnostic = Readonly<{
   name: string;
   message: string;
@@ -28,7 +30,8 @@ export function projectSafeAuthError(error: unknown): SafeAuthErrorDiagnostic {
   const name = typeof errorRecord?.name === 'string' && errorRecord.name.length > 0
     ? errorRecord.name
     : 'Error';
-  const code = readSafeErrorCode(errorRecord?.code);
+  const rawCode = readSafeErrorCode(errorRecord?.code);
+  const code = typeof rawCode === 'string' ? redactBugReportSensitiveText(rawCode) : rawCode;
   const message = typeof errorRecord?.message === 'string' && errorRecord.message.trim().length > 0
     && errorRecord.message !== 'Unknown error'
     ? errorRecord.message
@@ -36,8 +39,8 @@ export function projectSafeAuthError(error: unknown): SafeAuthErrorDiagnostic {
   const status = readSafeHttpStatus(errorRecord?.status)
     ?? readSafeHttpStatus(responseRecord?.status);
   return {
-    name,
-    message,
+    name: redactBugReportSensitiveText(name),
+    message: redactBugReportSensitiveText(message),
     ...(code !== undefined ? { code } : {}),
     ...(status !== undefined ? { status } : {}),
   };

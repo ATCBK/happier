@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { parseConnectArgs } from './parseConnectArgs';
 
 describe('parseConnectArgs', () => {
+  it('parses explicit native import acquisition without treating source as a target', () => {
+    const parsed = parseConnectArgs(['codex', '--import', '--source', 'native']);
+    expect(parsed.subcommand).toBe('codex');
+    expect(parsed.options).toMatchObject({ import: true, source: 'native' });
+  });
+  it('refuses native import into an existing opaque account target', () => {
+    expect(() => parseConnectArgs(['codex', '--import', '--account', 'account-7'])).toThrow();
+    expect(() => parseConnectArgs(['codex', '--import', '--profile', 'work'])).toThrow();
+  });
+  it('refuses ambiguous native and interactive authentication choices', () => {
+    expect(() => parseConnectArgs(['codex', '--source', 'native'])).toThrow();
+    expect(() => parseConnectArgs(['codex', '--import', '--mode', 'oauth'])).toThrow();
+    expect(() => parseConnectArgs(['codex', '--import', '--source'])).toThrow();
+  });
   it('parses --device and --profile and a subcommand', () => {
     const res = parseConnectArgs(['codex', '--device', '--profile', 'work']);
     expect(res.subcommand).toBe('codex');

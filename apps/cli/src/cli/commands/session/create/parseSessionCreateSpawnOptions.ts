@@ -1,8 +1,8 @@
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
-import type { AcpConfigOptionOverridesV1, ConnectedServiceBindingsV2, SessionMcpSelectionV1, SpawnConfigOptionValue } from '@happier-dev/protocol';
+import { readCapabilitySelectionCarrierV1, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import type { AcpConfigOptionOverridesV1, ConnectedServiceBindingsV2, SpawnConfigOptionValue } from '@happier-dev/protocol';
 
 import { readCommandPositionals, readFlagValue, readRawFlagValue, hasFlag } from '@/cli/commands/shared/argvFlags';
 import { normalizeBackendTargetKeysFromCsv } from '@/cli/commands/session/shared/normalizeBackendTargetKeys';
@@ -31,7 +31,12 @@ export type SessionCreateSpawnRequest = Readonly<{
   profileId?: string;
   environmentVariables?: Readonly<Record<string, string>>;
   connectedServices?: ConnectedServiceBindingsV2;
-  mcpSelection?: SessionMcpSelectionV1;
+  capabilitySelection?: SessionCapabilitySelectionV1;
+  /** CLI names only; resolved to canonical IDs before Action dispatch. */
+  capabilitySelectionNames?: Readonly<{
+    skills: Readonly<{ include: readonly string[]; exclude: readonly string[] }>;
+    mcp: Readonly<{ include: readonly string[]; exclude: readonly string[] }>;
+  }>;
   transcriptStorage?: 'persisted' | 'direct';
   terminal?: Readonly<Record<string, unknown>>;
   machineId?: string;
@@ -192,6 +197,7 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
       '--config-option', '--reasoning-effort', '--config-overrides-json', '--env', '--auth',
       '--connected-services', '--auth-json', '--connected-services-json', '--mcp-selection-json',
       '--terminal-json',
+      '--skill', '--no-skill', '--mcp', '--no-mcp',
     ],
     maxPositionals: 1,
     inlineValueFlags: [
@@ -215,6 +221,7 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
       '--config-option', '--reasoning-effort', '--config-overrides-json', '--env', '--auth',
       '--connected-services', '--auth-json', '--connected-services-json', '--mcp-selection-json',
       '--terminal-json',
+      '--skill', '--no-skill', '--mcp', '--no-mcp',
     ],
   });
   const path = resolveRequestedSessionDirectory({
@@ -287,11 +294,20 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
   const connectedServicesAuthIntent = connectedServicesAuthRaw
     ? parseConnectedServicesLaunchAuth(connectedServicesAuthRaw)
     : undefined;
-  const mcpSelection = readParsedJsonFlag(
+  const capabilitySelection = readParsedJsonFlag(
     argv,
     '--mcp-selection-json',
-    (value) => SessionMcpSelectionV1Schema.parse(value),
+    (value) => {
+      const selection = readCapabilitySelectionCarrierV1({ mcpSelection: value });
+      if (!selection) throw new Error('Invalid MCP selection');
+      return selection;
+    },
   );
+  const capabilitySelectionNames = {
+    skills: { include: readRepeatedFlagValues(argv, '--skill'), exclude: readRepeatedFlagValues(argv, '--no-skill') },
+    mcp: { include: readRepeatedFlagValues(argv, '--mcp'), exclude: readRepeatedFlagValues(argv, '--no-mcp') },
+  };
+  const hasCapabilityNames = Object.values(capabilitySelectionNames).some(kind => kind.include.length > 0 || kind.exclude.length > 0);
   const terminalRaw = readFlagValue(argv, '--terminal-json');
   const terminal = terminalRaw ? parseObjectJsonFlagValue(terminalRaw, '--terminal-json') : null;
   const transcriptStorage = transcriptStorageRaw ? parseTranscriptStorage(transcriptStorageRaw) : null;
@@ -317,7 +333,8 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
       ...(profileId ? { profileId } : {}),
       ...(environmentVariables ? { environmentVariables } : {}),
       ...(connectedServices ? { connectedServices } : {}),
-      ...(mcpSelection ? { mcpSelection } : {}),
+      ...(capabilitySelection ? { capabilitySelection } : {}),
+      ...(hasCapabilityNames ? { capabilitySelectionNames } : {}),
       ...(transcriptStorage ? { transcriptStorage } : {}),
       ...(terminal ? { terminal } : {}),
       ...(machineId ? { machineId } : {}),

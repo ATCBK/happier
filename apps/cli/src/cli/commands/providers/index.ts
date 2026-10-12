@@ -2,6 +2,7 @@ import { CUSTOM_PROVIDER_AUTHORING_PROTOCOLS_V1, CustomProviderAuthoringProtocol
 import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/connections/customTemplateV1';
 import { parseProviderManualModelInput } from '@happier-dev/protocol/providers/manualModelInput';
 import { ProviderModelIdSchema } from '@happier-dev/protocol/providers/ids';
+import { isProviderContributionAuthoringMachineRequiredV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import type { DaemonProviderContributionAuthoringPreviewV1 } from '@happier-dev/protocol/rpc';
 
 import { assertNoRawSecretArguments, assertOnlyAllowedFlags, hasFlag, positionalArgs, readFlag, readRawFlag } from './args';
@@ -103,11 +104,12 @@ function describeAuthoringCandidates(
   ].join('\n');
 }
 
-async function resolveTarget(args: readonly string[], deps: ProviderCliDependencies) {
+async function resolveTarget(args: readonly string[], deps: ProviderCliDependencies, machineFacts = false) {
   assertPositionalArity(args, 1);
   const snapshot = await deps.loadSnapshot();
   const identity = positionalArgs(args)[0];
-  const machineId = readFlag(args, '--machine') ?? snapshot.machineId;
+  const selectedMachineId = readFlag(args, '--machine');
+  const machineId = selectedMachineId ?? snapshot.machineId;
   if (machineId !== snapshot.machineId) {
     throw new ProviderCliError(
       'provider_not_enabled_on_machine',
@@ -115,7 +117,7 @@ async function resolveTarget(args: readonly string[], deps: ProviderCliDependenc
       { requestedMachineId: machineId, currentMachineId: snapshot.machineId },
     );
   }
-  const described = await deps.connections.describe({ machineId });
+  const described = await deps.connections.describe(selectedMachineId || machineFacts ? { machineId } : {});
   if (described.status === 'error') throwServiceError(described);
   const connection = resolveConnectionIdentity(requireValue(identity, 'connection id'), described.connections);
   return { snapshot, connection, machineId };
@@ -209,8 +211,7 @@ export async function executeProvidersCommand(
   if (subcommand === 'list') {
     assertOnlyAllowedFlags(args.slice(1), LIST_FLAGS);
     assertPositionalArity(args.slice(1), 0);
-    const snapshot = await deps.loadSnapshot();
-    const described = await deps.connections.describe({ machineId: snapshot.machineId });
+    const described = await deps.connections.describe({});
     if (described.status === 'error') throwServiceError(described);
     const available = hasFlag(args, '--available') ? described.available : [];
     return {
@@ -240,7 +241,8 @@ export async function executeProvidersCommand(
     }
     const allocatedConnectionId = deps.allocateConnectionId();
     const preview = await deps.connections.previewCreateContribution({
-      machineId: snapshot.machineId,
+      ...(isProviderContributionAuthoringMachineRequiredV1({ definition: resolved.contribution.definition, selectedCandidateId })
+        ? { machineId: snapshot.machineId } : {}),
       connectionId: allocatedConnectionId,
       contributionKey: resolved.contributionKey,
       displayName,
@@ -293,7 +295,7 @@ export async function executeProvidersCommand(
   }
   if (subcommand === 'enable' || subcommand === 'disable') {
     assertOnlyAllowedFlags(args.slice(1), MACHINE_FLAGS);
-    const target = await resolveTarget(args.slice(1), deps);
+    const target = await resolveTarget(args.slice(1), deps, subcommand === 'enable');
     if (subcommand === 'disable') {
       const disabledScope = 'connection' as const;
       const result = await deps.connections.setEnabled({

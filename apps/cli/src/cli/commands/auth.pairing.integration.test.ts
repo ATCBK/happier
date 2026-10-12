@@ -348,7 +348,8 @@ describe('auth pairing commands (request/approve/wait) (json)', () => {
         expect(waitOut.logs.length).toBe(1);
         const parsed = JSON.parse(waitOut.logs[0] ?? '');
         expect(parsed.success).toBe(true);
-        expect(parsed.token).toBe('issued-token');
+        expect(parsed).not.toHaveProperty('token');
+        expect(waitOut.logs.join('\n')).not.toContain('issued-token');
         expect(parsed.encryptionType).toBe('dataKey');
         expect(parsed.pairingAuthentication).toBe('v3');
       } finally {
@@ -435,10 +436,10 @@ describe('auth pairing commands (request/approve/wait) (json)', () => {
         await handleAuthWait(['--public-key', requestJson.publicKey, '--json']);
         expect(JSON.parse(waitOut.logs[0] ?? '')).toMatchObject({
           success: true,
-          token: 'plain-issued-token',
           encryptionType: 'tokenOnly',
           pairingAuthentication: 'v3',
         });
+        expect(waitOut.logs.join('\n')).not.toContain('plain-issued-token');
       } finally {
         waitOut.restore();
       }
@@ -547,7 +548,8 @@ describe('auth pairing commands (request/approve/wait) (json)', () => {
         };
         expect(parsed.success).toBe(true);
         expect(parsed.encryptionType).toBe('dataKey');
-        expect((parsed as { token?: string }).token).toBe('fresh-approved-token');
+        expect(parsed).not.toHaveProperty('token');
+        expect(waitOut.logs.join('\n')).not.toContain('fresh-approved-token');
         expect(typeof parsed.machineId).toBe('string');
         expect(parsed.machineId?.length).toBeGreaterThan(0);
       } finally {

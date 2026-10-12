@@ -15,11 +15,11 @@ async function showHelp(): Promise<void> {
   const { listCompiledActionCliUsageLinesForRoot } = await import('@/cli/actions/commandHelp');
   console.log(renderHelpPage({
     title: 'happier machines',
-    subtitle: 'Discover Account machines for API targeting and administer Machine Pools',
+    subtitle: 'Discover machines, inspect resources, and administer Machine Pools',
     usage: listCompiledActionCliUsageLinesForRoot(['machines']).map((label) => ({ label, description: '' })),
     notes: [
       'Authentication may come from happier auth login or HAPPIER_TOKEN.',
-      'Canonical Actions: machines.list and machines.pools.*.',
+      'Canonical Actions include machines.list, machines.resources.*, machines.processes.*, and machines.pools.*.',
     ],
   }));
 }
