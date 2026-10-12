@@ -6,7 +6,7 @@ import {
     isActiveHomeAccountStatus,
     normalizeVerifiedEmail,
     readKeysetCursorIdV1,
-    readKeysetCursorTimeV1,
+    readKeysetCursorTextV1,
     type HomeAccountDetailV1,
     type HomeAccountListResultV1,
     type HomeAccountPickerRowV1,
@@ -51,7 +51,7 @@ import {
     readTeamOwnershipErasureDecisionsInTx,
 } from "@/app/teams/memberships/erasurePrecondition";
 import type { Tx } from "@/storage/inTx";
-import { getDbProviderFromEnv } from "@/storage/prisma";
+import { getDbProviderFromEnv, prismaRuntime } from "@/storage/prisma";
 
 import {
     listHomeAdministrationEventsInTx,
@@ -383,7 +383,7 @@ async function resolveTeamsDestinationShownInTx(tx: Tx, input: Readonly<{
 async function readActiveHomeAdministratorNamesInTx(tx: Tx): Promise<string[]> {
     const rows = await tx.account.findMany({
         where: { homeRole: { in: ["owner", "admin"] }, status: "active" },
-        select: { homeRole: true, firstName: true, lastName: true, username: true },
+        select: { homeRole: true, name: true, username: true },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     return [...rows.filter((row) => row.homeRole === "owner"), ...rows.filter((row) => row.homeRole !== "owner")]
@@ -473,29 +473,40 @@ async function readHomeAccountAuthenticationByIdInTx(
     });
 }
 
-const HOME_ACCOUNT_CURSOR_QUERY_V1 = "home-accounts:v1";
-type HomeAccountCursor = Readonly<{ createdAt: number; id: string }>;
+const HOME_ACCOUNT_CURSOR_QUERY_V1 = "home-accounts:role-label:v1";
+// Sort precision, not a name limit: 32 code points at up to 6 JSON-escaped
+// bytes each leave room for the tuple/query binding and UUID under the 512-character cursor ceiling.
+const HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS = 32;
+type HomeAccountCursor = Readonly<{ roleRank: number; unnamedFlag: number; sortKey: string; accountId: string }>;
 
 function encodeHomeAccountCursor(cursor: HomeAccountCursor): string {
     return encodeKeysetCursorV1({
         queryKey: HOME_ACCOUNT_CURSOR_QUERY_V1,
-        parts: [cursor.createdAt, cursor.id],
+        parts: [cursor.roleRank, cursor.unnamedFlag, cursor.sortKey, cursor.accountId],
     });
 }
 
 function decodeHomeAccountCursor(cursor: string): HomeAccountCursor | null {
     const decoded = decodeKeysetCursorV1(cursor, HOME_ACCOUNT_CURSOR_QUERY_V1);
-    if (decoded.status !== "ok") return null;
-    const createdAt = readKeysetCursorTimeV1(decoded.parts[0]);
-    const id = readKeysetCursorIdV1(decoded.parts[1]);
-    return createdAt === null || id === null ? null : { createdAt, id };
+    if (decoded.status !== "ok" || decoded.parts.length !== 4) return null;
+    const roleRank = decoded.parts[0];
+    const unnamedFlag = decoded.parts[1];
+    const sortKey = readKeysetCursorTextV1(decoded.parts[2]);
+    const accountId = readKeysetCursorIdV1(decoded.parts[3]);
+    if (typeof roleRank !== "number" || !Number.isInteger(roleRank) || roleRank < 0 || roleRank > 2
+        || (unnamedFlag !== 0 && unnamedFlag !== 1)
+        || sortKey === null || [...sortKey].length > HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS
+        || accountId === null) return null;
+    return { roleRank, unnamedFlag, sortKey, accountId };
 }
 
 /**
  * The administrator People page.
  *
- * The keyset is `(createdAt, id)` so a page stays stable while Accounts are
- * created or administered. A malformed or foreign cursor is rejected rather
+ * Captures `(roleRank, unnamedFlag, sortKey, accountId)` from the ordering query.
+ * Renamed rows can cross the boundary (and recur); unchanged rows stay complete
+ * even if the boundary Account is renamed or deleted. No boundary reread occurs.
+ * A malformed or foreign cursor is rejected rather
  * than silently restarting and duplicating rows already rendered by the client.
  */
 export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
@@ -513,24 +524,63 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
     const limit = input.limit ?? HOME_ACCOUNT_PAGE_LIMIT_DEFAULT_V1;
     const after = input.cursor ? decodeHomeAccountCursor(input.cursor) : null;
     if (input.cursor && !after) return { status: "rejected", code: "invalid_home_cursor" };
-    const rows: readonly HomeAccountRow[] = await tx.account.findMany({
-        ...(after
-            ? {
-                where: {
-                    OR: [
-                        { createdAt: { gt: new Date(after.createdAt) } },
-                        { createdAt: new Date(after.createdAt), id: { gt: after.id } },
-                    ],
-                },
-            }
-            : {}),
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        take: limit + 1,
+    const sql = prismaRuntime.sql;
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    const postgres = provider === "postgres" || provider === "pglite";
+    const identifier = (name: string) => prismaRuntime.raw(provider === "mysql" ? `\`${name}\`` : `"${name}"`);
+    // Match the display-label owner's JavaScript trim, including whitespace-only
+    // names falling back to username. SQL TRIM's default only removes spaces.
+    const whitespace = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+    const trimmed = (column: string) => provider === "mysql"
+        ? sql`REGEXP_REPLACE(${identifier(column)}, ${`^[${whitespace}]+|[${whitespace}]+$`}, '')`
+        : postgres
+            ? sql`BTRIM(${identifier(column)}, ${whitespace})`
+            : sql`TRIM(${identifier(column)}, ${whitespace})`;
+    const label = sql`COALESCE(NULLIF(${trimmed("name")}, ''), NULLIF(${trimmed("username")}, ''), '')`;
+    const sortKeyExpression = sql`SUBSTR(LOWER(${label}), 1, ${HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS})`;
+    // Provider-native folding, with one bytewise comparison for both ordering
+    // and the captured boundary (not a second JavaScript sort/normalizer).
+    const orderedText = (expression: ReturnType<typeof sql>) => provider === "mysql"
+        ? sql`CAST(${expression} AS BINARY)`
+        : sql`${expression} COLLATE ${prismaRuntime.raw(postgres ? '"C"' : "BINARY")}`;
+    const roleRank = identifier("roleRank");
+    const unnamedFlag = identifier("unnamedFlag");
+    const sortKey = orderedText(sql`${identifier("sortKey")}`);
+    const accountId = orderedText(sql`${identifier("accountId")}`);
+    const boundary = after
+        ? sql`WHERE (${roleRank}, ${unnamedFlag}, ${sortKey}, ${accountId}) >
+            (${after.roleRank}, ${after.unnamedFlag}, ${orderedText(sql`${after.sortKey}`)}, ${orderedText(sql`${after.accountId}`)})`
+        : prismaRuntime.empty;
+    const positions = await tx.$queryRaw<readonly Readonly<{
+        roleRank: number | bigint;
+        unnamedFlag: number | bigint;
+        sortKey: string;
+        accountId: string;
+    }>[]>(sql`
+        SELECT ${roleRank}, ${unnamedFlag}, ${identifier("sortKey")}, ${identifier("accountId")}
+        FROM (
+            SELECT ${identifier("id")} AS ${identifier("accountId")},
+                CASE ${identifier("homeRole")} WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END AS ${roleRank},
+                CASE WHEN ${label} = '' THEN 1 ELSE 0 END AS ${unnamedFlag},
+                ${sortKeyExpression} AS ${identifier("sortKey")}
+            FROM ${identifier("Account")}
+        ) roster
+        ${boundary}
+        ORDER BY ${roleRank}, ${unnamedFlag}, ${sortKey}, ${accountId}
+        LIMIT ${limit + 1}
+    `);
+    const selected = await tx.account.findMany({
+        where: { id: { in: positions.slice(0, limit).map((position) => position.accountId) } },
         select: HOME_ACCOUNT_ROW_SELECT,
     });
+    const byId = new Map(selected.map((row) => [row.id, row]));
+    const page: readonly HomeAccountRow[] = positions.slice(0, limit).map((position) => {
+        const row = byId.get(position.accountId);
+        if (!row) throw new Error("home_governance_account_disappeared_in_transaction");
+        return row;
+    });
 
-    const page = rows.slice(0, limit);
-    const last = page.length === limit ? page[page.length - 1] : undefined;
+    const last = positions.length > limit ? positions[limit - 1] : undefined;
     const activeOwnerCount = await countActiveHomeOwnersInTx(tx);
     const teamOwnership = actorAuthority.eraseAccounts
         ? await readTeamOwnershipErasureDecisionsInTx(tx, { accountIds: page.map((row) => row.id) })
@@ -556,8 +606,11 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
                 if (!projected) throw new Error("home_governance_actor_disappeared_in_transaction");
                 return projected;
             })),
-            nextCursor: rows.length > limit && last
-                ? encodeHomeAccountCursor({ createdAt: last.createdAt.getTime(), id: last.id })
+            nextCursor: last
+                ? encodeHomeAccountCursor({
+                    roleRank: Number(last.roleRank), unnamedFlag: Number(last.unnamedFlag),
+                    sortKey: last.sortKey, accountId: last.accountId,
+                })
                 : null,
         },
     };
