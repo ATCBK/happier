@@ -1,4 +1,5 @@
 import type { ActionId, ApprovalRequestOriginV1 } from '@happier-dev/protocol';
+import type { ActionToolExecutionOptions } from './createActionToolExecutorBridge';
 
 type ActionExecutorResult = Readonly<
   | { ok: true; result: unknown }
@@ -15,6 +16,7 @@ type ActionExecutorLike = Readonly<{
       approvalOrigin?: ApprovalRequestOriginV1 | null;
       callerPermissionMode?: string | null;
       actionRequestId?: string | null;
+      signal?: AbortSignal;
     }>,
   ) => Promise<ActionExecutorResult>;
 }>;
@@ -34,16 +36,16 @@ export function createChangeTitleToolHandler(params: Readonly<{
   surface: 'mcp' | 'cli' | 'agent';
   resolveCallerPermissionMode?: (() => string | null | undefined) | null;
   afterCommit?: (args: Readonly<{ sessionId: string; title: string }>) => Promise<void> | void;
-}>): (sessionId: string, title: string, options?: Readonly<{ approvalOrigin?: ApprovalRequestOriginV1 | null }>) => Promise<unknown> {
+}>): (sessionId: string, title: string, options?: Pick<ActionToolExecutionOptions, 'approvalOrigin' | 'actionRequestId' | 'signal'>) => Promise<unknown> {
   return async (sessionId, title, options) => {
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!normalizedSessionId) {
-      return { success: false, error: 'session_not_selected' };
+      return { success: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
     }
 
     const approvalOrigin = options?.approvalOrigin ?? null;
     const callerPermissionMode = params.resolveCallerPermissionMode?.() ?? null;
-    const actionRequestId = approvalOrigin?.toolCallId
+    const actionRequestId = options?.actionRequestId ?? approvalOrigin?.toolCallId
       ?? approvalOrigin?.mcpRequestId
       ?? approvalOrigin?.messageId
       ?? approvalOrigin?.parentMessageId
@@ -57,11 +59,12 @@ export function createChangeTitleToolHandler(params: Readonly<{
         ...(approvalOrigin ? { approvalOrigin } : {}),
         ...(callerPermissionMode ? { callerPermissionMode } : {}),
         ...(actionRequestId ? { actionRequestId } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
       },
     );
 
     if (!res.ok) {
-      return { success: false, error: res.error };
+      return { success: false, errorCode: res.errorCode, error: res.error };
     }
 
     const result = readRecord(res.result);
@@ -73,7 +76,7 @@ export function createChangeTitleToolHandler(params: Readonly<{
         const error = readNonEmptyString(result.error)
           ?? readNonEmptyString(result.errorCode)
           ?? 'action_failed';
-        return { success: false, error };
+        return { success: false, errorCode: readNonEmptyString(result.errorCode) ?? 'action_failed', error };
       }
     }
 

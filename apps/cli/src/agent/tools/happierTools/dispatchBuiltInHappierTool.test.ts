@@ -30,7 +30,7 @@ vi.mock('@/plugins/runtime/reload/singleton', () => ({
 }));
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Ajv2020 from 'ajv/dist/2020.js';
+import Ajv from 'ajv';
 import {
   ActionsSettingsV1Schema,
   ActionDefinitionV1Schema,
@@ -40,6 +40,7 @@ import {
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
+import { createChangeTitleToolHandler } from './createChangeTitleToolHandler';
 
 import { listBuiltInHappierTools } from './listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
@@ -72,6 +73,26 @@ function useActiveResolvedContributionRegistry(
 }
 
 describe('built-in Happier tools', () => {
+  it.each([
+    { cancelled: false, expectedCode: 'unsupported_action' },
+    { cancelled: true, expectedCode: 'cancelled' },
+  ])('preserves the real title Action outcome (cancelled=$cancelled)', async ({ cancelled, expectedCode }) => {
+    // Keep Action admission and title dispatch real; no metadata transport is
+    // installed in this host, so an uncancelled call is explicitly unsupported.
+    const executor = createActionExecutor(createUnavailableActionTransportDeps());
+    const controller = new AbortController();
+    if (cancelled) controller.abort();
+    const result = await dispatchBuiltInHappierTool({
+      toolName: 'change_title', args: { title: 'New title' }, sessionId: 'sess-1',
+      signal: controller.signal,
+      deps: {
+        changeTitle: createChangeTitleToolHandler({ executor, surface: 'agent' }),
+        executeActionByToolName: createActionToolExecutorBridge({ executor, surface: 'agent' }).executeActionByToolName,
+      },
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: expectedCode });
+  });
+
   beforeEach(() => {
     activeRuntimeRegistryState.registry = null;
     activeRuntimeRegistryState.catalogPolicyOutcome = 'visible';
@@ -250,7 +271,7 @@ describe('built-in Happier tools', () => {
     expect(definition.kindVersion).toBe(1);
     if (!definition.inputSchema) throw new Error('Expected spawn input schema');
     // Exercise the published schema, including references, rather than requiring inline serialization.
-    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(definition.inputSchema);
+    const validate = new Ajv({ strict: false, validateFormats: false }).compile(definition.inputSchema);
     const input = {
       executionTarget: { serverId: 'active', machineId: 'machine-1' },
       directory: { kind: 'path', path: '/workspace/project' },

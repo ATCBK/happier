@@ -93,7 +93,7 @@ function normalizeChangeTitleResult(result: unknown): HappierBuiltInToolDispatch
     return ok(result);
   }
 
-  const changeTitleResult = result as { success?: unknown; error?: unknown };
+  const changeTitleResult = result as { success?: unknown; errorCode?: unknown; error?: unknown };
   if (changeTitleResult.success !== false) {
     return ok(result);
   }
@@ -101,7 +101,10 @@ function normalizeChangeTitleResult(result: unknown): HappierBuiltInToolDispatch
   const errorMessage = typeof changeTitleResult.error === 'string'
     ? changeTitleResult.error
     : 'Failed to change title';
-  return err('change_title_failed', errorMessage);
+  const errorCode = typeof changeTitleResult.errorCode === 'string' && changeTitleResult.errorCode.trim()
+    ? changeTitleResult.errorCode
+    : 'change_title_failed';
+  return err(errorCode, errorMessage);
 }
 
 export async function dispatchBuiltInHappierTool(params: Readonly<{

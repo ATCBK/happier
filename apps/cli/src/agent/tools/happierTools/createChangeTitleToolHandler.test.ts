@@ -21,6 +21,7 @@ describe('createChangeTitleToolHandler', () => {
 
         await expect(handler('sess_1', 'New title')).resolves.toEqual({
             success: false,
+            errorCode: 'not_authenticated',
             error: 'not_authenticated',
         });
         expect(afterCommit).not.toHaveBeenCalled();
