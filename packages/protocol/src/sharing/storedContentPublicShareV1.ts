@@ -5,7 +5,7 @@ import { SessionStoredMessageContentSchema } from '../sessions/messages/sessionS
 import { ArtifactBlobReadResponseV1Schema } from '../artifacts/artifactBinaryV1.js';
 import { SessionSystemRecordSchema } from '../sessions/system/records/sessionSystemRecord.js';
 import { SessionSystemRecordContentSchema } from '../sessions/system/records/sessionSystemRecordContent.js';
-import { SessionTranscriptSurfaceItemReferenceV1Schema } from '../sessions/messages/transcriptObservationV1.js';
+import { SessionTranscriptSurfaceItemReferenceInputV1Schema, SessionTranscriptSurfaceItemReferenceReadV1Schema } from '../sessions/messages/transcriptObservationV1.js';
 import { SessionMessageRoleSchema } from '../sessions/messages/sessionMessageRole.js';
 
 /** Closed authority-bearing HTTP objects; no fragment secret is a transport field. */
@@ -45,7 +45,7 @@ export const StoredContentPublicSharesListResponseV1Schema = lazyZodSchema(() =>
 export type StoredContentPublicSharesListResponseV1 = z.infer<typeof StoredContentPublicSharesListResponseV1Schema>;
 export const StoredContentPublicShareCreateResponseV1Schema = lazyZodSchema(() => z.object({
   publicShare: StoredContentPublicShareV1Schema,
-  isolatedOrigin: z.string().url(),
+  viewerOrigin: z.string().url(),
 }).strict());
 
 export const StoredContentPublicShareAccessLogV1Schema = lazyZodSchema(() => z.object({
@@ -76,7 +76,7 @@ export const StoredContentPublicShareReadResponseV1Schema = lazyZodSchema(() => 
       agentStateVersion: z.number().int().nonnegative(), messages: z.array(z.object({
         id: z.string().min(1), seq: z.number().int().nonnegative(), localId: z.string().nullable().optional(),
         createdAt: z.number().finite(), content: SessionStoredMessageContentSchema,
-        surfaceItemReference: z.lazy(() => SessionTranscriptSurfaceItemReferenceV1Schema).nullable().optional(),
+        surfaceItemReference: z.lazy(() => SessionTranscriptSurfaceItemReferenceInputV1Schema).nullable().optional(),
         messageRole: SessionMessageRoleSchema.optional(),
       })),
       hasMore: z.boolean(), nextBeforeSeq: z.number().int().nonnegative().nullable(),
@@ -95,7 +95,7 @@ export const StoredContentPublicShareVisualReadResponseV1Schema = lazyZodSchema(
   messageId: z.string().min(1),
   encryptionMode: z.enum(['plain', 'e2ee']),
   networkOff: z.boolean(),
-  reference: z.lazy(() => SessionTranscriptSurfaceItemReferenceV1Schema),
+  reference: z.lazy(() => SessionTranscriptSurfaceItemReferenceReadV1Schema),
   record: SessionSystemRecordSchema.extend({ content: SessionSystemRecordContentSchema }),
 }).strict().superRefine((value, context) => {
   if ((value.encryptionMode === 'plain') !== (value.record.content.t === 'plain')
