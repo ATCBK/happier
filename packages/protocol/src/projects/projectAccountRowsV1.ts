@@ -5,6 +5,7 @@ import { isAccountScopedBlobCiphertextForKind } from '../crypto/accountScopedCip
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
 import { WorkspaceSyncRelationshipV1Schema } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 import { PromptStackEntryV1Schema } from '../prompts/library/promptStacksV1.js';
+import { ProjectAtmosphereSchema } from '../account/settings/homeAtmosphere.js';
 
 export const PROJECT_ACCOUNT_ROWS_ROUTE_V1 = '/v1/account/project-rows' as const;
 export const PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1 = '@happier/account/project-rows/v1/' as const;
@@ -22,6 +23,7 @@ export type ProjectAccountRowKeyV1 = z.infer<typeof ProjectAccountRowKeyV1Schema
 export const ProjectAccountRelationshipGraphV1Schema = lazyDefinition(() => z.strictObject({ relationships: z.array(WorkspaceSyncRelationshipV1Schema) }));
 export type ProjectAccountRelationshipGraphV1 = z.infer<typeof ProjectAccountRelationshipGraphV1Schema>;
 export const ProjectAccountOrganizationV1Schema = lazyDefinition(() => z.strictObject({
+    atmosphere: z.optional(z.union([z.literal('home'), ProjectAtmosphereSchema])),
     hidden: z.optional(z.boolean()), pinned: z.optional(z.boolean()),
     label: z.optional(z.string().check(z.minLength(1), z.refine(value => value === value.trim()))),
     promptStack: z.optional(z.array(z.strictObject({ ...PromptStackEntryV1Schema.shape,
