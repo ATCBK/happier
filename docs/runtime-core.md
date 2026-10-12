@@ -184,6 +184,16 @@ The [input consumer](../apps/cli/src/agent/runtime/session/input/sessionProvider
 
 In 0.3 development, a missing launchable Agent CLI carries `agent_cli_missing` from both the command/terminal launch owner and the native plugin system-tool binding. Startup sanitization preserves that code; the primary Session issue classifier projects `dependency_failure` with static installation/path remediation. It does not expose raw startup error text or infer acceptance from a failed prerequisite.
 
+The daemon's existing runner-respawn owner reads this retained failed-turn issue
+before automatic recovery. A deterministic primary Session dependency failure
+observed after the exited runner's process start stops that
+respawn cycle; the host's issue remains the user-visible authority. An issue from
+an earlier runner cannot veto a fresh explicit Resume. This uses the existing
+exit-custody process witness and restart scheduler, not another retry policy.
+Transient `preparation_pending` and `daemon_plugin_catalog_unavailable` failures
+keep the existing automatic recovery path. Fixing configuration followed by
+explicit Resume admits a new runner; it does not silently resubmit uncertain input.
+
 The Session MCP owner refuses an unavailable daemon plugin catalog with
 `daemon_plugin_catalog_unavailable`, rather than interpreting it as an empty
 catalog. Before the live loop takes ownership, the construction owner projects

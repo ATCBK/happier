@@ -237,6 +237,13 @@ then verify and materialize those bytes; the renderer does not impose that
 RPC's deadline on the whole composition. Actual loader failures retain Retry,
 and retired mounts or Artifact identities cannot adopt late results. A pending
 load is not evidence of a plugin crash or of an unknown Action outcome.
+The surface disclosure fence distinguishes a pending Account-mode read from a
+terminal refusal: it shows loading while withholding context, and shows an error
+only after refusal. A cancellable Account-selected Artifact acquisition also
+waits for the initial Availability projection before reading bytes. The existing
+Account lifetime and mount signal retire that wait; a retired native load cannot
+quarantine healthy bytes or latch an error onto its successor mount. A loaded
+projection's actual selection refusal remains fail-closed.
 
 In 0.3 development source, the selected Artifact lease owner shares in-flight
 acquisition by digest within the captured Account lifetime and removes each

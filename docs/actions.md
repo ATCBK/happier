@@ -1705,9 +1705,13 @@ or invalid response after issuance reports `outcome_uncertain`; delivery never
 retries an issued invocation. These are current development contracts, not
 released availability or a completed loaded-runtime validation claim.
 
-Standalone CLI execution has no bound answering app, so the registry's surface
-normalizer still excludes client-placed Actions from CLI availability and
-friendly command generation. The catalog's `placements` field lists UI
+The registry normally excludes client-placed Actions from CLI availability and
+friendly command generation unless the spec declares a CLI entry point. In
+current 0.3 development, `session.open` navigation uses the existing paired
+daemon's answering-client dispatcher: ordinary navigation, including an explicit
+comparison destination or workspace tab, opens through the mounted Workspace owner, not a second terminal
+navigation implementation. A disconnected app returns `unavailable` / `noClient`;
+the CLI does not claim that the view opened. The catalog's `placements` field lists UI
 locations such as command palettes and menus; it does not report connected
 clients. Tool exposure remains a separate policy: removing a transport-gap
 override does not change the default Agent discovery budget.
@@ -2591,6 +2595,14 @@ and Voice adapters and the UI stack adapter use this same resolver; hosts supply
 qualified Artifact reads rather than another parser or composer. Reference,
 Account-mode and read-lifetime rules live in
 [private prompt catalogs](encryption.md#private-prompt-catalogs-and-role-overrides-03-development).
+
+Protocol selects enabled, non-suppressed entries before requesting an omitted
+scope. An empty effective stack returns no blocks or admission facts without
+reading Home credentials or Artifacts. A configured selection still fails closed
+when its required scope or content cannot be prepared. The CLI's finite qualified
+reader records only the failed operation, an allowlisted error code, HTTP status
+when available, and Home/private-requester qualification booleans in file logs;
+it never records document content, identifiers, URLs, credentials or raw errors.
 
 The preparation read port returns header, body and header/body revision facts.
 The current Protocol result is `{blocks, admittedEntries}`. Each admission fact
