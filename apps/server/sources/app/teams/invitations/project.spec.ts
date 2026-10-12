@@ -76,4 +76,24 @@ describe("Team invitation projection", () => {
         expect(projected.createdAt).toBe(CREATED_AT.getTime());
         expect(projected.expiresAt).toBe(EXPIRES_AT.getTime());
     });
+
+    it("publishes the terminal instant with acceptance taking precedence over revocation and expiry", () => {
+        expect(projectTeamInvitationRowV1(record(), CREATED_AT)).toMatchObject({ finishedAt: null });
+        expect(projectTeamInvitationRowV1(record(), EXPIRES_AT)).toMatchObject({ finishedAt: EXPIRES_AT.getTime() });
+        expect(projectTeamInvitationRowV1(record({ revokedAt: CREATED_AT }), EXPIRES_AT))
+            .toMatchObject({ finishedAt: CREATED_AT.getTime() });
+        expect(projectTeamInvitationRowV1(record({ acceptedAt: CREATED_AT, revokedAt: EXPIRES_AT }), EXPIRES_AT))
+            .toMatchObject({ finishedAt: CREATED_AT.getTime() });
+    });
+
+    it("projects the accepting Account through the shared neutral display-profile owner", () => {
+        const person = { id: "account-2", name: "Ada Lovelace", firstName: "Old", lastName: "Identity", username: null, avatar: null };
+        const projected = projectTeamInvitationRowV1(record({
+            acceptedAt: CREATED_AT, acceptedByAccountId: person.id,
+        }), EXPIRES_AT, person);
+        expect(projected).toMatchObject({
+            finishedByAccount: { name: "Ada Lovelace", firstName: "Ada Lovelace", lastName: null, username: null, avatarUrl: null },
+        });
+        expect(projectTeamInvitationRowV1(record(), CREATED_AT, person)).toMatchObject({ finishedByAccount: null });
+    });
 });

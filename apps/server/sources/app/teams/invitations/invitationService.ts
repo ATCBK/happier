@@ -33,7 +33,7 @@ import {
     revokeTeamInvitationInTx,
     type TeamInvitationRecord,
 } from "./invitationLifecycle";
-import { projectTeamInvitationRowV1 } from "./project";
+import { projectTeamInvitationRowV1, TEAM_INVITATION_DISPLAY_INCLUDE } from "./project";
 import { digestTeamInvitationToken, mintTeamInvitationToken, tryDigestTeamInvitationToken } from "./token";
 import { isTeamMembershipAdmissionEnabled } from "../memberships/membershipService";
 
@@ -347,13 +347,14 @@ export async function listTeamInvitationsForActorInTx(
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1,
+        include: TEAM_INVITATION_DISPLAY_INCLUDE,
     });
 
     const page = records.slice(0, input.limit);
     return {
         ok: true,
         value: {
-            items: page.map((record) => projectTeamInvitationRowV1(record, now)),
+            items: page.map((record) => projectTeamInvitationRowV1(record, now, record.acceptedByAccount)),
             nextCursor: records.length > input.limit && page[page.length - 1]
                 ? encodeTeamInvitationsCursorV1({
                     queryKey,
@@ -390,10 +391,10 @@ export async function revokeTeamInvitationForActorInTx(
 
     // Revoke is same-state safe: an already terminal invitation returns its current
     // projection rather than an error, so a duplicated click is not a failure.
-    const record = await tx.teamInvitation.findUnique({ where: { id: input.invitationId } });
+    const record = await tx.teamInvitation.findUnique({ where: { id: input.invitationId }, include: TEAM_INVITATION_DISPLAY_INCLUDE });
     if (!record || record.teamId !== input.teamId) return denied("invitation_not_found");
     if (revoked === "revoked") await publishTeamChangedInTx(tx, { teamId: input.teamId });
-    return { ok: true, value: projectTeamInvitationRowV1(record, now) };
+    return { ok: true, value: projectTeamInvitationRowV1(record, now, record.acceptedByAccount) };
 }
 
 export type ReissueTeamInvitationResultValue = Readonly<{
@@ -731,7 +732,7 @@ async function readTeamInvitationInviterLabelInTx(
     if (inviterAccountId === null) return null;
     const inviter = await tx.account.findUnique({
         where: { id: inviterAccountId },
-        select: { firstName: true, lastName: true, username: true },
+        select: { name: true, username: true },
     });
     return inviter ? resolveAccountDisplayLabelV1(inviter) : null;
 }

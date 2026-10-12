@@ -172,4 +172,24 @@ describe("directory administration read projections", () => {
         });
         expect(people.map((row) => row.teamMembershipId)).toEqual([null, null, null]);
     });
+
+    it("names a mapped Group independently of a client page and withholds a foreign Team's name", async () => {
+        persistence.teamDirectoryGroup.findMany.mockResolvedValue([
+            { id: "group-row-1", externalGroupId: "engineering", externalDisplayName: "Engineering", state: "active" },
+            { id: "group-row-2", externalGroupId: "foreign", externalDisplayName: "Foreign", state: "active" },
+        ]);
+        persistence.teamExternalGroupBinding.findMany.mockResolvedValue([
+            { id: "binding-1", externalGroupId: "engineering", bindingMode: "native_target", teamGroupId: "target-1", group: { teamId: team.id, name: "Platform Engineering" } },
+            { id: "binding-2", externalGroupId: "foreign", bindingMode: "native_target", teamGroupId: "target-2", group: { teamId: "another-team", name: "Private Group" } },
+        ]);
+        await expect(listDirectoryGroupsForActor(input)).resolves.toMatchObject({
+            ok: true,
+            value: { items: [
+                { mapping: { state: "bound", teamGroupName: "Platform Engineering" } },
+                { mapping: { state: "bound", teamGroupName: null } },
+            ] },
+        });
+        expect(persistence.teamExternalGroupBinding.findMany.mock.calls[0]?.[0].select.group)
+            .toEqual({ select: { teamId: true, name: true } });
+    });
 });

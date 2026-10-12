@@ -2,6 +2,7 @@ import type {
     TeamDirectorySafeErrorCodeV1,
     TeamDirectorySourceAllowedActionV1,
     TeamDirectorySourceSummaryV1,
+    TeamSummaryV1,
 } from "@happier-dev/protocol/teams";
 
 export const WORKOS_DIRECTORY_SYNC_TARGET_MS = 5 * 60 * 1_000;
@@ -192,6 +193,46 @@ function projectAllowedActions(
     ];
 }
 
+export type DirectoryMembershipProjectionRow = Pick<DirectorySourceProjectionRow,
+    "kind" | "state" | "displayName" | "activeReconcileRunId" | "lastAttemptAt" | "lastSuccessAt" | "lastErrorCode"
+>;
+
+function projectDirectorySyncAttempt(
+    source: Pick<DirectoryMembershipProjectionRow, "state" | "activeReconcileRunId" | "lastErrorCode" | "lastAttemptAt">,
+): TeamDirectorySourceSummaryV1["sync"]["attempt"] {
+    // Only the run owner settles an outstanding attempt; age is not failure.
+    return source.state === "paused"
+        ? "paused"
+        : source.activeReconcileRunId !== null
+            ? "syncing"
+            : readSafeError(source.lastErrorCode) !== null
+                ? "failed"
+                : source.lastAttemptAt === null
+                    ? "never"
+                    : "succeeded";
+}
+
+/** One safe fact, collapsing the canonical attempt/freshness facets without exposing administration data. */
+export function projectTeamDirectoryMembershipFact(
+    sources: readonly DirectoryMembershipProjectionRow[],
+    now: Date = new Date(),
+): NonNullable<TeamSummaryV1["directoryMembership"]> | null {
+    if (sources.length === 0) return null;
+    const states = sources.map((source) => {
+        const attempt = projectDirectorySyncAttempt(source);
+        const freshness = projectDirectorySyncFreshness(source, now);
+        if (source.state === "needs_attention" || attempt === "paused" || attempt === "failed") return "needs_attention";
+        if (attempt === "syncing") return "syncing";
+        if (source.state === "initializing" || attempt === "never" || freshness === "never_synced") return "syncing";
+        return freshness === "stale" ? "needs_attention" : "healthy";
+    });
+    return {
+        // Several sources still produce one fact; no source identities or counts.
+        providerDisplayName: [...new Set(sources.map((source) => source.displayName))].join(" · "),
+        state: states.includes("needs_attention") ? "needs_attention" : states.includes("syncing") ? "syncing" : "healthy",
+    };
+}
+
 export function projectTeamDirectorySourceSummary(params: Readonly<{
     source: DirectorySourceProjectionRow;
     now?: Date;
@@ -199,17 +240,7 @@ export function projectTeamDirectorySourceSummary(params: Readonly<{
     const now = params.now ?? new Date();
     const source = params.source;
     const safeError = readSafeError(source.lastErrorCode);
-    // Freshness targets are scheduling facts, not terminal failure evidence.
-    // The reconcile owner releases its run token when the attempt settles.
-    const attempt = source.state === "paused"
-        ? "paused" as const
-        : source.activeReconcileRunId !== null
-            ? "syncing" as const
-            : safeError !== null
-                ? "failed" as const
-                : source.lastAttemptAt === null
-                    ? "never" as const
-                    : "succeeded" as const;
+    const attempt = projectDirectorySyncAttempt(source);
 
     const freshness = projectDirectorySyncFreshness(source, now);
 

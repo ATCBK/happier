@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 
 import {
     resolveTeamAdmissionProjectionV1,
@@ -13,6 +14,7 @@ import {
 } from "@happier-dev/protocol";
 
 import type { HomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
+import { projectTeamDirectoryMembershipFact, type DirectoryMembershipProjectionRow } from "./directory/directorySourceProjection";
 import { getPublicUrl } from "@/storage/blob/files";
 import type {
     SessionHistoryAccess,
@@ -37,7 +39,19 @@ export const TEAM_PROJECTION_SELECT = {
     admissionMode: true,
     authenticationPolicy: true,
     archivedAt: true,
-} as const;
+    directorySources: {
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: {
+            kind: true,
+            state: true,
+            displayName: true,
+            activeReconcileRunId: true,
+            lastAttemptAt: true,
+            lastSuccessAt: true,
+            lastErrorCode: true,
+        },
+    },
+} satisfies Prisma.TeamSelect;
 
 export type TeamRecord = Readonly<{
     id: string;
@@ -50,6 +64,7 @@ export type TeamRecord = Readonly<{
     admissionMode: TeamAdmissionMode;
     authenticationPolicy: unknown;
     archivedAt: Date | null;
+    directorySources?: readonly DirectoryMembershipProjectionRow[];
 }>;
 
 /**
@@ -118,27 +133,30 @@ export function projectTeamPolicyV1(team: TeamRecord): TeamPolicyV1 {
 }
 
 /**
- * The Overview counts this viewer may see, decided exactly as the lists they
- * summarize decide it: roster and Group counts follow the composed
- * `viewRoster` capability, and the waiting-invitation count follows qualified
- * membership `manageInvitations`.
+ * Coarse membership totals accompany a readable Team, including Home-only
+ * administration; they confer no roster access. Group counts still follow
+ * `viewRoster`, and waiting invitations follow qualified membership
+ * `manageInvitations`.
  */
 function projectTeamSummaryCountsV1(input: Readonly<{
     counts: TeamSummaryCountFacts;
     capabilities: TeamCapabilitiesV1;
     teamCapabilities: TeamCapabilitiesV1;
 }>): TeamSummaryV1["counts"] {
-    if (!input.capabilities.viewRoster) return null;
+    if (!input.capabilities.viewTeam) return null;
     return {
         members: input.counts.members,
         suspendedMembers: input.counts.suspendedMembers,
-        groups: input.counts.groups,
+        groups: input.capabilities.viewRoster ? input.counts.groups : null,
+        archivedGroups: input.capabilities.viewRoster ? input.counts.archivedGroups : null,
         waitingInvitations: input.teamCapabilities.manageInvitations ? input.counts.waitingInvitations : null,
     };
 }
 
 /** The unqualified counts of one Team, as read by `readTeamSummaryCountsInTx`. */
-export type TeamSummaryCountFacts = Readonly<Omit<TeamSummaryCountsV1, "waitingInvitations"> & {
+export type TeamSummaryCountFacts = Readonly<Omit<TeamSummaryCountsV1, "groups" | "archivedGroups" | "waitingInvitations"> & {
+    groups: number;
+    archivedGroups: number;
     waitingInvitations: number;
 }>;
 
@@ -175,6 +193,9 @@ export function projectTeamSummaryV1(input: Readonly<{
             }
             : null,
         policy: projectTeamPolicyV1(input.team),
+        ...(input.capabilities.viewTeam && input.team.directorySources !== undefined ? {
+            directoryMembership: projectTeamDirectoryMembershipFact(input.team.directorySources),
+        } : {}),
         viewerRole: input.viewerRole,
         capabilities: input.capabilities,
         admission: resolveTeamAdmissionProjectionV1(),

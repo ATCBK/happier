@@ -473,7 +473,7 @@ describe("Team invitation service authority (SQLite integration)", () => {
         const f = await teamWith("owner");
         await db.account.update({
             where: { id: f.actor.id },
-            data: { firstName: "Ada", lastName: "Lovelace", username: `ada-${crypto.randomUUID()}` },
+            data: { name: "Ada Lovelace", firstName: "Ada", lastName: "Lovelace", username: `ada-${crypto.randomUUID()}` },
         });
         const created = await create(f.team.id, f.actor.id);
         if (!created.ok) throw new Error("expected success");

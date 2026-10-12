@@ -491,7 +491,8 @@ describe("Team member administration (SQLite integration)", () => {
         const source = await workosSource(acme.id, "Leave directory");
         await db.teamProvisionedIdentity.create({ data: {
             teamId: acme.id, directorySourceId: source.id, externalUserId: crypto.randomUUID(),
-            boundAccountId: person.id, teamMembershipId: membership.teamMembershipId,
+            state: "active", boundAccountId: person.id,
+            teamMembershipId: membership.teamMembershipId, teamMembershipTeamId: acme.id,
         } });
         const context = await inTx((tx) => resolveTeamActorContextInTx(tx, { teamId: acme.id, actorAccountId: person.id }));
         expect(context?.capabilities).toMatchObject({ leave: false });
@@ -1141,13 +1142,13 @@ describe("Team member administration (SQLite integration)", () => {
         await member(acme.id, owner.id, "owner");
         // Created last, so an unqueried page of two never reaches this row.
         const early = await db.account.create({
-            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", firstName: "Ana" },
+            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", name: "Ana" },
         });
         const middle = await db.account.create({
-            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", firstName: "Bo" },
+            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", name: "Bo" },
         });
         const late = await db.account.create({
-            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", username: "zoe-far-away", lastName: "Farrow" },
+            data: { publicKey: crypto.randomUUID(), encryptionMode: "plain", status: "active", homeRole: "member", username: "zoe-far-away", name: "Farrow" },
         });
         await member(acme.id, early.id, "member");
         await member(acme.id, middle.id, "member");

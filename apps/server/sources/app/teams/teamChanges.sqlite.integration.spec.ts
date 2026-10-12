@@ -7,7 +7,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import type { HomeRole } from "@/storage/enums.generated";
 
 import { archiveTeamInTx, createTeamInTx, restoreTeamInTx, updateTeamInTx } from "./lifecycle";
-import { TEAM_CHANGE_ENTITY_ID, publishTeamChangedInTx } from "./teamChanges";
+import { TEAM_CHANGE_ENTITY_ID, publishTeamChangedInTx, publishGitHubAppRegistrationTeamsChangedInTx } from "./teamChanges";
 
 describe("Team invalidation audience (SQLite integration)", () => {
     let harness: LightSqliteHarness;
@@ -47,6 +47,34 @@ describe("Team invalidation audience (SQLite integration)", () => {
         if (!created.ok) throw new Error(`fixture Team creation failed: ${created.error}`);
         return created.team;
     }
+
+    it("does not publish Team invalidation for a Home-only GitHub identity binding", async () => {
+        const owner = await account("owner");
+        const registration = await db.gitHubAppRegistration.create({ data: {
+            githubHost: "https://github.com", githubAppId: 901n, githubClientId: "home-only",
+            encryptedSecrets: Uint8Array.from([1]), config: { v: 1, secretHealth: {
+                clientSecretConfigured: false, privateKeyConfigured: true, webhookSecretConfigured: false,
+            } },
+        } });
+        const installation = await db.gitHubAppInstallation.create({ data: {
+            registrationId: registration.id, githubInstallationId: 902n,
+            githubOrganizationId: 903n, githubOrganizationLogin: "HomeOnly", repositorySelection: "all",
+        } });
+        const provider = await db.identityProviderInstance.create({ data: {
+            kind: "github_app_identity", displayName: "Home only", config: { v: 1, kind: "github_app_identity" },
+            githubAppInstallationId: installation.id,
+        } });
+        await db.teamIdentityConnection.create({ data: {
+            teamId: null, providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "HomeOnly" },
+        } });
+        const before = await seq(owner.id);
+        expect(await inTx(tx => publishGitHubAppRegistrationTeamsChangedInTx(tx, {
+            registrationId: registration.id,
+        }))).toBe(0);
+        expect(await seq(owner.id)).toBe(before);
+    });
 
     it("wakes the active Home administrators whose Home-level Team directory changed", async () => {
         const founder = await account();

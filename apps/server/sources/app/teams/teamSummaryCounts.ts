@@ -8,7 +8,7 @@ import type { TeamSummaryCountFacts } from "./projections";
 /**
  * The Team Overview counts for a page of Teams, as three grouped queries
  * whatever the page size — never a count per row. Membership counts use the
- * roster's `all` set, Groups exclude archived ones, and waiting invitations use
+ * roster's `all` set, Groups are counted separately by archive state, and waiting invitations use
  * the invitation owner's own active predicate at the transaction's database
  * time, so the Overview and the lists it leads to cannot disagree.
  */
@@ -27,8 +27,8 @@ export async function readTeamSummaryCountsInTx(
             _count: { _all: true },
         }),
         tx.teamGroup.groupBy({
-            by: ["teamId"],
-            where: { teamId: { in: ids }, archivedAt: null },
+            by: ["teamId", "archivedAt"],
+            where: { teamId: { in: ids } },
             _count: { _all: true },
         }),
         tx.teamInvitation.groupBy({
@@ -37,7 +37,7 @@ export async function readTeamSummaryCountsInTx(
             _count: { _all: true },
         }),
     ]);
-    const mutable = new Map(ids.map((id) => [id, { members: 0, suspendedMembers: 0, groups: 0, waitingInvitations: 0 }]));
+    const mutable = new Map(ids.map((id) => [id, { members: 0, suspendedMembers: 0, groups: 0, archivedGroups: 0, waitingInvitations: 0 }]));
     for (const row of memberships) {
         const entry = mutable.get(row.teamId);
         if (!entry) continue;
@@ -46,7 +46,9 @@ export async function readTeamSummaryCountsInTx(
     }
     for (const row of groups) {
         const entry = mutable.get(row.teamId);
-        if (entry) entry.groups = row._count._all;
+        if (!entry) continue;
+        if (row.archivedAt === null) entry.groups += row._count._all;
+        else entry.archivedGroups += row._count._all;
     }
     for (const row of invitations) {
         const entry = mutable.get(row.teamId);

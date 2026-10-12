@@ -52,7 +52,10 @@ describe("directory source completed evidence", () => {
             teamIdentityConnection: {
                 findFirst: async () => connection, findMany: async () => [connection], count: async () => 1,
             },
-            identityProviderInstance: { findUnique: async () => provider },
+            identityProviderInstance: {
+                findUnique: async () => provider,
+                findMany: async () => [provider],
+            },
         } as unknown as Tx;
         expect(await isDirectorySourceCompletedEvidenceAllowedInTx(tx, source)).toBe(true);
         provider.enabled = false;

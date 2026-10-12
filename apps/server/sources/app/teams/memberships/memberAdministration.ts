@@ -311,8 +311,7 @@ function memberSearchPredicate(query: string) {
         OR: [
             { accountId: query },
             { account: { username: buildAccountTextPrefixFilter(query, provider) } },
-            { account: { firstName: buildAccountTextPrefixFilter(query, provider) } },
-            { account: { lastName: buildAccountTextPrefixFilter(query, provider) } },
+            { account: { name: buildAccountTextPrefixFilter(query, provider) } },
         ],
     };
 }

@@ -726,7 +726,13 @@ export async function listDirectoryGroupsForActor(
                 directorySourceId: source.id,
                 externalGroupId: { in: externalGroupIds },
             },
-            select: { id: true, externalGroupId: true, bindingMode: true, teamGroupId: true },
+            select: {
+                id: true,
+                externalGroupId: true,
+                bindingMode: true,
+                teamGroupId: true,
+                group: { select: { teamId: true, name: true } },
+            },
         });
         const bindingByExternalGroupId = new Map(bindings.map((binding) => [binding.externalGroupId, binding]));
         const complete = source.lastFullReconcileAt !== null && isDirectorySourceProjectionComplete(source);
@@ -776,6 +782,7 @@ export async function listDirectoryGroupsForActor(
                                 bindingId: binding.id,
                                 mode: binding.bindingMode,
                                 teamGroupId: binding.teamGroupId,
+                                teamGroupName: binding.group.teamId === input.teamId ? binding.group.name : null,
                             }
                             : { state: "unbound" as const },
                         lastCompleteObservationAt: source.lastFullReconcileAt?.toISOString() ?? null,
@@ -808,7 +815,7 @@ export async function createDirectorySourceForActor(
         });
         await publishTeamChangedInTx(tx, { teamId: input.teamId });
         return { ok: true, value: projectSource(source, input.now) } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Source creation composes current actor/connection authority with directory lifecycle. */ });
     // Initial creation enters `initializing` with a durable run token. Wake the
     // local worker only after that transaction commits; other worker processes
     // discover the same source through the durable due predicate.
@@ -839,7 +846,7 @@ export async function syncDirectorySourceForActor(input: Partial<TeamOperationAu
             ok: true,
             value: { v: 1, status: requested.status, source: projectSource(source, input.now) },
         } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Manual sync request admission must agree with reconcile completion and source lifecycle. */ });
     if (result.ok) requestEnterpriseIdentitySyncNudge();
     return result;
 }
@@ -911,7 +918,7 @@ export async function setDirectorySourcePausedForActor(input: Partial<TeamOperat
         });
         await publishTeamChangedInTx(tx, { teamId: input.teamId });
         return { ok: true, value: projectSource(committed, input.now) } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Pause/reset participates in source lifecycle and child projection currentness. */ });
     // Resume records a durable repair request in the transaction above. Wake
     // the local worker after commit so an in-process worker observes it
     // immediately; another process still discovers the same request through
@@ -951,7 +958,7 @@ export async function preflightDirectorySourceRemovalForActor(input: Partial<Tea
                 }),
             },
         };
-    });
+    }, { isolationLevel: "Serializable" /* Source removal withdraws membership and Group contribution unions after impact checks. */ });
 }
 
 export async function removeDirectorySourceForActor(input: Partial<TeamOperationAuthenticationContext> & Readonly<{

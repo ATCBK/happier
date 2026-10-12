@@ -155,7 +155,19 @@ describe("directory source scanner", () => {
             writePeoplePage,
             writeGroupsPage,
             writeGroupMembersPage,
-        })).resolves.toEqual({ ok: true });
+        })).resolves.toEqual({
+            ok: true,
+            expectedCurrentness: {
+                kind: "github_directory_read",
+                directorySourceId: "source-scanner",
+                githubInstallationId: 42n,
+                githubOrganizationId: 84n,
+                installationRevision: 3,
+                registrationSecurityRevision: 5,
+                organizationLogin: "Acme",
+                networkPolicyFingerprint: expect.any(String),
+            },
+        });
 
         expect(writePeoplePage).toHaveBeenNthCalledWith(1, [
             { externalUserId: "1", active: true, login: "alice" },

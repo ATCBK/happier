@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { NO_TEAM_CAPABILITIES_V1, type TeamCapabilitiesV1 } from "@happier-dev/protocol";
+import { TeamSummaryV1Schema } from "@happier-dev/protocol/teams";
 import { AccountStatus, TeamMembershipStatus, TeamRole } from "@/storage/enums.generated";
 
 import { resolveHomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
 import { resolveTeamCapabilitiesV1, resolveTeamCredentialCapabilities, resolveTeamMembershipCapabilitiesV1, type TeamViewerFacts } from "./capabilities";
 import { projectTeamSummaryV1, type TeamRecord } from "./projections";
+import type { DirectoryMembershipProjectionRow } from "./directory/directorySourceProjection";
 
 const NO_HOME_AUTHORITY = resolveHomeGovernanceAuthority(null);
 
@@ -141,7 +143,61 @@ describe("Team capability resolver", () => {
         })).viewRoster).toBe(true);
     });
 
-    it("projects roster counts only under the composed roster capability, including ownerless recovery", () => {
+    it("gives a plain member only the safe Directory membership fact without management authority", () => {
+        const facts = viewer({ membership: membership(TeamRole.member) });
+        const capabilities = resolveTeamCapabilitiesV1(facts);
+        expect(capabilities).toMatchObject({ viewTeam: true, manageAuthentication: false });
+        const source = {
+            id: "private-source-id", teamId: "team", teamIdentityConnectionId: "private-connection-id",
+            kind: "workos_directory" as const, state: "active" as const, displayName: "Okta via WorkOS",
+            activeReconcileRunId: "private-run-id", activeReconcileStartedAt: new Date(),
+            lastAttemptAt: new Date(), lastSuccessAt: new Date(), lastFullReconcileAt: new Date(),
+            lastErrorCode: null, consecutiveFailureCount: 42, retryNotBefore: new Date(),
+            bindingConfig: { secret: "private-setup-data" },
+        };
+        const team = {
+            id: "team", name: "Team", description: null, logo: null,
+            sessionCreationPolicy: "private_default" as const, externalSharingPolicy: "allowed" as const,
+            defaultSessionHistoryAccess: "from_membership" as const, admissionMode: "invite_only" as const,
+            authenticationPolicy: null, archivedAt: null, directorySources: [source],
+        };
+        const project = (directorySources: readonly DirectoryMembershipProjectionRow[], projectedCapabilities = capabilities) => projectTeamSummaryV1({
+            team: { ...team, directorySources }, capabilities: projectedCapabilities, teamCapabilities: projectedCapabilities,
+            viewerRole: TeamRole.member, ownerRequired: false, homeAuthority: NO_HOME_AUTHORITY,
+            counts: { members: 1, suspendedMembers: 0, groups: 0, archivedGroups: 0, waitingInvitations: 0 },
+        });
+        const syncing = project([source]);
+        expect(syncing).toMatchObject({ directoryMembership: {
+            providerDisplayName: "Okta via WorkOS", state: "syncing",
+        } });
+        // Exact public object: no source/connection/run identities, schedules,
+        // counts, errors or setup data can survive the summary projection.
+        expect(Reflect.get(syncing, "directoryMembership")).toEqual({
+            providerDisplayName: "Okta via WorkOS", state: "syncing",
+        });
+        expect(JSON.stringify(syncing)).not.toMatch(/private-|consecutiveFailureCount|retryNotBefore|bindingConfig/);
+        expect(TeamSummaryV1Schema.parse(syncing)).toEqual(syncing);
+        expect(project([])).toMatchObject({ directoryMembership: null });
+        expect(project([{ ...source, activeReconcileRunId: null }])).toMatchObject({
+            directoryMembership: { state: "healthy" },
+        });
+        expect(project([{ ...source, state: "paused", activeReconcileRunId: null }])).toMatchObject({
+            directoryMembership: { state: "needs_attention" },
+        });
+        expect(project([{ ...source, activeReconcileRunId: null, lastErrorCode: "directory_snapshot_incomplete" }]))
+            .toMatchObject({ directoryMembership: { state: "needs_attention" } });
+        const stale = { ...source, lastSuccessAt: new Date("2000-01-01"), activeReconcileRunId: null };
+        expect(project([stale])).toMatchObject({ directoryMembership: { state: "needs_attention" } });
+        // An outstanding attempt is still syncing even when freshness is stale.
+        expect(project([{ ...stale, activeReconcileRunId: "private-run-id" }]))
+            .toMatchObject({ directoryMembership: { state: "syncing" } });
+        expect(project([source, { ...stale, displayName: "GitHub" }])).toMatchObject({
+            directoryMembership: { providerDisplayName: "Okta via WorkOS · GitHub", state: "needs_attention" },
+        });
+        expect(project([source], NO_TEAM_CAPABILITIES_V1).directoryMembership).toBeUndefined();
+    });
+
+    it("gives Home-only administrators coarse membership counts without roster or Group authority", () => {
         const team: TeamRecord = {
             id: "team",
             name: "Team",
@@ -154,11 +210,14 @@ describe("Team capability resolver", () => {
             authenticationPolicy: null,
             archivedAt: null,
         };
-        const counts = { members: 2, suspendedMembers: 1, groups: 3, waitingInvitations: 4 };
+        const counts = { members: 2, suspendedMembers: 1, groups: 3, archivedGroups: 1, waitingInvitations: 4 };
         for (const overrides of [
+            {},
             { homeAuthority: homeAdminAuthority },
+            { homeAuthority: homeOwnerAuthority },
             { homeAuthority: homeAdminAuthority, ownerRequired: true },
             { accountStatus: AccountStatus.disabled, homeAuthority: homeAdminAuthority, ownerRequired: true },
+            { accountStatus: AccountStatus.suspended, homeAuthority: homeAdminAuthority },
         ]) {
             const facts = viewer(overrides);
             const capabilities = resolveTeamCapabilitiesV1(facts);
@@ -171,9 +230,11 @@ describe("Team capability resolver", () => {
                 homeAuthority: facts.homeAuthority,
                 teamCapabilities: resolveTeamMembershipCapabilitiesV1(facts),
             });
-            expect(summary.counts).toEqual(capabilities.viewRoster
-                ? { ...counts, waitingInvitations: null }
-                : null);
+            expect(summary.counts).toEqual(!capabilities.viewTeam ? null
+                : capabilities.viewRoster ? { ...counts, waitingInvitations: null }
+                    : { members: 2, suspendedMembers: 1, groups: null, archivedGroups: null, waitingInvitations: null });
+            expect(summary.viewerRole).toBeNull();
+            expect(TeamSummaryV1Schema.parse(summary)).toEqual(summary);
         }
     });
 
