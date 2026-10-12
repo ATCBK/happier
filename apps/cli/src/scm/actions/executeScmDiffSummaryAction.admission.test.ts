@@ -58,11 +58,12 @@ describe('SCM generation through real host admission', () => {
                 baseRefSource: 'turn_start', contentConfidence: 'exact', attributionScope: 'shared_worktree',
                 receipts: [...start.receipts, ...final.receipts] },
         } });
-        const modelId = getAgentStaticModels('claude', { catalogOnly: true })[0]?.id;
+        const modelId = getAgentStaticModels('claude', { catalogOnly: true }).find(model => model.id.includes('haiku'))?.id;
         if (!modelId) throw new Error('Native structured model fixture is unavailable');
         const runs = new Map<string, ExecutionRunState>();
         const controllers = new Map<string, ExecutionRunController>();
         const delivered = new Set<string>();
+        const deliveredModels = new Map<string, string | undefined>();
         let failProvision = false;
         let releaseModel = () => {};
         let modelGate = new Promise<void>(resolve => { releaseModel = resolve; });
@@ -71,6 +72,7 @@ describe('SCM generation through real host admission', () => {
                 resumeSupported: true,
                 onProvisionRuntime: async () => { if (failProvision) throw new Error('Native model provisioning failed'); },
                 onSendPrompt: async () => {
+                    deliveredModels.set(options.runId!, options.start?.modelId);
                     delivered.add(options.runId!);
                     await modelGate;
                     const input = ExecutionRunScmDiffSummaryInputV1Schema.parse(options.start?.intentInput);
@@ -118,6 +120,7 @@ describe('SCM generation through real host admission', () => {
             expect({ admittedRuns: runs.size, modelRuns: delivered.size, resultIds: new Set([left.resultId, right.resultId]).size })
                 .toEqual({ admittedRuns: 1, modelRuns: 1, resultIds: 1 });
             expect(right.runId).toBe(left.runId);
+            expect(deliveredModels.get(left.runId!)).toBe(modelId);
             releaseModel();
             await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId, resultId: left.resultId! }))
                 .toMatchObject({ success: true, result: { output: { outputs: { summary: { state: 'complete' } } } } }));
@@ -133,6 +136,7 @@ describe('SCM generation through real host admission', () => {
             const differentModel = await generate('new-model', { modelSelector: { modelId: differentModelId } });
             expect(differentModel.resultId).not.toBe(left.resultId);
             await vi.waitFor(() => expect(delivered.size).toBe(3));
+            expect(deliveredModels.get(differentModel.runId!)).toBe(differentModelId);
             const differentOutput = await generate('new-output', { outputs: ['walkthrough'] });
             expect(differentOutput.resultId).not.toBe(left.resultId);
             await vi.waitFor(() => expect(delivered.size).toBe(4));

@@ -334,6 +334,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     const resultPrompt = buildExecutionRunResultContractPrompt(args.params.resultContract);
     const profile = args.profileCatalog ? resolveExecutionRunIntentProfileFromCatalog(args.profileCatalog,
       run.intent, run.profileId, run.profileSourceCustody) : resolveExecutionRunIntentProfile(run.intent);
+    if (localInputId) await profile.onBeforeRetainedInput?.({ start: run, localId: localInputId });
     const initialContext = ctrl2.turnCount === 1 ? profile.buildInitialInputContext?.({ start: run, structuredMeta: run.structuredMeta }) : '';
     const text = [initialContext, args.params.message, resultPrompt].filter(Boolean).join('\n\n');
     providerSendInvoked = true;
@@ -594,6 +595,14 @@ export async function sendBackendLongLivedRun(args: Readonly<{
       await initialHostBarrier;
     }
     throwIfExecutionRunControllerFailed(ctrl2);
+    if (localInputId) {
+      await publishExecutionRunTurn({
+        runId: args.runId, turnId, rawText: '', finishedAtMs: args.getNowMs(), admittedInputId: localInputId,
+        controller: ctrl2, controllers: args.controllers, runs: args.runs, profileCatalog: args.profileCatalog,
+        sendAcp: args.sendAcp, parentProvider: args.parentProvider, reviewComments: args.reviewComments,
+        onPublicStateUpdated: args.onPublicStateUpdated,
+      });
+    }
     // Attach completion handlers before any other awaited work to avoid unhandled rejections when
     // backends signal cancellation/completion on a near-zero timer.
     void runCompletionLoop();
