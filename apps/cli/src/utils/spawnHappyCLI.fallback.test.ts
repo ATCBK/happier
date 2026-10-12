@@ -222,7 +222,7 @@ describe('spawnHappyCLI fallback invocation', () => {
         'start-sync',
       ]),
     );
-    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
@@ -247,7 +247,7 @@ describe('spawnHappyCLI fallback invocation', () => {
         'start-sync',
       ]),
     );
-    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
@@ -273,7 +273,7 @@ describe('spawnHappyCLI fallback invocation', () => {
         'start-sync',
       ]),
     );
-    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
@@ -312,7 +312,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       ]),
     );
     expect(inv.argv).not.toEqual(expect.arrayContaining([expect.stringMatching(/dist[\\/]index\.mjs$/)]));
-    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
@@ -1415,7 +1415,7 @@ describe('spawnHappyCLI fallback invocation', () => {
     try {
       await withTempDir('spawn-happy-cli-source-root-', async (sourceRoot) => {
         const sourceEntrypoint = join(sourceRoot, 'src', 'index.ts');
-        const sourceTsconfigPath = join(sourceRoot, 'tsconfig.json');
+        const sourceTsconfigPath = join(sourceRoot, 'tsconfig.runtime.json');
         const inheritedTsxHook = '/external/tsx/dist/esm/index.mjs';
         mkdirSync(join(sourceRoot, 'src'), { recursive: true });
         writeFileSync(sourceEntrypoint, 'export {};\n', 'utf8');

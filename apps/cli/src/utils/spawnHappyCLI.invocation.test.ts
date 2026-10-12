@@ -165,7 +165,7 @@ describe('happier-cli subprocess invocation', () => {
         expect(inv.argv).toEqual(
             expect.arrayContaining([expect.stringMatching(/src[\\/]index\.ts$/), 'daemon', 'start-sync']),
         );
-        expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+        expect(inv.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     });
 
     it('propagates --preserve-symlinks when the current CLI process was launched with it', async () => {

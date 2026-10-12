@@ -176,7 +176,7 @@ function resolveCurrentProcessSourceEntrypoint(): string | null {
 }
 
 function resolveTsconfigPathForSourceEntrypoint(entrypoint: string): string {
-  return join(dirname(dirname(entrypoint)), 'tsconfig.json');
+  return join(dirname(dirname(entrypoint)), 'tsconfig.runtime.json');
 }
 
 export function resolveCliTsxTsconfigPath(): string {
@@ -186,7 +186,7 @@ export function resolveCliTsxTsconfigPath(): string {
   //
   // TSX supports this via `TSX_TSCONFIG_PATH`, but we only want to set it for the
   // spawned subprocess, not mutate the parent process environment.
-  return join(projectPath(), 'tsconfig.json');
+  return join(projectPath(), 'tsconfig.runtime.json');
 }
 
 function shouldAllowDevTsxFallback(env: NodeJS.ProcessEnv = process.env): boolean {

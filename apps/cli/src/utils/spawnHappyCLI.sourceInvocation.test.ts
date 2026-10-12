@@ -87,7 +87,7 @@ describe('spawnHappyCLI current-source subprocess invocation', () => {
       mkdirSync(sessionCwd, { recursive: true });
       mkdirSync(join(sourceEntrypoint, '..'), { recursive: true });
       writeFileSync(
-        join(sourceEntrypoint, '..', '..', 'tsconfig.json'),
+        join(sourceEntrypoint, '..', '..', 'tsconfig.runtime.json'),
         JSON.stringify({ compilerOptions: { module: 'esnext', target: 'es2022' } }),
         'utf8',
       );

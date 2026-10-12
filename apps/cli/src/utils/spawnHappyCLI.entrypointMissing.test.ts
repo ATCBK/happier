@@ -51,7 +51,7 @@ describe('buildHappyCliSubprocessInvocation (missing entrypoint)', () => {
       expect.arrayContaining([expect.stringMatching(/node_modules\/tsx\/dist\/esm\/index\.mjs$/)]),
     );
     expect(invocation.argv.join(' ')).toContain('src/index.ts');
-    expect(invocation.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(invocation.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
@@ -78,7 +78,7 @@ describe('buildHappyCliSubprocessInvocation (missing entrypoint)', () => {
       expect.arrayContaining([expect.stringMatching(/node_modules\/tsx\/dist\/esm\/index\.mjs$/)]),
     );
     expect(invocation.argv.join(' ')).toContain('src/index.ts');
-    expect(invocation.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.json$/));
+    expect(invocation.env?.TSX_TSCONFIG_PATH).toEqual(expect.stringMatching(/[\\/]apps[\\/]cli[\\/]tsconfig\.runtime\.json$/));
     expect(process.env.TSX_TSCONFIG_PATH).toBeUndefined();
   });
 
