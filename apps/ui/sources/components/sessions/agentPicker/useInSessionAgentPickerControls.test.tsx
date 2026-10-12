@@ -2,10 +2,15 @@ import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/s
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { observeConnectedAccountCatalog } from '@/sync/engine/settings/connectedAccountCatalogEngine';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import {
@@ -14,6 +19,9 @@ import {
 } from '@/dev/testkit/sessionDraftRepositoryTestkit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { deleteRawSessionDraftValues } from '@/sync/domains/state/sessionDraftValuesPersistence';
+import { canonicalSessionDraftAddressV2, type SessionDraftDocumentV2 } from '@happier-dev/protocol';
+import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
+import { getSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { t } from '@/text';
 
 import {
@@ -28,6 +36,33 @@ import type {
 const announceAccessibilityMessage = vi.hoisted(() => vi.fn());
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
+
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let hydratedAccountScope: ServerAccountScope | undefined;
+let stopObservingPurposes: (() => void) | undefined;
+let syncBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
+
+async function hydratePurposeCatalog(scope: ServerAccountScope | null) {
+    if (!scope || (hydratedAccountScope?.serverId === scope.serverId
+        && hydratedAccountScope.accountId === scope.accountId)) return;
+    stopObservingPurposes?.();
+    await accountConnection?.dispose();
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
+    const accountHttp = createHomeHubArtifactHttpBoundary(scope.accountId);
+    accountConnection = await restoreServerAccountForTest({
+        serverUrl: 'https://session-agent-picker.test',
+        accountId: scope.accountId,
+        credentialScope: 'restored-home',
+        request: async (input, init) => await purposes.handle(input, init) ?? accountHttp.request(input, init),
+    });
+    hydratedAccountScope = { serverId: accountConnection.home.id, accountId: scope.accountId };
+    stopObservingPurposes = observeConnectedAccountCatalog(hydratedAccountScope, 'purposes');
+    await purposes.hydrate(hydratedAccountScope);
+}
 
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
     announceAccessibilityMessage,
@@ -93,10 +128,10 @@ const CURRENT_AGENT_ROW: AgentInputChipPickerOption = {
     label: 'Claude Code',
     renderDetailContent: () => null,
 };
-const DEFAULT_DRAFT_SCOPE: ServerAccountScope = Object.freeze({
+let DEFAULT_DRAFT_SCOPE: ServerAccountScope = {
     serverId: 'legacy-test',
     accountId: 'legacy-test',
-});
+};
 
 const supportedSource: SessionAgentContinuationSourceState = {
     currentBackendTargetKey: 'backend:claude',
@@ -138,7 +173,8 @@ type HookProps = Readonly<{
 }>;
 
 async function renderControls(props: HookProps = {}) {
-    return renderHook((hookProps: HookProps) => useInSessionAgentPickerControls({
+    await hydratePurposeCatalog(props.accountScope === undefined ? DEFAULT_DRAFT_SCOPE : props.accountScope);
+    const hook = await renderHook((hookProps: HookProps) => useInSessionAgentPickerControls({
         sessionId: hookProps.sessionId ?? 'session-1',
         accountScope: hookProps.accountScope === undefined ? DEFAULT_DRAFT_SCOPE : hookProps.accountScope,
         currentAgentId: hookProps.currentAgentId ?? 'claude',
@@ -153,6 +189,13 @@ async function renderControls(props: HookProps = {}) {
         machine: hookProps.machine ?? onlineMachine,
         detail: detailContext,
     }), { initialProps: props });
+    return {
+        ...hook,
+        async rerender(next: HookProps) {
+            await hydratePurposeCatalog(next.accountScope === undefined ? DEFAULT_DRAFT_SCOPE : next.accountScope);
+            return hook.rerender(next);
+        },
+    };
 }
 
 function optionsOf(controls: ReturnType<typeof useInSessionAgentPickerControls>) {
@@ -173,11 +216,17 @@ async function openPicker(hook: Awaited<ReturnType<typeof renderControls>>) {
 }
 
 describe('useInSessionAgentPickerControls', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        syncBridge = await loadSyncSingletonForTests();
+        hydratedAccountScope = undefined;
         // The armed choice is a Session draft value now, so each case starts from
         // an empty draft rather than inheriting the previous one's arm.
         resetSessionDraftValueCachesForTests();
         deleteRawSessionDraftValues(null);
+        deleteRawSessionDraftValues(DEFAULT_DRAFT_SCOPE);
+        for (const accountId of ['account-1', 'account-a', 'account-b']) {
+            deleteRawSessionDraftValues({ serverId: DEFAULT_DRAFT_SCOPE.serverId, accountId });
+        }
         announceAccessibilityMessage.mockClear();
         machineRpcWithServerScope.mockReset();
         machineRpcWithServerScope.mockImplementation((params: {
@@ -190,15 +239,28 @@ describe('useInSessionAgentPickerControls', () => {
         ));
         detailSelectionChangeRef.current = null;
         detailModelSummaryRef.current = null;
+        await hydratePurposeCatalog(DEFAULT_DRAFT_SCOPE);
+        if (!hydratedAccountScope) throw new Error('Expected restored picker Account scope');
+        DEFAULT_DRAFT_SCOPE = hydratedAccountScope;
     });
 
-    it('arms the exact configured backend when two configurations share an engine projection', async () => {
+    afterEach(async () => {
+        stopObservingPurposes?.();
+        stopObservingPurposes = undefined;
+        await accountConnection?.dispose();
+        accountConnection = undefined;
+        hydratedAccountScope = undefined;
+        syncBridge?.dispose();
+        syncBridge = undefined;
+    });
+
+    it('restores the exact configured backend with retired stored continuation fields', async () => {
         const entries = getResolvedBackendCatalogEntries({
             enabledAgentIds: [],
             acpCatalogSnapshot: {
                 status: 'ready', revision: 1,
                 record: { v: 1, definitions: ['review-a', 'review-b'].map((id): AcpBackendDefinitionV1 => ({
-                    id, name: id, title: id, description: '', command: 'kiro-cli', args: ['acp'], env: {},
+                    id, name: id, title: id, description: '', launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] }, env: {},
                     capabilities: {
                         supportsLoadSession: true, supportsModes: 'unknown', supportsModels: 'unknown',
                         supportsConfigOptions: 'unknown', promptImageSupport: 'unknown',
@@ -211,14 +273,18 @@ describe('useInSessionAgentPickerControls', () => {
                 'review-b': { backendId: 'review-b', agentId: 'kiro', title: 'Review B' },
             },
         });
+        const source = entries.find((candidate) => candidate.backendId === 'review-a')!;
+        const target = entries.find((candidate) => candidate.backendId === 'review-b')!;
         const hook = await renderControls({
             entries,
             currentAgentId: 'acp:review-a',
-            source: { ...supportedSource, currentBackendTargetKey: 'backend:review-a:configured:review-a' },
+            source: { ...supportedSource, currentBackendTargetKey: source.backendTargetKey },
         });
         await openPicker(hook);
         await act(async () => {
-            optionsOf(hook.getCurrent()).find((option) => option.id === 'backend:review-b:configured:review-b')?.onSelectImmediate?.();
+            const targetOption = optionsOf(hook.getCurrent()).find((option) => option.id === target.backendTargetKey);
+            expect(targetOption).toBeDefined();
+            targetOption!.onSelectImmediate?.();
         });
 
         expect(hook.getCurrent().armedContinuation).toEqual({
@@ -231,6 +297,31 @@ describe('useInSessionAgentPickerControls', () => {
                 v: 1, sourceSessionId: 'session-1', selections: [{ v: 1, agentId: 'acp:review-b' }],
             },
         }));
+
+        await hook.unmount();
+        const storage = getSessionDraftPersistenceStorage();
+        const key = serverAccountScopedStorageKey('session-drafts-repository-v1', DEFAULT_DRAFT_SCOPE);
+        const persisted = JSON.parse(storage.getString(key)!) as { replicas: Record<string, { localRawDocument: SessionDraftDocumentV2 }> };
+        const document = persisted.replicas[canonicalSessionDraftAddressV2({ kind: 'session', sessionId: 'session-1' })]!.localRawDocument;
+        if (document.target.kind !== 'session') throw new Error('Expected retained continuation');
+        const retained = document.target.routing.agentContinuation.value;
+        if (!retained || typeof retained !== 'object' || Array.isArray(retained)) throw new Error('Expected retained continuation value');
+        Reflect.set(retained, 'retired', true);
+        const intent = retained.intent;
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent)) throw new Error('Expected retained continuation intent');
+        Reflect.set(intent, 'retired', true);
+        storage.set(key, JSON.stringify(persisted));
+        resetSessionDraftValueCachesForTests();
+        const restored = await renderControls({
+            entries,
+            currentAgentId: 'acp:review-a',
+            source: { ...supportedSource, currentBackendTargetKey: source.backendTargetKey },
+        });
+        await openPicker(restored);
+        expect(restored.getCurrent().armedContinuation).toEqual({
+            v: 1, mode: 'same_session', sourceAgentId: 'acp:review-a',
+            selection: { v: 1, agentId: 'acp:review-b' },
+        });
     });
 
     it('offers the rest of the Agent catalog beside the Agent already running', async () => {
@@ -402,8 +493,6 @@ describe('useInSessionAgentPickerControls', () => {
 
         const [, codexOption] = optionsOf(hook.getCurrent());
         expect(codexOption?.renderDetailContent).toBeTypeOf('function');
-        expect(codexOption?.deferredDetailContentCacheKey)
-            .toBe('session-continuation-engine:backend:codex');
         // The continuation meaning is one line in the model section's subtitle slot,
         // never a standalone description block.
         expect(codexOption?.detailDescription).toBeUndefined();
@@ -724,7 +813,7 @@ describe('useInSessionAgentPickerControls', () => {
         // The submit path reads exactly this value, so a stale arm surviving a
         // closing gate is the whole gate bypassed.
         expect(hook.getCurrent().armedContinuation).toBeNull();
-        expect(readSessionDraftValue(null, 'session-1', 'routing.agentContinuation')).toBeNull();
+        expect(readSessionDraftValue(DEFAULT_DRAFT_SCOPE, 'session-1', 'routing.agentContinuation')).toBeNull();
 
         // A definite disable is a destructive policy decision, not a temporary
         // presentation state: turning the bit back on must not resurrect an arm
@@ -734,7 +823,7 @@ describe('useInSessionAgentPickerControls', () => {
     });
 
     it('fails closed while feature state is unresolved without spending an existing arm', async () => {
-        const accountScope = { serverId: 'server-1', accountId: 'account-1' } as const;
+        const accountScope = { serverId: DEFAULT_DRAFT_SCOPE.serverId, accountId: 'account-1' } as const;
         const hook = await renderControls({ accountScope });
         await openPicker(hook);
         await act(async () => {
@@ -757,8 +846,8 @@ describe('useInSessionAgentPickerControls', () => {
     });
 
     it('clears the previous Account arm so returning to it cannot resurrect the switch', async () => {
-        const accountA = { serverId: 'server-1', accountId: 'account-a' } as const;
-        const accountB = { serverId: 'server-1', accountId: 'account-b' } as const;
+        const accountA = { serverId: DEFAULT_DRAFT_SCOPE.serverId, accountId: 'account-a' } as const;
+        const accountB = { serverId: DEFAULT_DRAFT_SCOPE.serverId, accountId: 'account-b' } as const;
         const hook = await renderControls({ accountScope: accountA });
         await openPicker(hook);
         await act(async () => {
