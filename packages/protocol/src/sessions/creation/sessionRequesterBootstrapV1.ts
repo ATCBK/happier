@@ -75,9 +75,14 @@ const RequesterAccountContextPlaintextV1Schema = lazyZodSchema(() => z.object({
   purpose: RequesterAccountContextPurposeV1Schema, credentials: SessionRequesterBootstrapCredentialsV1Schema,
 }).strict());
 
-function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAccountContextPurposeV1) {
+function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAccountContextPurposeV1, machineId: string) {
+  // Socket routing scopes methods with the Machine id already bound by the
+  // signed root. Seal and open commit one unscoped method identity, never try
+  // alternative signed purposes if opening fails.
+  const prefix = `${machineId}:`;
   return RequesterAccountContextPurposeV1Schema.parse(input.kind !== 'machine_rpc' ? input : {
-    kind: input.kind, method: input.method, paramsPresent: input.params !== undefined,
+    kind: input.kind, method: input.method.startsWith(prefix) ? input.method.slice(prefix.length) : input.method,
+    paramsPresent: input.params !== undefined,
     requestDigest: computeCanonicalDomainSeparatedDigest('happier-external-action-rpc-payload-v1', [
       createCanonicalJsonSigningInput(input.params === undefined ? null : input.params),
     ]),
@@ -102,7 +107,7 @@ export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
   }
   const plaintext = RequesterAccountContextPlaintextV1Schema.parse({ v: 1,
     authorization: { v: authorization.v, token: authorization.token, binding: authorization.binding },
-    purpose: projectRequesterAccountContextPurpose(input.purpose), credentials: input.credentials });
+    purpose: projectRequesterAccountContextPurpose(input.purpose, authorization.binding.machineId), credentials: input.credentials });
   const mode = authorization.binding.accountEncryptionMode;
   if (mode === 'plain' && (plaintext.credentials.secret || plaintext.credentials.encryption)
     || mode === 'e2ee' && !plaintext.credentials.secret && !plaintext.credentials.encryption
@@ -147,7 +152,7 @@ export function openExternalActionRequesterAccountContextV1(input: Readonly<{
       || createCanonicalJsonSigningInput(plaintext.data.authorization) !== createCanonicalJsonSigningInput({
         v: authorization.v, token: authorization.token, binding: authorization.binding,
       })
-      || createCanonicalJsonSigningInput(plaintext.data.purpose) !== createCanonicalJsonSigningInput(projectRequesterAccountContextPurpose(input.purpose))) return null;
+      || createCanonicalJsonSigningInput(plaintext.data.purpose) !== createCanonicalJsonSigningInput(projectRequesterAccountContextPurpose(input.purpose, authorization.binding.machineId))) return null;
     return plaintext.data.credentials;
   } catch { return null; }
 }
