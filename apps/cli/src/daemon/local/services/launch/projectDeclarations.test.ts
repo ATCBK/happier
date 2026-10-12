@@ -1149,7 +1149,12 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect(h.owner.listProjectServices()[0]?.snapshot()).toMatchObject({ state: 'running', baseUrl: null });
         await h.owner.listProjectServices()[0]?.stop();
     });
-    it.each(['rpc', 'agent'] as const)('restarts the exact occurrence through fresh Start admission on %s, retaining independent Start approval', async surface => {
+    it.each(['rpc', 'agent', 'restart-waived-agent', 'waived-agent'] as const)('restarts the exact occurrence through fresh Start admission on %s, retaining independent Start approval', async policy => {
+        const surface = policy === 'rpc' ? 'rpc' : 'agent';
+        const settings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: {
+            ...(policy === 'restart-waived-agent' || policy === 'waived-agent' ? { 'localServices.actions.restartManaged': ['agent'] } : {}),
+            ...(policy === 'waived-agent' ? { 'localServices.launcher.start': ['agent'] } : {}),
+        } });
         const h = await fixture();
         const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
         if (!review.reviewedEffectDigest) throw new Error('Expected current Service review');
@@ -1173,7 +1178,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
                 serverId: 'home', serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null }),
             runtimeActionExecute: execute,
             isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId,
-                normalizeActionsSettingsV1(null), context),
+                settings, context),
             // Artifact persistence and the human decision are genuine external boundaries.
             approvalsCreate: async ({ request }) => { approvals.push(request.actionId); return { artifactId: 'restart-start-review' }; },
             approvalsUpdate: async () => ({ ok: true }),
@@ -1189,14 +1194,15 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             services: { ...h.manifest.services, worker: { source: { kind: 'command', command: 'different reviewed effect' } } } }));
         expect(await execute({ actionId: 'localServices.actions.restartManaged',
             input: { ...request, confirmationNonce: createLocalServiceActionConfirmationNonceV1(request) },
-            context: { ...h.context, actionRequestId: request.requestId, surface } })).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_changed' });
+            context: { ...h.context, actionRequestId: request.requestId, surface, actionsSettings: settings } })).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_changed' });
         expect(original.snapshot().state).toBe('running');
         expect(approvals).toEqual([]);
         await writeFile(join(h.root, '.happier/project.json'), JSON.stringify(h.manifest));
         const result = await execute({ actionId: 'localServices.actions.restartManaged',
-            input: { ...request, confirmationNonce: createLocalServiceActionConfirmationNonceV1(request) },
-            context: { ...h.context, actionRequestId: request.requestId, surface } });
-        if (surface === 'agent') {
+            input: { ...request, ...(policy === 'restart-waived-agent' || policy === 'waived-agent' ? { expectedEffectDigest: undefined } : {}),
+                confirmationNonce: createLocalServiceActionConfirmationNonceV1(request) },
+            context: { ...h.context, actionRequestId: request.requestId, surface, actionsSettings: settings } });
+        if (surface === 'agent' && policy !== 'waived-agent') {
             expect(original.snapshot().state).toBe('running');
             expect(result).toMatchObject({ status: 'denied', reasonCode: 'approval_rejected' });
             expect(approvals).toEqual(['localServices.launcher.start']);
