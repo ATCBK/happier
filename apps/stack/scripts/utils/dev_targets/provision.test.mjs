@@ -11,6 +11,33 @@ import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 
 import { inspectProvisionedPosixDevTarget, provisionPosixDevTarget, prepareDevTargetHost } from './provision.mjs';
 
+test('host SSH inspection reads effective policy and rejection counts without changing services', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'happier-ssh-inspect-' });
+  const bin = join(root, 'bin');
+  await mkdir(bin);
+  // sshd, journal and privilege are OS boundaries; execute the actual owner script.
+  for (const [name, script] of Object.entries({
+    id: 'echo 0',
+    sshd: 'case "$1" in -V) echo OpenSSH_9.6p1 >&2 ;; -T) printf "maxsessions 10\\nmaxstartups 10:30:100\\npersourcepenalties yes\\npasswordauthentication no\\n" ;; esac',
+    journalctl: 'printf "drop connection past MaxStartups\\nrefused by PerSourcePenalties\\nno more sessions\\nAccepted publickey private-identity\\n"',
+    systemctl: 'exit 97',
+  })) await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+  let output = '';
+  await prepareDevTargetHost({ target: { name: 'nl1', platform: 'posix', ssh: 'nl1', remotePath: [] },
+    inspectSsh: true, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }, {
+    runInteractive: async ({ args, env }) => {
+      output = (await promisify(execFile)('/bin/bash', ['-c', args.at(-1)], { env })).stdout;
+    },
+    runCaptureResult: async () => { throw new Error('inspection does not require fresh authentication'); },
+  });
+  assert.match(output, /maxsessions 10/);
+  assert.match(output, /maxstartups 10:30:100/);
+  assert.match(output, /maxstartups_rejections=1/);
+  assert.match(output, /penalty_rejections=1/);
+  assert.match(output, /session_rejections=1/);
+  assert.doesNotMatch(output, /private-identity|passwordauthentication/);
+});
+
 test('QA provisioning refreshes the worker catalog before importing its installer dependencies', async t => {
   const { root } = await createTempFixture(t, { prefix: 'happier-qa-catalog-' });
   await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));

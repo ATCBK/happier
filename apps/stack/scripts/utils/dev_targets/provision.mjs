@@ -164,10 +164,29 @@ if [[ "$(id -u)" != 0 ]]; then root_command=(sudo ${passwordless ? '-n ' : ''}ba
 
 export async function prepareDevTargetHost({ target, growRoot = false, noSleep = false,
   passwordlessSudo = false, passwordlessProvisioning = false, fleetSsh = false, diskTmp = false, inotify = false,
+  inspectSsh = false, sshLogSince = '1 hour ago',
   toolchain = false, createUser = null, home = null, tailscale = false, tailscaleAuthkeyStdin = false,
   lockdown = null, autoUpdates = false, allLinux = false, env = process.env },
 { runInteractive = defaultRunInteractive, runCaptureResult: capture = defaultRunCaptureResult } = {}) {
   if (target.platform !== 'posix') throw new Error('[dev-targets] host prepare supports Linux workers only');
+  if (inspectSsh) {
+    const inspection = `set -euo pipefail
+sshd_command="$(command -v sshd || printf /usr/sbin/sshd)"
+"$sshd_command" -V 2>&1
+"$sshd_command" -T | grep -E '^(maxsessions|maxstartups|persource[^ ]*|logingracetime|clientaliveinterval|clientalivecountmax) '
+journalctl --no-pager -o cat -u ssh -u sshd --since ${posixQuote(sshLogSince)} | awk '
+  /drop connection.*MaxStartups/ { startups++ }
+  /([Rr]efus.*[Pp]enalt|drop connection.*[Pp]enalt)/ { penalties++ }
+  /no more sessions/ { sessions++ }
+  /Timeout before authentication/ { timeouts++ }
+  /Accepted publickey/ { accepted++ }
+  END { printf "maxstartups_rejections=%d\\npenalty_rejections=%d\\nsession_rejections=%d\\nauth_timeouts=%d\\naccepted_connections=%d\\n", startups, penalties, sessions, timeouts, accepted }
+'
+`;
+    await runInteractive({ command: 'ssh', args: configuredSshArgs({ configPath: target.sshConfigFile,
+      sshAlias: target.ssh, remoteCommand: `bash -c ${posixQuote(elevatedBash(inspection, '', true))}` }), env });
+    return target;
+  }
   if (lockdown === true) lockdown = 'tailscale-only';
   if (lockdown != null && !['tailscale-only', 'ssh-public'].includes(lockdown)) throw new Error('[dev-targets] invalid --lockdown mode');
   if (createUser != null) createUser = requireMatching(createUser, /^[a-z_][a-z0-9_.-]*$/, 'non-root worker user');

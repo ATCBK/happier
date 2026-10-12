@@ -359,6 +359,7 @@ async function main() {
         '  hstack dev-targets exec NAME|auto [--cwd=PATH] [--env=KEY=VALUE]... [--flush] [--tty] [--stack=NAME] -- COMMAND [ARG...]',
         '  hstack dev-targets ssh NAME [--stack=NAME]',
         '  hstack dev-targets host prepare NAME...|--all-linux [--toolchain] [--create-user=NAME --home=PATH] [--tailscale --tailscale-authkey-stdin] [--lockdown[=tailscale-only|ssh-public]] [--auto-updates] [--grow-root] [--no-sleep] [--passwordless-sudo] [--passwordless-provisioning] [--fleet-ssh] [--disk-tmp] [--inotify] [--stack=NAME]',
+        '    --inspect-ssh reads effective sshd policy and journal rejection counts only; --ssh-log-since=TIME selects the observation window.',
         '  hstack dev-targets placement show [--stack=NAME]',
         '  hstack dev-targets move-server TARGET [--stack=NAME]',
         '  hstack dev-targets placement set server|expo local|TARGET [--stack=NAME]',
@@ -790,6 +791,7 @@ async function main() {
     for (const target of targets) {
       process.stderr.write(`[dev-targets] preparing ${target.name}; enter its sudo password if prompted\n`);
       const prepared = await prepareDevTargetHost({ target, allLinux, growRoot: flags.has('--grow-root'), noSleep: flags.has('--no-sleep'),
+        inspectSsh: flags.has('--inspect-ssh'), sshLogSince: kv.get('--ssh-log-since') ?? '1 hour ago',
         passwordlessSudo: flags.has('--passwordless-sudo'), passwordlessProvisioning: flags.has('--passwordless-provisioning'),
         fleetSsh: flags.has('--fleet-ssh'), diskTmp: flags.has('--disk-tmp'), inotify: flags.has('--inotify'),
         toolchain: flags.has('--toolchain'), createUser: kv.get('--create-user') ?? null, home: kv.get('--home') ?? null,
