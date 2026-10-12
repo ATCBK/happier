@@ -11,6 +11,7 @@ import { getResolvedBackendCatalogEntries as readBackendCatalog, resolveCatalogA
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import type { BundledAgentId } from '@/agents/catalog/catalog';
 import { AcpBackendDefinitionV1Schema, type AcpCatalogSettingsV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { isProfileCompatibleWithBackendTarget } from '@/sync/domains/profiles/profileCompatibility';
 
 type BackendCatalogParams = Parameters<typeof readBackendCatalog>[0] & { acpCatalogSettingsV1?: AcpCatalogSettingsV1 };
 // Existing definition vectors are fixture inputs, not Account Settings authority.
@@ -42,9 +43,33 @@ function configuredAgentTargetKey(definitionId: string) {
 }
 
 describe('getResolvedBackendCatalogEntries', () => {
+    it('filters the hydrated QA catalog through real profile compatibility without losing configured definitions', () => {
+        // Target ids captured from the live QA composer; profile keys exercise
+        // existing predecessor-key ingress, not a second compatibility parser.
+        const definitions = ['qa-c-exact-args', 'qa-a-acp-alpha'].map((id) => AcpBackendDefinitionV1Schema.parse({
+            id, name: id, title: id, launch: { kind: 'command' as const, command: 'review', args: [] }, env: {},
+            capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
+                supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1,
+        }));
+        const entries = readBackendCatalog({
+            enabledAgentIds: ['claude', 'custom-acp'],
+            acpCatalogSnapshot: { status: 'ready', revision: 1, record: { v: 1, definitions } },
+        });
+        const compatibleTargets = (profile: Parameters<typeof isProfileCompatibleWithBackendTarget>[0]) => entries
+            .filter((entry) => isProfileCompatibleWithBackendTarget(profile, entry.backendTarget))
+            .map((entry) => entry.backendTarget);
+
+        expect(compatibleTargets({ isBuiltIn: false, compatibility: {} })).toEqual([
+            bundledAgentTarget('claude'), ...definitions.map(({ id }) => configuredAgentTarget(id)),
+        ]);
+        expect(compatibleTargets({ isBuiltIn: true, compatibility: {}, compatibilityByTargetKey: { 'agent:claude': true } }))
+            .toEqual([bundledAgentTarget('claude')]);
+        expect(compatibleTargets({ isBuiltIn: true, compatibility: {}, compatibilityByTargetKey: { 'acpBackend:qa-c-exact-args': true } }))
+            .toEqual([configuredAgentTarget('qa-c-exact-args')]);
+    });
     it('projects a declared Custom ACP container only as definition-qualified selectable instances', () => {
-        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'review-a', name: 'review-a', title: 'Review', command: 'review',
-            args: [], env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
+        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'review-a', name: 'review-a', title: 'Review', launch: { kind: 'command' as const, command: 'review', args: [] },
+             env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
                 supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1 });
         const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['custom-acp'],
             mergedProviderProjectionById: { 'custom-acp': { agentId: 'custom-acp',
@@ -55,7 +80,7 @@ describe('getResolvedBackendCatalogEntries', () => {
     });
     it('projects two configured definitions as distinct selections of one declared Custom ACP Agent', () => {
         const definitions = ['review-a', 'review-b'].map((id) => AcpBackendDefinitionV1Schema.parse({
-            id, name: id, title: id, command: id, args: [], env: {},
+            id, name: id, title: id, launch: { kind: 'command' as const, command: id, args: [] }, env: {},
             capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
                 supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1,
         }));
@@ -70,8 +95,8 @@ describe('getResolvedBackendCatalogEntries', () => {
         })));
     });
     it('keeps bundled Agents available while ACP rows load or are unavailable, and adds configured rows only when ready', () => {
-        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', command: 'review',
-            args: [], env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
+        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] },
+             env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
                 supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1 });
         const readyEntries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['claude'],
             acpCatalogSnapshot: { status: 'ready', revision: 4, record: { v: 1, definitions: [definition] } } });
@@ -124,8 +149,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'review-bot',
                         title: 'Review Bot',
                         description: 'Custom review backend',
-                        command: 'kiro-cli',
-                        args: ['acp', '--agent', 'review'],
+                        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp', '--agent', 'review'] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'sonnet',
@@ -177,8 +201,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'review-bot',
                         title: 'Review Bot',
                         description: 'Custom review backend',
-                        command: 'kiro-cli',
-                        args: ['acp', '--agent', 'review'],
+                        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp', '--agent', 'review'] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'sonnet',
@@ -236,8 +259,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'review-bot',
                         title: 'Review Bot',
                         description: 'Custom review backend',
-                        command: 'kiro-cli',
-                        args: ['acp', '--agent', 'review'],
+                        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp', '--agent', 'review'] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'sonnet',
@@ -273,8 +295,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'review-bot',
                         title: 'Review Bot',
                         description: 'Custom review backend',
-                        command: 'kiro-cli',
-                        args: ['acp', '--agent', 'review'],
+                        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp', '--agent', 'review'] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'sonnet',
@@ -483,8 +504,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'codex-localharness',
                         title: 'Codex Localharness',
                         description: 'Structured local runtime',
-                        command: 'agy-localharness',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'agy-localharness', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
@@ -503,8 +523,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'codex-terminal',
                         title: 'Codex Terminal',
                         description: 'Terminal runtime',
-                        command: 'codex',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'codex', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
@@ -646,8 +665,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'plugin-runtime',
                         title: 'Plugin Runtime',
                         description: 'Plugin runtime backend',
-                        command: 'plugin-runtime',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'plugin-runtime', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
@@ -710,8 +728,7 @@ describe('getResolvedBackendCatalogEntries', () => {
                         name: 'plugin-runtime',
                         title: 'Plugin Runtime',
                         description: 'Plugin runtime backend',
-                        command: 'plugin-runtime',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'plugin-runtime', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',

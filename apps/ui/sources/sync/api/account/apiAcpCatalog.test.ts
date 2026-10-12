@@ -1,30 +1,19 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
-import { getStorage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1, ACP_CATALOG_ACCOUNT_ROW_KEY_V1, AcpCatalogRowMutationV1Schema, sealAcpCatalogContentV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { createDeferred } from '@/dev/testkit';
-import { readAcpCatalog, writeAcpCatalogRecord, updateAcpCatalogInContext } from './apiAcpCatalog';
-import { refreshAcpCatalog, observeAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { createAccountScopedCryptoMaterialSnapshotV1, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { getAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
-import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
-import { resolveVoiceConfiguredAgentTarget } from '@/voice/agent/resolveVoiceConfiguredAgentTarget';
-import { canAgentResume } from '@/agents/runtime/resumeCapabilities';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { createVoiceAgentSettingsCatalogReader } from '@/sync/ops/actions/voiceAgentSettingsCatalog';
-import { createScmDiffSummarySettingsCatalogReader } from '@/sync/ops/actions/scmDiffSummarySettingsCatalog';
 import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { AccountSettingsV2HistoryMutationRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -35,16 +24,27 @@ import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/rem
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
-import { renderHook, standardCleanup } from '@/dev/testkit';
-import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
-import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import sodium from '@/encryption/libsodium.lib';
 
 installDisconnectedServerSocketBoundary();
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { createDeferred, renderHook, standardCleanup } = await import('@/dev/testkit');
+const { readAcpCatalog, writeAcpCatalogRecord, updateAcpCatalogInContext } = await import('./apiAcpCatalog');
+const { refreshAcpCatalog, observeAcpCatalog, resetAcpCatalogEngineForTests } = await import('@/sync/engine/settings/acpCatalogEngine');
+const { getResolvedBackendCatalogEntries } = await import('@/agents/backendCatalog/getResolvedBackendCatalogEntries');
+const { resolveVoiceConfiguredAgentTarget } = await import('@/voice/agent/resolveVoiceConfiguredAgentTarget');
+const { canAgentResume } = await import('@/agents/runtime/resumeCapabilities');
+const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+const { createVoiceAgentSettingsCatalogReader } = await import('@/sync/ops/actions/voiceAgentSettingsCatalog');
+const { createScmDiffSummarySettingsCatalogReader } = await import('@/sync/ops/actions/scmDiffSummarySettingsCatalog');
+const { useResumeCapabilityOptions } = await import('@/agents/hooks/useResumeCapabilityOptions');
+const { useAcpCatalog } = await import('@/sync/store/useAcpCatalog');
 beforeAll(loadSyncSingletonForTests);
 let scope: { serverId: string; accountId: string };
 let raw: Record<string, unknown>;
-const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', command: 'review',
+const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] },
     createdAt: 1, updatedAt: 1 });
 let row: unknown;
 const credentialsFor = (name: string): AuthCredentials => ({ token: `e30.${Buffer.from(JSON.stringify({ sub: `account-${name}` })).toString('base64url')}.signature` });
@@ -80,6 +80,44 @@ afterEach(async () => {
     await disconnectActiveServerConnection(); retireActiveServerAccountScopeLifetime(); resetRuntimeFetch();
 });
 describe('ACP captured Account row snapshots', () => {
+    it('retains the admitted row revision when malformed sibling definitions make the inventory partial', async () => {
+        row = { status: 'present', revision: 10, content: { t: 'plain', v: { v: 1,
+            definitions: [definition, { id: 'malformed-sibling' }] } } };
+        expect(await readAcpCatalog(scope)).toMatchObject({ catalog: { status: 'partial', revision: 10,
+            record: { definitions: [definition] } } });
+    });
+    it('renews a retired cold catalog read when the same Account is restored while another observer survives', async () => {
+        const pending = createDeferred<Response>();
+        let reads = 0;
+        setRuntimeFetch(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) {
+                reads += 1;
+                return reads === 1 ? pending.promise : Response.json(row);
+            }
+            if (path === '/v1/artifacts') return Response.json([]);
+            return new Response(null, { status: 404 });
+        });
+        // A second mounted consumer keeps the canonical loader observed during restoration.
+        const release = observeAcpCatalog(scope);
+        try {
+            const hook = await renderHook(() => useAcpCatalog(scope));
+            await vi.waitFor(() => expect(reads).toBe(1));
+            // Sync reset retires the Account even when its scope keys and credentials do not change.
+            await act(async () => {
+                retireActiveServerAccountScopeLifetime();
+            });
+            await act(async () => pending.resolve(Response.json({ status: 'present', revision: 2,
+                content: { t: 'plain', v: { v: 1, definitions: [] } } })));
+            await vi.waitFor(() => expect(hook.getCurrent().snapshot).toMatchObject({ stale: false,
+                catalog: { status: 'ready', revision: 3, record: { definitions: [definition] } } }));
+        } finally {
+            pending.resolve(Response.json(row));
+            release();
+        }
+    });
     it.each(['empty', 'personal-source', 'e2ee-unrelated-settings', 'data-key-unrelated-settings'] as const)('publishes the actual mounted catalog outcome for an absent row without activating source data (%s)', async (source) => {
         row = { status: 'absent' };
         raw = source === 'empty' ? {} : source === 'personal-source' ? {
@@ -163,7 +201,8 @@ describe('ACP captured Account row snapshots', () => {
             record: { definitions: [expect.objectContaining({ id: 'row-review' })] } });
     });
     it.each(['record', 'action', 'foreign-source'] as const)('promotes the captured personal bindings before atomically transferring the original ACP row and cleanup, then its numeric user delta (%s)', async (entry) => {
-        const source = { ...definition, id: 'kiro', name: 'kiro', title: 'Source Kiro', command: 'kiro-cli', args: ['acp'],
+        const { launch: _launch, ...predecessorDefinition } = definition;
+        const source = { ...predecessorDefinition, id: 'kiro', name: 'kiro', title: 'Source Kiro', command: 'kiro-cli', args: ['acp'],
             transportProfile: 'kiro', env: { TOKEN: { t: 'savedSecret' as const, secretId: 'old-token' } } };
         raw = { acpCatalogSettingsV1: { v: 2, backends: [source] }, neighboringUnknown: { preserve: true },
             secrets: [{ id: 'old-token', name: 'Existing token', kind: 'token',
@@ -250,7 +289,8 @@ describe('ACP captured Account row snapshots', () => {
             }
             return new Response(null, { status: 404 });
         });
-        const { transportProfile: _sourceTransport, ...candidate } = source;
+        const { transportProfile: _sourceTransport, command, args, ...sourceFields } = source;
+        const candidate = { ...sourceFields, launch: { kind: 'command' as const, command, args } };
         const record = { v: 1 as const, definitions: [{ ...candidate, title: 'User delta', runtime: { stderrRules: KIRO_ACP_STDERR_RULES } }] };
         if (entry === 'record') {
             await expect(writeAcpCatalogRecord(scope, { record, expectedRevision: 'absent' }))
@@ -479,7 +519,7 @@ describe('ACP captured Account row snapshots', () => {
         expect(raw).not.toHaveProperty('acpCatalogSettingsV1');
         expect(row).toMatchObject({ status: 'present', revision: 1 });
     });
-    it('retries incomplete retained history through the same owner after a numeric explicit write without rereading to activate a source', async () => {
+    it('retries incomplete retained history in the background after a numeric explicit write without rereading to activate a source', async () => {
         raw = { acpCatalogSettingsV1: { v: 2, backends: [] }, neighboringUnknown: { preserve: true } };
         row = { status: 'absent' };
         const recorded = { t: 'plain' as const, v: raw };
@@ -518,8 +558,8 @@ describe('ACP captured Account row snapshots', () => {
             .resolves.toMatchObject({ status: 'updated', revision: 1 });
         expect(historyMutations).toHaveLength(1);
         await expect(writeAcpCatalogRecord(scope, { record: { v: 1, definitions: [{ ...definition, title: 'Explicit retry edit' }] }, expectedRevision: 1 }))
-            .resolves.toMatchObject({ status: 'updated', revision: 2, cleanup: { status: 'complete' } });
-        expect(historyMutations).toHaveLength(2);
+            .resolves.toMatchObject({ status: 'updated', revision: 2 });
+        await vi.waitFor(() => expect(historyMutations).toHaveLength(2));
         expect(historyMutations[1]?.operation).toMatchObject({ kind: 'normalize', removedRoots: ['acpCatalogSettingsV1'], transferredPrivateCatalogRevisions: { acp: 2 } });
         expect(writes).toBe(2);
         expect(raw).not.toHaveProperty('acpCatalogSettingsV1');

@@ -20,10 +20,27 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
         expect(resolvePreferredBackendTarget({ lastUsedAgent: 'custom-acp', defaultBuiltInAgentId: 'custom-acp' }))
             .toEqual({ kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[DEFAULT_AGENT_ID] });
     });
+    it('gives New Session and workflow authoring an executable default despite a retained bare container target', () => {
+        // Both hosts consume this owner. R25 captured custom-acp at the builder;
+        // neither its routing reference nor its legacy key is a concrete choice.
+        for (const lastUsedBackendTarget of [
+            { kind: 'backend', backendId: 'custom-acp' },
+            { kind: 'builtInAgent', agentId: 'custom-acp' },
+            'backend:custom-acp',
+            'agent:custom-acp',
+        ]) {
+            expect(resolvePreferredBackendTargetFromProjection({
+                lastUsedAgent: 'custom-acp',
+                lastUsedBackendTarget,
+                enabledAgentIds: ['custom-acp', 'codex'],
+                acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [] } },
+            })).toEqual({ kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.codex });
+        }
+    });
     it('retains definition-qualified intent without a parallel daemon backend registry', () => {
         const target = { kind: 'agent' as const,
             identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-a' };
-        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'review-a', name: 'review-a', title: 'Review', command: 'review',
+        const definition = AcpBackendDefinitionV1Schema.parse({ id: 'review-a', name: 'review-a', title: 'Review', launch: { kind: 'command' as const, command: 'review', args: [] },
             createdAt: 1, updatedAt: 1 });
         const inputs = { lastUsedAgent: 'codex', lastUsedBackendTarget: target,
             enabledAgentIds: ['codex'],
@@ -42,7 +59,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
     });
     it('keeps a configured preference from ready destination row facts without a Settings catalog', () => {
         const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-            command: 'review', createdAt: 1, updatedAt: 1 });
+            launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
         expect(resolvePreferredBackendTargetFromProjection({
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'row-review', configuredBackendId: 'row-review' },
@@ -169,8 +186,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                         name: 'antigravity-localharness',
                         title: 'Antigravity Localharness',
                         description: 'Structured local runtime',
-                        command: 'agy-localharness',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'agy-localharness', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
@@ -299,7 +315,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
             backendEnabledByTargetKey: {},
             acpCatalogSnapshot: { status: 'ready', revision: 3, record: { v: 1, definitions: [
                 AcpBackendDefinitionV1Schema.parse({ id: 'ghost-bot', name: 'ghost-bot', title: 'Ghost Bot',
-                    command: 'ghost', createdAt: 1, updatedAt: 1 }),
+                    launch: { kind: 'command' as const, command: 'ghost', args: [] }, createdAt: 1, updatedAt: 1 }),
             ] } },
             daemonMergedProjectionInputs: {
                 discoveredBackendIds: [],
@@ -369,8 +385,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                         name: 'plugin-runtime',
                         title: 'Plugin Runtime',
                         description: 'Plugin runtime backend',
-                        command: 'plugin-runtime',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'plugin-runtime', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
@@ -430,8 +445,7 @@ describe('resolvePreferredBackendTargetFromProjection', () => {
                         name: 'review-bot',
                         title: 'Review Bot',
                         description: 'Custom review backend',
-                        command: 'review-bot',
-                        args: [],
+                        launch: { kind: 'command' as const, command: 'review-bot', args: [] },
                         env: {},
                         defaultMode: 'plan',
                         defaultModel: 'default',
