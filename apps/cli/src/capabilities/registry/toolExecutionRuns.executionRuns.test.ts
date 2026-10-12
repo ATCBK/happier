@@ -175,7 +175,7 @@ describe('executionRunsCapability', () => {
     // Replace only filesystem publication; exercise the actual registry and inventory owners.
     vi.restoreAllMocks();
     const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-      id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
+      id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
       createdAt: 1, updatedAt: 1,
     }] });
     setActiveAccountSettingsSnapshot({
@@ -211,17 +211,23 @@ describe('executionRunsCapability', () => {
     expect(disabledResult.backends[targetKey]?.intents).not.toContain('review');
   });
 
-  it('does not publish a complete execution inventory while ACP authority is unavailable', async () => {
+  it('keeps built-in execution protocol admission independent of unavailable configured ACP authority', async () => {
     vi.restoreAllMocks();
     const unavailable: AcpCatalogSnapshotV1 = { status: 'unavailable', reason: 'account-unavailable' };
     setActiveAccountSettingsSnapshot({
       source: 'cache', settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
       settings: AccountSettingsSchema.parse({}), acpCatalog: unavailable,
     });
-    await expect(executionRunsCapability.detect({
+    const result = await executionRunsCapability.detect({
       context: { cliSnapshot: makeCliSnapshot({}) },
       request: { id: 'tool.executionRuns' },
-    })).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
+    });
+    expect(result).toMatchObject({
+      available: true,
+      protocolVersion: 2,
+      features: { detachedScope: true, startAndWait: true, exactInputResults: true },
+      backends: { claude: { available: true } },
+    });
   });
 
   it('advertises the exact V2 facts required before detached or start-and-wait dispatch', async () => {
