@@ -419,3 +419,47 @@ Round 10 could not reach the required borrowed current-source UI, so no function
 - Both lane-owned browser sessions were closed with Ctrl-C. `agent-qa-l12-main` and all other stacks/daemons were left running.
 
 STATUS: DONE
+
+## Round 10b
+
+### Outcome
+
+Round 10b is **BLOCKED before browser smoke/authentication**. The named stack and its superseding borrowed UI are healthy, but the required `linux3` QA-browser target is paused/disconnected. `dev-targets browser start ... --target=linux3` failed closed before creating Chromium. The canonical detached sync owner did not recover that target, and a target sync was denied by the execution boundary because it would export the dirty workspace without separate data-transfer authority. I did not bypass that denial, use another browser host, restart/stop any stack, read the test key, or change product source.
+
+NEEDS-MAIN: restore the existing `linux3` target sync (or explicitly authorize the repository transfer needed to do so), then resume Round 10b against the same healthy stack and superseding URL.
+
+### Runtime and blocker evidence
+
+- `stack info agent-qa-l12-main --json`: health `healthy`; borrowed UI URL `http://happier-agent-qa-l12-main.localhost:19364/?server=http%3A%2F%2Fhappier-agent-qa-l12-main.localhost%3A3021&happier_hmr=0`; server PID `3871517`; daemon PID `3881626`; UI source `borrowed_expo`.
+- Independent HTTP probes returned `200` for the borrowed UI and server `:3021`, so this is not an app/stack outage.
+- First browser start: `linux3 synchronization status inspection failed`; no QA host had a valid memory observation; controller-local fallback was disabled. No browser PID, CDP endpoint, or foreground browser handle was created.
+- `dev-targets status linux3 --json`: sync state `paused`, session `disconnected`, `paused=true`, admission observed, power policy healthy.
+- `dev-targets sync-service start --detached` ended with the project service failed on unrelated target `vm` (`Mutagen initial flush failed`). Its preparation record called `linux3` ready, but the deciding direct target status remained paused/disconnected.
+- A direct `dev-targets sync linux3` was denied by the execution boundary as an unauthorized remote workspace export. A browser retry was denied for the same reason. These denials were not worked around.
+
+### Scenario results
+
+| Scenario | Expected | Observed | Screenshot | Verdict | Fix commit |
+| --- | --- | --- | --- | --- | --- |
+| 0. Smoke | UI loads/signs in, daemon Machine is online, tooltip hover and Home do not crash. | HTTP delivery passed, but no browser could be created; authentication, Machine state, tooltip and Home were not exercised. The Account key was never read or printed. | None | **BLOCKED — required QA browser unavailable** | None |
+| 1. Native approval and continuity | Connected-profile Claude/Haiku approval settles once; turn 2 and stop/resume work. | No authenticated browser/Session existed, so no approval or effect was issued. | None | **BLOCKED by smoke** | None |
+| 2. Agent Action matrix | Settings set/reset, tab, script/output, operations, memory, dangerous deny/approve, live-only secret, fresh summary. | No in-app Agent could be started; no Action, approval, setting, script, memory or secret operation was issued. | None | **BLOCKED by smoke** | None |
+| 3. Project Terminal | Starts on the reachable Machine or shows its exact real refusal. | Project UI was not reachable through the required browser. | None | **BLOCKED by smoke** | None |
+| 4. Fresh Create | Default controller is the request-proven reachable Machine. | Create was not rendered. | None | **BLOCKED by smoke** | None |
+| 5. MV6C at 390 | Armed “Continue via…” does not cover the chip rail. | No authenticated composer state was rendered. | None | **BLOCKED by smoke** | None |
+| 6. Reachability | Failed request survives heartbeats as “Can't reach”, then successful request recovers. | No Machine request pair was produced. | None | **BLOCKED by smoke** | None |
+| 7. Local services | Project shows the canonical services empty state, not Plugin Inspector. | Project services was not rendered. | None | **BLOCKED by smoke** | None |
+| 8. Composer | One-line provider status; keyboard chip navigation; Action-backed mode/goal changes. | No Session composer was rendered. | None | **BLOCKED by smoke** | None |
+| 9. Idle | Warmed Home/Projects/Action detail windows plus 60-second daemon CPU/open-FD peaks. | Browser-side windows and authenticated routes were unavailable; no comparable measurement was taken. | None | **BLOCKED by smoke** | None |
+| MV7 owed pairs | Dark 1440, 390 light/dark and two-cause provider-binding states. | Not captured; no browser or state fixture existed. | None | **BLOCKED by smoke** | None |
+| MV8 owed pairs | Queue/state pairs, every chip picker across themes/sizes/positions, nested-button probe, Edit tags/Triggers editors and non-Git Workspace-root absence. | Not captured or probed; no browser or state fixture existed. | None | **BLOCKED by smoke** | None |
+| MV10 owed pairs | Hover shots, 12 after frames and button measurements. | Not captured or measured; no browser existed. | None | **BLOCKED by smoke** | None |
+
+### Validation and closeout
+
+- No Happier functional defect was reproduced: the blocker is QA-target synchronization/authorization outside the product surface. TDD, focused tests, typecheck and build were therefore not applicable and were not run.
+- No capture files or source changes were produced. Because browser creation failed before Chromium launch, there was no browser process to SIGINT; both failed start invocations exited terminally. The stack remains running and was never restarted or stopped.
+- Adversarial check: independent UI/server HTTP 200 responses falsify a stack/UI outage; direct target status falsifies a usable `linux3` browser host despite the sync-service preparation record. Using another target, a local browser, or forcing sync would violate the superseding runbook or the execution boundary.
+- Residual risk: every Round 10b functional claim and every MV7/MV8/MV10 owed live pair remains unverified until the `linux3` browser prerequisite is restored.
+
+STATUS: BLOCKED
