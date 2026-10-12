@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import {
   NOTIFICATION_CONFIGURATION_ACTION_IDS,
   NotificationConfigurationActionInputSchemas,
@@ -6,6 +9,27 @@ import {
 } from './notificationConfigurationActionFamily.js';
 
 describe('notification signing secret Action input', () => {
+  it('admits waived OS permission requests without turning the waiver into an OS grant', async () => {
+    for (const actionId of ['notifications.desktop.permission.request', 'notifications.push.permission.request'] as const) {
+      const result = actionId === 'notifications.desktop.permission.request' ? { status: 'notGranted' }
+        : { decision: 'skip_cannot_ask_again', granted: false };
+      const effects: unknown[] = [];
+      // The answering client's native permission adapter is the process boundary.
+      const executor = createActionExecutor({
+        notificationConfigurationAction: async args => { effects.push(args); return result; },
+        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+          context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context),
+      } as ActionExecutorDeps);
+      for (const surface of ['agent', 'mcp'] as const) {
+        const context = { surface, authority: 'account_automation', actionCaller: { kind: 'host' } } as const;
+        expect(await executor.execute(actionId, {}, context)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        expect(effects).toEqual([]);
+        const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        expect(await executor.execute(actionId, {}, { ...context, actionsSettings })).toEqual({ ok: true, result });
+        expect(effects.pop()).toMatchObject({ actionId, context: { authority: 'account_automation' } });
+      }
+    }
+  });
   it('preserves exact write-only signing material including surrounding whitespace', () => {
     const secret = '  byte-exact signing material\n';
     expect(NotificationConfigurationActionInputSchemas['notifications.webhooks.signingSecret.set'].parse({ channelId: 'hook', secret }))

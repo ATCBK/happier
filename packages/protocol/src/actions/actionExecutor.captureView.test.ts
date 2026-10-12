@@ -27,7 +27,7 @@ function executor(settings: unknown = { v: 1 }, decision: 'approve' | 'reject' =
   } as ActionExecutorDeps);
   return {
     invoke: (pluginId = 'acme.viewer') => instance.execute('capture.view', input, {
-      surface: 'plugin', actionCaller: caller(pluginId), serverId: 'home-1',
+      surface: 'plugin', actionCaller: caller(pluginId), serverId: 'home-1', defaultSessionMachineId: 'machine-1',
       actionRequestId: `view-${requests}`, runtimeAccountId: 'account-1',
     }),
     requests: () => requests,

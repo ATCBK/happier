@@ -101,7 +101,7 @@ describe('native computer Action contracts', () => {
       expect(isApprovalRequiredByActionsSettings(ActionIdSchema.parse(id),
         ActionsSettingsV1Schema.parse({ v: 1 }), { surface: 'agent' }), id).toBe(true);
     }
-    expect(nativeSpec('computer.target.close').requiredAuthority).toBe('present_user');
+    expect(nativeSpec('computer.target.close').requiredAuthority).toBe('account_automation');
   });
 
   it('rejects request authority labels, mixed targets and unsafe native identities', () => {

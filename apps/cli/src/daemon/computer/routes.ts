@@ -49,8 +49,6 @@ export function createComputerRoutes(input: Readonly<{machineId: string; machine
     async dispatch(actionId, rawInput, context) {
       const sessionId = context.defaultSessionId;
       if (!context.authority || (!sessionId && actionId !== 'computer.permissions.openSettings')) return failure('computer_session_required');
-      if (actionId === 'computer.target.close'
-        && context.authority !== 'present_user') return failure('present_user_required');
       if ((actionId === 'computer.targets.list' || SURFACE_AUTHORITY_AGENT_FLOOR.some(id => id === actionId))
         && context.authority !== 'present_user' && !context.bypassApprovals) return failure('approval_required');
       const list = actionId === 'computer.targets.list';

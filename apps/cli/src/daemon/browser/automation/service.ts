@@ -72,7 +72,7 @@ export type BrowserAutomationDaemonService = Readonly<{
   prepareConfidentialFill(request: BrowserAutomationSecretFillRequestV1, context?: ActionExecutorContext): Promise<BrowserConfidentialFillPreparation>;
   execute(request: BrowserAutomationActionRequestV1, context?: Readonly<{ signal?: AbortSignal }>): Promise<BrowserAutomationActionResultV1>;
   cancelActive(
-    input: BrowserAutomationViewRef & Readonly<{ authority: 'present_user' }>,
+    input: BrowserAutomationViewRef & BrowserControllerAuthority,
   ): Promise<BrowserAutomationCancelResult>;
   recordHumanInput(input: BrowserAutomationViewRef & BrowserControllerAuthority): Promise<BrowserAutomationCancelResult>;
   /** Page-changing control commands retain their host authority through the same admission and drain. */

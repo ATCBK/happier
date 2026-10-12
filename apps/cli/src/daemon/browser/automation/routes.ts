@@ -108,14 +108,17 @@ export function createBrowserAutomationRoutes(input: Readonly<{
         if (!parsed.success) return invalidParameters;
         const view = readViewRef(parsed.data);
         if (!view) return invalidParameters;
-        if (context?.authority !== 'present_user') {
+        if (context?.authority !== 'present_user'
+          && !(context?.authority === 'account_automation' && context.bypassApprovals === true)) {
           return BrowserAutomationCancelActiveResultV1Schema.parse({
             v: 1,
             outcome: 'owner_mismatch',
             canceledCount: 0,
           });
         }
-        const canceled = await input.service.cancelActive({ ...view, authority: context.authority });
+        const canceled = await input.service.cancelActive(context.authority === 'present_user'
+          ? { ...view, authority: 'present_user' }
+          : { ...view, authority: 'account_automation', bypassApprovals: true });
         return canceled.ok
           ? BrowserAutomationCancelActiveResultV1Schema.parse({
               v: 1,

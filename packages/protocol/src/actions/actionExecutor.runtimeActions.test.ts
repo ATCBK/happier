@@ -173,42 +173,30 @@ describe('createActionExecutor (runtime-unification actions)', () => {
     });
   });
 
-  it('requires present-user authority before delegating browser automation cancellation', async () => {
-    const runtimeActionExecute = vi.fn(async () => ({ v: 1, outcome: 'canceled' as const, canceledCount: 1 }));
-    const executor = createActionExecutor(createDeps({ runtimeActionExecute }));
-
-    const result = await executor.execute('browser.automation.cancelActive', {
-      browserSessionId: 'browser_session_1',
-      viewId: 'view_1',
-    }, {
-      surface: 'api',
-      authority: 'account_automation',
-      actionCaller: { kind: 'host' },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      errorCode: 'present_user_required',
-      error: 'present_user_required',
-    });
-    expect(runtimeActionExecute).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when a caller omits host-stamped authority', async () => {
-    const runtimeActionExecute = vi.fn(async () => ({ v: 1, outcome: 'canceled' as const, canceledCount: 1 }));
-    const executor = createActionExecutor(createDeps({ runtimeActionExecute }));
-
-    const result = await executor.execute('browser.automation.cancelActive', {
-      browserSessionId: 'browser_session_1',
-      viewId: 'view_1',
-    }, { surface: 'ui' });
-
-    expect(result).toEqual({
-      ok: false,
-      errorCode: 'present_user_required',
-      error: 'present_user_required',
-    });
-    expect(runtimeActionExecute).not.toHaveBeenCalled();
+  it('asks before browser cancellation and native target close unless the user waived that surface', async () => {
+    const rows = [
+      { id: 'browser.automation.cancelActive', input: { browserSessionId: 'browser_session_1', viewId: 'view_1' },
+        output: { v: 1, outcome: 'canceled', canceledCount: 1, completion: 'stopped' } },
+      { id: 'computer.target.close', input: { machineId: 'machine_1' }, output: { status: 'dispatched',
+        target: { kind: 'window', displayId: ':77', pid: 123, windowId: 456 }, sourceId: 'source_1' } },
+    ] as const;
+    for (const row of rows) {
+      const effects: unknown[] = [];
+      // The machine runtime is the external boundary; policy and admission remain real.
+      const executor = createActionExecutor(createDeps({
+        runtimeActionExecute: async args => { effects.push(args); return row.output; },
+        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+          context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
+      }));
+      for (const surface of ['agent', 'mcp'] as const) {
+        const context = { surface, authority: 'account_automation', defaultSessionId: 'session_1', actionCaller: { kind: 'host' } } as const;
+        expect(await executor.execute(row.id, row.input, context)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        expect(effects).toEqual([]);
+        const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [row.id]: [surface] } });
+        expect(await executor.execute(row.id, row.input, { ...context, actionsSettings })).toEqual({ ok: true, result: row.output });
+        expect(effects.pop()).toMatchObject({ actionId: row.id, input: row.input, context: { authority: 'account_automation' } });
+      }
+    }
   });
 
   it('fails closed when a runtime action producer returns output outside its declared schema', async () => {

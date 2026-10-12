@@ -13,6 +13,25 @@ function selectUnsupportedTarget(registry: ReturnType<typeof createMachineLiveSt
 }
 
 describe('native computer route authority', () => {
+  it('lets policy-admitted automation close its selected target without bypassing Session or Machine admission', async () => {
+    const registry = createMachineLiveStreamCaptureRegistry();
+    selectUnsupportedTarget(registry);
+    const routes = createComputerRoutes({ machineId: 'machine', registry });
+    try {
+      expect(await routes.dispatch('computer.target.close', { machineId: 'machine' },
+        { authority: 'account_automation', defaultSessionId: 'session' })).toMatchObject({ ok: false, errorCode: 'approval_required' });
+      expect(registry.list()).toHaveLength(1);
+      expect(await routes.dispatch('computer.target.close', { machineId: 'other' },
+        { authority: 'account_automation', defaultSessionId: 'session', bypassApprovals: true }))
+        .toMatchObject({ ok: false, errorCode: 'computer_machine_mismatch' });
+      expect(await routes.dispatch('computer.target.close', { machineId: 'machine' },
+        { authority: 'account_automation', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: 'computer_session_required' });
+      expect(registry.list()).toHaveLength(1);
+      expect(await routes.dispatch('computer.target.close', { machineId: 'machine' },
+        { authority: 'account_automation', defaultSessionId: 'session', bypassApprovals: true })).toMatchObject({ status: 'dispatched' });
+      expect(registry.list()).toHaveLength(0);
+    } finally { await routes.dispose(); }
+  });
   it('refuses an old approved source after selection was revoked or replaced', async () => {
     const registry = createMachineLiveStreamCaptureRegistry();
     selectUnsupportedTarget(registry);

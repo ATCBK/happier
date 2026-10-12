@@ -369,7 +369,10 @@ describe('browser automation routes', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
   });
 
-  it('lets a present user take over an active automation action and advances its control epoch', async () => {
+  it.each([
+    { authority: 'present_user' as const },
+    { authority: 'account_automation' as const, bypassApprovals: true },
+  ])('lets policy-admitted $authority cancellation drain active automation and advance its control epoch', async context => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -390,7 +393,7 @@ describe('browser automation routes', () => {
       const canceling = r.dispatch('browser.automation.cancelActive', {
         browserSessionId: 'browser_session_1',
         viewId: 'view_1',
-      }, presentUserContext);
+      }, context);
       release();
       expect(await canceling).toEqual({ v: 1, outcome: 'canceled', canceledCount: 1, completion: 'uncertain' });
       await expect(pending).resolves.toMatchObject({

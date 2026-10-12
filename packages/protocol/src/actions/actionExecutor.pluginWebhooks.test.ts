@@ -4,6 +4,7 @@ import { getActionSpec } from './actionSpecs.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 
 const ensureInput = {
   webhookContribution: { pluginId: 'example.github', localId: 'events' },
@@ -18,6 +19,26 @@ const ensureInput = {
 } as const;
 
 describe('createActionExecutor (plugin webhook endpoints)', () => {
+  it('keeps delivery replay and discard Ask-first with a user-changeable surface default', async () => {
+    for (const actionId of ['plugin.webhook.delivery.replay', 'plugin.webhook.delivery.discard'] as const) {
+      const input = { deliveryId: 'delivery-1', expectedRevision: 3 };
+      const result = { kind: actionId.endsWith('replay') ? 'requeued' : 'discarded', revision: 4 };
+      const effects: unknown[] = [];
+      const executor = createActionExecutor({
+        pluginWebhookAction: async args => { effects.push(args); return result; },
+        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+          context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
+      } as ActionExecutorDeps);
+      for (const surface of ['agent', 'mcp'] as const) {
+        const context = { surface, authority: 'account_automation', actionCaller: { kind: 'host' } } as const;
+        expect(await executor.execute(actionId, input, context)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        expect(effects).toEqual([]);
+        const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        expect(await executor.execute(actionId, input, { ...context, actionsSettings })).toEqual({ ok: true, result });
+        expect(effects.pop()).toMatchObject({ actionId, input, caller: { kind: 'host' } });
+      }
+    }
+  });
   it.each(['agent', 'mcp'] as const)('requires human setup consent on %s and confines the secret to the deciding human', async (surface) => {
     expect(getActionSpec('plugin.webhook.endpoint.ensure').safety).toBe('danger');
     let stored: ApprovalRequest | null = null;
