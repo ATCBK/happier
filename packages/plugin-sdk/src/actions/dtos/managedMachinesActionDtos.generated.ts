@@ -169,6 +169,8 @@ export type ManagedMachinesActionInputById = {
             } | undefined;
             permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo' | 'plan' | undefined;
             agentModeId?: string | undefined;
+            allowedTools?: string[] | undefined;
+            unlistedTools?: 'ask' | 'deny' | undefined;
             configuration?: unknown;
             connectedServices?: {
                 v: 1;
@@ -229,7 +231,20 @@ export type ManagedMachinesActionInputById = {
                     disclosedMember?: undefined;
                 }> | undefined;
             } | undefined;
-            mcpSelection?: unknown;
+            capabilitySelection?: {
+                mcp?: {
+                    v?: 1 | undefined;
+                    managedServersEnabled?: boolean | undefined;
+                    forceIncludeServerIds?: string[] | undefined;
+                    forceExcludeServerIds?: string[] | undefined;
+                } | undefined;
+                skills?: {
+                    v?: 1 | undefined;
+                    forceIncludeSkillIds?: string[] | undefined;
+                    forceExcludeSkillIds?: string[] | undefined;
+                    excludeNativeSkillNames?: string[] | undefined;
+                } | undefined;
+            } | undefined;
             transcriptStorage?: 'direct' | 'persisted' | undefined;
             terminal?: {
                 mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
@@ -253,6 +268,10 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            attestedContext?: {
+                externalPrincipalId: string;
+                sourceMessageId: string;
+            } | undefined;
             managedCreation?: {
                 homeId: string;
                 managedId: string;
@@ -927,10 +946,12 @@ export type ManagedMachinesActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'session' | 'period' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                         }[];
                         defaults: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'ask' | 'deny' | undefined;
                             agentTarget?: {
                                 kind: 'agent';
                                 identity: {
@@ -965,11 +986,19 @@ export type ManagedMachinesActionInputById = {
                                     value: string | number | boolean | null;
                                 }>;
                             } | null | undefined;
-                            mcpSelection?: {
-                                forceIncludeServerIds: string[];
-                                forceExcludeServerIds: string[];
-                                v: 1;
-                                managedServersEnabled: boolean;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
                             } | null | undefined;
                             connectedServices?: {
                                 v: 2;
@@ -1155,7 +1184,7 @@ export type ManagedMachinesActionInputById = {
                                 intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                             } | undefined;
                             profileId?: string | undefined;
-                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
                         } | {
                             roleId: string;
@@ -1173,7 +1202,7 @@ export type ManagedMachinesActionInputById = {
                                 effort?: string | undefined;
                             } | undefined;
                             profileId?: string | undefined;
-                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
                         })[] | undefined;
                         blocks: readonly PluginActionWorkflowBlockV1<true>[];
@@ -1217,7 +1246,7 @@ export type ManagedMachinesActionInputById = {
                         intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 }[] | undefined;
                 onComplete?: {
@@ -1565,6 +1594,8 @@ export type ManagedMachinesActionInputById = {
             } | undefined;
             permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo' | 'plan' | undefined;
             agentModeId?: string | undefined;
+            allowedTools?: string[] | undefined;
+            unlistedTools?: 'ask' | 'deny' | undefined;
             configuration?: unknown;
             connectedServices?: {
                 v: 1;
@@ -1625,7 +1656,20 @@ export type ManagedMachinesActionInputById = {
                     disclosedMember?: undefined;
                 }> | undefined;
             } | undefined;
-            mcpSelection?: unknown;
+            capabilitySelection?: {
+                mcp?: {
+                    v?: 1 | undefined;
+                    managedServersEnabled?: boolean | undefined;
+                    forceIncludeServerIds?: string[] | undefined;
+                    forceExcludeServerIds?: string[] | undefined;
+                } | undefined;
+                skills?: {
+                    v?: 1 | undefined;
+                    forceIncludeSkillIds?: string[] | undefined;
+                    forceExcludeSkillIds?: string[] | undefined;
+                    excludeNativeSkillNames?: string[] | undefined;
+                } | undefined;
+            } | undefined;
             transcriptStorage?: 'direct' | 'persisted' | undefined;
             terminal?: {
                 mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
@@ -1649,6 +1693,10 @@ export type ManagedMachinesActionInputById = {
                 baseRef: string | null;
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
+            attestedContext?: {
+                externalPrincipalId: string;
+                sourceMessageId: string;
+            } | undefined;
             managedCreation?: {
                 homeId: string;
                 managedId: string;
@@ -2323,10 +2371,12 @@ export type ManagedMachinesActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'session' | 'period' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                         }[];
                         defaults: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'ask' | 'deny' | undefined;
                             agentTarget?: {
                                 kind: 'agent';
                                 identity: {
@@ -2361,11 +2411,19 @@ export type ManagedMachinesActionInputById = {
                                     value: string | number | boolean | null;
                                 }>;
                             } | null | undefined;
-                            mcpSelection?: {
-                                forceIncludeServerIds: string[];
-                                forceExcludeServerIds: string[];
-                                v: 1;
-                                managedServersEnabled: boolean;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
                             } | null | undefined;
                             connectedServices?: {
                                 v: 2;
@@ -2551,7 +2609,7 @@ export type ManagedMachinesActionInputById = {
                                 intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                             } | undefined;
                             profileId?: string | undefined;
-                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
                         } | {
                             roleId: string;
@@ -2569,7 +2627,7 @@ export type ManagedMachinesActionInputById = {
                                 effort?: string | undefined;
                             } | undefined;
                             profileId?: string | undefined;
-                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
                         })[] | undefined;
                         blocks: readonly PluginActionWorkflowBlockV1<true>[];
@@ -2613,7 +2671,7 @@ export type ManagedMachinesActionInputById = {
                         intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 }[] | undefined;
                 onComplete?: {

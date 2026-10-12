@@ -63,6 +63,21 @@ export type MessagingActionInputById = {
             runInBackground?: boolean | undefined;
         };
         idempotencyKey: string;
+    } | {
+        sessionId: string;
+        kind: 'sessionSubagentCommand';
+        command: {
+            [x: string]: unknown;
+            kind: 'agent_team_delete';
+            teamId: string;
+        } | {
+            [x: string]: unknown;
+            kind: 'agent_team_member_delete';
+            teamId: string;
+            memberId: string;
+            memberLabel?: string | undefined;
+        };
+        idempotencyKey: string;
     };
     readonly "session.worker.publish": {
         summary: string;
@@ -85,7 +100,7 @@ export type MessagingActionResultById = {
         localId: string;
     } | {
         status: 'rejected';
-        code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
+        code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
     } | {
         status: 'outcomeUnknown';
         localId: string;

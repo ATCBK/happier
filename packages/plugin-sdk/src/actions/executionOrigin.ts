@@ -9,6 +9,6 @@ export const PluginMachineExecutionOriginV1Schema: Readonly<{
   safeParse(value: unknown):
     | Readonly<{ success: true; data: PluginMachineExecutionOriginV1 }>
     | Readonly<{ success: false; error: unknown }>;
-}> = projectProtocolValue(canonicalPluginMachineExecutionOriginV1Schema);
+}> = /* @__PURE__ */ projectProtocolValue(canonicalPluginMachineExecutionOriginV1Schema);
 /** Exact Protocol execution-origin fact used for contributed Action currentness. */
 export type { PluginMachineExecutionOriginV1 };

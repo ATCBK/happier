@@ -406,7 +406,7 @@ export type ExecutionRunControlActionInputById = {
                     label: string;
                     typeLabel: string;
                     description?: string | undefined;
-                    icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                    icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                 };
                 content?: {
@@ -441,7 +441,20 @@ export type ExecutionRunControlActionInputById = {
             decisions: string[];
         } | undefined;
         cwd?: string | undefined;
-        mcpSelection?: unknown;
+        capabilitySelection?: {
+            mcp?: {
+                v?: 1 | undefined;
+                managedServersEnabled?: boolean | undefined;
+                forceIncludeServerIds?: string[] | undefined;
+                forceExcludeServerIds?: string[] | undefined;
+            } | undefined;
+            skills?: {
+                v?: 1 | undefined;
+                forceIncludeSkillIds?: string[] | undefined;
+                forceExcludeSkillIds?: string[] | undefined;
+                excludeNativeSkillNames?: string[] | undefined;
+            } | undefined;
+        } | undefined;
         modelId?: string | undefined;
         modelSelection?: {
             agentTargetKey: string;
@@ -452,6 +465,8 @@ export type ExecutionRunControlActionInputById = {
             providerConnectionId: string;
             modelId: string;
         } | null | undefined;
+        childSelection?: 'agentDefault' | undefined;
+        accountSettings?: undefined;
         teamCredentialModel?: {
             kind: 'team_credential_provider_model';
             resourceId: string;
@@ -482,6 +497,8 @@ export type ExecutionRunControlActionInputById = {
         } | undefined;
         connectedServicesDefaultServiceIds?: string[] | undefined;
         notifyParentOnCompletion?: boolean | undefined;
+        allowedTools?: string[] | undefined;
+        unlistedTools?: 'ask' | 'deny' | undefined;
         sessionId?: string | null | undefined;
         waitForCompletion?: boolean | undefined;
         waitTimeoutSeconds?: number | undefined;
@@ -996,7 +1013,7 @@ export type ExecutionRunControlActionInputById = {
                         label: string;
                         typeLabel: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'search' | 'error' | 'check' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'error' | 'check' | 'file' | 'external' | 'search' | 'review' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                     };
                     content?: {
@@ -1031,7 +1048,20 @@ export type ExecutionRunControlActionInputById = {
                 decisions: string[];
             } | undefined;
             cwd?: string | undefined;
-            mcpSelection?: unknown;
+            capabilitySelection?: {
+                mcp?: {
+                    v?: 1 | undefined;
+                    managedServersEnabled?: boolean | undefined;
+                    forceIncludeServerIds?: string[] | undefined;
+                    forceExcludeServerIds?: string[] | undefined;
+                } | undefined;
+                skills?: {
+                    v?: 1 | undefined;
+                    forceIncludeSkillIds?: string[] | undefined;
+                    forceExcludeSkillIds?: string[] | undefined;
+                    excludeNativeSkillNames?: string[] | undefined;
+                } | undefined;
+            } | undefined;
             modelId?: string | undefined;
             modelSelection?: {
                 agentTargetKey: string;
@@ -1042,6 +1072,8 @@ export type ExecutionRunControlActionInputById = {
                 providerConnectionId: string;
                 modelId: string;
             } | null | undefined;
+            childSelection?: 'agentDefault' | undefined;
+            accountSettings?: undefined;
             teamCredentialModel?: {
                 kind: 'team_credential_provider_model';
                 resourceId: string;
@@ -1131,6 +1163,8 @@ export type ExecutionRunControlActionInputById = {
             } | null | undefined;
             connectedServicesDefaultServiceIds?: string[] | undefined;
             notifyParentOnCompletion?: boolean | undefined;
+            allowedTools?: string[] | undefined;
+            unlistedTools?: 'ask' | 'deny' | undefined;
         } | undefined;
         resume?: boolean | undefined;
     };
@@ -1357,8 +1391,8 @@ export type ExecutionRunControlActionInputById = {
                         } | undefined;
                         usageReporting?: true | undefined;
                         catalog?: {
-                            active?: ('vendorPlugins' | 'skills')[] | undefined;
-                            inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                            active?: ('skills' | 'vendorPlugins')[] | undefined;
+                            inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                         } | undefined;
                         usageLimitRecovery?: {
                             active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -1662,8 +1696,8 @@ export type ExecutionRunControlActionResultById = {
                             } | undefined;
                             usageReporting?: true | undefined;
                             catalog?: {
-                                active?: ('vendorPlugins' | 'skills')[] | undefined;
-                                inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                                active?: ('skills' | 'vendorPlugins')[] | undefined;
+                                inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                             } | undefined;
                             usageLimitRecovery?: {
                                 active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -1924,8 +1958,8 @@ export type ExecutionRunControlActionResultById = {
                             } | undefined;
                             usageReporting?: true | undefined;
                             catalog?: {
-                                active?: ('vendorPlugins' | 'skills')[] | undefined;
-                                inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                                active?: ('skills' | 'vendorPlugins')[] | undefined;
+                                inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                             } | undefined;
                             usageLimitRecovery?: {
                                 active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -2186,8 +2220,8 @@ export type ExecutionRunControlActionResultById = {
                             } | undefined;
                             usageReporting?: true | undefined;
                             catalog?: {
-                                active?: ('vendorPlugins' | 'skills')[] | undefined;
-                                inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                                active?: ('skills' | 'vendorPlugins')[] | undefined;
+                                inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                             } | undefined;
                             usageLimitRecovery?: {
                                 active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -2452,8 +2486,8 @@ export type ExecutionRunControlActionResultById = {
                             } | undefined;
                             usageReporting?: true | undefined;
                             catalog?: {
-                                active?: ('vendorPlugins' | 'skills')[] | undefined;
-                                inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                                active?: ('skills' | 'vendorPlugins')[] | undefined;
+                                inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                             } | undefined;
                             usageLimitRecovery?: {
                                 active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -2552,7 +2586,7 @@ export type ExecutionRunControlActionResultById = {
             code: 'cancelled';
         } | {
             ok: false;
-            code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
+            code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
         } | undefined;
     };
     readonly "execution.run.list": {
@@ -2726,8 +2760,8 @@ export type ExecutionRunControlActionResultById = {
                     } | undefined;
                     usageReporting?: true | undefined;
                     catalog?: {
-                        active?: ('vendorPlugins' | 'skills')[] | undefined;
-                        inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                        active?: ('skills' | 'vendorPlugins')[] | undefined;
+                        inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                     } | undefined;
                     usageLimitRecovery?: {
                         active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -2978,8 +3012,8 @@ export type ExecutionRunControlActionResultById = {
                     } | undefined;
                     usageReporting?: true | undefined;
                     catalog?: {
-                        active?: ('vendorPlugins' | 'skills')[] | undefined;
-                        inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                        active?: ('skills' | 'vendorPlugins')[] | undefined;
+                        inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                     } | undefined;
                     usageLimitRecovery?: {
                         active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -3343,8 +3377,8 @@ export type ExecutionRunControlActionResultById = {
                         } | undefined;
                         usageReporting?: true | undefined;
                         catalog?: {
-                            active?: ('vendorPlugins' | 'skills')[] | undefined;
-                            inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                            active?: ('skills' | 'vendorPlugins')[] | undefined;
+                            inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                         } | undefined;
                         usageLimitRecovery?: {
                             active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -3605,8 +3639,8 @@ export type ExecutionRunControlActionResultById = {
                         } | undefined;
                         usageReporting?: true | undefined;
                         catalog?: {
-                            active?: ('vendorPlugins' | 'skills')[] | undefined;
-                            inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                            active?: ('skills' | 'vendorPlugins')[] | undefined;
+                            inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                         } | undefined;
                         usageLimitRecovery?: {
                             active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -3867,8 +3901,8 @@ export type ExecutionRunControlActionResultById = {
                         } | undefined;
                         usageReporting?: true | undefined;
                         catalog?: {
-                            active?: ('vendorPlugins' | 'skills')[] | undefined;
-                            inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                            active?: ('skills' | 'vendorPlugins')[] | undefined;
+                            inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                         } | undefined;
                         usageLimitRecovery?: {
                             active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -4133,8 +4167,8 @@ export type ExecutionRunControlActionResultById = {
                         } | undefined;
                         usageReporting?: true | undefined;
                         catalog?: {
-                            active?: ('vendorPlugins' | 'skills')[] | undefined;
-                            inactive?: ('vendorPlugins' | 'skills')[] | undefined;
+                            active?: ('skills' | 'vendorPlugins')[] | undefined;
+                            inactive?: ('skills' | 'vendorPlugins')[] | undefined;
                         } | undefined;
                         usageLimitRecovery?: {
                             active?: ('checkNow' | 'consumeResetCredit')[] | undefined;
@@ -4233,6 +4267,6 @@ export type ExecutionRunControlActionResultById = {
         code: 'cancelled';
     } | {
         ok: false;
-        code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
+        code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
     };
 };

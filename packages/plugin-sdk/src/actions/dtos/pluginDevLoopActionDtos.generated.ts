@@ -24,6 +24,9 @@ export type PluginDevLoopActionInputById = {
         projectRoot: string;
         sdkRegistryOrigin?: string | undefined;
     };
+    readonly "plugins.dev.unregister": {
+        projectRoot: string;
+    };
     readonly "plugins.dev.install": {
         projectRoot: string;
         sdkRegistryOrigin?: string | undefined;
@@ -126,7 +129,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -158,7 +161,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -190,7 +193,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -222,7 +225,39 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'applied' | 'failed' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.dev.unregister": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -254,7 +289,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -286,7 +321,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -318,7 +353,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -350,7 +385,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -382,7 +417,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -414,7 +449,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -446,7 +481,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -478,7 +513,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
@@ -510,7 +545,7 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
         outcome?: 'applied' | 'failed' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;

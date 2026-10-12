@@ -39,6 +39,9 @@ export type TeamsActionInputById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -83,6 +86,9 @@ export type TeamsActionInputById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -137,6 +143,9 @@ export type TeamsActionInputById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -261,6 +270,9 @@ export type TeamsActionInputById = {
                         service: {
                             pluginId: string;
                             localId: string;
+                        } | {
+                            pluginId: 'happier';
+                            localId: 'mcp-sign-in';
                         };
                         groupId: string;
                     };
@@ -303,6 +315,11 @@ export type TeamsActionInputById = {
     readonly "teams.credentials.test": {
         teamId: string;
         resourceId: string;
+    };
+    readonly "teams.credentials.preparation.get": {
+        teamId: string;
+        resourceId: string;
+        view?: 'readiness' | undefined;
     };
     readonly "teams.credentials.activity.list": {
         resourceId: string;
@@ -360,6 +377,43 @@ export type TeamsActionInputById = {
     };
     readonly "teams.credentials.externalKeys.revokeAll": {
         resourceId: string;
+    };
+    readonly "teams.credentials.usage.export": {
+        query: {
+            resourceId: string;
+            startMs: number;
+            endMs: number;
+            granularity?: 'day' | 'week' | 'month' | 'hour' | undefined;
+            costMode?: 'auto' | 'reported' | 'estimated' | undefined;
+            breakdown?: 'member' | 'external_api_key' | 'model' | 'session' | 'source_member' | 'worker_machine' | 'broker_machine' | 'delivery_mode' | undefined;
+            cursor?: string | undefined;
+        };
+        resourceName: string;
+        breakdownRowCount?: number | undefined;
+    };
+    readonly "teams.members.history.preparation.get": {
+        teamId: string;
+        target: {
+            kind: 'team';
+            teamMembershipId: string;
+        } | {
+            kind: 'group';
+            teamGroupId: string;
+            accountId: string;
+        };
+        recipientAccountId: string;
+    };
+    readonly "teams.members.history.prepare": {
+        teamId: string;
+        target: {
+            kind: 'team';
+            teamMembershipId: string;
+        } | {
+            kind: 'group';
+            teamGroupId: string;
+            accountId: string;
+        };
+        recipientAccountId: string;
     };
     readonly "teams.list": {
         v: 1;
@@ -867,6 +921,9 @@ export type TeamsActionResultById = {
                     service: {
                         pluginId: string;
                         localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
                     };
                     groupId: string;
                 };
@@ -883,6 +940,9 @@ export type TeamsActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
             } | {
                 kind: 'provider';
@@ -1015,6 +1075,9 @@ export type TeamsActionResultById = {
                     service: {
                         pluginId: string;
                         localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
                     };
                     groupId: string;
                 };
@@ -1217,6 +1280,9 @@ export type TeamsActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -1233,6 +1299,9 @@ export type TeamsActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
         } | {
             kind: 'provider';
@@ -1442,6 +1511,9 @@ export type TeamsActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
             } | {
                 kind: 'provider';
@@ -1500,6 +1572,9 @@ export type TeamsActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -1516,6 +1591,9 @@ export type TeamsActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
         } | {
             kind: 'provider';
@@ -1652,6 +1730,19 @@ export type TeamsActionResultById = {
             resetsAtUtc: string;
         };
         recovery?: string | undefined;
+    };
+    readonly "teams.credentials.preparation.get": {
+        status: 'ready';
+        reason: null;
+        counts: {
+            pending: 0;
+        };
+    } | {
+        status: 'not_ready';
+        reason: 'preparation_pending';
+        counts: {
+            pending: number;
+        };
     };
     readonly "teams.credentials.activity.list": {
         items: {
@@ -1857,6 +1948,36 @@ export type TeamsActionResultById = {
         resourceId: string;
         revokedCount: number;
     };
+    readonly "teams.credentials.usage.export": {
+        v: 1;
+        mediaType: string;
+        fileName: string;
+        base64: string;
+        fields: ('totals' | 'coverage' | 'series' | 'breakdowns' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'tokenCategories' | 'contributions' | 'resets' | 'renewals')[];
+        asOfMs: number | null;
+    };
+    readonly "teams.members.history.preparation.get": {
+        status: 'ready';
+        actionable: boolean;
+        exceptions: {
+            callerVisibleNonTransferableSessionCount: number;
+            callerEnvelopeRepairRequiredCount: number;
+        };
+    } | {
+        status: 'recipient_unavailable';
+        reason: 'plain_account' | 'encryption_setup_required' | 'encryption_inconsistent';
+    };
+    readonly "teams.members.history.prepare": {
+        status: 'complete' | 'recipient_unavailable' | 'incomplete' | 'scope_changed' | 'recipient_changed' | 'membership_changed' | 'invalid_recipient_binding';
+        preparedCount: number;
+        skippedCount: number;
+        repairRequiredCount: number;
+        recipientUnavailableReason: 'plain_account' | 'encryption_setup_required' | 'encryption_inconsistent' | null;
+        exceptions: {
+            callerVisibleNonTransferableSessionCount: number;
+            callerEnvelopeRepairRequiredCount: number;
+        } | null;
+    };
     readonly "teams.list": {
         items: {
             id: string;
@@ -1918,9 +2039,14 @@ export type TeamsActionResultById = {
             counts: {
                 members: number;
                 suspendedMembers: number;
-                groups: number;
+                groups: number | null;
                 waitingInvitations: number | null;
+                archivedGroups?: number | null | undefined;
             } | null;
+            directoryMembership?: {
+                providerDisplayName: string;
+                state: 'needs_attention' | 'syncing' | 'healthy';
+            } | null | undefined;
         }[];
         nextCursor: string | null;
     };
@@ -1984,9 +2110,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.create": {
         id: string;
@@ -2048,9 +2179,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.update": {
         id: string;
@@ -2112,9 +2248,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.logo.set": {
         id: string;
@@ -2176,9 +2317,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.logo.remove": {
         id: string;
@@ -2240,9 +2386,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.policy.set": {
         id: string;
@@ -2304,9 +2455,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.archive": {
         id: string;
@@ -2368,9 +2524,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.restore": {
         id: string;
@@ -2432,9 +2593,14 @@ export type TeamsActionResultById = {
         counts: {
             members: number;
             suspendedMembers: number;
-            groups: number;
+            groups: number | null;
             waitingInvitations: number | null;
+            archivedGroups?: number | null | undefined;
         } | null;
+        directoryMembership?: {
+            providerDisplayName: string;
+            state: 'needs_attention' | 'syncing' | 'healthy';
+        } | null | undefined;
     };
     readonly "teams.members.list": {
         items: {
@@ -2443,6 +2609,7 @@ export type TeamsActionResultById = {
             teamId: string;
             accountId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -2480,6 +2647,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2515,6 +2683,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2550,6 +2719,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2585,6 +2755,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2620,6 +2791,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2667,6 +2839,7 @@ export type TeamsActionResultById = {
         teamId: string;
         accountId: string;
         account: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -2910,6 +3083,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -2939,6 +3113,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -2966,6 +3141,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -2993,6 +3169,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3020,6 +3197,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3050,6 +3228,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3077,6 +3256,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3104,6 +3284,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3131,6 +3312,7 @@ export type TeamsActionResultById = {
             accountId: string;
             membershipId: string;
             account: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -3171,6 +3353,14 @@ export type TeamsActionResultById = {
                 status: 'sent' | 'failed';
                 attemptedAt: number;
             } | null;
+            finishedAt?: number | null | undefined;
+            finishedByAccount?: {
+                name: string | null;
+                firstName: string | null;
+                lastName: string | null;
+                username: string | null;
+                avatarUrl: string | null;
+            } | null | undefined;
         }[];
         nextCursor: string | null;
         emailDelivery: 'available' | 'unavailable';
@@ -3192,6 +3382,14 @@ export type TeamsActionResultById = {
                 status: 'sent' | 'failed';
                 attemptedAt: number;
             } | null;
+            finishedAt?: number | null | undefined;
+            finishedByAccount?: {
+                name: string | null;
+                firstName: string | null;
+                lastName: string | null;
+                username: string | null;
+                avatarUrl: string | null;
+            } | null | undefined;
         };
         joinUrl: string | null;
     };
@@ -3210,6 +3408,14 @@ export type TeamsActionResultById = {
             status: 'sent' | 'failed';
             attemptedAt: number;
         } | null;
+        finishedAt?: number | null | undefined;
+        finishedByAccount?: {
+            name: string | null;
+            firstName: string | null;
+            lastName: string | null;
+            username: string | null;
+            avatarUrl: string | null;
+        } | null | undefined;
     };
     readonly "teams.invitations.reissue": {
         previous: {
@@ -3227,6 +3433,14 @@ export type TeamsActionResultById = {
                 status: 'sent' | 'failed';
                 attemptedAt: number;
             } | null;
+            finishedAt?: number | null | undefined;
+            finishedByAccount?: {
+                name: string | null;
+                firstName: string | null;
+                lastName: string | null;
+                username: string | null;
+                avatarUrl: string | null;
+            } | null | undefined;
         };
         replacement: {
             id: string;
@@ -3243,6 +3457,14 @@ export type TeamsActionResultById = {
                 status: 'sent' | 'failed';
                 attemptedAt: number;
             } | null;
+            finishedAt?: number | null | undefined;
+            finishedByAccount?: {
+                name: string | null;
+                firstName: string | null;
+                lastName: string | null;
+                username: string | null;
+                avatarUrl: string | null;
+            } | null | undefined;
         };
         joinUrl: string | null;
     };
@@ -3373,7 +3595,7 @@ export type TeamsActionResultById = {
             v: 1;
             providerId: string | null;
             providerKind: 'oidc' | 'workos_sso' | 'github_app_identity';
-            owner: 'home' | 'team';
+            owner: 'team' | 'home';
             displayName: string | null;
             availability: {
                 status: 'available';
@@ -3873,7 +4095,7 @@ export type TeamsActionResultById = {
             emailAvailable: boolean;
             emailVerified: boolean;
             groups: {
-                state: 'complete' | 'absent' | 'incomplete';
+                state: 'complete' | 'incomplete' | 'absent';
                 count: number | null;
             };
             eligibility: {
@@ -4378,7 +4600,7 @@ export type TeamsActionResultById = {
             allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
             sync: {
                 mode: 'events_and_full' | 'full_only';
-                attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+                attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
                 freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
                 lastAttemptAt: string | null;
                 lastSuccessAt: string | null;
@@ -4403,7 +4625,7 @@ export type TeamsActionResultById = {
         allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
         sync: {
             mode: 'events_and_full' | 'full_only';
-            attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+            attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
             freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
             lastAttemptAt: string | null;
             lastSuccessAt: string | null;
@@ -4455,6 +4677,7 @@ export type TeamsActionResultById = {
                 bindingId: string;
                 mode: 'directory_created' | 'native_target';
                 teamGroupId: string;
+                teamGroupName: string | null;
             };
             lastCompleteObservationAt: string | null;
             sourceLabel: string;
@@ -4471,7 +4694,7 @@ export type TeamsActionResultById = {
         allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
         sync: {
             mode: 'events_and_full' | 'full_only';
-            attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+            attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
             freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
             lastAttemptAt: string | null;
             lastSuccessAt: string | null;
@@ -4497,7 +4720,7 @@ export type TeamsActionResultById = {
             allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
             sync: {
                 mode: 'events_and_full' | 'full_only';
-                attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+                attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
                 freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
                 lastAttemptAt: string | null;
                 lastSuccessAt: string | null;
@@ -4521,7 +4744,7 @@ export type TeamsActionResultById = {
         allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
         sync: {
             mode: 'events_and_full' | 'full_only';
-            attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+            attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
             freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
             lastAttemptAt: string | null;
             lastSuccessAt: string | null;
@@ -4544,7 +4767,7 @@ export type TeamsActionResultById = {
         allowedActions: ('teams.directory.sources.sync' | 'teams.directory.sources.pause' | 'teams.directory.sources.resume' | 'teams.directory.sources.remove')[];
         sync: {
             mode: 'events_and_full' | 'full_only';
-            attempt: 'never' | 'failed' | 'paused' | 'syncing' | 'succeeded';
+            attempt: 'never' | 'syncing' | 'failed' | 'paused' | 'succeeded';
             freshness: 'unknown' | 'stale' | 'never_synced' | 'fresh';
             lastAttemptAt: string | null;
             lastSuccessAt: string | null;

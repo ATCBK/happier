@@ -91,6 +91,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;
@@ -142,6 +143,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;
@@ -188,6 +190,7 @@ export type SessionDiscussionActionResultById = {
                 v: 1;
                 accountId: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -236,6 +239,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;
@@ -276,6 +280,7 @@ export type SessionDiscussionActionResultById = {
                 v: 1;
                 accountId: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -317,6 +322,7 @@ export type SessionDiscussionActionResultById = {
                 v: 1;
                 accountId: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -363,6 +369,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;
@@ -412,6 +419,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;
@@ -461,6 +469,7 @@ export type SessionDiscussionActionResultById = {
                     v: 1;
                     accountId: string;
                     profile: {
+                        name: string | null;
                         firstName: string | null;
                         lastName: string | null;
                         username: string | null;

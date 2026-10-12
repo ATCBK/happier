@@ -22,6 +22,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -30,6 +34,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -71,6 +77,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -79,6 +89,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -103,6 +115,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -111,6 +127,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -135,6 +153,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -143,6 +165,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -164,6 +188,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -172,6 +200,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -195,6 +225,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -203,6 +237,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -225,6 +261,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -233,6 +273,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -321,14 +363,47 @@ export type UsageActionInputById = {
         } | {
             kind: 'mcp_binding';
             owner: {
-                scope: {
-                    serverId: string;
-                    accountId: string;
-                };
-                bindingId: string;
-                before: boolean;
-                applied: boolean;
-                revision: number;
+                serverId: string;
+                rules: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+                previous: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
             };
         };
     };
@@ -347,6 +422,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -355,6 +434,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -378,6 +459,10 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+            } | {
+                relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                startMs?: undefined;
+                endMs?: undefined;
             } | undefined;
             agents?: string[] | undefined;
             machines?: string[] | undefined;
@@ -386,6 +471,8 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeSessionEvidence?: boolean | undefined;
+            includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
             workspaceIds?: string[] | undefined;
@@ -920,6 +1007,10 @@ export type UsageActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                } | {
+                    relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                    startMs?: undefined;
+                    endMs?: undefined;
                 };
                 agents: string[];
                 machines: string[];
@@ -928,6 +1019,8 @@ export type UsageActionResultById = {
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                 metric: 'tokens' | 'cost';
+                includeSessionEvidence: boolean;
+                includeWorkEvidence: boolean;
                 breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 modelIds: string[];
                 workspaceIds: string[];
@@ -947,6 +1040,10 @@ export type UsageActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                } | {
+                    relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                    startMs?: undefined;
+                    endMs?: undefined;
                 };
                 agents: string[];
                 machines: string[];
@@ -955,6 +1052,8 @@ export type UsageActionResultById = {
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                 metric: 'tokens' | 'cost';
+                includeSessionEvidence: boolean;
+                includeWorkEvidence: boolean;
                 breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 modelIds: string[];
                 workspaceIds: string[];
@@ -1352,6 +1451,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                     models?: {
                         key: string;
@@ -1377,6 +1502,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                     sessions?: {
                         key: string;
@@ -1402,6 +1553,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                     projects?: {
                         key: string;
@@ -1427,6 +1604,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                     workspaces?: {
                         key: string;
@@ -1452,6 +1655,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                     engines?: {
                         key: string;
@@ -1477,6 +1706,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[] | undefined;
                 } | undefined;
                 modelTimeline?: {
@@ -1506,6 +1761,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[];
                 }[] | undefined;
                 engineTimeline?: {
@@ -1535,6 +1816,32 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         } | undefined;
+                        sources?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                            source: string;
+                            eventCount: number;
+                            tokens: {
+                                input: number;
+                                output: number;
+                                reasoning: number;
+                                cacheRead: number;
+                                cacheWrite: number;
+                                total: number;
+                            };
+                            cost: {
+                                reportedUsd: number;
+                                estimatedUsd: number;
+                                currency: string;
+                                apiEquivalentUsd?: number | undefined;
+                                pricingSource?: string | undefined;
+                                invoiceUsd?: number | undefined;
+                                billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                breakdown?: Record<string, number> | undefined;
+                                effectiveUsd?: number | undefined;
+                            };
+                        }[] | undefined;
                     }[];
                 }[] | undefined;
                 messageStats?: {
@@ -1584,30 +1891,6 @@ export type UsageActionResultById = {
                         errorCode?: string | undefined;
                     };
                 } | undefined;
-                coverage?: {
-                    status: 'unknown' | 'complete' | 'partial';
-                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
-                    sources: {
-                        source: string;
-                        path: 'unknown' | 'runtime' | 'native' | 'legacy';
-                        status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending';
-                        eventCount: number;
-                        asOfMs?: number | undefined;
-                        historyComplete?: boolean | undefined;
-                    }[];
-                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
-                    range: {
-                        complete: boolean;
-                        startMs?: number | undefined;
-                        endMs?: number | undefined;
-                    };
-                    ranked: {
-                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
-                        totalEntries: number;
-                        returnedEntries: number;
-                        complete: boolean;
-                    }[];
-                } | undefined;
                 contributions?: {
                     id: string;
                     observedAtMs: number;
@@ -1639,10 +1922,27 @@ export type UsageActionResultById = {
                         breakdown?: Record<string, number> | undefined;
                         effectiveUsd?: number | undefined;
                     };
+                    eventCount?: number | undefined;
+                    context?: {
+                        usedTokens?: number | null | undefined;
+                        windowTokens?: number | null | undefined;
+                    } | undefined;
                     backendMode?: string | null | undefined;
                     providerId?: string | null | undefined;
                     providerConnectionId?: string | null | undefined;
                     providerAttribution?: 'unknown' | 'known' | undefined;
+                    providerSource?: 'unknown' | 'native' | 'provider' | undefined;
+                    connectedAccount?: {
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        accountId: string;
+                    } | null | undefined;
+                    sourceContext?: {
+                        path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                        execution: 'unknown' | 'happier' | 'outside';
+                    } | undefined;
                     tokenCategories?: {
                         input: number;
                         output: number;
@@ -1659,6 +1959,33 @@ export type UsageActionResultById = {
                     cacheRead: number;
                     cacheWrite: number;
                     total: number;
+                } | undefined;
+                coverage?: {
+                    status: 'unknown' | 'complete' | 'partial';
+                    reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                    missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                    range: {
+                        complete: boolean;
+                        startMs?: number | undefined;
+                        endMs?: number | undefined;
+                    };
+                    ranked: {
+                        dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                        totalEntries: number;
+                        returnedEntries: number;
+                        complete: boolean;
+                    }[];
+                    sources: {
+                        source: string;
+                        path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                        status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending';
+                        eventCount: number;
+                        machineId?: string | undefined;
+                        captureKind?: 'measured' | 'from_logs' | 'not_added' | undefined;
+                        asOfMs?: number | undefined;
+                        historyComplete?: boolean | undefined;
+                        displayLocation?: string | undefined;
+                    }[];
                 } | undefined;
             } | undefined;
             costFactTotals?: {
@@ -1814,6 +2141,11 @@ export type UsageActionResultById = {
                         source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                         confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                     } | undefined;
+                    recoveryCreditDetails?: Record<string, {
+                        remainingCount: number;
+                        appliesToProviderLimitIds: string[];
+                        unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                    }> | undefined;
                     diagnostics?: {
                         kind: 'unknown' | 'unavailable' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection' | 'storage';
                         code?: string | undefined;
@@ -1866,6 +2198,9 @@ export type UsageActionResultById = {
                             service: {
                                 pluginId: string;
                                 localId: string;
+                            } | {
+                                pluginId: 'happier';
+                                localId: 'mcp-sign-in';
                             };
                             groupId: string;
                         };
@@ -1888,6 +2223,11 @@ export type UsageActionResultById = {
                             nextCheckAtMs?: number | undefined;
                         };
                     }[];
+                    unboundEntries?: {
+                        sessionId: string;
+                        localId: string;
+                        authorityCurrent: boolean;
+                    }[] | undefined;
                 } | {
                     status: 'unavailable';
                     reason: 'unsupported' | 'authority_unavailable' | 'read_failed';
@@ -2010,6 +2350,11 @@ export type UsageActionResultById = {
                                 source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                                 confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                             } | undefined;
+                            recoveryCreditDetails?: Record<string, {
+                                remainingCount: number;
+                                appliesToProviderLimitIds: string[];
+                                unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                            }> | undefined;
                             diagnostics?: {
                                 kind: 'unknown' | 'unavailable' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection' | 'storage';
                                 code?: string | undefined;
@@ -2057,6 +2402,9 @@ export type UsageActionResultById = {
                     service: {
                         pluginId: string;
                         localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
                     };
                     groupId: string;
                 };
@@ -2072,6 +2420,9 @@ export type UsageActionResultById = {
                             service: {
                                 pluginId: string;
                                 localId: string;
+                            } | {
+                                pluginId: 'happier';
+                                localId: 'mcp-sign-in';
                             };
                             groupId: string;
                         };
@@ -2088,7 +2439,7 @@ export type UsageActionResultById = {
                             reason: 'selected' | 'manual_strategy' | 'no_eligible_members';
                             excluded: {
                                 profileId: string;
-                                reason: 'disabled' | 'auth_invalid' | 'current_active' | 'cooldown' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
+                                reason: 'disabled' | 'cooldown' | 'auth_invalid' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
                                 retryAtMs?: number | null | undefined;
                             }[];
                             decisionTrace: {
@@ -2114,17 +2465,163 @@ export type UsageActionResultById = {
                                         capturedAtMs?: number | undefined;
                                         exhausted?: boolean | undefined;
                                     };
-                                    exclusionReason?: 'disabled' | 'auth_invalid' | 'current_active' | 'cooldown' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
+                                    exclusionReason?: 'disabled' | 'cooldown' | 'auth_invalid' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
                                     retryAtMs?: number | null | undefined;
                                 }[];
                             };
                         };
+                        hypothetical?: {
+                            strategy: 'manual' | 'priority' | 'expiry_first' | 'least_limited';
+                            atMs: number;
+                        } | undefined;
                     } | {
                         status: 'unavailable';
                         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';
                     } | undefined;
                 };
             }[] | undefined;
+            planInsights?: {
+                accounts: {
+                    source: {
+                        ref: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                        bindingKind: 'account';
+                    } | {
+                        ref: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                        bindingKind: 'group_member';
+                        groupId: string;
+                        groupGeneration?: number | undefined;
+                    };
+                    value: {
+                        status: 'insufficient_basis';
+                        reason: string;
+                    } | {
+                        status: 'available';
+                        kind: 'api_equivalent';
+                        amountUsd: number;
+                        currency: 'USD';
+                        period: {
+                            startMs?: number | undefined;
+                            endMs?: number | undefined;
+                        };
+                        coverage: 'complete' | 'partial';
+                        pricedContributionCount: number;
+                        unpricedContributionCount: number;
+                        unknownAccountContributionCount: number;
+                        pricingSources: string[];
+                        priceMultiple: {
+                            status: 'insufficient_basis';
+                            reason: string;
+                        } | {
+                            status: 'available';
+                            multiple: number;
+                            priceKind: 'paid' | 'list' | 'entered';
+                            priceAmount: number;
+                            currency: 'USD';
+                            priceAsOfMs: number;
+                            priceSource: string;
+                            period: {
+                                startAtMs: number;
+                                endAtMs: number;
+                            };
+                            method: 'observed_api_equivalent_divided_by_period_price';
+                        };
+                    };
+                    weather: ({
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'available';
+                        outlook: 'within_even_pace' | 'ahead_of_even_pace';
+                        projectedUsedFraction: number;
+                        sampleCount: number;
+                        resetAtMs: number;
+                        method: 'witnessed_linear_pace';
+                        coverage: 'observed_samples';
+                        qualification: 'estimated' | 'confirmed';
+                    } | {
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'insufficient_basis';
+                        reason: string;
+                    })[];
+                    pricePerReset: ({
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'insufficient_basis';
+                        reason: string;
+                    } | {
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'available';
+                        amount: number;
+                        currency: string;
+                        priceKind: 'paid' | 'list' | 'entered';
+                        priceAmount: number;
+                        priceAsOfMs: number;
+                        priceSource: string;
+                        period: {
+                            startAtMs: number;
+                            endAtMs: number;
+                        };
+                        recordedResetCount: number;
+                        coverage: 'recorded_subset';
+                        method: 'period_price_divided_by_recorded_resets';
+                    })[];
+                    modelHeadroom: ({
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'available';
+                        modelId: string;
+                        remainingFraction: number;
+                        resetAtMs: number;
+                        method: 'model_specific_quota_meter';
+                        coverage: 'current_meter';
+                        qualification: 'estimated' | 'confirmed';
+                    } | {
+                        meterId: string;
+                        label: string;
+                        asOfMs: number;
+                        status: 'insufficient_basis';
+                        reason: string;
+                        modelId: string | null;
+                    })[];
+                }[];
+                recordedWeek: {
+                    status: 'insufficient_basis';
+                    reason: string;
+                } | {
+                    status: 'available';
+                    startMs: number;
+                    endMs: number;
+                    timeZoneOffsetMinutes: number;
+                    recordedActiveDays: number;
+                    recordedEvents: number;
+                    observedBusyMs: number | null;
+                    observedWaitMs: number | null;
+                    asOfMs: number | null;
+                    coverage: 'partial' | 'complete_recorded_history';
+                    accountingCoverage: 'complete' | 'partial';
+                    intervalCoverage: 'unknown' | 'partial' | 'complete_for_supplied_facts';
+                    method: 'recorded_calendar_week';
+                    humanPresence: 'unknown';
+                };
+            } | undefined;
             comparison?: {
                 query: {
                     granularity: 'hour' | 'day' | 'week' | 'month';
@@ -2134,6 +2631,10 @@ export type UsageActionResultById = {
                     period: {
                         startMs?: number | undefined;
                         endMs?: number | undefined;
+                    } | {
+                        relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                        startMs?: undefined;
+                        endMs?: undefined;
                     };
                     agents: string[];
                     machines: string[];
@@ -2142,6 +2643,8 @@ export type UsageActionResultById = {
                     session: string | string[] | null;
                     costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                     metric: 'tokens' | 'cost';
+                    includeSessionEvidence: boolean;
+                    includeWorkEvidence: boolean;
                     breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     modelIds: string[];
                     workspaceIds: string[];
@@ -2538,6 +3041,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                         models?: {
                             key: string;
@@ -2563,6 +3092,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                         sessions?: {
                             key: string;
@@ -2588,6 +3143,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                         projects?: {
                             key: string;
@@ -2613,6 +3194,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                         workspaces?: {
                             key: string;
@@ -2638,6 +3245,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                         engines?: {
                             key: string;
@@ -2663,6 +3296,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[] | undefined;
                     } | undefined;
                     modelTimeline?: {
@@ -2692,6 +3351,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[];
                     }[] | undefined;
                     engineTimeline?: {
@@ -2721,6 +3406,32 @@ export type UsageActionResultById = {
                                 breakdown?: Record<string, number> | undefined;
                                 effectiveUsd?: number | undefined;
                             } | undefined;
+                            sources?: {
+                                path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                                execution: 'unknown' | 'happier' | 'outside';
+                                source: string;
+                                eventCount: number;
+                                tokens: {
+                                    input: number;
+                                    output: number;
+                                    reasoning: number;
+                                    cacheRead: number;
+                                    cacheWrite: number;
+                                    total: number;
+                                };
+                                cost: {
+                                    reportedUsd: number;
+                                    estimatedUsd: number;
+                                    currency: string;
+                                    apiEquivalentUsd?: number | undefined;
+                                    pricingSource?: string | undefined;
+                                    invoiceUsd?: number | undefined;
+                                    billingContext?: 'unknown' | 'api_usage' | 'subscription_included' | 'subscription_with_possible_overage' | undefined;
+                                    costSource?: 'provider_reported' | 'provider_reported_api_equivalent' | 'pricing_estimate' | 'invoice' | 'none' | undefined;
+                                    breakdown?: Record<string, number> | undefined;
+                                    effectiveUsd?: number | undefined;
+                                };
+                            }[] | undefined;
                         }[];
                     }[] | undefined;
                     messageStats?: {
@@ -2770,30 +3481,6 @@ export type UsageActionResultById = {
                             errorCode?: string | undefined;
                         };
                     } | undefined;
-                    coverage?: {
-                        status: 'unknown' | 'complete' | 'partial';
-                        reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
-                        sources: {
-                            source: string;
-                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
-                            status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending';
-                            eventCount: number;
-                            asOfMs?: number | undefined;
-                            historyComplete?: boolean | undefined;
-                        }[];
-                        missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
-                        range: {
-                            complete: boolean;
-                            startMs?: number | undefined;
-                            endMs?: number | undefined;
-                        };
-                        ranked: {
-                            dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
-                            totalEntries: number;
-                            returnedEntries: number;
-                            complete: boolean;
-                        }[];
-                    } | undefined;
                     contributions?: {
                         id: string;
                         observedAtMs: number;
@@ -2825,10 +3512,27 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
+                        context?: {
+                            usedTokens?: number | null | undefined;
+                            windowTokens?: number | null | undefined;
+                        } | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
+                        providerSource?: 'unknown' | 'native' | 'provider' | undefined;
+                        connectedAccount?: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        } | null | undefined;
+                        sourceContext?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                        } | undefined;
                         tokenCategories?: {
                             input: number;
                             output: number;
@@ -2845,6 +3549,33 @@ export type UsageActionResultById = {
                         cacheRead: number;
                         cacheWrite: number;
                         total: number;
+                    } | undefined;
+                    coverage?: {
+                        status: 'unknown' | 'complete' | 'partial';
+                        reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
+                        missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
+                        range: {
+                            complete: boolean;
+                            startMs?: number | undefined;
+                            endMs?: number | undefined;
+                        };
+                        ranked: {
+                            dimension: 'agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine';
+                            totalEntries: number;
+                            returnedEntries: number;
+                            complete: boolean;
+                        }[];
+                        sources: {
+                            source: string;
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            status: 'unknown' | 'error' | 'partial' | 'available' | 'unsupported' | 'pending';
+                            eventCount: number;
+                            machineId?: string | undefined;
+                            captureKind?: 'measured' | 'from_logs' | 'not_added' | undefined;
+                            asOfMs?: number | undefined;
+                            historyComplete?: boolean | undefined;
+                            displayLocation?: string | undefined;
+                        }[];
                     } | undefined;
                 } | undefined;
                 costFactTotals?: {
@@ -2898,10 +3629,27 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
+                        context?: {
+                            usedTokens?: number | null | undefined;
+                            windowTokens?: number | null | undefined;
+                        } | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
+                        providerSource?: 'unknown' | 'native' | 'provider' | undefined;
+                        connectedAccount?: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        } | null | undefined;
+                        sourceContext?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                        } | undefined;
                         tokenCategories?: {
                             input: number;
                             output: number;
@@ -2934,7 +3682,7 @@ export type UsageActionResultById = {
                             url: string;
                             baseBranch: string;
                             headBranch: string;
-                            state: 'unknown' | 'open' | 'closed' | 'merged' | 'draft';
+                            state: 'unknown' | 'closed' | 'open' | 'merged' | 'draft';
                             number?: number | null | undefined;
                             providerNativeId?: string | undefined;
                             headRepositoryNameWithOwner?: string | undefined;
@@ -2988,7 +3736,7 @@ export type UsageActionResultById = {
                             url: string;
                             baseBranch: string;
                             headBranch: string;
-                            state: 'unknown' | 'open' | 'closed' | 'merged' | 'draft';
+                            state: 'unknown' | 'closed' | 'open' | 'merged' | 'draft';
                             number?: number | null | undefined;
                             providerNativeId?: string | undefined;
                             headRepositoryNameWithOwner?: string | undefined;
@@ -3011,6 +3759,20 @@ export type UsageActionResultById = {
                                 description?: string | undefined;
                             } | undefined;
                         };
+                        committedAtMs?: number | undefined;
+                        checkpointCommittedAtMs?: number | undefined;
+                        retainedChange?: {
+                            targetSha: string;
+                            method: 'changed_file_tree_comparison';
+                            status: 'partial' | 'retained';
+                            addedLines: number;
+                            removedLines: number;
+                        } | undefined;
+                        branches?: {
+                            ref: string;
+                            headSha: string;
+                        }[] | undefined;
+                        branchRepositoryKey?: string | undefined;
                     }[];
                 }[];
                 outcomes: {
@@ -3036,7 +3798,7 @@ export type UsageActionResultById = {
                         url: string;
                         baseBranch: string;
                         headBranch: string;
-                        state: 'unknown' | 'open' | 'closed' | 'merged' | 'draft';
+                        state: 'unknown' | 'closed' | 'open' | 'merged' | 'draft';
                         number?: number | null | undefined;
                         providerNativeId?: string | undefined;
                         headRepositoryNameWithOwner?: string | undefined;
@@ -3093,10 +3855,27 @@ export type UsageActionResultById = {
                             breakdown?: Record<string, number> | undefined;
                             effectiveUsd?: number | undefined;
                         };
+                        eventCount?: number | undefined;
+                        context?: {
+                            usedTokens?: number | null | undefined;
+                            windowTokens?: number | null | undefined;
+                        } | undefined;
                         backendMode?: string | null | undefined;
                         providerId?: string | null | undefined;
                         providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
+                        providerSource?: 'unknown' | 'native' | 'provider' | undefined;
+                        connectedAccount?: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        } | null | undefined;
+                        sourceContext?: {
+                            path: 'unknown' | 'runtime' | 'native' | 'legacy';
+                            execution: 'unknown' | 'happier' | 'outside';
+                        } | undefined;
                         tokenCategories?: {
                             input: number;
                             output: number;
@@ -3128,6 +3907,15 @@ export type UsageActionResultById = {
                             ref: string;
                             headSha: string;
                         };
+                        committedAtMs?: number | undefined;
+                        checkpointCommittedAtMs?: number | undefined;
+                        retainedChange?: {
+                            targetSha: string;
+                            method: 'changed_file_tree_comparison';
+                            status: 'partial' | 'retained';
+                            addedLines: number;
+                            removedLines: number;
+                        } | undefined;
                     }[];
                 }[];
                 branches: {
@@ -3264,6 +4052,17 @@ export type UsageActionResultById = {
                         estimatedTokenCount: 0;
                     };
                 } | null;
+                autopsy?: {
+                    coverage: 'complete' | 'partial';
+                    events: {
+                        evidenceId: string;
+                        sessionId: string;
+                        turnId: string | null;
+                        observedAtMs: number;
+                        kind: 'unknown' | 'read' | 'change' | 'execute' | 'delegate' | 'compaction';
+                        method: 'tool_classification' | 'native_event';
+                    }[];
+                } | undefined;
             } | undefined;
             coach?: {
                 v: 1;
@@ -3275,11 +4074,11 @@ export type UsageActionResultById = {
                 asOfMs: number | null;
                 currentness: 'unknown' | 'stale' | 'current';
                 evaluations: ({
-                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
-                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity')[];
+                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
+                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity' | 'cache_accounting' | 'recorded_effort' | 'subagent_accounting')[];
                     status: 'finding';
                     finding: {
-                        detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
+                        detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
                         evidenceKey: string;
                         queryKey: string;
                         period: {
@@ -3290,14 +4089,26 @@ export type UsageActionResultById = {
                         currentness: 'unknown' | 'stale' | 'current';
                         coverage: 'unknown' | 'complete' | 'partial';
                         severity: 'info' | 'warning';
-                        summaryCode: 'duplicate_injection_observed' | 'compatible_model_cost_difference' | 'idle_cache_recreation_observed' | 'approval_wait_observed' | 'unused_mcp_schema_observed' | 'unused_mcp_binding_observed' | 'redundant_unchanged_read_observed' | 'repeated_compaction_observed' | 'failed_loop_observed' | 'prefix_change_cache_miss_observed' | 'outside_happier_usage_observed' | 'context_capacity_reached' | 'comparable_completed_request_cost_difference';
+                        classification: 'informational' | 'cost_linked';
+                        basis: {
+                            method: string;
+                            kind: 'derived' | 'observation' | 'guidance_derived' | 'vendor_fact';
+                            citations: {
+                                url: string;
+                                sourceKind: 'vendor_docs' | 'vendor_changelog' | 'research_paper' | 'price_catalog';
+                                asOf: string;
+                            }[];
+                            limitations: string[];
+                            advice: string[];
+                        };
+                        summaryCode: 'duplicate_injection_observed' | 'compatible_model_cost_difference' | 'idle_cache_recreation_observed' | 'approval_wait_observed' | 'unused_mcp_schema_observed' | 'unused_mcp_binding_observed' | 'redundant_unchanged_read_observed' | 'repeated_compaction_observed' | 'failed_loop_observed' | 'prefix_change_cache_miss_observed' | 'outside_happier_usage_observed' | 'comparable_completed_request_cost_difference' | 'compaction_thrash_observed' | 'context_growth_cost_observed' | 'cache_economics_observed' | 'effort_audit_observed' | 'subagent_fanout_observed' | 'mcp_definition_overhead_observed';
                         evidence: {
-                            kind: 'accounting' | 'permission' | 'composition' | 'file_read' | 'compaction' | 'model_comparison' | 'native_cache' | 'tool' | 'loop' | 'mcp_usage';
+                            kind: 'accounting' | 'compaction' | 'permission' | 'composition' | 'file_read' | 'model_comparison' | 'native_cache' | 'tool' | 'loop' | 'mcp_usage' | 'effort' | 'subagent';
                             id: string;
                             observedAtMs: number;
                         }[];
                         measurements: {
-                            metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens';
+                            metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens' | 'cache_read_tokens' | 'input_tokens' | 'cache_hit_ratio' | 'cache_replacement_premium' | 'cache_cost_share' | 'cached_history_cost' | 'output_tokens' | 'thinking_tokens' | 'parent_tokens' | 'subagent_tokens' | 'fanout_multiplier' | 'loaded_schema_tokens';
                             value: number;
                             unit: 'tokens' | 'currency' | 'count' | 'bytes' | 'milliseconds';
                             currency?: string | undefined;
@@ -3353,8 +4164,23 @@ export type UsageActionResultById = {
                         } | {
                             kind: 'mcp_binding';
                             bindingId: string;
+                            serverId: string;
+                            target: {
+                                t: 'allMachines';
+                            } | {
+                                t: 'machine';
+                                machineId: string;
+                            } | {
+                                t: 'project';
+                                projectKey: string;
+                            } | {
+                                t: 'workspace';
+                                machineId: string;
+                                workspaceRoot: string;
+                            };
                             enabled: boolean;
                             expectedRevision: number | 'absent';
+                            agentId?: string | undefined;
                         } | {
                             kind: 'prepared_session';
                             input: {
@@ -3387,7 +4213,7 @@ export type UsageActionResultById = {
                         } | null;
                         action: {
                             actionId: 'usage.coach.apply';
-                            detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
+                            detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
                             evidenceKey: string;
                         } | null;
                         state: {
@@ -3445,8 +4271,23 @@ export type UsageActionResultById = {
                                 } | {
                                     kind: 'mcp_binding';
                                     bindingId: string;
+                                    serverId: string;
+                                    target: {
+                                        t: 'allMachines';
+                                    } | {
+                                        t: 'machine';
+                                        machineId: string;
+                                    } | {
+                                        t: 'project';
+                                        projectKey: string;
+                                    } | {
+                                        t: 'workspace';
+                                        machineId: string;
+                                        workspaceRoot: string;
+                                    };
                                     enabled: boolean;
                                     expectedRevision: number | 'absent';
+                                    agentId?: string | undefined;
                                 } | {
                                     kind: 'prepared_session';
                                     input: {
@@ -3479,6 +4320,17 @@ export type UsageActionResultById = {
                                 };
                             } | null;
                         };
+                        evidenceSeries?: {
+                            metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens' | 'cache_read_tokens' | 'input_tokens' | 'cache_hit_ratio' | 'cache_replacement_premium' | 'cache_cost_share' | 'cached_history_cost' | 'output_tokens' | 'thinking_tokens' | 'parent_tokens' | 'subagent_tokens' | 'fanout_multiplier' | 'loaded_schema_tokens';
+                            unit: 'tokens' | 'currency' | 'count' | 'bytes' | 'milliseconds';
+                            points: {
+                                evidenceId: string;
+                                observedAtMs: number;
+                                value: number;
+                            }[];
+                            currency?: string | undefined;
+                            costKind?: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | undefined;
+                        }[] | undefined;
                         estimate?: {
                             kind: 'observed_difference' | 'potential_duplicate_bytes';
                             value: number;
@@ -3507,20 +4359,59 @@ export type UsageActionResultById = {
                             candidateCost: number;
                             currency: string;
                             costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
+                            costCoverage?: 'complete' | 'partial' | undefined;
+                            providerAttribution?: 'unknown' | 'known' | undefined;
+                            modelResponseSource?: {
+                                kind: 'native';
+                                connectedAccount: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                } | null;
+                            } | {
+                                kind: 'provider';
+                                providerId: string | null;
+                                providerConnectionId: string;
+                            } | undefined;
+                            candidateResponseSource?: {
+                                kind: 'native';
+                                connectedAccount: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                } | null;
+                            } | {
+                                kind: 'provider';
+                                providerId: string | null;
+                                providerConnectionId: string;
+                            } | undefined;
                         } | undefined;
+                        cacheCauses?: {
+                            cause: 'ttl_expired' | 'prefix_change';
+                            cacheWriteTokens: number;
+                            premiumUsd: number | null;
+                        }[] | undefined;
                     };
                 } | {
-                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
-                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity')[];
+                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
+                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity' | 'cache_accounting' | 'recorded_effort' | 'subagent_accounting')[];
                     status: 'insufficient_evidence';
-                    missingEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity')[];
+                    missingEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity' | 'cache_accounting' | 'recorded_effort' | 'subagent_accounting')[];
                 } | {
-                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
-                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity')[];
+                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
+                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity' | 'cache_accounting' | 'recorded_effort' | 'subagent_accounting')[];
                     status: 'no_finding';
+                } | {
+                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
+                    requiredEvidence: ('instruction_injections' | 'model_outcome_comparison' | 'native_cache_cause' | 'permission_request_decision_pairs' | 'mcp_schema_and_tool_use' | 'file_identity_version_reads' | 'compaction_events' | 'loop_operation_outcomes' | 'native_prefix_cache_cause' | 'accounting_origin' | 'context_composition_capacity' | 'cache_accounting' | 'recorded_effort' | 'subagent_accounting')[];
+                    status: 'disabled';
                 })[];
                 findings: {
-                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
+                    detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
                     evidenceKey: string;
                     queryKey: string;
                     period: {
@@ -3531,14 +4422,26 @@ export type UsageActionResultById = {
                     currentness: 'unknown' | 'stale' | 'current';
                     coverage: 'unknown' | 'complete' | 'partial';
                     severity: 'info' | 'warning';
-                    summaryCode: 'duplicate_injection_observed' | 'compatible_model_cost_difference' | 'idle_cache_recreation_observed' | 'approval_wait_observed' | 'unused_mcp_schema_observed' | 'unused_mcp_binding_observed' | 'redundant_unchanged_read_observed' | 'repeated_compaction_observed' | 'failed_loop_observed' | 'prefix_change_cache_miss_observed' | 'outside_happier_usage_observed' | 'context_capacity_reached' | 'comparable_completed_request_cost_difference';
+                    classification: 'informational' | 'cost_linked';
+                    basis: {
+                        method: string;
+                        kind: 'derived' | 'observation' | 'guidance_derived' | 'vendor_fact';
+                        citations: {
+                            url: string;
+                            sourceKind: 'vendor_docs' | 'vendor_changelog' | 'research_paper' | 'price_catalog';
+                            asOf: string;
+                        }[];
+                        limitations: string[];
+                        advice: string[];
+                    };
+                    summaryCode: 'duplicate_injection_observed' | 'compatible_model_cost_difference' | 'idle_cache_recreation_observed' | 'approval_wait_observed' | 'unused_mcp_schema_observed' | 'unused_mcp_binding_observed' | 'redundant_unchanged_read_observed' | 'repeated_compaction_observed' | 'failed_loop_observed' | 'prefix_change_cache_miss_observed' | 'outside_happier_usage_observed' | 'comparable_completed_request_cost_difference' | 'compaction_thrash_observed' | 'context_growth_cost_observed' | 'cache_economics_observed' | 'effort_audit_observed' | 'subagent_fanout_observed' | 'mcp_definition_overhead_observed';
                     evidence: {
-                        kind: 'accounting' | 'permission' | 'composition' | 'file_read' | 'compaction' | 'model_comparison' | 'native_cache' | 'tool' | 'loop' | 'mcp_usage';
+                        kind: 'accounting' | 'compaction' | 'permission' | 'composition' | 'file_read' | 'model_comparison' | 'native_cache' | 'tool' | 'loop' | 'mcp_usage' | 'effort' | 'subagent';
                         id: string;
                         observedAtMs: number;
                     }[];
                     measurements: {
-                        metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens';
+                        metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens' | 'cache_read_tokens' | 'input_tokens' | 'cache_hit_ratio' | 'cache_replacement_premium' | 'cache_cost_share' | 'cached_history_cost' | 'output_tokens' | 'thinking_tokens' | 'parent_tokens' | 'subagent_tokens' | 'fanout_multiplier' | 'loaded_schema_tokens';
                         value: number;
                         unit: 'tokens' | 'currency' | 'count' | 'bytes' | 'milliseconds';
                         currency?: string | undefined;
@@ -3594,8 +4497,23 @@ export type UsageActionResultById = {
                     } | {
                         kind: 'mcp_binding';
                         bindingId: string;
+                        serverId: string;
+                        target: {
+                            t: 'allMachines';
+                        } | {
+                            t: 'machine';
+                            machineId: string;
+                        } | {
+                            t: 'project';
+                            projectKey: string;
+                        } | {
+                            t: 'workspace';
+                            machineId: string;
+                            workspaceRoot: string;
+                        };
                         enabled: boolean;
                         expectedRevision: number | 'absent';
+                        agentId?: string | undefined;
                     } | {
                         kind: 'prepared_session';
                         input: {
@@ -3628,7 +4546,7 @@ export type UsageActionResultById = {
                     } | null;
                     action: {
                         actionId: 'usage.coach.apply';
-                        detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat';
+                        detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
                         evidenceKey: string;
                     } | null;
                     state: {
@@ -3686,8 +4604,23 @@ export type UsageActionResultById = {
                             } | {
                                 kind: 'mcp_binding';
                                 bindingId: string;
+                                serverId: string;
+                                target: {
+                                    t: 'allMachines';
+                                } | {
+                                    t: 'machine';
+                                    machineId: string;
+                                } | {
+                                    t: 'project';
+                                    projectKey: string;
+                                } | {
+                                    t: 'workspace';
+                                    machineId: string;
+                                    workspaceRoot: string;
+                                };
                                 enabled: boolean;
                                 expectedRevision: number | 'absent';
+                                agentId?: string | undefined;
                             } | {
                                 kind: 'prepared_session';
                                 input: {
@@ -3720,6 +4653,17 @@ export type UsageActionResultById = {
                             };
                         } | null;
                     };
+                    evidenceSeries?: {
+                        metric: 'permission_wait' | 'duplicate_injections' | 'duplicate_bytes' | 'observed_cost_difference' | 'cache_write_tokens' | 'permission_requests' | 'unused_schema_bytes' | 'unused_mcp_bindings' | 'unchanged_reads' | 'compactions' | 'failed_repetitions' | 'outside_tokens' | 'composed_tokens' | 'context_window_tokens' | 'cache_read_tokens' | 'input_tokens' | 'cache_hit_ratio' | 'cache_replacement_premium' | 'cache_cost_share' | 'cached_history_cost' | 'output_tokens' | 'thinking_tokens' | 'parent_tokens' | 'subagent_tokens' | 'fanout_multiplier' | 'loaded_schema_tokens';
+                        unit: 'tokens' | 'currency' | 'count' | 'bytes' | 'milliseconds';
+                        points: {
+                            evidenceId: string;
+                            observedAtMs: number;
+                            value: number;
+                        }[];
+                        currency?: string | undefined;
+                        costKind?: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | undefined;
+                    }[] | undefined;
                     estimate?: {
                         kind: 'observed_difference' | 'potential_duplicate_bytes';
                         value: number;
@@ -3748,7 +4692,42 @@ export type UsageActionResultById = {
                         candidateCost: number;
                         currency: string;
                         costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
+                        costCoverage?: 'complete' | 'partial' | undefined;
+                        providerAttribution?: 'unknown' | 'known' | undefined;
+                        modelResponseSource?: {
+                            kind: 'native';
+                            connectedAccount: {
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                accountId: string;
+                            } | null;
+                        } | {
+                            kind: 'provider';
+                            providerId: string | null;
+                            providerConnectionId: string;
+                        } | undefined;
+                        candidateResponseSource?: {
+                            kind: 'native';
+                            connectedAccount: {
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                accountId: string;
+                            } | null;
+                        } | {
+                            kind: 'provider';
+                            providerId: string | null;
+                            providerConnectionId: string;
+                        } | undefined;
                     } | undefined;
+                    cacheCauses?: {
+                        cause: 'ttl_expired' | 'prefix_change';
+                        cacheWriteTokens: number;
+                        premiumUsd: number | null;
+                    }[] | undefined;
                 }[];
                 digestSuggestion?: {
                     kind: 'recurring_automation';
@@ -3761,6 +4740,10 @@ export type UsageActionResultById = {
                         period: {
                             startMs?: number | undefined;
                             endMs?: number | undefined;
+                        } | {
+                            relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+                            startMs?: undefined;
+                            endMs?: undefined;
                         };
                         agents: string[];
                         machines: string[];
@@ -3769,6 +4752,8 @@ export type UsageActionResultById = {
                         session: string | string[] | null;
                         costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                         metric: 'tokens' | 'cost';
+                        includeSessionEvidence: boolean;
+                        includeWorkEvidence: boolean;
                         breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                         modelIds: string[];
                         workspaceIds: string[];
@@ -3807,10 +4792,12 @@ export type UsageActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'session' | 'period' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                             }[];
                             defaults: {
+                                allowedTools?: string[] | undefined;
+                                unlistedTools?: 'ask' | 'deny' | undefined;
                                 agentTarget?: {
                                     kind: 'agent';
                                     identity: {
@@ -3845,11 +4832,19 @@ export type UsageActionResultById = {
                                         value: string | number | boolean | null;
                                     }>;
                                 } | null | undefined;
-                                mcpSelection?: {
-                                    forceIncludeServerIds: string[];
-                                    forceExcludeServerIds: string[];
-                                    v: 1;
-                                    managedServersEnabled: boolean;
+                                capabilitySelection?: {
+                                    mcp?: {
+                                        forceIncludeServerIds: string[];
+                                        forceExcludeServerIds: string[];
+                                        v: 1;
+                                        managedServersEnabled: boolean;
+                                    } | undefined;
+                                    skills?: {
+                                        forceIncludeSkillIds: string[];
+                                        forceExcludeSkillIds: string[];
+                                        excludeNativeSkillNames: string[];
+                                        v: 1;
+                                    } | undefined;
                                 } | null | undefined;
                                 connectedServices?: {
                                     v: 2;
@@ -4032,10 +5027,10 @@ export type UsageActionResultById = {
                                     kind: 'session';
                                 } | {
                                     kind: 'background_run';
-                                    intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                                    intent: 'agent' | 'delegate' | 'plan' | 'review' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                                 } | undefined;
                                 profileId?: string | undefined;
-                                workspaceWrites?: 'allow' | 'deny' | undefined;
+                                workspaceWrites?: 'deny' | 'allow' | undefined;
                                 secondOpinion?: 'off' | 'encouraged' | undefined;
                             } | {
                                 roleId: string;
@@ -4045,7 +5040,7 @@ export type UsageActionResultById = {
                                     kind: 'session';
                                 } | {
                                     kind: 'background_run';
-                                    intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                                    intent: 'agent' | 'delegate' | 'plan' | 'review' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                                 };
                                 engine?: {
                                     agentTargetKey: string;
@@ -4053,7 +5048,7 @@ export type UsageActionResultById = {
                                     effort?: string | undefined;
                                 } | undefined;
                                 profileId?: string | undefined;
-                                workspaceWrites?: 'allow' | 'deny' | undefined;
+                                workspaceWrites?: 'deny' | 'allow' | undefined;
                                 secondOpinion?: 'off' | 'encouraged' | undefined;
                             })[] | undefined;
                             blocks: readonly PluginActionWorkflowBlockV1[];
@@ -4077,6 +5072,10 @@ export type UsageActionResultById = {
                         }>;
                     };
                 } | undefined;
+                unavailableChecks?: {
+                    check: 'fast_mode' | 'scheduled_interval_vs_ttl';
+                    reason: 'not_available';
+                }[] | undefined;
             } | undefined;
         }[];
     };
@@ -4141,8 +5140,23 @@ export type UsageActionResultById = {
         } | {
             kind: 'mcp_binding';
             bindingId: string;
+            serverId: string;
+            target: {
+                t: 'allMachines';
+            } | {
+                t: 'machine';
+                machineId: string;
+            } | {
+                t: 'project';
+                projectKey: string;
+            } | {
+                t: 'workspace';
+                machineId: string;
+                workspaceRoot: string;
+            };
             enabled: boolean;
             expectedRevision: number | 'absent';
+            agentId?: string | undefined;
         } | {
             kind: 'prepared_session';
             input: {
@@ -4257,14 +5271,47 @@ export type UsageActionResultById = {
         } | {
             kind: 'mcp_binding';
             owner: {
-                scope: {
-                    serverId: string;
-                    accountId: string;
-                };
-                bindingId: string;
-                before: boolean;
-                applied: boolean;
-                revision: number;
+                serverId: string;
+                rules: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+                previous: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
             };
         } | undefined;
         spawnedSessionId?: string | undefined;

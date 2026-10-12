@@ -71,6 +71,7 @@ import {
     normalizeActionInputByFieldHints,
     readActionInputOptionValue,
     resolveEffectiveActionInputFields,
+    resolveEffectiveInputFields,
 } from './inputHints.js';
 import type {
     ActionId,
@@ -409,6 +410,16 @@ describe('ActionsService source contract', () => {
             .toEqualTypeOf<Pick<ActionSpec, 'inputHints'>>();
         expectTypeOf<Parameters<typeof normalizeActionInputByFieldHints>[0]>()
             .toEqualTypeOf<Pick<ActionSpec, 'inputHints'>>();
+    });
+
+    it('supports actual surface-slot visibility through both public field resolver names', () => {
+        const declaration = { inputHints: { fields: [{ path: 'session', title: 'Session', widget: 'json' as const,
+            visibleWhenContextSlot: 'session' }] } } satisfies Pick<ActionSpec, 'inputHints'>;
+        for (const resolve of [resolveEffectiveInputFields, resolveEffectiveActionInputFields]) {
+            expect(resolve(declaration, {}, { contextSlots: [] })).toEqual([]);
+            expect(resolve(declaration, {}, { contextSlots: ['session'] }).map(field => field.path)).toEqual(['session']);
+            expect(resolve(declaration, {}).map(field => field.path)).toEqual(['session']);
+        }
     });
 
     it('projects canonical execution-run result DTOs with validator brands erased', () => {

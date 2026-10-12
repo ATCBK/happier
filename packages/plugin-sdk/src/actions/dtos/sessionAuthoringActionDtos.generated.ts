@@ -36,8 +36,66 @@ export type SessionAuthoringActionInputById = {
                     machineId: string;
                     rootPath: string;
                 };
-                page: 'scripts' | 'changes';
+                page: 'code' | 'overview' | 'changes' | 'scripts' | 'services' | 'context';
+                purpose?: 'session' | undefined;
                 comparisonId?: string | undefined;
+                layoutId?: string | undefined;
+                attachedDashboard?: {
+                    sourceId: string;
+                    artifactId: string;
+                    serverId?: string | undefined;
+                } | undefined;
+                codeLocation?: {
+                    kind: 'folder';
+                    path: string;
+                } | {
+                    kind: 'file';
+                    path: string;
+                } | undefined;
+                resource?: {
+                    kind: 'file';
+                    path: string;
+                    anchor?: {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'before' | 'after' | undefined;
+                        startLineHash?: `lh1:${string}` | undefined;
+                        endLineHash?: `lh1:${string}` | undefined;
+                        selectedTextHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'fileLine';
+                        startLine: number;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'diffLine';
+                        startLine: number;
+                        side: 'before' | 'after';
+                        oldLine: number | null;
+                        newLine: number | null;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'before' | 'after' | undefined;
+                        lineHash?: `lh1:${string}` | undefined;
+                    } | undefined;
+                    anchorSource?: 'file' | 'diff' | undefined;
+                } | {
+                    kind: 'commit';
+                    sha: string;
+                } | undefined;
+                surface?: 'code' | 'overview' | 'changes' | 'scripts' | 'services' | 'context' | 'browse' | 'git' | 'tabs' | 'terminal' | 'browser' | undefined;
+                companion?: 'scripts' | 'services' | 'git' | 'terminal' | 'browser' | 'files' | {
+                    kind: 'plugin';
+                    destination: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    instanceKey?: string | undefined;
+                } | undefined;
             } | undefined;
             checkoutIntent?: 'none' | 'preparedReviewWorkspace' | 'reuseWorkspace' | 'createWorktree' | 'ask' | undefined;
             placement?: {
@@ -81,7 +139,7 @@ export type SessionAuthoringActionInputById = {
                     presentation: {
                         label: string;
                         description?: string | undefined;
-                        icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        icon?: 'file' | 'external' | 'error' | 'check' | 'search' | 'terminal' | 'browser' | 'action' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };

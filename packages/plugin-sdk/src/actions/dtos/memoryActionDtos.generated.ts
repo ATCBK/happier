@@ -614,6 +614,26 @@ export type MemoryActionResultById = {
         } | null;
         includeArchivedSessionsEffective?: boolean | undefined;
         documentSearchSupported?: boolean | undefined;
+        documents?: {
+            state: 'ready';
+            facts: {
+                ref: {
+                    artifactId: string;
+                    kind: 'doc';
+                    serverId: string;
+                };
+                revision: {
+                    headerVersion: number;
+                    bodyVersion: number;
+                };
+                indexedFactCount: number;
+                loadedFactCount?: number | undefined;
+            }[];
+        } | {
+            state: 'pending';
+        } | {
+            state: 'unavailable';
+        } | undefined;
         sources?: {
             source: {
                 type: 'happier_session';

@@ -10,9 +10,15 @@ export type PromptLibraryActionInputById = {
     readonly "prompt_doc.create": {
         title: string;
         markdown: string;
+        favorite?: boolean | undefined;
         folderId?: string | null | undefined;
         tags?: string[] | undefined;
-        favorite?: boolean | undefined;
+        createFolder?: {
+            id: string;
+            name: string;
+            expectedRevision: number | 'absent';
+            parentId?: string | null | undefined;
+        } | undefined;
     } | {
         starter: 'happier_guide';
     };
@@ -63,20 +69,74 @@ export type PromptLibraryActionInputById = {
         artifactId: string;
         title: string;
         markdown: string;
+        folderId?: string | null | undefined;
+        tags?: string[] | undefined;
+        createFolder?: {
+            id: string;
+            name: string;
+            expectedRevision: number | 'absent';
+            parentId?: string | null | undefined;
+        } | undefined;
+        expectedRevision?: {
+            headerVersion: number;
+            bodyVersion: number;
+        } | undefined;
+    };
+    readonly "prompt_bundle.create": {
+        title: string;
+        bundleSchemaId: 'skills.skill_md_v1' | 'bundle.generic_v1';
+        entries: {
+            path: string;
+            contentBase64: string;
+            contentKind: 'utf8' | 'binary';
+            unixMode?: number | null | undefined;
+        }[];
+        folderId?: string | null | undefined;
+        tags?: string[] | undefined;
+        createFolder?: {
+            id: string;
+            name: string;
+            expectedRevision: number | 'absent';
+            parentId?: string | null | undefined;
+        } | undefined;
+    };
+    readonly "prompt_bundle.update": {
+        skillMarkdown: string;
+        artifactId: string;
+        title: string;
         expectedRevision?: {
             headerVersion: number;
             bodyVersion: number;
         } | undefined;
         folderId?: string | null | undefined;
         tags?: string[] | undefined;
-    };
-    readonly "prompt_bundle.update": {
-        [x: string]: unknown;
+        createFolder?: {
+            id: string;
+            name: string;
+            expectedRevision: number | 'absent';
+            parentId?: string | null | undefined;
+        } | undefined;
+    } | {
+        entries: {
+            path: string;
+            contentBase64: string;
+            contentKind: 'utf8' | 'binary';
+            unixMode?: number | null | undefined;
+        }[];
+        expectedRevision: {
+            headerVersion: number;
+            bodyVersion: number;
+        };
         artifactId: string;
         title: string;
-        skillMarkdown: string;
         folderId?: string | null | undefined;
         tags?: string[] | undefined;
+        createFolder?: {
+            id: string;
+            name: string;
+            expectedRevision: number | 'absent';
+            parentId?: string | null | undefined;
+        } | undefined;
     };
     readonly "prompt_asset.export": {
         [x: string]: unknown;
@@ -174,9 +234,18 @@ export type PromptLibraryActionResultById = {
             bodyVersion: number;
         } | undefined;
     };
-    readonly "prompt_bundle.update": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
+    readonly "prompt_bundle.create": {
+        ok: true;
+        artifactId: string;
+    };
+    readonly "prompt_bundle.update": {
+        ok: true;
+        artifactId: string;
+        revision?: {
+            headerVersion: number;
+            bodyVersion: number;
+        } | undefined;
+    };
     readonly "prompt_asset.export": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;
     } | null;

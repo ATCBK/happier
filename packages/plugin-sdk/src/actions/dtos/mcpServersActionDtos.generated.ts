@@ -9,7 +9,6 @@ export type McpServersActionInputById = {
         serverId: string;
     };
     readonly "mcp.servers.create": {
-        expectedRevision: number | 'absent';
         entry: {
             id: string;
             name: string;
@@ -20,6 +19,9 @@ export type McpServersActionInputById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             createdAt: number;
             updatedAt: number;
@@ -37,26 +39,23 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                auth?: {
+                    kind: 'oauth';
+                } | undefined;
             } | undefined;
-        };
-        bindings: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
+            configOverrides?: {
+                target: {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
@@ -69,6 +68,9 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 } | undefined;
                 envPatch?: Record<string, {
@@ -77,10 +79,54 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
-            } | undefined;
-        }[];
+            }[] | undefined;
+        };
+        expectedRevision: number | 'absent';
+        where?: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'on' | 'off' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        } | undefined;
     } | {
+        expectedRevision: number | 'absent';
         entries: {
             entry: {
                 id: string;
@@ -92,6 +138,9 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
                 createdAt: number;
                 updatedAt: number;
@@ -109,26 +158,23 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    auth?: {
+                        kind: 'oauth';
+                    } | undefined;
                 } | undefined;
-            };
-            bindings: {
-                id: string;
-                serverId: string;
-                enabled: boolean;
-                target: {
-                    t: 'allMachines';
-                } | {
-                    t: 'machine';
-                    machineId: string;
-                } | {
-                    t: 'workspace';
-                    machineId: string;
-                    workspaceRoot: string;
-                };
-                createdAt: number;
-                updatedAt: number;
-                overrides?: {
+                configOverrides?: {
+                    target: {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
@@ -141,6 +187,9 @@ export type McpServersActionInputById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'sessionAttested';
+                            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                         } | null> | undefined;
                     } | undefined;
                     envPatch?: Record<string, {
@@ -149,11 +198,52 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
-                } | undefined;
-            }[];
+                }[] | undefined;
+            };
+            where?: {
+                kind: 'write';
+                write: {
+                    place: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    state: 'on' | 'off' | 'inherit';
+                    agentId?: string | undefined;
+                };
+            } | {
+                kind: 'replace';
+                rules: {
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    agentId?: string | undefined;
+                }[];
+            } | undefined;
         }[];
-        expectedRevision: number | 'absent';
     };
     readonly "mcp.servers.update": {
         expectedRevision: number | 'absent';
@@ -167,6 +257,9 @@ export type McpServersActionInputById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             createdAt: number;
             updatedAt: number;
@@ -184,26 +277,23 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                auth?: {
+                    kind: 'oauth';
+                } | undefined;
             } | undefined;
-        };
-        bindings: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
+            configOverrides?: {
+                target: {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
@@ -216,6 +306,9 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 } | undefined;
                 envPatch?: Record<string, {
@@ -224,12 +317,51 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+                } | null> | undefined;
+            }[] | undefined;
+        };
+        configOverrides?: {
+            target: {
+                t: 'machine';
+                machineId: string;
+            } | {
+                t: 'workspace';
+                machineId: string;
+                workspaceRoot: string;
+            };
+            stdio?: {
+                command?: string | undefined;
+                args?: string[] | undefined;
+            } | undefined;
+            remote?: {
+                url?: string | undefined;
+                headersPatch?: Record<string, {
+                    t: 'literal';
+                    v: string;
+                } | {
+                    t: 'savedSecret';
+                    secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
             } | undefined;
-        }[];
+            envPatch?: Record<string, {
+                t: 'literal';
+                v: string;
+            } | {
+                t: 'savedSecret';
+                secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
+            } | null> | undefined;
+        }[] | undefined;
     };
     readonly "mcp.servers.duplicate": {
-        expectedRevision: number | 'absent';
         entry: {
             id: string;
             name: string;
@@ -240,6 +372,9 @@ export type McpServersActionInputById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             createdAt: number;
             updatedAt: number;
@@ -257,26 +392,23 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                auth?: {
+                    kind: 'oauth';
+                } | undefined;
             } | undefined;
-        };
-        bindings: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
+            configOverrides?: {
+                target: {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
@@ -289,6 +421,9 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 } | undefined;
                 envPatch?: Record<string, {
@@ -297,125 +432,58 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
-            } | undefined;
-        }[];
+            }[] | undefined;
+        };
+        expectedRevision: number | 'absent';
         serverId: string;
+        where?: {
+            kind: 'write';
+            write: {
+                place: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                state: 'on' | 'off' | 'inherit';
+                agentId?: string | undefined;
+            };
+        } | {
+            kind: 'replace';
+            rules: {
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                agentId?: string | undefined;
+            }[];
+        } | undefined;
     };
     readonly "mcp.servers.delete": {
         expectedRevision: number | 'absent';
         serverId: string;
         removeBindings: boolean;
-    };
-    readonly "mcp.bindings.add": {
-        expectedRevision: number | 'absent';
-        binding: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
-                stdio?: {
-                    command?: string | undefined;
-                    args?: string[] | undefined;
-                } | undefined;
-                remote?: {
-                    url?: string | undefined;
-                    headersPatch?: Record<string, {
-                        t: 'literal';
-                        v: string;
-                    } | {
-                        t: 'savedSecret';
-                        secretId: string;
-                    } | null> | undefined;
-                } | undefined;
-                envPatch?: Record<string, {
-                    t: 'literal';
-                    v: string;
-                } | {
-                    t: 'savedSecret';
-                    secretId: string;
-                } | null> | undefined;
-            } | undefined;
-        };
-    };
-    readonly "mcp.bindings.edit": {
-        expectedRevision: number | 'absent';
-        binding: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
-                stdio?: {
-                    command?: string | undefined;
-                    args?: string[] | undefined;
-                } | undefined;
-                remote?: {
-                    url?: string | undefined;
-                    headersPatch?: Record<string, {
-                        t: 'literal';
-                        v: string;
-                    } | {
-                        t: 'savedSecret';
-                        secretId: string;
-                    } | null> | undefined;
-                } | undefined;
-                envPatch?: Record<string, {
-                    t: 'literal';
-                    v: string;
-                } | {
-                    t: 'savedSecret';
-                    secretId: string;
-                } | null> | undefined;
-            } | undefined;
-        };
-    };
-    readonly "mcp.bindings.enable": {
-        expectedRevision: number | 'absent';
-        bindingId: string;
-        captureBefore?: boolean | undefined;
-        expectedEnabled?: boolean | undefined;
-        expectedScope?: {
-            serverId: string;
-            accountId: string;
-        } | undefined;
-    };
-    readonly "mcp.bindings.disable": {
-        expectedRevision: number | 'absent';
-        bindingId: string;
-        captureBefore?: boolean | undefined;
-        expectedEnabled?: boolean | undefined;
-        expectedScope?: {
-            serverId: string;
-            accountId: string;
-        } | undefined;
-    };
-    readonly "mcp.bindings.remove": {
-        expectedRevision: number | 'absent';
-        bindingId: string;
     };
     readonly "mcp.servers.test": {
         t: 'draft';
@@ -431,6 +499,9 @@ export type McpServersActionInputById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             createdAt: number;
             updatedAt: number;
@@ -448,26 +519,23 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                auth?: {
+                    kind: 'oauth';
+                } | undefined;
             } | undefined;
-        };
-        binding?: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
+            configOverrides?: {
+                target: {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
@@ -480,6 +548,9 @@ export type McpServersActionInputById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 } | undefined;
                 envPatch?: Record<string, {
@@ -488,8 +559,32 @@ export type McpServersActionInputById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
-            } | undefined;
+            }[] | undefined;
+        };
+        binding?: {
+            id: string;
+            target: {
+                t: 'allMachines';
+            } | {
+                t: 'machine';
+                machineId: string;
+            } | {
+                t: 'project';
+                projectKey: string;
+            } | {
+                t: 'workspace';
+                machineId: string;
+                workspaceRoot: string;
+            };
+            enabled: boolean;
+            createdAt: number;
+            updatedAt: number;
+            serverId: string;
+            agentId?: string | undefined;
         } | null | undefined;
     } | {
         t: 'byId';
@@ -502,6 +597,10 @@ export type McpServersActionInputById = {
         machineId: string;
         directory?: string | undefined;
         providers?: string[] | undefined;
+    };
+    readonly "mcp.servers.signIn.start": {
+        serverId: string;
+        stepUp?: boolean | undefined;
     };
 };
 export type McpServersActionResultById = {
@@ -530,21 +629,25 @@ export type McpServersActionResultById = {
                 description?: string | undefined;
             }[];
             bindings: {
+                id: string;
                 target: {
                     t: 'allMachines';
                 } | {
                     t: 'machine';
                     machineId: string;
                 } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
                     t: 'workspace';
                     machineId: string;
                     workspaceRoot: string;
                 };
-                serverId: string;
-                id: string;
+                enabled: boolean;
                 createdAt: number;
                 updatedAt: number;
-                enabled: boolean;
+                serverId: string;
+                agentId?: string | undefined;
             }[];
         };
         cleanup?: {
@@ -573,21 +676,25 @@ export type McpServersActionResultById = {
                 description?: string | undefined;
             }[];
             bindings: {
+                id: string;
                 target: {
                     t: 'allMachines';
                 } | {
                     t: 'machine';
                     machineId: string;
                 } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
                     t: 'workspace';
                     machineId: string;
                     workspaceRoot: string;
                 };
-                serverId: string;
-                id: string;
+                enabled: boolean;
                 createdAt: number;
                 updatedAt: number;
-                enabled: boolean;
+                serverId: string;
+                agentId?: string | undefined;
             }[];
         };
         cleanup?: {
@@ -615,6 +722,9 @@ export type McpServersActionResultById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
                 createdAt: number;
                 updatedAt: number;
@@ -632,26 +742,23 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    auth?: {
+                        kind: 'oauth';
+                    } | undefined;
                 } | undefined;
-            }[];
-            bindings: {
-                id: string;
-                serverId: string;
-                enabled: boolean;
-                target: {
-                    t: 'allMachines';
-                } | {
-                    t: 'machine';
-                    machineId: string;
-                } | {
-                    t: 'workspace';
-                    machineId: string;
-                    workspaceRoot: string;
-                };
-                createdAt: number;
-                updatedAt: number;
-                overrides?: {
+                configOverrides?: {
+                    target: {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
@@ -664,6 +771,9 @@ export type McpServersActionResultById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'sessionAttested';
+                            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                         } | null> | undefined;
                     } | undefined;
                     envPatch?: Record<string, {
@@ -672,8 +782,32 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
-                } | undefined;
+                }[] | undefined;
+            }[];
+            bindings: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                serverId: string;
+                agentId?: string | undefined;
             }[];
         };
         revision: number | 'absent';
@@ -702,6 +836,9 @@ export type McpServersActionResultById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
                 createdAt: number;
                 updatedAt: number;
@@ -719,26 +856,23 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     }>;
+                    auth?: {
+                        kind: 'oauth';
+                    } | undefined;
                 } | undefined;
-            }[];
-            bindings: {
-                id: string;
-                serverId: string;
-                enabled: boolean;
-                target: {
-                    t: 'allMachines';
-                } | {
-                    t: 'machine';
-                    machineId: string;
-                } | {
-                    t: 'workspace';
-                    machineId: string;
-                    workspaceRoot: string;
-                };
-                createdAt: number;
-                updatedAt: number;
-                overrides?: {
+                configOverrides?: {
+                    target: {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
                     stdio?: {
                         command?: string | undefined;
                         args?: string[] | undefined;
@@ -751,6 +885,9 @@ export type McpServersActionResultById = {
                         } | {
                             t: 'savedSecret';
                             secretId: string;
+                        } | {
+                            t: 'sessionAttested';
+                            field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                         } | null> | undefined;
                     } | undefined;
                     envPatch?: Record<string, {
@@ -759,8 +896,32 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
-                } | undefined;
+                }[] | undefined;
+            }[];
+            bindings: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                serverId: string;
+                agentId?: string | undefined;
             }[];
         };
         revision: number | 'absent';
@@ -788,6 +949,9 @@ export type McpServersActionResultById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             createdAt: number;
             updatedAt: number;
@@ -805,26 +969,23 @@ export type McpServersActionResultById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 }>;
+                auth?: {
+                    kind: 'oauth';
+                } | undefined;
             } | undefined;
-        };
-        bindings: {
-            id: string;
-            serverId: string;
-            enabled: boolean;
-            target: {
-                t: 'allMachines';
-            } | {
-                t: 'machine';
-                machineId: string;
-            } | {
-                t: 'workspace';
-                machineId: string;
-                workspaceRoot: string;
-            };
-            createdAt: number;
-            updatedAt: number;
-            overrides?: {
+            configOverrides?: {
+                target: {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
                 stdio?: {
                     command?: string | undefined;
                     args?: string[] | undefined;
@@ -837,6 +998,9 @@ export type McpServersActionResultById = {
                     } | {
                         t: 'savedSecret';
                         secretId: string;
+                    } | {
+                        t: 'sessionAttested';
+                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                     } | null> | undefined;
                 } | undefined;
                 envPatch?: Record<string, {
@@ -845,8 +1009,32 @@ export type McpServersActionResultById = {
                 } | {
                     t: 'savedSecret';
                     secretId: string;
+                } | {
+                    t: 'sessionAttested';
+                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                 } | null> | undefined;
-            } | undefined;
+            }[] | undefined;
+        };
+        bindings: {
+            id: string;
+            target: {
+                t: 'allMachines';
+            } | {
+                t: 'machine';
+                machineId: string;
+            } | {
+                t: 'project';
+                projectKey: string;
+            } | {
+                t: 'workspace';
+                machineId: string;
+                workspaceRoot: string;
+            };
+            enabled: boolean;
+            createdAt: number;
+            updatedAt: number;
+            serverId: string;
+            agentId?: string | undefined;
         }[];
         revision: number | 'absent';
         authority: 'active' | 'inactive';
@@ -915,96 +1103,18 @@ export type McpServersActionResultById = {
     } | {
         status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
         reason?: string | undefined;
-    };
-    readonly "mcp.bindings.add": {
-        status: 'updated';
-        revision: number;
-        cursor: number;
-    } | {
-        status: 'conflict';
-        revision: number;
-    } | {
-        status: 'settings-conflict';
-        revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
-    };
-    readonly "mcp.bindings.edit": {
-        status: 'updated';
-        revision: number;
-        cursor: number;
-    } | {
-        status: 'conflict';
-        revision: number;
-    } | {
-        status: 'settings-conflict';
-        revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
-    };
-    readonly "mcp.bindings.enable": {
-        status: 'conflict';
-        revision: number;
-    } | {
-        status: 'settings-conflict';
-        revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
     } | {
         status: 'updated';
         revision: number;
         cursor: number;
-        reversal?: {
-            scope: {
-                serverId: string;
-                accountId: string;
-            };
-            bindingId: string;
-            before: boolean;
-            applied: boolean;
-            revision: number;
-        } | undefined;
-    };
-    readonly "mcp.bindings.disable": {
-        status: 'conflict';
-        revision: number;
-    } | {
-        status: 'settings-conflict';
-        revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
-    } | {
-        status: 'updated';
-        revision: number;
-        cursor: number;
-        reversal?: {
-            scope: {
-                serverId: string;
-                accountId: string;
-            };
-            bindingId: string;
-            before: boolean;
-            applied: boolean;
-            revision: number;
-        } | undefined;
-    };
-    readonly "mcp.bindings.remove": {
-        status: 'updated';
-        revision: number;
-        cursor: number;
-    } | {
-        status: 'conflict';
-        revision: number;
-    } | {
-        status: 'settings-conflict';
-        revision: number;
-    } | {
-        status: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content' | 'invalid-reference';
-        reason?: string | undefined;
+        signOut: {
+            status: 'revoked';
+            remoteStatus: 'remoteRevoked' | 'remoteUnsupported' | 'remoteNotAttempted';
+        } | {
+            status: 'not_connected';
+        } | {
+            status: 'pending';
+        };
     };
     readonly "mcp.servers.test": {
         [x: string]: unknown;
@@ -1031,7 +1141,7 @@ export type McpServersActionResultById = {
             enabled: boolean | null;
             source: {
                 [x: string]: unknown;
-                kind: 'user' | 'project';
+                kind: 'project' | 'user';
                 path: string;
             };
             stdio?: {
@@ -1042,6 +1152,7 @@ export type McpServersActionResultById = {
                 url: string;
                 headers: string[];
             } | undefined;
+            loadedInHappierSessions?: boolean | undefined;
         }[];
         warnings?: {
             [x: string]: unknown;
@@ -1055,5 +1166,11 @@ export type McpServersActionResultById = {
         ok: false;
         errorCode: 'invalid_request' | 'internal_error';
         error: string;
+    };
+    readonly "mcp.servers.signIn.start": {
+        attemptId: string;
+        authorizationUrl: string;
+        expiresAtMs: number;
+        machineId: string;
     };
 };

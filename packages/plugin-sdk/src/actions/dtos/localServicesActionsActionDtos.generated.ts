@@ -42,6 +42,51 @@ export type LocalServicesActionsActionInputById = {
                 };
             } | undefined;
         };
+        desiredPlacement: {
+            workspace: {
+                serverId: string;
+                refId: string;
+            };
+            serviceName: string;
+            expectedRevision: number | 'absent';
+            expected: {
+                kind: 'absent';
+            } | {
+                kind: 'value';
+                value: {
+                    runsOn: {
+                        kind: 'primary';
+                    } | {
+                        kind: 'workers';
+                        destination: {
+                            kind: 'machine';
+                            machineId: string;
+                        } | {
+                            kind: 'pool';
+                            poolId: string;
+                            selection: 'ask' | 'automatic';
+                        };
+                    };
+                    unavailable: 'primary' | 'fail';
+                };
+            };
+            value: {
+                runsOn: {
+                    kind: 'primary';
+                } | {
+                    kind: 'workers';
+                    destination: {
+                        kind: 'machine';
+                        machineId: string;
+                    } | {
+                        kind: 'pool';
+                        poolId: string;
+                        selection: 'ask' | 'automatic';
+                    };
+                };
+                unavailable: 'primary' | 'fail';
+            };
+        };
         destination: {
             kind: 'primary';
         } | {
@@ -54,6 +99,9 @@ export type LocalServicesActionsActionInputById = {
                 poolId: string;
                 selection: 'ask' | 'automatic';
             };
+        };
+        selectedTarget: {
+            machineId: string;
         };
     };
     readonly "localServices.actions.copyUrl": {

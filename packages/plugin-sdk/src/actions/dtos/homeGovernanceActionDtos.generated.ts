@@ -279,6 +279,7 @@ export type HomeGovernanceActionResultById = {
             homeRole: 'owner' | 'admin' | 'member';
             status: 'active' | 'suspended' | 'disabled';
             profile: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -342,6 +343,7 @@ export type HomeGovernanceActionResultById = {
         accounts: {
             accountId: string;
             profile: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -355,6 +357,7 @@ export type HomeGovernanceActionResultById = {
         homeRole: 'owner' | 'admin' | 'member';
         status: 'active' | 'suspended' | 'disabled';
         profile: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -437,6 +440,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -447,6 +451,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -470,6 +475,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -480,6 +486,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -505,6 +512,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -515,6 +523,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -540,6 +549,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -550,6 +560,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -568,6 +579,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -578,6 +590,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -596,6 +609,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -606,6 +620,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -623,6 +638,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -633,6 +649,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -648,6 +665,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -658,6 +676,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -677,6 +696,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -687,6 +707,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -704,6 +725,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -714,6 +736,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -731,6 +754,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -741,6 +765,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -758,6 +783,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -768,6 +794,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -785,6 +812,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -795,6 +823,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -812,6 +841,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -822,6 +852,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -839,6 +870,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -849,6 +881,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -866,6 +899,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -876,6 +910,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -894,6 +929,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -904,6 +940,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -922,6 +959,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -932,6 +970,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -950,6 +989,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -960,6 +1000,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -973,6 +1014,7 @@ export type HomeGovernanceActionResultById = {
         homeRole: 'owner' | 'admin' | 'member';
         status: 'active' | 'suspended' | 'disabled';
         profile: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -1035,6 +1077,7 @@ export type HomeGovernanceActionResultById = {
         homeRole: 'owner' | 'admin' | 'member';
         status: 'active' | 'suspended' | 'disabled';
         profile: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -1097,6 +1140,7 @@ export type HomeGovernanceActionResultById = {
         homeRole: 'owner' | 'admin' | 'member';
         status: 'active' | 'suspended' | 'disabled';
         profile: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -1164,6 +1208,7 @@ export type HomeGovernanceActionResultById = {
         homeRole: 'owner' | 'admin' | 'member';
         status: 'active' | 'suspended' | 'disabled';
         profile: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -1286,6 +1331,10 @@ export type HomeGovernanceActionResultById = {
                 type: 'string' | 'boolean' | 'int' | 'enum' | 'email' | 'url' | 'float' | 'list' | 'json';
                 section: 'email' | 'data' | 'reach' | 'policies' | 'features' | 'runtime' | 'server';
                 group?: string | undefined;
+                appliesWhen?: {
+                    key: string;
+                    values: string[];
+                } | undefined;
                 family?: string | undefined;
                 featureId?: string | undefined;
                 default?: unknown;
@@ -1336,6 +1385,10 @@ export type HomeGovernanceActionResultById = {
                 type: 'string' | 'boolean' | 'int' | 'enum' | 'email' | 'url' | 'float' | 'list' | 'json';
                 section: 'email' | 'data' | 'reach' | 'policies' | 'features' | 'runtime' | 'server';
                 group?: string | undefined;
+                appliesWhen?: {
+                    key: string;
+                    values: string[];
+                } | undefined;
                 family?: string | undefined;
                 featureId?: string | undefined;
                 default?: unknown;
@@ -1395,6 +1448,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1405,6 +1459,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1428,6 +1483,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1438,6 +1494,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1463,6 +1520,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1473,6 +1531,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1498,6 +1557,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1508,6 +1568,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1526,6 +1587,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1536,6 +1598,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1554,6 +1617,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1564,6 +1628,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1581,6 +1646,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1591,6 +1657,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1606,6 +1673,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1616,6 +1684,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1635,6 +1704,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1645,6 +1715,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1662,6 +1733,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1672,6 +1744,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1689,6 +1762,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1699,6 +1773,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1716,6 +1791,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1726,6 +1802,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1743,6 +1820,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1753,6 +1831,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1770,6 +1849,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1780,6 +1860,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1797,6 +1878,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1807,6 +1889,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1824,6 +1907,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1834,6 +1918,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1852,6 +1937,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1862,6 +1948,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1880,6 +1967,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1890,6 +1978,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1908,6 +1997,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'deployment_command' | 'personal_home_bootstrap';
                 accountId: string | null;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;
@@ -1918,6 +2008,7 @@ export type HomeGovernanceActionResultById = {
                 kind: 'account' | 'setting' | 'identity_provider' | 'github_app';
                 id: string;
                 profile: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;

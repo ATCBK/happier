@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, QualifiedAudienceSelection } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type BoardsActionInputById = {
     readonly "boards.list": Record<string, never>;
@@ -87,16 +87,7 @@ export type BoardsActionInputById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: unknown;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1Input<true>;
                         inputs: {
                             title?: string | undefined;
                             description?: string | undefined;
@@ -112,7 +103,7 @@ export type BoardsActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -120,11 +111,13 @@ export type BoardsActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: unknown;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
                                 disabledWhen?: unknown;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -149,6 +142,10 @@ export type BoardsActionInputById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -162,6 +159,10 @@ export type BoardsActionInputById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             boardId: string;
             ref: {
@@ -283,16 +284,7 @@ export type BoardsActionInputById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: unknown;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1Input<true>;
                         inputs: {
                             title?: string | undefined;
                             description?: string | undefined;
@@ -308,7 +300,7 @@ export type BoardsActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -316,11 +308,13 @@ export type BoardsActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: unknown;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
                                 disabledWhen?: unknown;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -345,6 +339,10 @@ export type BoardsActionInputById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -358,6 +356,10 @@ export type BoardsActionInputById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             } | undefined;
             expectedPresentation?: {
                 frameStyle: 'card' | 'plain' | null;
@@ -578,6 +580,48 @@ export type BoardsActionInputById = {
             };
             paths?: string[] | undefined;
         } | {
+            kind: 'widget_network';
+            network: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            };
+            boardId: string;
+            ref: {
+                surface: {
+                    serverId: string;
+                    accountId: string;
+                    owner: {
+                        kind: 'home';
+                    } | {
+                        kind: 'sessionBoard';
+                        sessionId: string;
+                    } | {
+                        kind: 'companion';
+                        sessionId: string;
+                    } | {
+                        kind: 'workBoard';
+                        boardId: string;
+                    } | {
+                        kind: 'project';
+                        projectId: string;
+                        layoutId?: string | undefined;
+                    } | {
+                        kind: 'pluginArea';
+                        pluginId: string;
+                        pageId: string;
+                        area: string;
+                        layoutId?: string | undefined;
+                    } | {
+                        kind: 'corePage';
+                        pageId: string;
+                        area: string;
+                        layoutId?: string | undefined;
+                    };
+                    artifactId?: string | undefined;
+                };
+                instanceId: string;
+            };
+        } | {
             kind: 'create';
             board: {
                 id: string;
@@ -623,7 +667,7 @@ export type BoardsActionInputById = {
                         bot?: 'bot' | 'ordinary' | undefined;
                     } | null | undefined;
                     picked?: {
-                        kind: 'session' | 'workflow_run' | 'workflow' | 'machine';
+                        kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                         qualifiedId: {
                             serverId: string;
                             id: string;
@@ -635,7 +679,7 @@ export type BoardsActionInputById = {
             kind: 'add_items';
             boardId: string;
             refs: {
-                kind: 'session' | 'workflow_run' | 'workflow' | 'machine';
+                kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                 qualifiedId: {
                     serverId: string;
                     id: string;
@@ -649,7 +693,7 @@ export type BoardsActionInputById = {
             kind: 'remove_item';
             boardId: string;
             ref: {
-                kind: 'session' | 'workflow_run' | 'workflow' | 'machine';
+                kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                 qualifiedId: {
                     serverId: string;
                     id: string;
@@ -696,7 +740,7 @@ export type BoardsActionResultById = {
                     source: 'all' | 'persisted' | 'direct';
                 }> | undefined;
                 picked: readonly Readonly<{
-                    kind: 'session' | 'workflow_run' | 'workflow' | 'machine';
+                    kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                     qualifiedId: Readonly<{
                         serverId: string;
                         id: string;
@@ -789,19 +833,7 @@ export type BoardsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -814,7 +846,7 @@ export type BoardsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -822,11 +854,13 @@ export type BoardsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -854,6 +888,10 @@ export type BoardsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -869,6 +907,10 @@ export type BoardsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -898,7 +940,7 @@ export type BoardsActionResultById = {
                     source: 'all' | 'persisted' | 'direct';
                 }> | undefined;
                 picked: readonly Readonly<{
-                    kind: 'session' | 'workflow_run' | 'workflow' | 'machine';
+                    kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                     qualifiedId: Readonly<{
                         serverId: string;
                         id: string;
@@ -991,19 +1033,7 @@ export type BoardsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -1016,7 +1046,7 @@ export type BoardsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -1024,11 +1054,13 @@ export type BoardsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -1056,6 +1088,10 @@ export type BoardsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -1071,6 +1107,10 @@ export type BoardsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                 frameStyle?: 'card' | 'plain' | undefined;

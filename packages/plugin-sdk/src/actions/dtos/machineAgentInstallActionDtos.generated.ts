@@ -6,12 +6,18 @@
 export type MachineAgentInstallActionInputById = {
     readonly "machines.agents.install": {
         agentId: string;
-        intent: 'install' | 'update';
         machineId: string;
+        intent: 'install' | 'update';
+        definitionId?: string | undefined;
         force?: boolean | undefined;
         consent?: {
             vendorRecipe: boolean;
         } | undefined;
+    };
+    readonly "machines.agents.uninstall": {
+        machineId: string;
+        agentId: string;
+        definitionId?: string | undefined;
     };
     readonly "machines.agents.install.status": {
         jobId: string;
@@ -29,12 +35,20 @@ export type MachineAgentInstallActionResultById = {
         jobId: string;
     } | {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
+        error: string;
+    };
+    readonly "machines.agents.uninstall": {
+        ok: true;
+        jobId: string;
+    } | {
+        ok: false;
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
         error: string;
     };
     readonly "machines.agents.install.status": {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
         error: string;
     } | {
         ok: true;
@@ -67,9 +81,10 @@ export type MachineAgentInstallActionResultById = {
         outcome: {
             kind: 'succeeded';
             version: string | null;
+            checksum?: 'verified' | 'not_published' | undefined;
         } | {
             kind: 'failed';
-            code: 'consent_required' | 'unsupported_platform' | 'install_not_available' | 'download_failed' | 'verification_failed' | 'timeout' | 'cancelled' | 'install_failed' | 'update_not_available';
+            code: 'not_managed' | 'in_use' | 'consent_required' | 'unsupported_platform' | 'install_not_available' | 'download_failed' | 'verification_failed' | 'timeout' | 'cancelled' | 'install_failed' | 'update_not_available';
             stepId: string;
             message: string;
             guideUrl?: string | undefined;
@@ -77,7 +92,7 @@ export type MachineAgentInstallActionResultById = {
     };
     readonly "machines.agents.install.cancel": {
         ok: false;
-        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable';
+        errorCode: 'invalid_request' | 'job_not_found' | 'install_unavailable' | 'not_managed' | 'in_use';
         error: string;
     } | {
         ok: true;

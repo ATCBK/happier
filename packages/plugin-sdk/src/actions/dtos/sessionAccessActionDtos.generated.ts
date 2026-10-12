@@ -100,6 +100,7 @@ export type SessionAccessActionResultById = {
                 };
             };
             principal: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -125,6 +126,7 @@ export type SessionAccessActionResultById = {
             };
         }[];
         owner: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -185,6 +187,7 @@ export type SessionAccessActionResultById = {
         grants: [
         ];
         owner: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -284,6 +287,7 @@ export type SessionAccessActionResultById = {
         changed: boolean;
         responsibleAccountId: string | null;
         responsibleAccount: {
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -297,6 +301,7 @@ export type SessionAccessActionResultById = {
         candidates: {
             accountId: string;
             profile: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -315,7 +320,7 @@ export type SessionAccessActionResultById = {
         updatedAt: number;
         networkOff?: boolean | undefined;
         keyDerivation?: 'fragment_v1' | 'legacy_token_v1' | undefined;
-        isolatedOrigin?: string | undefined;
+        viewerOrigin?: string | undefined;
     } | null;
     readonly "session.public_link.create": {
         id: string;
@@ -327,7 +332,7 @@ export type SessionAccessActionResultById = {
         url: string;
         networkOff?: boolean | undefined;
         keyDerivation?: 'fragment_v1' | 'legacy_token_v1' | undefined;
-        isolatedOrigin?: string | undefined;
+        viewerOrigin?: string | undefined;
     };
     readonly "session.public_link.remove": {
         changed: boolean;

@@ -77,10 +77,12 @@ export type WorkflowDiagnosticsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                 }[];
                 defaults: {
+                    allowedTools?: string[] | undefined;
+                    unlistedTools?: 'ask' | 'deny' | undefined;
                     agentTarget?: {
                         kind: 'agent';
                         identity: {
@@ -115,11 +117,19 @@ export type WorkflowDiagnosticsActionResultById = {
                             value: string | number | boolean | null;
                         }>;
                     } | null | undefined;
-                    mcpSelection?: {
-                        forceIncludeServerIds: string[];
-                        forceExcludeServerIds: string[];
-                        v: 1;
-                        managedServersEnabled: boolean;
+                    capabilitySelection?: {
+                        mcp?: {
+                            forceIncludeServerIds: string[];
+                            forceExcludeServerIds: string[];
+                            v: 1;
+                            managedServersEnabled: boolean;
+                        } | undefined;
+                        skills?: {
+                            forceIncludeSkillIds: string[];
+                            forceExcludeSkillIds: string[];
+                            excludeNativeSkillNames: string[];
+                            v: 1;
+                        } | undefined;
                     } | null | undefined;
                     connectedServices?: {
                         v: 2;
@@ -305,7 +315,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 } | {
                     roleId: string;
@@ -323,7 +333,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         effort?: string | undefined;
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
@@ -404,10 +414,12 @@ export type WorkflowDiagnosticsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                 }[];
                 defaults: {
+                    allowedTools?: string[] | undefined;
+                    unlistedTools?: 'ask' | 'deny' | undefined;
                     agentTarget?: {
                         kind: 'agent';
                         identity: {
@@ -442,11 +454,19 @@ export type WorkflowDiagnosticsActionResultById = {
                             value: string | number | boolean | null;
                         }>;
                     } | null | undefined;
-                    mcpSelection?: {
-                        forceIncludeServerIds: string[];
-                        forceExcludeServerIds: string[];
-                        v: 1;
-                        managedServersEnabled: boolean;
+                    capabilitySelection?: {
+                        mcp?: {
+                            forceIncludeServerIds: string[];
+                            forceExcludeServerIds: string[];
+                            v: 1;
+                            managedServersEnabled: boolean;
+                        } | undefined;
+                        skills?: {
+                            forceIncludeSkillIds: string[];
+                            forceExcludeSkillIds: string[];
+                            excludeNativeSkillNames: string[];
+                            v: 1;
+                        } | undefined;
                     } | null | undefined;
                     connectedServices?: {
                         v: 2;
@@ -632,7 +652,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 } | {
                     roleId: string;
@@ -650,7 +670,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         effort?: string | undefined;
                     } | undefined;
                     profileId?: string | undefined;
-                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                    workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];

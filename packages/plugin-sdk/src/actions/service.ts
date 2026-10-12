@@ -97,7 +97,7 @@ export type PluginActionWorkflowDefinitionV1 = PluginActionResultById['workflow.
 /** Looks up one canonical host ActionSpec without changing its runtime identity. */
 export const getActionSpec: (
   id: ActionId,
-) => ActionSpec = projectProtocolValue(canonicalGetActionSpec);
+) => ActionSpec = /* @__PURE__ */ projectProtocolValue(canonicalGetActionSpec);
 export {
   actionInputOptionValueKey,
   isSameActionInputOptionValue,

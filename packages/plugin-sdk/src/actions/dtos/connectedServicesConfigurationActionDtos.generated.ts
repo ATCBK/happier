@@ -10,6 +10,9 @@ export type ConnectedServicesConfigurationActionInputById = {
         service: {
             pluginId: string;
             localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
         };
         machineId: string;
         expectedConfigurationRevision?: string | undefined;
@@ -41,6 +44,7 @@ export type ConnectedServicesConfigurationActionInputById = {
             code: string;
             callbackUrl: string;
             state: string;
+            iss?: string | undefined;
         };
         machineId: string;
     };
@@ -64,11 +68,15 @@ export type ConnectedServicesConfigurationActionInputById = {
         attemptId: string;
         machineId: string;
         restoreKind?: 'oauth' | undefined;
+        waitForProviderStart?: boolean | undefined;
     };
     readonly "connectedServices.authentication.pending.list": {
         service: {
             pluginId: string;
             localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
         };
         machineId: string;
     };
@@ -185,10 +193,17 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
         providerLimitId?: string | undefined;
+        hypothetical?: {
+            strategy?: 'manual' | 'expiry_first' | 'priority' | 'least_limited' | undefined;
+            atMs?: number | undefined;
+        } | undefined;
     };
     readonly "connectedServices.accounts.revoke": {
         account: {
@@ -260,6 +275,9 @@ export type ConnectedServicesConfigurationActionInputById = {
         service: {
             pluginId: string;
             localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
         };
         selection: {
             source: 'native';
@@ -317,6 +335,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -325,6 +346,9 @@ export type ConnectedServicesConfigurationActionInputById = {
         service: {
             pluginId: string;
             localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
         };
         group: {
             groupId: string;
@@ -366,6 +390,9 @@ export type ConnectedServicesConfigurationActionInputById = {
         service: {
             pluginId: string;
             localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
         };
         groupId: string;
         expectedGeneration: number;
@@ -409,6 +436,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -421,6 +451,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -436,6 +469,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -451,6 +487,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -474,6 +513,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -493,6 +535,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -502,6 +547,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -518,6 +566,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -552,6 +603,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         } | {
@@ -581,6 +635,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -601,6 +658,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -612,6 +672,9 @@ export type ConnectedServicesConfigurationActionInputById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         } | {
@@ -641,6 +704,9 @@ export type ConnectedServicesConfigurationActionInputById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -664,6 +730,9 @@ export type ConnectedServicesConfigurationActionInputById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -699,6 +768,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -717,6 +789,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -798,6 +873,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -816,6 +894,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -897,6 +978,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -915,6 +999,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -996,6 +1083,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1014,6 +1104,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1095,6 +1188,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1113,6 +1209,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1194,6 +1293,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1212,6 +1314,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1293,6 +1398,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1311,6 +1419,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1392,6 +1503,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1410,6 +1524,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1491,6 +1608,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1509,6 +1629,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1590,6 +1713,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1608,6 +1734,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
@@ -1689,6 +1818,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         } | {
@@ -1707,10 +1839,368 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             modeId: string;
         };
         mode: {
+            id: string;
+            kind: 'oauthAuthorizationCode';
+            pkce: 'required';
+            outcomeReconciliation: 'none' | 'providerCheck' | 'lateEvidence';
+            title?: string | {
+                key: string;
+                fallback: string;
+            } | undefined;
+            callbackUrl?: string | undefined;
+            scopes?: string[] | undefined;
+            allowRawAuthorizationCode?: boolean | undefined;
+            configuration?: {
+                scope: 'service' | 'account';
+                changeBehavior: 'reconnect' | 'refresh';
+                fields: ({
+                    secret: true;
+                    id: string;
+                    title: string | {
+                        key: string;
+                        fallback: string;
+                    };
+                    schema: PluginSettingFieldSchemaV2;
+                    description?: string | {
+                        key: string;
+                        fallback: string;
+                    } | undefined;
+                    availability?: {
+                        when?: PluginPolicyExpressionV2 | undefined;
+                        disabledWhen?: undefined;
+                        disabledReason?: undefined;
+                    } | {
+                        disabledWhen: PluginPolicyExpressionV2;
+                        disabledReason: string | {
+                            key: string;
+                            fallback: string;
+                        };
+                        when?: PluginPolicyExpressionV2 | undefined;
+                    } | undefined;
+                    presentation?: {
+                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                        placeholder?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        options?: {
+                            value: PluginJsonValueV2;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                        }[] | undefined;
+                        step?: number | undefined;
+                        binding?: {
+                            kind: 'direct';
+                            settingId?: string | undefined;
+                        } | {
+                            kind: 'perActiveServer';
+                            fallbackSettingId: string;
+                            byServerIdSettingId: string;
+                        } | undefined;
+                        hidden?: boolean | undefined;
+                        order?: number | undefined;
+                    } | undefined;
+                    analytics?: {
+                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                        identityScope: 'person' | 'device_user';
+                        trackCurrentState?: boolean | undefined;
+                        trackChanges?: boolean | undefined;
+                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                    } | undefined;
+                    default?: undefined;
+                    required?: boolean | undefined;
+                    semantic?: undefined;
+                } | {
+                    secret: false;
+                    id: string;
+                    title: string | {
+                        key: string;
+                        fallback: string;
+                    };
+                    schema: PluginSettingFieldSchemaV2;
+                    description?: string | {
+                        key: string;
+                        fallback: string;
+                    } | undefined;
+                    availability?: {
+                        when?: PluginPolicyExpressionV2 | undefined;
+                        disabledWhen?: undefined;
+                        disabledReason?: undefined;
+                    } | {
+                        disabledWhen: PluginPolicyExpressionV2;
+                        disabledReason: string | {
+                            key: string;
+                            fallback: string;
+                        };
+                        when?: PluginPolicyExpressionV2 | undefined;
+                    } | undefined;
+                    presentation?: {
+                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                        placeholder?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        options?: {
+                            value: PluginJsonValueV2;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                        }[] | undefined;
+                        step?: number | undefined;
+                        binding?: {
+                            kind: 'direct';
+                            settingId?: string | undefined;
+                        } | {
+                            kind: 'perActiveServer';
+                            fallbackSettingId: string;
+                            byServerIdSettingId: string;
+                        } | undefined;
+                        hidden?: boolean | undefined;
+                        order?: number | undefined;
+                    } | undefined;
+                    analytics?: {
+                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                        identityScope: 'person' | 'device_user';
+                        trackCurrentState?: boolean | undefined;
+                        trackChanges?: boolean | undefined;
+                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                    } | undefined;
+                    default?: PluginJsonValueV2 | undefined;
+                    required?: boolean | undefined;
+                    semantic?: undefined;
+                } | {
+                    secret: false;
+                    id: string;
+                    title: string | {
+                        key: string;
+                        fallback: string;
+                    };
+                    semantic: 'connectedAccountOrigin';
+                    schema: {
+                        type: 'string';
+                        minLength: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        maxLength?: number | undefined;
+                    };
+                    required: true;
+                    description?: string | {
+                        key: string;
+                        fallback: string;
+                    } | undefined;
+                    availability?: {
+                        when?: PluginPolicyExpressionV2 | undefined;
+                        disabledWhen?: undefined;
+                        disabledReason?: undefined;
+                    } | {
+                        disabledWhen: PluginPolicyExpressionV2;
+                        disabledReason: string | {
+                            key: string;
+                            fallback: string;
+                        };
+                        when?: PluginPolicyExpressionV2 | undefined;
+                    } | undefined;
+                    presentation?: {
+                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                        placeholder?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        options?: {
+                            value: PluginJsonValueV2;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                        }[] | undefined;
+                        step?: number | undefined;
+                        binding?: {
+                            kind: 'direct';
+                            settingId?: string | undefined;
+                        } | {
+                            kind: 'perActiveServer';
+                            fallbackSettingId: string;
+                            byServerIdSettingId: string;
+                        } | undefined;
+                        hidden?: boolean | undefined;
+                        order?: number | undefined;
+                    } | undefined;
+                    analytics?: {
+                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                        identityScope: 'person' | 'device_user';
+                        trackCurrentState?: boolean | undefined;
+                        trackChanges?: boolean | undefined;
+                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                    } | undefined;
+                    default?: undefined;
+                } | {
+                    secret: false;
+                    id: string;
+                    title: string | {
+                        key: string;
+                        fallback: string;
+                    };
+                    semantic: 'connectedAccountFixedOrigin';
+                    schema: {
+                        type: 'string';
+                        enum: string[];
+                        title?: string | undefined;
+                        description?: string | undefined;
+                    };
+                    originByValue: Record<string, string>;
+                    required: true;
+                    description?: string | {
+                        key: string;
+                        fallback: string;
+                    } | undefined;
+                    availability?: {
+                        when?: PluginPolicyExpressionV2 | undefined;
+                        disabledWhen?: undefined;
+                        disabledReason?: undefined;
+                    } | {
+                        disabledWhen: PluginPolicyExpressionV2;
+                        disabledReason: string | {
+                            key: string;
+                            fallback: string;
+                        };
+                        when?: PluginPolicyExpressionV2 | undefined;
+                    } | undefined;
+                    presentation?: {
+                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                        placeholder?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        options?: {
+                            value: PluginJsonValueV2;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                        }[] | undefined;
+                        step?: number | undefined;
+                        binding?: {
+                            kind: 'direct';
+                            settingId?: string | undefined;
+                        } | {
+                            kind: 'perActiveServer';
+                            fallbackSettingId: string;
+                            byServerIdSettingId: string;
+                        } | undefined;
+                        hidden?: boolean | undefined;
+                        order?: number | undefined;
+                    } | undefined;
+                    analytics?: {
+                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                        identityScope: 'person' | 'device_user';
+                        trackCurrentState?: boolean | undefined;
+                        trackChanges?: boolean | undefined;
+                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                    } | undefined;
+                    default?: undefined;
+                } | {
+                    secret: false;
+                    id: string;
+                    title: string | {
+                        key: string;
+                        fallback: string;
+                    };
+                    semantic: 'connectedAccountBase';
+                    schema: {
+                        type: 'string';
+                        minLength: number;
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        maxLength?: number | undefined;
+                    };
+                    required: true;
+                    description?: string | {
+                        key: string;
+                        fallback: string;
+                    } | undefined;
+                    availability?: {
+                        when?: PluginPolicyExpressionV2 | undefined;
+                        disabledWhen?: undefined;
+                        disabledReason?: undefined;
+                    } | {
+                        disabledWhen: PluginPolicyExpressionV2;
+                        disabledReason: string | {
+                            key: string;
+                            fallback: string;
+                        };
+                        when?: PluginPolicyExpressionV2 | undefined;
+                    } | undefined;
+                    presentation?: {
+                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                        placeholder?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        options?: {
+                            value: PluginJsonValueV2;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                        }[] | undefined;
+                        step?: number | undefined;
+                        binding?: {
+                            kind: 'direct';
+                            settingId?: string | undefined;
+                        } | {
+                            kind: 'perActiveServer';
+                            fallbackSettingId: string;
+                            byServerIdSettingId: string;
+                        } | undefined;
+                        hidden?: boolean | undefined;
+                        order?: number | undefined;
+                    } | undefined;
+                    analytics?: {
+                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                        identityScope: 'person' | 'device_user';
+                        trackCurrentState?: boolean | undefined;
+                        trackChanges?: boolean | undefined;
+                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                    } | undefined;
+                    default?: undefined;
+                })[];
+            } | undefined;
+        } | {
             id: string;
             kind: 'manual';
             outcomeReconciliation: 'none';
@@ -2188,361 +2678,6 @@ export type ConnectedServicesConfigurationActionResultById = {
             } | undefined;
             directExport?: {
                 contractVersion: 'happier.team-credential-manual-connected-account-direct.v1';
-            } | undefined;
-        } | {
-            id: string;
-            kind: 'oauthAuthorizationCode';
-            pkce: 'required';
-            outcomeReconciliation: 'none' | 'providerCheck' | 'lateEvidence';
-            title?: string | {
-                key: string;
-                fallback: string;
-            } | undefined;
-            callbackUrl?: string | undefined;
-            scopes?: string[] | undefined;
-            allowRawAuthorizationCode?: boolean | undefined;
-            configuration?: {
-                scope: 'service' | 'account';
-                changeBehavior: 'reconnect' | 'refresh';
-                fields: ({
-                    secret: true;
-                    id: string;
-                    title: string | {
-                        key: string;
-                        fallback: string;
-                    };
-                    schema: PluginSettingFieldSchemaV2;
-                    description?: string | {
-                        key: string;
-                        fallback: string;
-                    } | undefined;
-                    availability?: {
-                        when?: PluginPolicyExpressionV2 | undefined;
-                        disabledWhen?: undefined;
-                        disabledReason?: undefined;
-                    } | {
-                        disabledWhen: PluginPolicyExpressionV2;
-                        disabledReason: string | {
-                            key: string;
-                            fallback: string;
-                        };
-                        when?: PluginPolicyExpressionV2 | undefined;
-                    } | undefined;
-                    presentation?: {
-                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
-                        placeholder?: string | {
-                            key: string;
-                            fallback: string;
-                        } | undefined;
-                        options?: {
-                            value: PluginJsonValueV2;
-                            title: string | {
-                                key: string;
-                                fallback: string;
-                            };
-                            description?: string | {
-                                key: string;
-                                fallback: string;
-                            } | undefined;
-                        }[] | undefined;
-                        step?: number | undefined;
-                        binding?: {
-                            kind: 'direct';
-                            settingId?: string | undefined;
-                        } | {
-                            kind: 'perActiveServer';
-                            fallbackSettingId: string;
-                            byServerIdSettingId: string;
-                        } | undefined;
-                        hidden?: boolean | undefined;
-                        order?: number | undefined;
-                    } | undefined;
-                    analytics?: {
-                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
-                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
-                        identityScope: 'person' | 'device_user';
-                        trackCurrentState?: boolean | undefined;
-                        trackChanges?: boolean | undefined;
-                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
-                    } | undefined;
-                    default?: undefined;
-                    required?: boolean | undefined;
-                    semantic?: undefined;
-                } | {
-                    secret: false;
-                    id: string;
-                    title: string | {
-                        key: string;
-                        fallback: string;
-                    };
-                    schema: PluginSettingFieldSchemaV2;
-                    description?: string | {
-                        key: string;
-                        fallback: string;
-                    } | undefined;
-                    availability?: {
-                        when?: PluginPolicyExpressionV2 | undefined;
-                        disabledWhen?: undefined;
-                        disabledReason?: undefined;
-                    } | {
-                        disabledWhen: PluginPolicyExpressionV2;
-                        disabledReason: string | {
-                            key: string;
-                            fallback: string;
-                        };
-                        when?: PluginPolicyExpressionV2 | undefined;
-                    } | undefined;
-                    presentation?: {
-                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
-                        placeholder?: string | {
-                            key: string;
-                            fallback: string;
-                        } | undefined;
-                        options?: {
-                            value: PluginJsonValueV2;
-                            title: string | {
-                                key: string;
-                                fallback: string;
-                            };
-                            description?: string | {
-                                key: string;
-                                fallback: string;
-                            } | undefined;
-                        }[] | undefined;
-                        step?: number | undefined;
-                        binding?: {
-                            kind: 'direct';
-                            settingId?: string | undefined;
-                        } | {
-                            kind: 'perActiveServer';
-                            fallbackSettingId: string;
-                            byServerIdSettingId: string;
-                        } | undefined;
-                        hidden?: boolean | undefined;
-                        order?: number | undefined;
-                    } | undefined;
-                    analytics?: {
-                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
-                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
-                        identityScope: 'person' | 'device_user';
-                        trackCurrentState?: boolean | undefined;
-                        trackChanges?: boolean | undefined;
-                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
-                    } | undefined;
-                    default?: PluginJsonValueV2 | undefined;
-                    required?: boolean | undefined;
-                    semantic?: undefined;
-                } | {
-                    secret: false;
-                    id: string;
-                    title: string | {
-                        key: string;
-                        fallback: string;
-                    };
-                    semantic: 'connectedAccountOrigin';
-                    schema: {
-                        type: 'string';
-                        minLength: number;
-                        title?: string | undefined;
-                        description?: string | undefined;
-                        maxLength?: number | undefined;
-                    };
-                    required: true;
-                    description?: string | {
-                        key: string;
-                        fallback: string;
-                    } | undefined;
-                    availability?: {
-                        when?: PluginPolicyExpressionV2 | undefined;
-                        disabledWhen?: undefined;
-                        disabledReason?: undefined;
-                    } | {
-                        disabledWhen: PluginPolicyExpressionV2;
-                        disabledReason: string | {
-                            key: string;
-                            fallback: string;
-                        };
-                        when?: PluginPolicyExpressionV2 | undefined;
-                    } | undefined;
-                    presentation?: {
-                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
-                        placeholder?: string | {
-                            key: string;
-                            fallback: string;
-                        } | undefined;
-                        options?: {
-                            value: PluginJsonValueV2;
-                            title: string | {
-                                key: string;
-                                fallback: string;
-                            };
-                            description?: string | {
-                                key: string;
-                                fallback: string;
-                            } | undefined;
-                        }[] | undefined;
-                        step?: number | undefined;
-                        binding?: {
-                            kind: 'direct';
-                            settingId?: string | undefined;
-                        } | {
-                            kind: 'perActiveServer';
-                            fallbackSettingId: string;
-                            byServerIdSettingId: string;
-                        } | undefined;
-                        hidden?: boolean | undefined;
-                        order?: number | undefined;
-                    } | undefined;
-                    analytics?: {
-                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
-                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
-                        identityScope: 'person' | 'device_user';
-                        trackCurrentState?: boolean | undefined;
-                        trackChanges?: boolean | undefined;
-                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
-                    } | undefined;
-                    default?: undefined;
-                } | {
-                    secret: false;
-                    id: string;
-                    title: string | {
-                        key: string;
-                        fallback: string;
-                    };
-                    semantic: 'connectedAccountFixedOrigin';
-                    schema: {
-                        type: 'string';
-                        enum: string[];
-                        title?: string | undefined;
-                        description?: string | undefined;
-                    };
-                    originByValue: Record<string, string>;
-                    required: true;
-                    description?: string | {
-                        key: string;
-                        fallback: string;
-                    } | undefined;
-                    availability?: {
-                        when?: PluginPolicyExpressionV2 | undefined;
-                        disabledWhen?: undefined;
-                        disabledReason?: undefined;
-                    } | {
-                        disabledWhen: PluginPolicyExpressionV2;
-                        disabledReason: string | {
-                            key: string;
-                            fallback: string;
-                        };
-                        when?: PluginPolicyExpressionV2 | undefined;
-                    } | undefined;
-                    presentation?: {
-                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
-                        placeholder?: string | {
-                            key: string;
-                            fallback: string;
-                        } | undefined;
-                        options?: {
-                            value: PluginJsonValueV2;
-                            title: string | {
-                                key: string;
-                                fallback: string;
-                            };
-                            description?: string | {
-                                key: string;
-                                fallback: string;
-                            } | undefined;
-                        }[] | undefined;
-                        step?: number | undefined;
-                        binding?: {
-                            kind: 'direct';
-                            settingId?: string | undefined;
-                        } | {
-                            kind: 'perActiveServer';
-                            fallbackSettingId: string;
-                            byServerIdSettingId: string;
-                        } | undefined;
-                        hidden?: boolean | undefined;
-                        order?: number | undefined;
-                    } | undefined;
-                    analytics?: {
-                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
-                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
-                        identityScope: 'person' | 'device_user';
-                        trackCurrentState?: boolean | undefined;
-                        trackChanges?: boolean | undefined;
-                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
-                    } | undefined;
-                    default?: undefined;
-                } | {
-                    secret: false;
-                    id: string;
-                    title: string | {
-                        key: string;
-                        fallback: string;
-                    };
-                    semantic: 'connectedAccountBase';
-                    schema: {
-                        type: 'string';
-                        minLength: number;
-                        title?: string | undefined;
-                        description?: string | undefined;
-                        maxLength?: number | undefined;
-                    };
-                    required: true;
-                    description?: string | {
-                        key: string;
-                        fallback: string;
-                    } | undefined;
-                    availability?: {
-                        when?: PluginPolicyExpressionV2 | undefined;
-                        disabledWhen?: undefined;
-                        disabledReason?: undefined;
-                    } | {
-                        disabledWhen: PluginPolicyExpressionV2;
-                        disabledReason: string | {
-                            key: string;
-                            fallback: string;
-                        };
-                        when?: PluginPolicyExpressionV2 | undefined;
-                    } | undefined;
-                    presentation?: {
-                        control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
-                        placeholder?: string | {
-                            key: string;
-                            fallback: string;
-                        } | undefined;
-                        options?: {
-                            value: PluginJsonValueV2;
-                            title: string | {
-                                key: string;
-                                fallback: string;
-                            };
-                            description?: string | {
-                                key: string;
-                                fallback: string;
-                            } | undefined;
-                        }[] | undefined;
-                        step?: number | undefined;
-                        binding?: {
-                            kind: 'direct';
-                            settingId?: string | undefined;
-                        } | {
-                            kind: 'perActiveServer';
-                            fallbackSettingId: string;
-                            byServerIdSettingId: string;
-                        } | undefined;
-                        hidden?: boolean | undefined;
-                        order?: number | undefined;
-                    } | undefined;
-                    analytics?: {
-                        valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
-                        privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
-                        identityScope: 'person' | 'device_user';
-                        trackCurrentState?: boolean | undefined;
-                        trackChanges?: boolean | undefined;
-                        serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
-                    } | undefined;
-                    default?: undefined;
-                })[];
             } | undefined;
         } | {
             id: string;
@@ -3048,6 +3183,11 @@ export type ConnectedServicesConfigurationActionResultById = {
                 source?: 'unknown' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | 'cached' | undefined;
                 confidence?: 'unknown' | 'exact' | 'derived' | 'estimated' | 'stale' | undefined;
             } | undefined;
+            recoveryCreditDetails?: Record<string, {
+                remainingCount: number;
+                appliesToProviderLimitIds: string[];
+                unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+            }> | undefined;
             diagnostics?: {
                 kind: 'unknown' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection';
                 code?: string | undefined;
@@ -3100,6 +3240,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                     service: {
                         pluginId: string;
                         localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
                     };
                     groupId: string;
                 };
@@ -3122,6 +3265,11 @@ export type ConnectedServicesConfigurationActionResultById = {
                     nextCheckAtMs?: number | undefined;
                 };
             }[];
+            unboundEntries?: {
+                localId: string;
+                sessionId: string;
+                authorityCurrent: boolean;
+            }[] | undefined;
         } | {
             status: 'unavailable';
             reason: 'authority_unavailable' | 'unsupported' | 'read_failed';
@@ -3244,6 +3392,11 @@ export type ConnectedServicesConfigurationActionResultById = {
                         source?: 'unknown' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | 'cached' | undefined;
                         confidence?: 'unknown' | 'exact' | 'derived' | 'estimated' | 'stale' | undefined;
                     } | undefined;
+                    recoveryCreditDetails?: Record<string, {
+                        remainingCount: number;
+                        appliesToProviderLimitIds: string[];
+                        unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                    }> | undefined;
                     diagnostics?: {
                         kind: 'unknown' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection';
                         code?: string | undefined;
@@ -3291,6 +3444,9 @@ export type ConnectedServicesConfigurationActionResultById = {
             service: {
                 pluginId: string;
                 localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
             };
             groupId: string;
         };
@@ -3307,7 +3463,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             reason: 'selected' | 'manual_strategy' | 'no_eligible_members';
             excluded: {
                 profileId: string;
-                reason: 'auth_invalid' | 'disabled' | 'current_active' | 'cooldown' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
+                reason: 'cooldown' | 'auth_invalid' | 'disabled' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
                 retryAtMs?: number | null | undefined;
             }[];
             decisionTrace: {
@@ -3333,11 +3489,15 @@ export type ConnectedServicesConfigurationActionResultById = {
                         capturedAtMs?: number | undefined;
                         exhausted?: boolean | undefined;
                     };
-                    exclusionReason?: 'auth_invalid' | 'disabled' | 'current_active' | 'cooldown' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
+                    exclusionReason?: 'cooldown' | 'auth_invalid' | 'disabled' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
                     retryAtMs?: number | null | undefined;
                 }[];
             };
         };
+        hypothetical?: {
+            strategy: 'manual' | 'expiry_first' | 'priority' | 'least_limited';
+            atMs: number;
+        } | undefined;
     } | {
         status: 'unavailable';
         code: 'unsupported' | 'connected_account_daemon_owner_unavailable' | 'connected_account_daemon_runtime_unavailable' | 'connected_account_daemon_response_invalid';
@@ -3498,6 +3658,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -3585,6 +3748,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -3681,6 +3847,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -3768,6 +3937,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -3855,6 +4027,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                 service: {
                     pluginId: string;
                     localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
                 };
                 groupId: string;
             };
@@ -4027,6 +4202,11 @@ export type ConnectedServicesConfigurationActionResultById = {
                 source?: 'unknown' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | 'cached' | undefined;
                 confidence?: 'unknown' | 'exact' | 'derived' | 'estimated' | 'stale' | undefined;
             } | undefined;
+            recoveryCreditDetails?: Record<string, {
+                remainingCount: number;
+                appliesToProviderLimitIds: string[];
+                unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+            }> | undefined;
             subscription?: {
                 status: 'unavailable' | 'none' | 'subscribed';
                 renewal: 'unknown' | 'off' | 'on';

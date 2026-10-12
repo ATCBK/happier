@@ -41,16 +41,7 @@ export type ApprovalsActionInputById = {
     readonly "approval.request.decide": {
         artifactId: string;
         decision: 'cancel' | 'approve' | 'reject';
-        computerTarget?: {
-            kind: 'window';
-            displayId: string;
-            pid: number;
-            windowId: number;
-        } | {
-            kind: 'display';
-            displayId: string;
-        } | undefined;
-        computerAccess?: 'see' | 'use' | undefined;
+        narrowedInput?: unknown;
         originServerId?: string | undefined;
         serverIdentityId?: string | undefined;
     };

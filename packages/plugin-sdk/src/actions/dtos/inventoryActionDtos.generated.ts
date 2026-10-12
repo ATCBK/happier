@@ -198,6 +198,7 @@ export type InventoryActionInputById = {
     readonly "machines.list": {
         serverId?: string | undefined;
         limit?: number | undefined;
+        refresh?: boolean | undefined;
     };
     readonly "servers.list": {
         [x: string]: unknown;
@@ -220,6 +221,7 @@ export type InventoryActionInputById = {
         machineId: string;
         serverId?: string | undefined;
         agentId?: string | undefined;
+        definitionId?: string | undefined;
         refresh?: boolean | undefined;
     };
     readonly "agents.models.list": {
@@ -479,6 +481,30 @@ export type InventoryActionResultById = {
     readonly "projects.context.update": {
         ok: true;
         row: {
+            atmosphere?: 'home' | {
+                source: 'none' | 'planet' | 'picture';
+                planet: {
+                    placement: 'corner' | 'side' | 'rise';
+                    style: 'airy' | 'balanced' | 'rich';
+                    digits: boolean;
+                };
+                picture: {
+                    ref: {
+                        kind: 'builtin';
+                        id: string;
+                    } | {
+                        kind: 'user';
+                        localId: string;
+                    };
+                    layout: 'horizon' | 'wallpaper';
+                };
+                looks: Record<string, {
+                    look?: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving' | undefined;
+                    strength?: number | undefined;
+                    dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
+                }>;
+                behindSessions: boolean;
+            } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;
             label?: string | undefined;
@@ -504,6 +530,30 @@ export type InventoryActionResultById = {
     readonly "projects.visibility.set": {
         ok: true;
         row: {
+            atmosphere?: 'home' | {
+                source: 'none' | 'planet' | 'picture';
+                planet: {
+                    placement: 'corner' | 'side' | 'rise';
+                    style: 'airy' | 'balanced' | 'rich';
+                    digits: boolean;
+                };
+                picture: {
+                    ref: {
+                        kind: 'builtin';
+                        id: string;
+                    } | {
+                        kind: 'user';
+                        localId: string;
+                    };
+                    layout: 'horizon' | 'wallpaper';
+                };
+                looks: Record<string, {
+                    look?: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving' | undefined;
+                    strength?: number | undefined;
+                    dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
+                }>;
+                behindSessions: boolean;
+            } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;
             label?: string | undefined;
@@ -548,6 +598,30 @@ export type InventoryActionResultById = {
             } | undefined;
         };
         organization?: {
+            atmosphere?: 'home' | {
+                source: 'none' | 'planet' | 'picture';
+                planet: {
+                    placement: 'corner' | 'side' | 'rise';
+                    style: 'airy' | 'balanced' | 'rich';
+                    digits: boolean;
+                };
+                picture: {
+                    ref: {
+                        kind: 'builtin';
+                        id: string;
+                    } | {
+                        kind: 'user';
+                        localId: string;
+                    };
+                    layout: 'horizon' | 'wallpaper';
+                };
+                looks: Record<string, {
+                    look?: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving' | undefined;
+                    strength?: number | undefined;
+                    dissolve?: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows' | undefined;
+                }>;
+                behindSessions: boolean;
+            } | undefined;
             hidden?: boolean | undefined;
             pinned?: boolean | undefined;
             label?: string | undefined;
@@ -701,12 +775,30 @@ export type InventoryActionResultById = {
             }[];
             agentId: string;
             title: string;
+            managed?: boolean | undefined;
+            fit?: {
+                kind: 'can_run';
+                via: 'command' | 'npm' | 'archive' | 'uv';
+                target?: 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64' | undefined;
+            } | {
+                kind: 'cant_run';
+                reason: 'no_build_for_platform' | 'archive_type_unsupported' | 'managed_uv_unavailable';
+            } | {
+                kind: 'unknown';
+                reason: 'platform_unknown' | 'arch_unknown';
+            } | undefined;
+            definitionId?: string | undefined;
         }[];
         unavailable?: {
             agentId: string;
             reason: 'missing_result' | 'probe_failed' | 'invalid_facts';
+            definitionId?: string | undefined;
             errorCode?: string | undefined;
         }[] | undefined;
+        definitionCatalog?: {
+            status: 'unavailable';
+            reason: string;
+        } | undefined;
     };
     readonly "agents.models.list": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;

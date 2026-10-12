@@ -21,6 +21,47 @@ export type WorkspaceLayoutActionInputById = {
                 matchCase: boolean;
                 regex: boolean;
             } | undefined;
+        } | {
+            query: string;
+            target: {
+                kind: 'project-file';
+                workspaceRefId: string;
+                serverId: string;
+                machineId: string;
+                rootPath: string;
+                path: string;
+                anchor?: {
+                    kind: 'range';
+                    filePath: string;
+                    startLine: number;
+                    endLine: number;
+                    side?: 'before' | 'after' | undefined;
+                    startLineHash?: `lh1:${string}` | undefined;
+                    endLineHash?: `lh1:${string}` | undefined;
+                    selectedTextHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'fileLine';
+                    startLine: number;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'diffLine';
+                    startLine: number;
+                    side: 'before' | 'after';
+                    oldLine: number | null;
+                    newLine: number | null;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'line';
+                    filePath: string;
+                    line: number;
+                    side?: 'before' | 'after' | undefined;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | undefined;
+            };
+            options?: {
+                matchCase: boolean;
+                regex: boolean;
+            } | undefined;
         } | undefined;
         beforeTabId?: string | null | undefined;
         reuseExisting?: boolean | undefined;

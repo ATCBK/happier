@@ -36,12 +36,13 @@ export type InputTypePickerLaunchInputV1 = Readonly<{
   inputType: Readonly<{ pluginId: string; localId: string }>; semantic: string;
   value?: import('../identity.js').JsonValue; options?: readonly InputOption[];
 }>;
-export const readInputTypePickerLaunchInput: (value: unknown) => InputTypePickerLaunchInputV1 | null = projectProtocolValue(canonicalReadInputTypePickerLaunchInput);
+export const readInputTypePickerLaunchInput: (value: unknown) => InputTypePickerLaunchInputV1 | null = /* @__PURE__ */ projectProtocolValue(canonicalReadInputTypePickerLaunchInput);
 
 export const readInputPath: (input: unknown, path: string) => unknown = canonicalReadInputPath;
 export const writeInputPath: (input: Readonly<Record<string, unknown>>, path: string, value: unknown) => Record<string, unknown> = canonicalWriteInputPath;
-export const resolveEffectiveInputFields: (spec: Readonly<{ inputHints?: InputHints }>, input: unknown) => readonly EffectiveInputField[] = projectProtocolValue(canonicalResolveEffectiveInputFields);
-export const normalizeInputByFieldHints: (spec: Readonly<{ inputHints?: InputHints }>, input: Record<string, unknown>) => Record<string, unknown> = projectProtocolValue(canonicalNormalizeInputByFieldHints);
+export const resolveEffectiveInputFields: (spec: Readonly<{ inputHints?: InputHints }>, input: unknown,
+  options?: Readonly<{ includeHidden?: boolean; contextSlots?: readonly string[] }>) => readonly EffectiveInputField[] = /* @__PURE__ */ projectProtocolValue(canonicalResolveEffectiveInputFields);
+export const normalizeInputByFieldHints: (spec: Readonly<{ inputHints?: InputHints }>, input: Record<string, unknown>) => Record<string, unknown> = /* @__PURE__ */ projectProtocolValue(canonicalNormalizeInputByFieldHints);
 
 /**
  * The normalized, author-visible Action form contract consumed by UI
@@ -63,22 +64,23 @@ export type ActionFormHints = Omit<ActionInputHints, 'fields'> & Readonly<{
 export const resolveEffectiveActionInputFields: (
   spec: Pick<ActionSpec, 'inputHints'>,
   input: unknown,
-) => readonly EffectiveActionInputField[] = projectProtocolValue(canonicalResolveEffectiveActionInputFields);
+  options?: Readonly<{ includeHidden?: boolean; contextSlots?: readonly string[] }>,
+) => readonly EffectiveActionInputField[] = /* @__PURE__ */ projectProtocolValue(canonicalResolveEffectiveActionInputFields);
 /** Normalizes schema-admitted Action input through the Protocol-owned form owner. */
 export const normalizeActionInputByFieldHints: (
   spec: Pick<ActionSpec, 'inputHints'>,
   input: Record<string, unknown>,
-) => Record<string, unknown> = projectProtocolValue(canonicalNormalizeActionInputByFieldHints);
+) => Record<string, unknown> = /* @__PURE__ */ projectProtocolValue(canonicalNormalizeActionInputByFieldHints);
 /** Stable semantic identity for Action-form option values. */
 export const actionInputOptionValueKey: (
   value: ActionInputOptionValue,
-) => string = projectProtocolValue(canonicalActionInputOptionValueKey);
+) => string = /* @__PURE__ */ projectProtocolValue(canonicalActionInputOptionValueKey);
 /** Compares structured option values by their exact canonical ref, never object identity. */
 export const isSameActionInputOptionValue: (
   left: ActionInputOptionValue,
   right: ActionInputOptionValue,
-) => boolean = projectProtocolValue(canonicalIsSameActionInputOptionValue);
+) => boolean = /* @__PURE__ */ projectProtocolValue(canonicalIsSameActionInputOptionValue);
 /** Reads a draft/control option value through the Protocol's canonical strict schema. */
 export const readActionInputOptionValue: (
   value: unknown,
-) => ActionInputOptionValue | undefined = projectProtocolValue(canonicalReadActionInputOptionValue);
+) => ActionInputOptionValue | undefined = /* @__PURE__ */ projectProtocolValue(canonicalReadActionInputOptionValue);

@@ -44,6 +44,16 @@ export type SessionControlActionInputById = {
             };
         };
         serverId?: string | undefined;
+        initialInput?: {
+            content: {
+                t: 'encrypted';
+                c: string;
+            } | {
+                t: 'plain';
+                v: unknown;
+            };
+            targetMachineId?: string | undefined;
+        } | undefined;
     };
     readonly "session.pending.resetStart.cancel": {
         sessionId: string;
@@ -93,6 +103,7 @@ export type SessionControlActionInputById = {
             providerContributionId: string;
             settingFieldPath: string;
             value: VoiceProviderSettingsJsonValueV1<true>;
+            displayName?: string | undefined;
         } | null;
     };
     readonly "session.context.update": {
@@ -164,14 +175,14 @@ export type SessionControlActionInputById = {
         showToolCalls: boolean | null;
     };
     readonly "session.permission_mode.set": {
-        [x: string]: unknown;
         sessionId: string;
         permissionMode: unknown;
-        applyTiming?: 'immediate' | 'next_prompt' | undefined;
+        applyTiming?: 'immediate' | undefined;
     };
     readonly "session.model.set": {
         [x: string]: unknown;
         sessionId: string;
+        applyTiming?: 'immediate' | 'next_prompt' | undefined;
         modelId?: string | undefined;
         providerConnectionId?: string | null | undefined;
         teamCredentialModel?: {
@@ -311,6 +322,158 @@ export type SessionControlActionInputById = {
         [x: string]: unknown;
         sessionId: string;
         timeoutSeconds?: number | undefined;
+    };
+    readonly "session.config_option.set": {
+        configId: string;
+        valueId: string;
+        sessionId?: string | undefined;
+    };
+    readonly "session.mcp_selection.set": {
+        selection: unknown;
+        sessionActive: boolean;
+        sessionId?: string | undefined;
+    };
+    readonly "session.connected_services_auth.set": {
+        sessionId: string;
+        agentId: string;
+        bindings: {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 2;
+            bindingsByServiceId?: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            }> | undefined;
+        };
+        machineId: string;
+        rematerializeServiceId?: string | undefined;
+        expectedGroupGenerationByServiceId?: Record<string, number> | undefined;
+        teamCredentialBindings?: ({
+            v: 1;
+            slot: {
+                kind: 'provider_model';
+            } | {
+                kind: 'connected_service_purpose';
+                purpose: {
+                    consumer: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    purpose: string;
+                };
+            };
+            resourceId: string;
+            expectedResourceRevision: number;
+            deliveryMode: 'brokered' | 'direct';
+            teamId?: string | undefined;
+        } | {
+            v: 1;
+            slot: {
+                kind: 'provider_model';
+            } | {
+                kind: 'connected_service_purpose';
+                purpose: {
+                    consumer: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    purpose: string;
+                };
+            };
+            resourceId: null;
+        })[] | undefined;
+        previousTeamCredentialBindings?: ({
+            v: 1;
+            slot: {
+                kind: 'provider_model';
+            } | {
+                kind: 'connected_service_purpose';
+                purpose: {
+                    consumer: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    purpose: string;
+                };
+            };
+            resourceId: string;
+            expectedResourceRevision: number;
+            deliveryMode: 'brokered' | 'direct';
+            teamId?: string | undefined;
+        } | {
+            v: 1;
+            slot: {
+                kind: 'provider_model';
+            } | {
+                kind: 'connected_service_purpose';
+                purpose: {
+                    consumer: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    purpose: string;
+                };
+            };
+            resourceId: null;
+        })[] | undefined;
+        teamVisibilityGrantConsent?: {
+            teamId: string;
+        } | undefined;
+        accountSettingsVersionHint?: number | undefined;
+        serverId?: string | null | undefined;
+    };
+    readonly "session.model.unarm": {
+        sessionId: string;
     };
     readonly "session.pending.next": Record<string, never>;
 };
@@ -581,6 +744,169 @@ export type SessionControlActionResultById = {
         ok: false;
         code: 'unsupported' | 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'encryption_material_unavailable' | 'timeout';
         candidates?: readonly string[] | undefined;
+    };
+    readonly "session.config_option.set": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "session.mcp_selection.set": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "session.connected_services_auth.set": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "session.model.unarm": {
+        ok: true;
+        status: 'applied' | 'already_active';
+        activeSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        reversal?: {
+            owner: 'active';
+            scope: {
+                serverId: string;
+                accountId: string;
+                sessionId: string;
+            };
+            runId: string;
+            before: {
+                agentTargetKey: string;
+                providerConnectionId: null;
+                modelId: string;
+            } | {
+                agentTargetKey: string;
+                providerConnectionId: string;
+                modelId: string;
+            };
+            applied: {
+                agentTargetKey: string;
+                providerConnectionId: null;
+                modelId: string;
+            } | {
+                agentTargetKey: string;
+                providerConnectionId: string;
+                modelId: string;
+            };
+            updatedAt: number;
+        } | {
+            owner: 'inactive';
+            scope: {
+                serverId: string;
+                accountId: string;
+                sessionId: string;
+            };
+            before: {
+                agentTargetKey: string;
+                providerConnectionId: null;
+                modelId: string;
+            } | {
+                agentTargetKey: string;
+                providerConnectionId: string;
+                modelId: string;
+            };
+            applied: {
+                agentTargetKey: string;
+                providerConnectionId: null;
+                modelId: string;
+            } | {
+                agentTargetKey: string;
+                providerConnectionId: string;
+                modelId: string;
+            };
+            updatedAt: number;
+        } | undefined;
+    } | {
+        ok: true;
+        status: 'armed';
+        activeSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        requestedSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+    } | {
+        ok: false;
+        status: 'unsupported' | 'restart_required' | 'superseded' | 'apply_failed' | 'publication_failed_rolled_back';
+        activeSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        requestedSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        reason?: string | undefined;
+    } | {
+        ok: false;
+        status: 'reconciliation_required';
+        activeSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        } | null;
+        requestedSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        reason?: string | undefined;
+    } | {
+        ok: false;
+        status: 'owner_unavailable';
+        activeSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        } | null;
+        requestedSelection: {
+            agentTargetKey: string;
+            providerConnectionId: null;
+            modelId: string;
+        } | {
+            agentTargetKey: string;
+            providerConnectionId: string;
+            modelId: string;
+        };
+        reason?: string | undefined;
     };
     readonly "session.pending.next": {
         status: 'opened' | 'none' | 'unavailable';

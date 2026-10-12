@@ -14,6 +14,7 @@ export type IntentStartActionInputById = {
         target?: {
             kind: 'detached';
         } | undefined;
+        cwd?: string | undefined;
         outputs?: 'walkthrough'[] | undefined;
         comparisonId?: string | undefined;
         narrator?: {
@@ -48,7 +49,7 @@ export type IntentStartActionInputById = {
             worktreeRoot: string | null;
             baseRef: {
                 [x: string]: unknown;
-                source: 'explicit' | 'branch_upstream' | 'default_branch' | 'unavailable';
+                source: 'unavailable' | 'explicit' | 'branch_upstream' | 'default_branch';
                 ref: string | null;
             };
             selectedPaths: string[];
@@ -217,6 +218,9 @@ export type IntentStartActionInputById = {
             modelId?: string | undefined;
         } | undefined;
         sessionId?: string | undefined;
+        target?: {
+            kind: 'detached';
+        } | undefined;
         reviewRunIds?: string[] | undefined;
     };
     readonly "review.explain_findings": {
@@ -230,6 +234,9 @@ export type IntentStartActionInputById = {
         runId: string;
         instructions?: string | undefined;
         sessionId?: string | undefined;
+        target?: {
+            kind: 'detached';
+        } | undefined;
         reviewRunIds?: string[] | undefined;
     };
     readonly "subagents.plan.start": {

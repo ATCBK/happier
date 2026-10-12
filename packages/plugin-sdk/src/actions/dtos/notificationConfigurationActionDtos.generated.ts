@@ -52,6 +52,13 @@ export type NotificationConfigurationActionInputById = {
     };
     readonly "notifications.desktop.permission.read": Record<string, never>;
     readonly "notifications.desktop.permission.request": Record<string, never>;
+    readonly "notifications.push.tokens.list": Record<string, never>;
+    readonly "notifications.push.tokens.remove": {
+        tokenId: string;
+    };
+    readonly "notifications.push.permission.read": Record<string, never>;
+    readonly "notifications.push.permission.request": Record<string, never>;
+    readonly "notifications.push.register": Record<string, never>;
 };
 export type NotificationConfigurationActionResultById = {
     readonly "notifications.webhooks.list": {
@@ -92,5 +99,37 @@ export type NotificationConfigurationActionResultById = {
     };
     readonly "notifications.desktop.permission.request": {
         status: 'granted' | 'notGranted';
+    };
+    readonly "notifications.push.tokens.list": {
+        tokens: {
+            tokenId: string;
+            fingerprint: string;
+            isCurrentDevice: boolean;
+            clientServerUrl: string | null;
+            createdAt: number;
+            updatedAt: number;
+        }[];
+    };
+    readonly "notifications.push.tokens.remove": {
+        tokenId: string;
+        removed: true;
+    };
+    readonly "notifications.push.permission.read": {
+        status: 'ready';
+        permission: {
+            status: 'granted' | 'unsupported' | 'denied' | 'undetermined';
+            granted: boolean;
+            canAskAgain: boolean;
+        };
+    } | {
+        status: 'unavailable';
+        reason: 'runtime_unavailable' | 'runtime_timeout';
+    };
+    readonly "notifications.push.permission.request": {
+        decision: 'prime' | 'open_system_settings' | 'skip_push_disabled' | 'skip_unsupported' | 'skip_already_granted' | 'skip_already_declined' | 'skip_cannot_ask_again' | 'skip_runtime_unavailable';
+        granted: boolean;
+    };
+    readonly "notifications.push.register": {
+        status: 'reconciled';
     };
 };

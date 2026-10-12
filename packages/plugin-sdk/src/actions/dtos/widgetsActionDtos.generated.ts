@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2 } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type WidgetsActionInputById = {
     readonly "widgets.catalog.list": {
@@ -148,16 +148,7 @@ export type WidgetsActionInputById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: unknown;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1Input<true>;
                     inputs: {
                         title?: string | undefined;
                         description?: string | undefined;
@@ -173,7 +164,7 @@ export type WidgetsActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -181,11 +172,13 @@ export type WidgetsActionInputById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: unknown;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: unknown;
                             disabledWhen?: unknown;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -210,6 +203,10 @@ export type WidgetsActionInputById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -223,6 +220,10 @@ export type WidgetsActionInputById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
         area?: 'main' | 'aside' | undefined;
         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -540,6 +541,47 @@ export type WidgetsActionInputById = {
             instanceId: string;
         };
         frameStyle: 'card' | 'plain' | null;
+    };
+    readonly "widgets.item.network.set": {
+        ref: {
+            surface: {
+                serverId: string;
+                accountId: string;
+                owner: {
+                    kind: 'home';
+                } | {
+                    kind: 'sessionBoard';
+                    sessionId: string;
+                } | {
+                    kind: 'companion';
+                    sessionId: string;
+                } | {
+                    kind: 'workBoard';
+                    boardId: string;
+                } | {
+                    kind: 'project';
+                    projectId: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'pluginArea';
+                    pluginId: string;
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'corePage';
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                };
+                artifactId?: string | undefined;
+            };
+            instanceId: string;
+        };
+        network: {
+            networkOrigins?: string[] | undefined;
+            network?: 'none' | 'open' | undefined;
+        };
     };
     readonly "widgets.item.inputs.get": {
         ref: {
@@ -872,16 +914,7 @@ export type WidgetsActionInputById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: unknown;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1Input<true>;
                             inputs: {
                                 title?: string | undefined;
                                 description?: string | undefined;
@@ -897,7 +930,7 @@ export type WidgetsActionInputById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -905,11 +938,13 @@ export type WidgetsActionInputById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: unknown;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: unknown;
                                     disabledWhen?: unknown;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -934,6 +969,10 @@ export type WidgetsActionInputById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -947,6 +986,10 @@ export type WidgetsActionInputById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -954,8 +997,9 @@ export type WidgetsActionInputById = {
             }[];
             width?: 'full' | 'half' | undefined;
             title?: string | undefined;
+            titleKey?: string | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
-            dividers?: 'hairline' | 'none' | undefined;
+            dividers?: 'none' | 'hairline' | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: unknown;
@@ -1044,7 +1088,7 @@ export type WidgetsActionInputById = {
             };
         };
         width?: 'full' | 'half' | undefined;
-        dividers?: 'hairline' | 'none' | undefined;
+        dividers?: 'none' | 'hairline' | undefined;
     };
     readonly "widgets.group.inputs.set": {
         ref: {
@@ -1273,16 +1317,7 @@ export type WidgetsActionInputById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: unknown;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1Input<true>;
                                 inputs: {
                                     title?: string | undefined;
                                     description?: string | undefined;
@@ -1298,7 +1333,7 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -1306,11 +1341,13 @@ export type WidgetsActionInputById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: unknown;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
                                         disabledWhen?: unknown;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -1335,6 +1372,10 @@ export type WidgetsActionInputById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -1348,6 +1389,10 @@ export type WidgetsActionInputById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -1395,16 +1440,7 @@ export type WidgetsActionInputById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: unknown;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1Input<true>;
                                     inputs: {
                                         title?: string | undefined;
                                         description?: string | undefined;
@@ -1420,7 +1456,7 @@ export type WidgetsActionInputById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -1428,11 +1464,13 @@ export type WidgetsActionInputById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: unknown;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: unknown;
                                             disabledWhen?: unknown;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -1457,6 +1495,10 @@ export type WidgetsActionInputById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -1470,6 +1512,10 @@ export type WidgetsActionInputById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -1477,8 +1523,9 @@ export type WidgetsActionInputById = {
                     }[];
                     width?: 'full' | 'half' | undefined;
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
-                    dividers?: 'hairline' | 'none' | undefined;
+                    dividers?: 'none' | 'hairline' | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: unknown;
@@ -1745,16 +1792,7 @@ export type WidgetsActionInputById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: unknown;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1Input<true>;
             inputs: {
                 title?: string | undefined;
                 description?: string | undefined;
@@ -1770,7 +1808,7 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -1778,11 +1816,13 @@ export type WidgetsActionInputById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: unknown;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
                     disabledWhen?: unknown;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -1805,6 +1845,10 @@ export type WidgetsActionInputById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
     };
     readonly "widgets.definition.update": {
@@ -1825,21 +1869,16 @@ export type WidgetsActionInputById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | null | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | null | undefined;
             sizeDeclaration?: {
                 sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             } | undefined;
             name?: string | undefined;
-            body?: {
-                kind: 'declarative';
-                document: unknown;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            } | undefined;
+            body?: WidgetDefinitionBodyV1Input<true> | undefined;
             inputs?: {
                 title?: string | undefined;
                 description?: string | undefined;
@@ -1855,7 +1894,7 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -1863,11 +1902,13 @@ export type WidgetsActionInputById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: unknown;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
                     disabledWhen?: unknown;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -1946,7 +1987,7 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -1954,11 +1995,13 @@ export type WidgetsActionInputById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: unknown;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
                     disabledWhen?: unknown;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -2009,16 +2052,7 @@ export type WidgetsActionInputById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: unknown;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1Input<true>;
                                 inputs: {
                                     title?: string | undefined;
                                     description?: string | undefined;
@@ -2034,7 +2068,7 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -2042,11 +2076,13 @@ export type WidgetsActionInputById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: unknown;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
                                         disabledWhen?: unknown;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -2071,6 +2107,10 @@ export type WidgetsActionInputById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -2084,6 +2124,10 @@ export type WidgetsActionInputById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -2102,7 +2146,8 @@ export type WidgetsActionInputById = {
                 }> | undefined;
                 width?: 'full' | 'half' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
-                dividers?: 'hairline' | 'none' | undefined;
+                titleKey?: string | undefined;
+                dividers?: 'none' | 'hairline' | undefined;
             };
             description?: string | undefined;
             origin?: {
@@ -2135,7 +2180,7 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -2143,11 +2188,13 @@ export type WidgetsActionInputById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: unknown;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
                     disabledWhen?: unknown;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -2198,16 +2245,7 @@ export type WidgetsActionInputById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: unknown;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1Input<true>;
                                 inputs: {
                                     title?: string | undefined;
                                     description?: string | undefined;
@@ -2223,7 +2261,7 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -2231,11 +2269,13 @@ export type WidgetsActionInputById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: unknown;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
                                         disabledWhen?: unknown;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -2260,6 +2300,10 @@ export type WidgetsActionInputById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -2273,6 +2317,10 @@ export type WidgetsActionInputById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -2291,7 +2339,8 @@ export type WidgetsActionInputById = {
                 }> | undefined;
                 width?: 'full' | 'half' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
-                dividers?: 'hairline' | 'none' | undefined;
+                titleKey?: string | undefined;
+                dividers?: 'none' | 'hairline' | undefined;
             } | undefined;
             origin?: {
                 kind: 'home' | 'project' | 'pluginArea' | 'corePage';
@@ -2450,19 +2499,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -2475,7 +2512,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -2483,11 +2520,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -2515,6 +2554,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             title: string;
@@ -2529,7 +2572,7 @@ export type WidgetsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'period' | 'session' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace';
+                    hostType: 'session' | 'workspace' | 'machine';
                 } | undefined;
                 contextMode?: 'follow' | 'own' | undefined;
                 required?: boolean | undefined;
@@ -2537,11 +2580,13 @@ export type WidgetsActionResultById = {
                 listSeparator?: 'comma' | 'newline' | undefined;
                 maxSelections?: number | undefined;
                 visibleWhen?: InputPredicate | undefined;
+                visibleWhenContextSlot?: string | undefined;
                 requiredWhen?: InputPredicate | undefined;
                 disabledWhen?: InputPredicate | undefined;
                 optionsSourceId?: string | undefined;
                 connectedAccountOptions?: true | undefined;
                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                prompt?: string | undefined;
                 description?: string | undefined;
                 placeholder?: string | undefined;
                 options?: readonly {
@@ -2631,19 +2676,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -2656,7 +2689,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -2664,11 +2697,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -2696,6 +2731,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -2711,6 +2750,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             area?: 'main' | 'aside' | undefined;
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -2757,19 +2800,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -2782,7 +2813,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -2790,11 +2821,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -2822,6 +2855,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -2837,6 +2874,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -2884,19 +2925,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -2909,7 +2938,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -2917,11 +2946,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -2949,6 +2980,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -2964,6 +2999,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -2971,8 +3010,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -3035,19 +3075,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -3060,7 +3088,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -3068,11 +3096,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -3100,6 +3130,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -3115,6 +3149,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -3162,19 +3200,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -3187,7 +3213,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -3195,11 +3221,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -3227,6 +3255,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -3242,6 +3274,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -3249,8 +3285,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -3307,19 +3344,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -3332,7 +3357,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -3340,11 +3365,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -3372,6 +3399,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -3387,6 +3418,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -3434,19 +3469,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -3459,7 +3482,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -3467,11 +3490,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -3499,6 +3524,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -3514,6 +3543,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -3521,8 +3554,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -3579,19 +3613,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -3604,7 +3626,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -3612,11 +3634,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -3644,6 +3668,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -3659,6 +3687,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -3706,19 +3738,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -3731,7 +3751,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -3739,11 +3759,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -3771,6 +3793,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -3786,6 +3812,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -3793,8 +3823,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -3852,19 +3883,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -3877,7 +3896,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -3885,11 +3904,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -3917,6 +3938,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -3932,6 +3957,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -3979,19 +4008,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -4004,7 +4021,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -4012,11 +4029,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -4044,6 +4063,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -4059,6 +4082,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -4066,8 +4093,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -4170,19 +4198,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -4195,7 +4211,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -4203,11 +4219,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -4235,6 +4253,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -4250,6 +4272,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -4291,19 +4317,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -4316,7 +4330,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -4324,11 +4338,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -4356,6 +4372,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -4371,6 +4391,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -4418,19 +4442,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -4443,7 +4455,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -4451,11 +4463,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -4483,6 +4497,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -4498,6 +4516,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -4505,8 +4527,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -4597,19 +4620,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -4622,7 +4633,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -4630,11 +4641,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -4662,6 +4675,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -4677,6 +4694,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -4718,19 +4739,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -4743,7 +4752,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -4751,11 +4760,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -4783,6 +4794,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -4798,6 +4813,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -4845,19 +4864,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -4870,7 +4877,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -4878,11 +4885,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -4910,6 +4919,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -4925,6 +4938,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -4932,8 +4949,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -5024,19 +5042,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -5049,7 +5055,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -5057,11 +5063,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -5089,6 +5097,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -5104,6 +5116,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -5145,19 +5161,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -5170,7 +5174,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -5178,11 +5182,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -5210,6 +5216,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -5225,6 +5235,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -5272,19 +5286,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -5297,7 +5299,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -5305,11 +5307,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -5337,6 +5341,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -5352,6 +5360,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -5359,8 +5371,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -5487,19 +5500,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -5512,7 +5513,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -5520,11 +5521,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -5552,6 +5555,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -5567,6 +5574,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -5608,19 +5619,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -5633,7 +5632,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -5641,11 +5640,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -5673,6 +5674,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -5688,6 +5693,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -5735,19 +5744,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -5760,7 +5757,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -5768,11 +5765,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -5800,6 +5799,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -5815,6 +5818,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -5822,8 +5829,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -5914,19 +5922,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -5939,7 +5935,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -5947,11 +5943,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -5979,6 +5977,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -5994,6 +5996,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -6035,19 +6041,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -6060,7 +6054,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -6068,11 +6062,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -6100,6 +6096,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -6115,6 +6115,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -6162,19 +6166,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -6187,7 +6179,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -6195,11 +6187,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -6227,6 +6221,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -6242,6 +6240,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -6249,8 +6251,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -6341,19 +6344,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -6366,7 +6357,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -6374,11 +6365,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -6406,6 +6399,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -6421,6 +6418,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -6462,19 +6463,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -6487,7 +6476,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -6495,11 +6484,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -6527,6 +6518,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -6542,6 +6537,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -6589,19 +6588,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -6614,7 +6601,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -6622,11 +6609,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -6654,6 +6643,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -6669,6 +6662,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -6676,8 +6673,431 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
+            context?: Record<string, {
+                kind: 'value';
+                value: string | number | boolean | readonly JsonValue[] | {
+                    readonly [key: string]: JsonValue;
+                } | null;
+            } | {
+                kind: 'context';
+                slot: string;
+            } | {
+                kind: 'viewer';
+                purpose: string;
+            }> | undefined;
+            area?: 'main' | 'aside' | undefined;
+        } | null | undefined;
+        area?: 'main' | 'aside' | undefined;
+    };
+    readonly "widgets.item.network.set": {
+        ref: {
+            surface: {
+                serverId: string;
+                accountId: string;
+                owner: {
+                    kind: 'home';
+                } | {
+                    kind: 'sessionBoard';
+                    sessionId: string;
+                } | {
+                    kind: 'companion';
+                    sessionId: string;
+                } | {
+                    kind: 'workBoard';
+                    boardId: string;
+                } | {
+                    kind: 'project';
+                    projectId: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'pluginArea';
+                    pluginId: string;
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'corePage';
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                };
+                artifactId?: string | undefined;
+            };
+            instanceId: string;
+        };
+        instance: {
+            v: 1;
+            id: string;
+            definition: {
+                kind: 'installed';
+                surface: {
+                    pluginId: string;
+                    localId: string;
+                };
+            } | {
+                kind: 'builtin';
+                id: string;
+            } | {
+                kind: 'artifact';
+                artifactId: string;
+            } | {
+                kind: 'inline';
+                definition: {
+                    provenance: {
+                        source: {
+                            kind: 'authored';
+                        } | {
+                            kind: 'session';
+                            serverId: string;
+                            sessionId: string;
+                            itemId: string;
+                        };
+                        authorAccountId?: string | undefined;
+                        author?: {
+                            kind: 'person' | 'agent' | 'plugin';
+                        } | undefined;
+                        createdAt?: number | undefined;
+                    };
+                    sizeDeclaration: {
+                        sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
+                        defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
+                    };
+                    name: string;
+                    body: WidgetDefinitionBodyV1;
+                    inputs: {
+                        fields: readonly {
+                            path: string;
+                            widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                            title: string;
+                            inputType?: {
+                                pluginId: string;
+                                localId: string;
+                            } | {
+                                hostType: 'usageQuery';
+                                field?: 'period' | 'session' | undefined;
+                            } | {
+                                hostType: 'session' | 'workspace' | 'machine';
+                            } | undefined;
+                            contextMode?: 'follow' | 'own' | undefined;
+                            required?: boolean | undefined;
+                            requireExplicitSelection?: boolean | undefined;
+                            listSeparator?: 'comma' | 'newline' | undefined;
+                            maxSelections?: number | undefined;
+                            visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
+                            requiredWhen?: InputPredicate | undefined;
+                            disabledWhen?: InputPredicate | undefined;
+                            optionsSourceId?: string | undefined;
+                            connectedAccountOptions?: true | undefined;
+                            resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
+                            description?: string | undefined;
+                            placeholder?: string | undefined;
+                            options?: readonly {
+                                value: JsonValue;
+                                label: string;
+                                description?: string | undefined;
+                                disabled?: boolean | undefined;
+                            }[] | undefined;
+                        }[];
+                        title?: string | undefined;
+                        description?: string | undefined;
+                        submitLabel?: string | undefined;
+                    };
+                    inputSchema: PluginJsonSchemaV2;
+                    v: 1;
+                    id: string;
+                    description?: string | undefined;
+                    sessionInputPath?: string | undefined;
+                    connectedAccountPurposeBindings?: {
+                        path: string;
+                        purpose: string;
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        nativeServicePath?: string | undefined;
+                    }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
+                };
+            };
+            bindings: Record<string, {
+                kind: 'value';
+                value: string | number | boolean | readonly JsonValue[] | {
+                    readonly [key: string]: JsonValue;
+                } | null;
+            } | {
+                kind: 'context';
+                slot: string;
+            } | {
+                kind: 'viewer';
+                purpose: string;
+            }>;
+            displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
+        } | null;
+        item?: {
+            kind: 'widget';
+            instance: {
+                v: 1;
+                id: string;
+                definition: {
+                    kind: 'installed';
+                    surface: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                } | {
+                    kind: 'builtin';
+                    id: string;
+                } | {
+                    kind: 'artifact';
+                    artifactId: string;
+                } | {
+                    kind: 'inline';
+                    definition: {
+                        provenance: {
+                            source: {
+                                kind: 'authored';
+                            } | {
+                                kind: 'session';
+                                serverId: string;
+                                sessionId: string;
+                                itemId: string;
+                            };
+                            authorAccountId?: string | undefined;
+                            author?: {
+                                kind: 'person' | 'agent' | 'plugin';
+                            } | undefined;
+                            createdAt?: number | undefined;
+                        };
+                        sizeDeclaration: {
+                            sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
+                            defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
+                        };
+                        name: string;
+                        body: WidgetDefinitionBodyV1;
+                        inputs: {
+                            fields: readonly {
+                                path: string;
+                                widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                title: string;
+                                inputType?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | {
+                                    hostType: 'usageQuery';
+                                    field?: 'period' | 'session' | undefined;
+                                } | {
+                                    hostType: 'session' | 'workspace' | 'machine';
+                                } | undefined;
+                                contextMode?: 'follow' | 'own' | undefined;
+                                required?: boolean | undefined;
+                                requireExplicitSelection?: boolean | undefined;
+                                listSeparator?: 'comma' | 'newline' | undefined;
+                                maxSelections?: number | undefined;
+                                visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
+                                requiredWhen?: InputPredicate | undefined;
+                                disabledWhen?: InputPredicate | undefined;
+                                optionsSourceId?: string | undefined;
+                                connectedAccountOptions?: true | undefined;
+                                resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
+                                description?: string | undefined;
+                                placeholder?: string | undefined;
+                                options?: readonly {
+                                    value: JsonValue;
+                                    label: string;
+                                    description?: string | undefined;
+                                    disabled?: boolean | undefined;
+                                }[] | undefined;
+                            }[];
+                            title?: string | undefined;
+                            description?: string | undefined;
+                            submitLabel?: string | undefined;
+                        };
+                        inputSchema: PluginJsonSchemaV2;
+                        v: 1;
+                        id: string;
+                        description?: string | undefined;
+                        sessionInputPath?: string | undefined;
+                        connectedAccountPurposeBindings?: {
+                            path: string;
+                            purpose: string;
+                            consumer: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            nativeServicePath?: string | undefined;
+                        }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
+                    };
+                };
+                bindings: Record<string, {
+                    kind: 'value';
+                    value: string | number | boolean | readonly JsonValue[] | {
+                        readonly [key: string]: JsonValue;
+                    } | null;
+                } | {
+                    kind: 'context';
+                    slot: string;
+                } | {
+                    kind: 'viewer';
+                    purpose: string;
+                }>;
+                displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
+            };
+            size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
+            frameStyle?: 'card' | 'plain' | undefined;
+            area?: 'main' | 'aside' | undefined;
+        } | {
+            kind: 'group';
+            id: string;
+            children: {
+                kind: 'widget';
+                instance: {
+                    v: 1;
+                    id: string;
+                    definition: {
+                        kind: 'installed';
+                        surface: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                    } | {
+                        kind: 'builtin';
+                        id: string;
+                    } | {
+                        kind: 'artifact';
+                        artifactId: string;
+                    } | {
+                        kind: 'inline';
+                        definition: {
+                            provenance: {
+                                source: {
+                                    kind: 'authored';
+                                } | {
+                                    kind: 'session';
+                                    serverId: string;
+                                    sessionId: string;
+                                    itemId: string;
+                                };
+                                authorAccountId?: string | undefined;
+                                author?: {
+                                    kind: 'person' | 'agent' | 'plugin';
+                                } | undefined;
+                                createdAt?: number | undefined;
+                            };
+                            sizeDeclaration: {
+                                sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
+                                defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
+                            };
+                            name: string;
+                            body: WidgetDefinitionBodyV1;
+                            inputs: {
+                                fields: readonly {
+                                    path: string;
+                                    widget: 'number' | 'boolean' | 'text' | 'url' | 'secret' | 'textarea' | 'integer' | 'text_list' | 'select' | 'multiselect' | 'json';
+                                    title: string;
+                                    inputType?: {
+                                        pluginId: string;
+                                        localId: string;
+                                    } | {
+                                        hostType: 'usageQuery';
+                                        field?: 'period' | 'session' | undefined;
+                                    } | {
+                                        hostType: 'session' | 'workspace' | 'machine';
+                                    } | undefined;
+                                    contextMode?: 'follow' | 'own' | undefined;
+                                    required?: boolean | undefined;
+                                    requireExplicitSelection?: boolean | undefined;
+                                    listSeparator?: 'comma' | 'newline' | undefined;
+                                    maxSelections?: number | undefined;
+                                    visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
+                                    requiredWhen?: InputPredicate | undefined;
+                                    disabledWhen?: InputPredicate | undefined;
+                                    optionsSourceId?: string | undefined;
+                                    connectedAccountOptions?: true | undefined;
+                                    resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
+                                    description?: string | undefined;
+                                    placeholder?: string | undefined;
+                                    options?: readonly {
+                                        value: JsonValue;
+                                        label: string;
+                                        description?: string | undefined;
+                                        disabled?: boolean | undefined;
+                                    }[] | undefined;
+                                }[];
+                                title?: string | undefined;
+                                description?: string | undefined;
+                                submitLabel?: string | undefined;
+                            };
+                            inputSchema: PluginJsonSchemaV2;
+                            v: 1;
+                            id: string;
+                            description?: string | undefined;
+                            sessionInputPath?: string | undefined;
+                            connectedAccountPurposeBindings?: {
+                                path: string;
+                                purpose: string;
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                nativeServicePath?: string | undefined;
+                            }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
+                        };
+                    };
+                    bindings: Record<string, {
+                        kind: 'value';
+                        value: string | number | boolean | readonly JsonValue[] | {
+                            readonly [key: string]: JsonValue;
+                        } | null;
+                    } | {
+                        kind: 'context';
+                        slot: string;
+                    } | {
+                        kind: 'viewer';
+                        purpose: string;
+                    }>;
+                    displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
+                };
+                size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
+                frameStyle?: 'card' | 'plain' | undefined;
+                area?: 'main' | 'aside' | undefined;
+            }[];
+            width: 'full' | 'half';
+            frameStyle: 'card' | 'plain';
+            dividers: 'none' | 'hairline';
+            title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -6830,19 +7250,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -6855,7 +7263,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -6863,11 +7271,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -6895,6 +7305,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -6910,6 +7324,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -6951,19 +7369,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -6976,7 +7382,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -6984,11 +7390,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -7016,6 +7424,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -7031,6 +7443,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -7078,19 +7494,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -7103,7 +7507,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -7111,11 +7515,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -7143,6 +7549,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -7158,6 +7568,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -7165,8 +7579,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -7257,19 +7672,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -7282,7 +7685,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -7290,11 +7693,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -7322,6 +7727,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -7337,6 +7746,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -7378,19 +7791,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -7403,7 +7804,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -7411,11 +7812,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -7443,6 +7846,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -7458,6 +7865,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -7505,19 +7916,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -7530,7 +7929,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -7538,11 +7937,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -7570,6 +7971,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -7585,6 +7990,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -7592,8 +8001,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -7722,19 +8132,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -7747,7 +8145,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -7755,11 +8153,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -7787,6 +8187,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -7802,6 +8206,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -7843,19 +8251,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -7868,7 +8264,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -7876,11 +8272,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -7908,6 +8306,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -7923,6 +8325,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -7970,19 +8376,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -7995,7 +8389,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -8003,11 +8397,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -8035,6 +8431,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -8050,6 +8450,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -8057,8 +8461,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -8149,19 +8554,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -8174,7 +8567,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -8182,11 +8575,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -8214,6 +8609,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -8229,6 +8628,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -8270,19 +8673,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -8295,7 +8686,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -8303,11 +8694,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -8335,6 +8728,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -8350,6 +8747,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -8397,19 +8798,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -8422,7 +8811,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -8430,11 +8819,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -8462,6 +8853,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -8477,6 +8872,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -8484,8 +8883,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -8576,19 +8976,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -8601,7 +8989,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -8609,11 +8997,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -8641,6 +9031,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -8656,6 +9050,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -8697,19 +9095,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -8722,7 +9108,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -8730,11 +9116,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -8762,6 +9150,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -8777,6 +9169,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -8824,19 +9220,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -8849,7 +9233,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -8857,11 +9241,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -8889,6 +9275,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -8904,6 +9294,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -8911,8 +9305,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -9003,19 +9398,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -9028,7 +9411,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -9036,11 +9419,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -9068,6 +9453,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -9083,6 +9472,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -9124,19 +9517,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -9149,7 +9530,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -9157,11 +9538,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -9189,6 +9572,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -9204,6 +9591,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -9251,19 +9642,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -9276,7 +9655,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -9284,11 +9663,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -9316,6 +9697,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -9331,6 +9716,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -9338,8 +9727,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -9430,19 +9820,7 @@ export type WidgetsActionResultById = {
                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     };
                     name: string;
-                    body: {
-                        kind: 'declarative';
-                        document: Readonly<{
-                            version: 1;
-                            root: PluginDeclarativeNodeV2;
-                        }>;
-                    } | {
-                        kind: 'installed';
-                        surface: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                    };
+                    body: WidgetDefinitionBodyV1;
                     inputs: {
                         fields: readonly {
                             path: string;
@@ -9455,7 +9833,7 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace';
+                                hostType: 'session' | 'workspace' | 'machine';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
@@ -9463,11 +9841,13 @@ export type WidgetsActionResultById = {
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
                             visibleWhen?: InputPredicate | undefined;
+                            visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
                             disabledWhen?: InputPredicate | undefined;
                             optionsSourceId?: string | undefined;
                             connectedAccountOptions?: true | undefined;
                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                            prompt?: string | undefined;
                             description?: string | undefined;
                             placeholder?: string | undefined;
                             options?: readonly {
@@ -9495,6 +9875,10 @@ export type WidgetsActionResultById = {
                         };
                         nativeServicePath?: string | undefined;
                     }[] | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
             };
             bindings: Record<string, {
@@ -9510,6 +9894,10 @@ export type WidgetsActionResultById = {
                 purpose: string;
             }>;
             displayName?: string | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         } | null;
         item?: {
             kind: 'widget';
@@ -9551,19 +9939,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -9576,7 +9952,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -9584,11 +9960,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -9616,6 +9994,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -9631,6 +10013,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -9678,19 +10064,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -9703,7 +10077,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -9711,11 +10085,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -9743,6 +10119,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -9758,6 +10138,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -9765,8 +10149,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -9855,19 +10240,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -9880,7 +10253,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -9888,11 +10261,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -9920,6 +10295,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -9935,6 +10314,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             area?: 'main' | 'aside' | undefined;
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -9981,19 +10364,7 @@ export type WidgetsActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -10006,7 +10377,7 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -10014,11 +10385,13 @@ export type WidgetsActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -10046,6 +10419,10 @@ export type WidgetsActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -10061,6 +10438,10 @@ export type WidgetsActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
             frameStyle?: 'card' | 'plain' | undefined;
@@ -10108,19 +10489,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -10133,7 +10502,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -10141,11 +10510,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -10173,6 +10544,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -10188,6 +10563,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -10195,8 +10574,9 @@ export type WidgetsActionResultById = {
             }[];
             width: 'full' | 'half';
             frameStyle: 'card' | 'plain';
-            dividers: 'hairline' | 'none';
+            dividers: 'none' | 'hairline';
             title?: string | undefined;
+            titleKey?: string | undefined;
             context?: Record<string, {
                 kind: 'value';
                 value: string | number | boolean | readonly JsonValue[] | {
@@ -10259,19 +10639,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -10284,7 +10652,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -10292,11 +10660,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -10324,6 +10694,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -10339,6 +10713,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -10386,19 +10764,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -10411,7 +10777,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -10419,11 +10785,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -10451,6 +10819,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -10466,6 +10838,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -10473,8 +10849,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -10531,19 +10908,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -10556,7 +10921,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -10564,11 +10929,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -10596,6 +10963,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -10611,6 +10982,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -10658,19 +11033,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -10683,7 +11046,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -10691,11 +11054,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -10723,6 +11088,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -10738,6 +11107,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -10745,8 +11118,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -10803,19 +11177,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -10828,7 +11190,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -10836,11 +11198,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -10868,6 +11232,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -10883,6 +11251,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -10930,19 +11302,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -10955,7 +11315,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -10963,11 +11323,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -10995,6 +11357,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -11010,6 +11376,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -11017,8 +11387,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -11076,19 +11447,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -11101,7 +11460,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -11109,11 +11468,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -11141,6 +11502,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -11156,6 +11521,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -11203,19 +11572,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -11228,7 +11585,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -11236,11 +11593,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -11268,6 +11627,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -11283,6 +11646,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -11290,8 +11657,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -11427,19 +11795,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -11452,7 +11808,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -11460,11 +11816,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -11492,6 +11850,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -11507,6 +11869,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -11554,19 +11920,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -11579,7 +11933,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -11587,11 +11941,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -11619,6 +11975,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -11634,6 +11994,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -11641,8 +12005,9 @@ export type WidgetsActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -11766,19 +12131,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -11791,7 +12144,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -11799,11 +12152,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -11831,6 +12186,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -11846,6 +12205,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -11893,19 +12256,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -11918,7 +12269,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -11926,11 +12277,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -11958,6 +12311,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -11973,6 +12330,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -11980,8 +12341,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -12111,19 +12473,7 @@ export type WidgetsActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -12136,7 +12486,7 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -12144,11 +12494,13 @@ export type WidgetsActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -12176,6 +12528,10 @@ export type WidgetsActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -12191,6 +12547,10 @@ export type WidgetsActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -12238,19 +12598,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -12263,7 +12611,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -12271,11 +12619,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -12303,6 +12653,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -12318,6 +12672,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -12325,8 +12683,9 @@ export type WidgetsActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -12450,19 +12809,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -12475,7 +12822,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -12483,11 +12830,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -12515,6 +12864,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -12530,6 +12883,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -12577,19 +12934,7 @@ export type WidgetsActionResultById = {
                                         defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                     };
                                     name: string;
-                                    body: {
-                                        kind: 'declarative';
-                                        document: Readonly<{
-                                            version: 1;
-                                            root: PluginDeclarativeNodeV2;
-                                        }>;
-                                    } | {
-                                        kind: 'installed';
-                                        surface: {
-                                            pluginId: string;
-                                            localId: string;
-                                        };
-                                    };
+                                    body: WidgetDefinitionBodyV1;
                                     inputs: {
                                         fields: readonly {
                                             path: string;
@@ -12602,7 +12947,7 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace';
+                                                hostType: 'session' | 'workspace' | 'machine';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
@@ -12610,11 +12955,13 @@ export type WidgetsActionResultById = {
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
                                             visibleWhen?: InputPredicate | undefined;
+                                            visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
                                             disabledWhen?: InputPredicate | undefined;
                                             optionsSourceId?: string | undefined;
                                             connectedAccountOptions?: true | undefined;
                                             resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                            prompt?: string | undefined;
                                             description?: string | undefined;
                                             placeholder?: string | undefined;
                                             options?: readonly {
@@ -12642,6 +12989,10 @@ export type WidgetsActionResultById = {
                                         };
                                         nativeServicePath?: string | undefined;
                                     }[] | undefined;
+                                    networkOverride?: {
+                                        networkOrigins?: string[] | undefined;
+                                        network?: 'none' | 'open' | undefined;
+                                    } | undefined;
                                 };
                             };
                             bindings: Record<string, {
@@ -12657,6 +13008,10 @@ export type WidgetsActionResultById = {
                                 purpose: string;
                             }>;
                             displayName?: string | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                         size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                         frameStyle?: 'card' | 'plain' | undefined;
@@ -12664,8 +13019,9 @@ export type WidgetsActionResultById = {
                     }[];
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     title?: string | undefined;
+                    titleKey?: string | undefined;
                     context?: Record<string, {
                         kind: 'value';
                         value: string | number | boolean | readonly JsonValue[] | {
@@ -12952,7 +13308,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -12960,11 +13316,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -12980,7 +13338,7 @@ export type WidgetsActionResultById = {
             };
             inputSchema: PluginJsonSchemaV2;
             artifactId: string;
-            bodyKind: 'installed' | 'declarative';
+            bodyKind: 'installed' | 'builtin' | 'declarative' | 'html';
             resources: {
                 pluginId: string;
                 localId: string;
@@ -12996,6 +13354,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
             author?: {
                 kind: 'person' | 'agent' | 'plugin';
             } | undefined;
@@ -13031,19 +13393,7 @@ export type WidgetsActionResultById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: Readonly<{
-                    version: 1;
-                    root: PluginDeclarativeNodeV2;
-                }>;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1;
             inputs: {
                 fields: readonly {
                     path: string;
@@ -13056,7 +13406,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13064,11 +13414,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13096,6 +13448,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
         placementSummary?: {
             placements: {
@@ -13158,19 +13514,7 @@ export type WidgetsActionResultById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: Readonly<{
-                    version: 1;
-                    root: PluginDeclarativeNodeV2;
-                }>;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1;
             inputs: {
                 fields: readonly {
                     path: string;
@@ -13183,7 +13527,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13191,11 +13535,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13223,6 +13569,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
     };
     readonly "widgets.definition.update": {
@@ -13247,19 +13597,7 @@ export type WidgetsActionResultById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: Readonly<{
-                    version: 1;
-                    root: PluginDeclarativeNodeV2;
-                }>;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1;
             inputs: {
                 fields: readonly {
                     path: string;
@@ -13272,7 +13610,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13280,11 +13618,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13312,6 +13652,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
     };
     readonly "widgets.definition.duplicate": {
@@ -13336,19 +13680,7 @@ export type WidgetsActionResultById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: Readonly<{
-                    version: 1;
-                    root: PluginDeclarativeNodeV2;
-                }>;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1;
             inputs: {
                 fields: readonly {
                     path: string;
@@ -13361,7 +13693,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13369,11 +13701,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13401,6 +13735,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
     };
     readonly "widgets.definition.delete": {
@@ -13429,19 +13767,7 @@ export type WidgetsActionResultById = {
                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             };
             name: string;
-            body: {
-                kind: 'declarative';
-                document: Readonly<{
-                    version: 1;
-                    root: PluginDeclarativeNodeV2;
-                }>;
-            } | {
-                kind: 'installed';
-                surface: {
-                    pluginId: string;
-                    localId: string;
-                };
-            };
+            body: WidgetDefinitionBodyV1;
             inputs: {
                 fields: readonly {
                     path: string;
@@ -13454,7 +13780,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13462,11 +13788,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13494,6 +13822,10 @@ export type WidgetsActionResultById = {
                 };
                 nativeServicePath?: string | undefined;
             }[] | undefined;
+            networkOverride?: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            } | undefined;
         };
         suggestedBindings: Record<string, {
             kind: 'value';
@@ -13523,7 +13855,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13531,11 +13863,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13553,7 +13887,7 @@ export type WidgetsActionResultById = {
             group: {
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     instance: {
@@ -13592,19 +13926,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -13617,7 +13939,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -13625,11 +13947,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -13657,6 +13981,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -13672,6 +14000,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -13690,6 +14022,7 @@ export type WidgetsActionResultById = {
                     kind: 'viewer';
                     purpose: string;
                 }> | undefined;
+                titleKey?: string | undefined;
             };
             artifactId: string;
             childCount: number;
@@ -13734,7 +14067,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13742,11 +14075,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13764,7 +14099,7 @@ export type WidgetsActionResultById = {
             group: {
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     instance: {
@@ -13803,19 +14138,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -13828,7 +14151,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -13836,11 +14159,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -13868,6 +14193,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -13883,6 +14212,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -13901,6 +14234,7 @@ export type WidgetsActionResultById = {
                     kind: 'viewer';
                     purpose: string;
                 }> | undefined;
+                titleKey?: string | undefined;
             };
             v: 1;
             id: string;
@@ -13941,7 +14275,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -13949,11 +14283,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -13971,7 +14307,7 @@ export type WidgetsActionResultById = {
             group: {
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     instance: {
@@ -14010,19 +14346,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -14035,7 +14359,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -14043,11 +14367,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -14075,6 +14401,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -14090,6 +14420,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -14108,6 +14442,7 @@ export type WidgetsActionResultById = {
                     kind: 'viewer';
                     purpose: string;
                 }> | undefined;
+                titleKey?: string | undefined;
             };
             v: 1;
             id: string;
@@ -14148,7 +14483,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -14156,11 +14491,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -14178,7 +14515,7 @@ export type WidgetsActionResultById = {
             group: {
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     instance: {
@@ -14217,19 +14554,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -14242,7 +14567,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -14250,11 +14575,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -14282,6 +14609,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -14297,6 +14628,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -14315,6 +14650,7 @@ export type WidgetsActionResultById = {
                     kind: 'viewer';
                     purpose: string;
                 }> | undefined;
+                titleKey?: string | undefined;
             };
             v: 1;
             id: string;
@@ -14355,7 +14691,7 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace';
+                        hostType: 'session' | 'workspace' | 'machine';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
@@ -14363,11 +14699,13 @@ export type WidgetsActionResultById = {
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
                     visibleWhen?: InputPredicate | undefined;
+                    visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
                     disabledWhen?: InputPredicate | undefined;
                     optionsSourceId?: string | undefined;
                     connectedAccountOptions?: true | undefined;
                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                    prompt?: string | undefined;
                     description?: string | undefined;
                     placeholder?: string | undefined;
                     options?: readonly {
@@ -14385,7 +14723,7 @@ export type WidgetsActionResultById = {
             group: {
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     instance: {
@@ -14424,19 +14762,7 @@ export type WidgetsActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -14449,7 +14775,7 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -14457,11 +14783,13 @@ export type WidgetsActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -14489,6 +14817,10 @@ export type WidgetsActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -14504,6 +14836,10 @@ export type WidgetsActionResultById = {
                             purpose: string;
                         }>;
                         v: 1;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                         displayName?: string | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
@@ -14522,6 +14858,7 @@ export type WidgetsActionResultById = {
                     kind: 'viewer';
                     purpose: string;
                 }> | undefined;
+                titleKey?: string | undefined;
             };
             v: 1;
             id: string;
@@ -14566,5 +14903,12 @@ export type WidgetsActionResultById = {
             title: string;
             sourceKind: 'declarative' | 'widget' | 'walkthrough' | 'hostedHtml';
         } | undefined;
+        effectiveNetwork?: {
+            network: 'none' | 'open' | 'origins';
+            networkOrigins: string[];
+        } | undefined;
+        notices?: {
+            code: 'agent_html_network_off';
+        }[] | undefined;
     };
 };

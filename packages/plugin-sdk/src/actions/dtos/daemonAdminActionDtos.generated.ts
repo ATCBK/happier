@@ -55,26 +55,6 @@ export type DaemonAdminActionInputById = {
         previewOnly?: boolean | undefined;
         expectedDigest?: string | null | undefined;
     };
-    readonly "daemon.filesystem.readFile": {
-        [x: string]: unknown;
-        path: string;
-    };
-    readonly "daemon.filesystem.writeFile": {
-        [x: string]: unknown;
-        path: string;
-        content: string;
-        expectedHash?: string | null | undefined;
-    };
-    readonly "daemon.filesystem.listDirectory": {
-        [x: string]: unknown;
-        path: string;
-        includeGitIgnore?: boolean | undefined;
-    };
-    readonly "daemon.filesystem.getDirectoryTree": {
-        [x: string]: unknown;
-        path: string;
-        maxDepth: number;
-    };
     readonly "daemon.filesystem.listRoots": Record<string, never>;
     readonly "daemon.filesystem.browseDirectory": {
         [x: string]: unknown;
@@ -107,18 +87,6 @@ export type DaemonAdminActionResultById = {
         readonly [key: string]: JsonValue;
     } | null;
     readonly "daemon.promptRegistry.install": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.filesystem.readFile": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.filesystem.writeFile": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.filesystem.listDirectory": string | number | boolean | readonly JsonValue[] | {
-        readonly [key: string]: JsonValue;
-    } | null;
-    readonly "daemon.filesystem.getDirectoryTree": string | number | boolean | readonly JsonValue[] | {
         readonly [key: string]: JsonValue;
     } | null;
     readonly "daemon.filesystem.listRoots": string | number | boolean | readonly JsonValue[] | {

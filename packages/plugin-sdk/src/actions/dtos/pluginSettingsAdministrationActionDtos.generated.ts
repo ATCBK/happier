@@ -30,6 +30,7 @@ export type PluginSettingsAdministrationActionInputById = {
             machineId: string;
         };
         localId: string;
+        bindingServerIdentityId?: string | null | undefined;
     };
     readonly "plugins.settings.set": {
         pluginId: string;
@@ -45,6 +46,7 @@ export type PluginSettingsAdministrationActionInputById = {
         };
         localId: string;
         value: unknown;
+        bindingServerIdentityId?: string | null | undefined;
         expectedRevision?: string | undefined;
     };
     readonly "plugins.settings.reset": {
@@ -60,6 +62,7 @@ export type PluginSettingsAdministrationActionInputById = {
             machineId: string;
         };
         localId: string;
+        bindingServerIdentityId?: string | null | undefined;
         expectedRevision?: string | undefined;
     };
     readonly "plugins.settings.secret.status": {
@@ -80,6 +83,7 @@ export type PluginSettingsAdministrationActionInputById = {
             serverIdentityId: string;
             machineId: string;
         } | undefined;
+        canonicalOrigin?: string | undefined;
     };
     readonly "plugins.settings.secret.bind": {
         pluginId: string;
@@ -100,6 +104,7 @@ export type PluginSettingsAdministrationActionInputById = {
             serverIdentityId: string;
             machineId: string;
         } | undefined;
+        canonicalOrigin?: string | undefined;
         expectedRevision?: string | undefined;
     };
     readonly "plugins.settings.secret.unbind": {
@@ -120,6 +125,7 @@ export type PluginSettingsAdministrationActionInputById = {
             serverIdentityId: string;
             machineId: string;
         } | undefined;
+        canonicalOrigin?: string | undefined;
         expectedRevision?: string | undefined;
     };
     readonly "plugins.settings.secret.delete": {
@@ -140,11 +146,55 @@ export type PluginSettingsAdministrationActionInputById = {
             serverIdentityId: string;
             machineId: string;
         } | undefined;
+        canonicalOrigin?: string | undefined;
         expectedRevision?: string | undefined;
     };
 };
 export type PluginSettingsAdministrationActionResultById = {
     readonly "plugins.settings.list": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -311,13 +361,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.get": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -484,13 +572,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.set": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -657,13 +783,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.reset": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -830,13 +994,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.secret.status": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -1003,13 +1205,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.secret.bind": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -1176,13 +1416,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.secret.unbind": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -1349,13 +1627,51 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
     readonly "plugins.settings.secret.delete": {
+        ok: false;
+        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
+        errorCode: string;
+        error: string;
+        details?: {
+            kind: 'settings_snapshot';
+            scope: {
+                kind: 'account' | 'daemon';
+            };
+            target: {
+                kind: 'account';
+            } | {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            revision: string;
+            values: Record<string, string | number | boolean | readonly JsonValue[] | {
+                readonly [key: string]: JsonValue;
+            } | null>;
+        } | {
+            localId: string;
+            custody: 'account';
+            target: {
+                kind: 'account';
+            };
+            state: 'configured' | 'missing';
+            revision: string;
+            kind: 'secret_snapshot';
+        } | {
+            localId: string;
+            custody: 'daemon';
+            target: {
+                kind: 'daemon';
+                serverIdentityId: string;
+                machineId: string;
+            };
+            state: 'configured' | 'missing' | 'denied' | 'unavailable';
+            revision: string;
+            kind: 'secret_snapshot';
+            canonicalOrigin?: string | undefined;
+        } | undefined;
+    } | {
         ok: true;
         kind: 'plugins.settings.list';
         data: {
@@ -1522,10 +1838,5 @@ export type PluginSettingsAdministrationActionResultById = {
                 kind: 'live';
             };
         };
-    } | {
-        ok: false;
-        kind: 'plugins.settings.list' | 'plugins.settings.get' | 'plugins.settings.set' | 'plugins.settings.reset' | 'plugins.settings.secret.status' | 'plugins.settings.secret.bind' | 'plugins.settings.secret.unbind' | 'plugins.settings.secret.delete';
-        errorCode: string;
-        error: string;
     };
 };

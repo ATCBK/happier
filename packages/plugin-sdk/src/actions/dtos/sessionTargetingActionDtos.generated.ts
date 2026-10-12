@@ -19,6 +19,10 @@ export type SessionTargetingActionInputById = {
         sessionIds: string[];
     };
     readonly "session.list": {
+        project?: {
+            serverId: string;
+            projectKey: string;
+        } | undefined;
         query?: {
             v: 1;
             storage: 'active' | 'archived';
@@ -195,6 +199,11 @@ export type SessionTargetingActionResultById = {
         hasNext: boolean;
         attentionNextCursor?: string | null | undefined;
         attentionHasNext?: boolean | undefined;
+        project?: {
+            serverId: string;
+            projectKey: string;
+        } | undefined;
+        projectFilterUnavailableCount?: number | undefined;
         metadataUpgradeRequiredCount?: number | undefined;
         botFilterUnavailableCount?: number | undefined;
     } | (({
@@ -499,6 +508,11 @@ export type SessionTargetingActionResultById = {
         [x: string]: unknown;
         attentionNextCursor?: string | null | undefined;
         attentionHasNext?: boolean | undefined;
+        project?: {
+            serverId: string;
+            projectKey: string;
+        } | undefined;
+        projectFilterUnavailableCount?: number | undefined;
         queryVersion?: 1 | undefined;
         metadataUpgradeRequiredCount?: number | undefined;
         botFilterUnavailableCount?: number | undefined;

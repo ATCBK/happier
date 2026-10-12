@@ -94,7 +94,7 @@ export type WorkflowEventCatalogActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'period' | 'session' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace';
+                            hostType: 'session' | 'workspace' | 'machine';
                         } | undefined;
                         contextMode?: 'follow' | 'own' | undefined;
                         required?: boolean | undefined;
@@ -102,11 +102,13 @@ export type WorkflowEventCatalogActionResultById = {
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
                         visibleWhen?: InputPredicate | undefined;
+                        visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;
                         disabledWhen?: InputPredicate | undefined;
                         optionsSourceId?: string | undefined;
                         connectedAccountOptions?: true | undefined;
                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                        prompt?: string | undefined;
                         description?: string | undefined;
                         placeholder?: string | undefined;
                         options?: readonly {
@@ -143,7 +145,7 @@ export type WorkflowEventCatalogActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'period' | 'session' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace';
+                            hostType: 'session' | 'workspace' | 'machine';
                         } | undefined;
                         contextMode?: 'follow' | 'own' | undefined;
                         required?: boolean | undefined;
@@ -151,11 +153,13 @@ export type WorkflowEventCatalogActionResultById = {
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
                         visibleWhen?: InputPredicate | undefined;
+                        visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;
                         disabledWhen?: InputPredicate | undefined;
                         optionsSourceId?: string | undefined;
                         connectedAccountOptions?: true | undefined;
                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                        prompt?: string | undefined;
                         description?: string | undefined;
                         placeholder?: string | undefined;
                         options?: readonly {

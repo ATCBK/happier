@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2 } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type HomeHubLayoutActionInputById = {
     readonly "home.reachNudge.dismiss": {
@@ -82,16 +82,7 @@ export type HomeHubLayoutActionInputById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: unknown;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1Input<true>;
                         inputs: {
                             title?: string | undefined;
                             description?: string | undefined;
@@ -107,7 +98,7 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -115,11 +106,13 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: unknown;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
                                 disabledWhen?: unknown;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -144,6 +137,10 @@ export type HomeHubLayoutActionInputById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -157,6 +154,10 @@ export type HomeHubLayoutActionInputById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             position?: {
                 anchorId: string | null;
@@ -208,16 +209,7 @@ export type HomeHubLayoutActionInputById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: unknown;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1Input<true>;
                         inputs: {
                             title?: string | undefined;
                             description?: string | undefined;
@@ -233,7 +225,7 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -241,11 +233,13 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: unknown;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
                                 disabledWhen?: unknown;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -270,6 +264,10 @@ export type HomeHubLayoutActionInputById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -283,6 +281,10 @@ export type HomeHubLayoutActionInputById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             } | undefined;
             expectedPresentation?: {
                 frameStyle: 'card' | 'plain' | null;
@@ -378,16 +380,7 @@ export type HomeHubLayoutActionInputById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: unknown;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1Input<true>;
                                 inputs: {
                                     title?: string | undefined;
                                     description?: string | undefined;
@@ -403,7 +396,7 @@ export type HomeHubLayoutActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -411,11 +404,13 @@ export type HomeHubLayoutActionInputById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: unknown;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
                                         disabledWhen?: unknown;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -440,6 +435,10 @@ export type HomeHubLayoutActionInputById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -453,6 +452,10 @@ export type HomeHubLayoutActionInputById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -460,8 +463,9 @@ export type HomeHubLayoutActionInputById = {
                 }[];
                 width?: 'full' | 'half' | undefined;
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
-                dividers?: 'hairline' | 'none' | undefined;
+                dividers?: 'none' | 'hairline' | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: unknown;
@@ -482,7 +486,7 @@ export type HomeHubLayoutActionInputById = {
             kind: 'group_set';
             instanceId: string;
             width?: 'full' | 'half' | undefined;
-            dividers?: 'hairline' | 'none' | undefined;
+            dividers?: 'none' | 'hairline' | undefined;
         } | {
             kind: 'group_inputs';
             instanceId: string;
@@ -536,16 +540,7 @@ export type HomeHubLayoutActionInputById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: unknown;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1Input<true>;
                         inputs: {
                             title?: string | undefined;
                             description?: string | undefined;
@@ -561,7 +556,7 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -569,11 +564,13 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: unknown;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
                                 disabledWhen?: unknown;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -598,6 +595,10 @@ export type HomeHubLayoutActionInputById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -611,6 +612,10 @@ export type HomeHubLayoutActionInputById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             groupId?: string | undefined;
             toIndex?: number | undefined;
@@ -660,6 +665,13 @@ export type HomeHubLayoutActionInputById = {
             kind: 'inputs_reset';
             instanceId: string;
             paths?: string[] | undefined;
+        } | {
+            kind: 'network';
+            instanceId: string;
+            network: {
+                networkOrigins?: string[] | undefined;
+                network?: 'none' | 'open' | undefined;
+            };
         };
     };
 };
@@ -713,19 +725,7 @@ export type HomeHubLayoutActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -738,7 +738,7 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -746,11 +746,13 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -778,6 +780,10 @@ export type HomeHubLayoutActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -793,6 +799,10 @@ export type HomeHubLayoutActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -840,19 +850,7 @@ export type HomeHubLayoutActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -865,7 +863,7 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -873,11 +871,13 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -905,6 +905,10 @@ export type HomeHubLayoutActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -920,6 +924,10 @@ export type HomeHubLayoutActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -927,8 +935,9 @@ export type HomeHubLayoutActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -996,19 +1005,7 @@ export type HomeHubLayoutActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -1021,7 +1018,7 @@ export type HomeHubLayoutActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -1029,11 +1026,13 @@ export type HomeHubLayoutActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -1061,6 +1060,10 @@ export type HomeHubLayoutActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -1076,6 +1079,10 @@ export type HomeHubLayoutActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             frameStyle?: 'card' | 'plain' | undefined;
@@ -1128,19 +1135,7 @@ export type HomeHubLayoutActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -1153,7 +1148,7 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -1161,11 +1156,13 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -1193,6 +1190,10 @@ export type HomeHubLayoutActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -1208,6 +1209,10 @@ export type HomeHubLayoutActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -1215,8 +1220,9 @@ export type HomeHubLayoutActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -1274,19 +1280,7 @@ export type HomeHubLayoutActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -1299,7 +1293,7 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -1307,11 +1301,13 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -1339,6 +1335,10 @@ export type HomeHubLayoutActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -1354,6 +1354,10 @@ export type HomeHubLayoutActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -1407,19 +1411,7 @@ export type HomeHubLayoutActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -1432,7 +1424,7 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -1440,11 +1432,13 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -1472,6 +1466,10 @@ export type HomeHubLayoutActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -1487,6 +1485,10 @@ export type HomeHubLayoutActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                 frameStyle?: 'card' | 'plain' | undefined;
@@ -1534,19 +1536,7 @@ export type HomeHubLayoutActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -1559,7 +1549,7 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -1567,11 +1557,13 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -1599,6 +1591,10 @@ export type HomeHubLayoutActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -1614,6 +1610,10 @@ export type HomeHubLayoutActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -1621,8 +1621,9 @@ export type HomeHubLayoutActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -1690,19 +1691,7 @@ export type HomeHubLayoutActionResultById = {
                             defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         };
                         name: string;
-                        body: {
-                            kind: 'declarative';
-                            document: Readonly<{
-                                version: 1;
-                                root: PluginDeclarativeNodeV2;
-                            }>;
-                        } | {
-                            kind: 'installed';
-                            surface: {
-                                pluginId: string;
-                                localId: string;
-                            };
-                        };
+                        body: WidgetDefinitionBodyV1;
                         inputs: {
                             fields: readonly {
                                 path: string;
@@ -1715,7 +1704,7 @@ export type HomeHubLayoutActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace';
+                                    hostType: 'session' | 'workspace' | 'machine';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
@@ -1723,11 +1712,13 @@ export type HomeHubLayoutActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 visibleWhen?: InputPredicate | undefined;
+                                visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
                                 disabledWhen?: InputPredicate | undefined;
                                 optionsSourceId?: string | undefined;
                                 connectedAccountOptions?: true | undefined;
                                 resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                prompt?: string | undefined;
                                 description?: string | undefined;
                                 placeholder?: string | undefined;
                                 options?: readonly {
@@ -1755,6 +1746,10 @@ export type HomeHubLayoutActionResultById = {
                             };
                             nativeServicePath?: string | undefined;
                         }[] | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                 };
                 bindings: Record<string, {
@@ -1770,6 +1765,10 @@ export type HomeHubLayoutActionResultById = {
                     purpose: string;
                 }>;
                 displayName?: string | undefined;
+                networkOverride?: {
+                    networkOrigins?: string[] | undefined;
+                    network?: 'none' | 'open' | undefined;
+                } | undefined;
             };
             size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
             frameStyle?: 'card' | 'plain' | undefined;
@@ -1822,19 +1821,7 @@ export type HomeHubLayoutActionResultById = {
                                     defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                                 };
                                 name: string;
-                                body: {
-                                    kind: 'declarative';
-                                    document: Readonly<{
-                                        version: 1;
-                                        root: PluginDeclarativeNodeV2;
-                                    }>;
-                                } | {
-                                    kind: 'installed';
-                                    surface: {
-                                        pluginId: string;
-                                        localId: string;
-                                    };
-                                };
+                                body: WidgetDefinitionBodyV1;
                                 inputs: {
                                     fields: readonly {
                                         path: string;
@@ -1847,7 +1834,7 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace';
+                                            hostType: 'session' | 'workspace' | 'machine';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
@@ -1855,11 +1842,13 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         visibleWhen?: InputPredicate | undefined;
+                                        visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
                                         disabledWhen?: InputPredicate | undefined;
                                         optionsSourceId?: string | undefined;
                                         connectedAccountOptions?: true | undefined;
                                         resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                        prompt?: string | undefined;
                                         description?: string | undefined;
                                         placeholder?: string | undefined;
                                         options?: readonly {
@@ -1887,6 +1876,10 @@ export type HomeHubLayoutActionResultById = {
                                     };
                                     nativeServicePath?: string | undefined;
                                 }[] | undefined;
+                                networkOverride?: {
+                                    networkOrigins?: string[] | undefined;
+                                    network?: 'none' | 'open' | undefined;
+                                } | undefined;
                             };
                         };
                         bindings: Record<string, {
@@ -1902,6 +1895,10 @@ export type HomeHubLayoutActionResultById = {
                             purpose: string;
                         }>;
                         displayName?: string | undefined;
+                        networkOverride?: {
+                            networkOrigins?: string[] | undefined;
+                            network?: 'none' | 'open' | undefined;
+                        } | undefined;
                     };
                     size?: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large' | undefined;
                     frameStyle?: 'card' | 'plain' | undefined;
@@ -1909,8 +1906,9 @@ export type HomeHubLayoutActionResultById = {
                 }[];
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 title?: string | undefined;
+                titleKey?: string | undefined;
                 context?: Record<string, {
                     kind: 'value';
                     value: string | number | boolean | readonly JsonValue[] | {
@@ -1968,19 +1966,7 @@ export type HomeHubLayoutActionResultById = {
                                 defaultSize: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                             };
                             name: string;
-                            body: {
-                                kind: 'declarative';
-                                document: Readonly<{
-                                    version: 1;
-                                    root: PluginDeclarativeNodeV2;
-                                }>;
-                            } | {
-                                kind: 'installed';
-                                surface: {
-                                    pluginId: string;
-                                    localId: string;
-                                };
-                            };
+                            body: WidgetDefinitionBodyV1;
                             inputs: {
                                 fields: readonly {
                                     path: string;
@@ -1993,7 +1979,7 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace';
+                                        hostType: 'session' | 'workspace' | 'machine';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
@@ -2001,11 +1987,13 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     visibleWhen?: InputPredicate | undefined;
+                                    visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
                                     disabledWhen?: InputPredicate | undefined;
                                     optionsSourceId?: string | undefined;
                                     connectedAccountOptions?: true | undefined;
                                     resolvedEmptyConnectedAccountOptions?: true | undefined;
+                                    prompt?: string | undefined;
                                     description?: string | undefined;
                                     placeholder?: string | undefined;
                                     options?: readonly {
@@ -2033,6 +2021,10 @@ export type HomeHubLayoutActionResultById = {
                                 };
                                 nativeServicePath?: string | undefined;
                             }[] | undefined;
+                            networkOverride?: {
+                                networkOrigins?: string[] | undefined;
+                                network?: 'none' | 'open' | undefined;
+                            } | undefined;
                         };
                     };
                     bindings: Record<string, {
@@ -2048,6 +2040,10 @@ export type HomeHubLayoutActionResultById = {
                         purpose: string;
                     }>;
                     displayName?: string | undefined;
+                    networkOverride?: {
+                        networkOrigins?: string[] | undefined;
+                        network?: 'none' | 'open' | undefined;
+                    } | undefined;
                 };
                 size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                 frameStyle?: 'card' | 'plain' | undefined;

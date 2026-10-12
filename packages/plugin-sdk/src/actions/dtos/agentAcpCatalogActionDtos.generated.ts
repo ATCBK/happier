@@ -12,15 +12,88 @@ export type AgentAcpCatalogActionInputById = {
             id: string;
             name: string;
             title: string;
-            command: string;
+            launch: {
+                kind: 'command';
+                command: string;
+                args?: string[] | undefined;
+            } | {
+                kind: 'npm';
+                package: string;
+                version: string;
+                bin?: string | undefined;
+                args?: string[] | undefined;
+            } | {
+                kind: 'archive';
+                version: string;
+                assetsByPlatform: {
+                    'darwin-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'darwin-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                };
+                args?: string[] | undefined;
+                envByPlatform?: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', Record<string, string>>> | undefined;
+            } | {
+                kind: 'uv';
+                package: string;
+                version: string;
+                command?: string | undefined;
+                args?: string[] | undefined;
+            };
             description?: string | undefined;
-            args?: string[] | undefined;
             env?: Record<string, {
                 t: 'literal';
                 v: string;
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }> | undefined;
             auth?: {
                 support: string;
@@ -80,8 +153,78 @@ export type AgentAcpCatalogActionResultById = {
             id: string;
             name: string;
             title: string;
-            command: string;
-            args: string[];
+            launch: {
+                kind: 'command';
+                command: string;
+                args: string[];
+            } | {
+                kind: 'npm';
+                package: string;
+                version: string;
+                args: string[];
+                bin?: string | undefined;
+            } | {
+                kind: 'archive';
+                version: string;
+                assetsByPlatform: {
+                    'darwin-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'darwin-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                };
+                args: string[];
+                envByPlatform?: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', Record<string, string>>> | undefined;
+            } | {
+                kind: 'uv';
+                package: string;
+                version: string;
+                args: string[];
+                command?: string | undefined;
+            };
             createdAt: number;
             updatedAt: number;
             capabilities: {
@@ -97,6 +240,9 @@ export type AgentAcpCatalogActionResultById = {
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             description?: string | undefined;
             runtime?: {
@@ -140,14 +286,87 @@ export type AgentAcpCatalogActionResultById = {
             id: string;
             name: string;
             title: string;
-            command: string;
-            args: string[];
+            launch: {
+                kind: 'command';
+                command: string;
+                args: string[];
+            } | {
+                kind: 'npm';
+                package: string;
+                version: string;
+                args: string[];
+                bin?: string | undefined;
+            } | {
+                kind: 'archive';
+                version: string;
+                assetsByPlatform: {
+                    'darwin-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'darwin-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'linux-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-x64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                    'win32-arm64'?: {
+                        archiveUrl: string;
+                        executableSubpath: string;
+                        sha256?: string | undefined;
+                        kind?: 'archive' | 'executable' | undefined;
+                        sizeBytes?: number | undefined;
+                        args?: string[] | undefined;
+                    } | undefined;
+                };
+                args: string[];
+                envByPlatform?: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', Record<string, string>>> | undefined;
+            } | {
+                kind: 'uv';
+                package: string;
+                version: string;
+                args: string[];
+                command?: string | undefined;
+            };
             env: Record<string, {
                 t: 'literal';
                 v: string;
             } | {
                 t: 'savedSecret';
                 secretId: string;
+            } | {
+                t: 'sessionAttested';
+                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
             }>;
             capabilities: {
                 supportsLoadSession: boolean;

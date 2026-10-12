@@ -271,6 +271,9 @@ export type SavedSecretSharingActionInputById = {
                             } | {
                                 t: 'savedSecret';
                                 secretId: string;
+                            } | {
+                                t: 'sessionAttested';
+                                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                             }>;
                             createdAt: number;
                             updatedAt: number;
@@ -288,26 +291,23 @@ export type SavedSecretSharingActionInputById = {
                                 } | {
                                     t: 'savedSecret';
                                     secretId: string;
+                                } | {
+                                    t: 'sessionAttested';
+                                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                                 }>;
+                                auth?: {
+                                    kind: 'oauth';
+                                } | undefined;
                             } | undefined;
-                        }[];
-                        bindings: {
-                            id: string;
-                            serverId: string;
-                            enabled: boolean;
-                            target: {
-                                t: 'allMachines';
-                            } | {
-                                t: 'machine';
-                                machineId: string;
-                            } | {
-                                t: 'workspace';
-                                machineId: string;
-                                workspaceRoot: string;
-                            };
-                            createdAt: number;
-                            updatedAt: number;
-                            overrides?: {
+                            configOverrides?: {
+                                target: {
+                                    t: 'machine';
+                                    machineId: string;
+                                } | {
+                                    t: 'workspace';
+                                    machineId: string;
+                                    workspaceRoot: string;
+                                };
                                 stdio?: {
                                     command?: string | undefined;
                                     args?: string[] | undefined;
@@ -320,6 +320,9 @@ export type SavedSecretSharingActionInputById = {
                                     } | {
                                         t: 'savedSecret';
                                         secretId: string;
+                                    } | {
+                                        t: 'sessionAttested';
+                                        field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                                     } | null> | undefined;
                                 } | undefined;
                                 envPatch?: Record<string, {
@@ -328,8 +331,32 @@ export type SavedSecretSharingActionInputById = {
                                 } | {
                                     t: 'savedSecret';
                                     secretId: string;
+                                } | {
+                                    t: 'sessionAttested';
+                                    field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                                 } | null> | undefined;
-                            } | undefined;
+                            }[] | undefined;
+                        }[];
+                        bindings: {
+                            id: string;
+                            target: {
+                                t: 'allMachines';
+                            } | {
+                                t: 'machine';
+                                machineId: string;
+                            } | {
+                                t: 'project';
+                                projectKey: string;
+                            } | {
+                                t: 'workspace';
+                                machineId: string;
+                                workspaceRoot: string;
+                            };
+                            enabled: boolean;
+                            createdAt: number;
+                            updatedAt: number;
+                            serverId: string;
+                            agentId?: string | undefined;
                         }[];
                     };
                 } | {
@@ -353,11 +380,81 @@ export type SavedSecretSharingActionInputById = {
                             id: string;
                             name: string;
                             title: string;
-                            command: string;
+                            launch: {
+                                kind: 'command';
+                                command: string;
+                                args?: string[] | undefined;
+                            } | {
+                                kind: 'npm';
+                                package: string;
+                                version: string;
+                                bin?: string | undefined;
+                                args?: string[] | undefined;
+                            } | {
+                                kind: 'archive';
+                                version: string;
+                                assetsByPlatform: {
+                                    'darwin-arm64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                    'darwin-x64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                    'linux-x64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                    'linux-arm64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                    'win32-x64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                    'win32-arm64'?: {
+                                        archiveUrl: string;
+                                        executableSubpath: string;
+                                        sha256?: string | undefined;
+                                        kind?: 'archive' | 'executable' | undefined;
+                                        sizeBytes?: number | undefined;
+                                        args?: string[] | undefined;
+                                    } | undefined;
+                                };
+                                args?: string[] | undefined;
+                                envByPlatform?: Partial<Record<'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64' | 'win32-x64' | 'win32-arm64', Record<string, string>>> | undefined;
+                            } | {
+                                kind: 'uv';
+                                package: string;
+                                version: string;
+                                command?: string | undefined;
+                                args?: string[] | undefined;
+                            };
                             createdAt: number;
                             updatedAt: number;
                             description?: string | undefined;
-                            args?: string[] | undefined;
                             runtime?: {
                                 stderrRules: {
                                     authenticationErrorDetail?: string | undefined;
@@ -404,6 +501,9 @@ export type SavedSecretSharingActionInputById = {
                             } | {
                                 t: 'savedSecret';
                                 secretId: string;
+                            } | {
+                                t: 'sessionAttested';
+                                field: 'externalPrincipalId' | 'sourceMessageId' | 'sessionId';
                             }> | undefined;
                         }[];
                     };
@@ -530,6 +630,9 @@ export type SavedSecretSharingActionInputById = {
                                 service: {
                                     pluginId: string;
                                     localId: string;
+                                } | {
+                                    pluginId: 'happier';
+                                    localId: 'mcp-sign-in';
                                 };
                                 groupId: string;
                             }> | undefined;
@@ -684,6 +787,9 @@ export type SavedSecretSharingActionInputById = {
                                     service: {
                                         pluginId: string;
                                         localId: string;
+                                    } | {
+                                        pluginId: 'happier';
+                                        localId: 'mcp-sign-in';
                                     };
                                     groupId: string;
                                 };
@@ -774,6 +880,9 @@ export type SavedSecretSharingActionInputById = {
                                     service: {
                                         pluginId: string;
                                         localId: string;
+                                    } | {
+                                        pluginId: 'happier';
+                                        localId: 'mcp-sign-in';
                                     };
                                     groupId: string;
                                 };
@@ -1056,6 +1165,7 @@ export type SavedSecretSharingActionResultById = {
             kind: 'apiKey' | 'token' | 'password' | 'other' | null;
             encryptionMode: 'plain' | 'e2ee' | null;
             owner: {
+                name: string | null;
                 firstName: string | null;
                 lastName: string | null;
                 username: string | null;
@@ -1078,6 +1188,7 @@ export type SavedSecretSharingActionResultById = {
             })[];
             audience: {
                 accounts: {
+                    name: string | null;
                     firstName: string | null;
                     lastName: string | null;
                     username: string | null;

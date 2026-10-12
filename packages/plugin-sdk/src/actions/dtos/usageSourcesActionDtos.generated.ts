@@ -64,6 +64,8 @@ export type UsageSourcesActionResultById = {
             coverage: 'unknown' | 'unsupported' | 'partial' | 'complete';
             pendingCount: number;
             asOfMs: number | null;
+            accountingSources?: string[] | undefined;
+            captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
             errorCode?: string | undefined;
         }[];
@@ -86,6 +88,8 @@ export type UsageSourcesActionResultById = {
             coverage: 'unknown' | 'unsupported' | 'partial' | 'complete';
             pendingCount: number;
             asOfMs: number | null;
+            accountingSources?: string[] | undefined;
+            captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
             errorCode?: string | undefined;
         }[];
@@ -111,6 +115,8 @@ export type UsageSourcesActionResultById = {
             coverage: 'unknown' | 'unsupported' | 'partial' | 'complete';
             pendingCount: number;
             asOfMs: number | null;
+            accountingSources?: string[] | undefined;
+            captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
             errorCode?: string | undefined;
         };
@@ -133,6 +139,8 @@ export type UsageSourcesActionResultById = {
             coverage: 'unknown' | 'unsupported' | 'partial' | 'complete';
             pendingCount: number;
             asOfMs: number | null;
+            accountingSources?: string[] | undefined;
+            captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
             errorCode?: string | undefined;
         };
@@ -155,6 +163,8 @@ export type UsageSourcesActionResultById = {
             coverage: 'unknown' | 'unsupported' | 'partial' | 'complete';
             pendingCount: number;
             asOfMs: number | null;
+            accountingSources?: string[] | undefined;
+            captureKind?: 'from_logs' | undefined;
             externalSessionSource?: ExternalSessionsSource | undefined;
             errorCode?: string | undefined;
         };

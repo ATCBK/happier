@@ -9,9 +9,14 @@ export type SettingsDeclarationsActionInputById = {
     };
     readonly "settings.get": {
         anchor: string;
+        key?: string | undefined;
         target?: {
             kind: 'home';
             serverId: string;
+        } | {
+            kind: 'project';
+            serverId: string;
+            projectKey: string;
         } | {
             kind: 'team';
             serverId: string;
@@ -27,9 +32,14 @@ export type SettingsDeclarationsActionInputById = {
     readonly "settings.set": {
         anchor: string;
         value: unknown;
+        key?: string | undefined;
         target?: {
             kind: 'home';
             serverId: string;
+        } | {
+            kind: 'project';
+            serverId: string;
+            projectKey: string;
         } | {
             kind: 'team';
             serverId: string;
@@ -63,9 +73,42 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'restore';
         } | undefined;
     };
+    readonly "settings.reset": {
+        anchor: string;
+        target?: {
+            kind: 'home';
+            serverId: string;
+        } | {
+            kind: 'project';
+            serverId: string;
+            projectKey: string;
+        } | {
+            kind: 'team';
+            serverId: string;
+            teamId: string;
+        } | {
+            kind: 'team_identity_connection';
+            serverId: string;
+            teamId: string;
+            connectionId: string;
+        } | undefined;
+    };
     readonly "settings.invoke": {
         anchor: string;
         input?: {
+            kind: 'atmosphere_picture_add';
+            source: {
+                kind: 'url';
+                url: string;
+            } | {
+                kind: 'machine_file';
+                machineId: string;
+                path: string;
+            };
+        } | {
+            kind: 'atmosphere_picture_remove';
+            localId: string;
+        } | {
             kind: 'account_settings_history_purge';
             versions: number[];
         } | {
@@ -104,7 +147,7 @@ export type SettingsDeclarationsActionResultById = {
             sensitive: boolean;
             description?: string | undefined;
             storageScope?: 'account' | 'local' | undefined;
-            targetKinds?: ('home' | 'team' | 'team_identity_connection')[] | undefined;
+            targetKinds?: ('home' | 'project' | 'team' | 'team_identity_connection')[] | undefined;
             targetRequired?: boolean | undefined;
             allowedValues?: (string | number | boolean | null)[] | undefined;
             operation?: {
@@ -174,6 +217,15 @@ export type SettingsDeclarationsActionResultById = {
             };
         } | undefined;
         reversalUnavailableReason?: 'no_change' | undefined;
+    };
+    readonly "settings.reset": {
+        anchor: string;
+        value: string | number | boolean | readonly JsonValue[] | {
+            readonly [key: string]: JsonValue;
+        } | null;
+    } | {
+        anchor: string;
+        unset: true;
     };
     readonly "settings.invoke": {
         anchor: string;
