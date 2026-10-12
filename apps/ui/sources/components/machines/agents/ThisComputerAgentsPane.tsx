@@ -86,7 +86,7 @@ const styles = StyleSheet.create((theme) => ({
     connected: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     connectedText: {
         ...Typography.default('semiBold'),
@@ -98,7 +98,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     grow: {
         flexGrow: 1,

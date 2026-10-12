@@ -71,7 +71,7 @@ export const MachinePathBrowserListRow = React.memo(function MachinePathBrowserL
 
     const loadingChildren = props.node.type === 'directory' && props.node.isExpanded && props.node.isLoadingChildren;
     const rightElement = loadingChildren || props.selected ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}>
             {loadingChildren ? <ActivitySpinner testID={`${getPathBrowserRowTestId(props.node.path)}-loading`}
                 size={16} color={theme.colors.text.secondary} /> : null}
             {props.selected ? <Icon name="check-circle" size={16} color={theme.colors.button.primary.background} /> : null}

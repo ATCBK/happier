@@ -78,9 +78,9 @@ export const MachineAgentSetupPane = React.memo(function MachineAgentSetupPane(p
 
 const styles = StyleSheet.create((theme) => ({
     pane: {
-        gap: 12,
-        paddingHorizontal: 4,
-        paddingTop: 2,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s4,
+        paddingTop: theme.space.s2,
     },
     head: {
         gap: 1,
@@ -91,9 +91,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

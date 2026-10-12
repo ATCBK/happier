@@ -83,9 +83,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
+        gap: theme.space.s8,
         height: 24,
-        marginBottom: 10,
+        marginBottom: theme.space.s10,
     },
     version: {
         ...Typography.mono(),
@@ -100,7 +100,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     footer: {
         marginTop: 'auto',
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
         minHeight: 36,
         justifyContent: 'center',
     },

@@ -47,7 +47,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         alignItems: 'stretch',
-        gap: 8,
+        gap: theme.space.s8,
     },
     containerWide: {
         flexDirection: 'row',
@@ -79,7 +79,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     details: {
         paddingHorizontal: 30,
         paddingBottom: 30,
-        gap: 8,
+        gap: theme.space.s8,
     },
     detailsWide: {
         flex: 1,
@@ -90,10 +90,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingBottom: 0,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 20,
-        lineHeight: 26,
-        letterSpacing: -0.2,
+
+        ...Typography.variant('title'),
+
+
         color: theme.colors.text.primary,
     },
     titleWide: {

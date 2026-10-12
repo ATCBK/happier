@@ -75,7 +75,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     details: {
         paddingHorizontal: 30,
         paddingBottom: 18,
-        gap: 12,
+        gap: theme.space.s12,
         flexShrink: 1,
     },
     detailsWide: {
@@ -85,7 +85,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         paddingHorizontal: 0,
         paddingBottom: 0,
-        gap: 16,
+        gap: theme.space.s16,
     },
     title: {
         ...Typography.default('semiBold'),
@@ -109,7 +109,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: STORY_DECK_WIDE_BODY_LINE_HEIGHT,
     },
     bodyStack: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     mediaPlane: {
         position: 'relative',

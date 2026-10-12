@@ -33,7 +33,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         paddingHorizontal: 28,
-        paddingTop: 40,
+        paddingTop: theme.space.s40,
         paddingBottom: 30,
         gap: 30,
     },
@@ -75,7 +75,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
     },
     rowsScrollContent: {
-        paddingBottom: 8,
+        paddingBottom: theme.space.s8,
     },
     row: {
         flexDirection: 'row',
@@ -99,12 +99,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowText: {
         flex: 1,
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     rowTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 22,
+
+        ...Typography.variant('heading'),
+
         color: theme.colors.text.primary,
     },
     rowBody: {

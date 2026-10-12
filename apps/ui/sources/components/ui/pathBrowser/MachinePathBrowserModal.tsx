@@ -92,16 +92,16 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 10,
+        gap: theme.space.s10,
     },
     selectionText: {
         flex: 1,
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
+
     },
     headerActionButton: {
-        padding: 2,
+        padding: theme.space.s2,
     },
     contextMenu: {
         width: 220,

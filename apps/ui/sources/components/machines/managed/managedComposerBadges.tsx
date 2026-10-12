@@ -355,12 +355,12 @@ const rowDescription = happierPageTextMetrics('rowDescription');
 const styles = StyleSheet.create((theme) => ({
   popover: {
     padding: 14,
-    gap: 8,
+    gap: theme.space.s8,
   },
   head: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
   },
   mark: {
     width: 16,
@@ -403,8 +403,8 @@ const styles = StyleSheet.create((theme) => ({
     alignSelf: 'flex-start',
   },
   archive: {
-    gap: 6,
-    paddingTop: 8,
+    gap: theme.space.s6,
+    paddingTop: theme.space.s8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },

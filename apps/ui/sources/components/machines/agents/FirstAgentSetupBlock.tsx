@@ -110,16 +110,14 @@ const styles = StyleSheet.create((theme) => ({
     head: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     headText: {
         flex: 1,
         minWidth: 0,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 15.5,
-        lineHeight: 21,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     lead: {
@@ -147,7 +145,7 @@ const styles = StyleSheet.create((theme) => ({
     choiceText: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     choiceTextCard: {
@@ -159,12 +157,12 @@ const styles = StyleSheet.create((theme) => ({
     },
     formBody: {
         flex: 1,
-        paddingVertical: 4,
+        paddingVertical: theme.space.s4,
     },
     more: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     grow: {
         flexGrow: 1,

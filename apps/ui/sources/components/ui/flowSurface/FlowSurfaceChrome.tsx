@@ -39,20 +39,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     header: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     content: {
         paddingHorizontal: FLOW_SURFACE_CONTENT_INSET,
-        paddingTop: 22,
-        paddingBottom: 24,
-        gap: 18,
+        paddingTop: theme.space.s24,
+        paddingBottom: theme.space.s24,
+        gap: theme.space.s16,
     },
     titleBlock: {
         width: '100%',
         maxWidth: 440,
         alignSelf: 'center',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     titleBlockLeft: {
         maxWidth: '100%',
@@ -67,10 +67,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'flex-start',
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 24,
-        lineHeight: 30,
-        letterSpacing: -0.4,
+        ...Typography.variant('title'),
         color: theme.colors.text.primary,
         textAlign: 'center',
     },
@@ -82,9 +79,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'left',
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 15,
-        lineHeight: 21,
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },
@@ -93,11 +88,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     body: {
         width: '100%',
-        gap: 16,
+        gap: theme.space.s16,
     },
     footer: {
         width: '100%',
-        gap: 12,
+        gap: theme.space.s12,
     },
 }));
 

@@ -58,13 +58,13 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        columnGap: 10,
-        rowGap: 2,
+        columnGap: theme.space.s10,
+        rowGap: theme.space.s2,
     },
     part: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
     text: {
         color: theme.colors.text.secondary,

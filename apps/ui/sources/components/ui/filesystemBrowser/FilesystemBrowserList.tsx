@@ -25,15 +25,15 @@ export const FilesystemBrowserList = React.memo(function FilesystemBrowserList(p
         showRootLoadingHeader ? (
             <View
                 style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
+                    paddingHorizontal: theme.space.s12,
+                    paddingVertical: theme.space.s10,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 10,
+                    gap: theme.space.s10,
                 }}
             >
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                     {props.loadingLabel}
                 </Text>
             </View>

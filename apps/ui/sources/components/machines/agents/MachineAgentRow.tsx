@@ -85,7 +85,7 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.mono(),
         ...happierPageTextMetrics('rowDescription'),
         color: theme.colors.text.tertiary,
-        marginLeft: 6,
+        marginLeft: theme.space.s6,
     },
     dimMark: {
         opacity: 0.6,

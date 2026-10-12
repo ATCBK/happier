@@ -41,12 +41,12 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.elevated,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         paddingVertical: 3,
     },
     icon: {
