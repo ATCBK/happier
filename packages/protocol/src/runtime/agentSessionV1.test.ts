@@ -64,6 +64,12 @@ describe('Agent session VB4 open inputs', () => {
     expect(AgentSessionConfigurationUpdateV1Schema.parse(handsOff)).toEqual(handsOff);
     expect(AgentSessionConfigurationSnapshotV1Schema.safeParse({ ...configuration, workspaceWrites: 'unknown' }).success).toBe(false);
   });
+  it('carries session tool restrictions without accepting an open unlisted policy', () => {
+    const confined = { ...configuration, allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' };
+    expect(AgentSessionConfigurationSnapshotV1Schema.parse(confined)).toEqual(confined);
+    expect(AgentSessionConfigurationUpdateV1Schema.parse(confined)).toEqual(confined);
+    expect(AgentSessionConfigurationSnapshotV1Schema.safeParse({ ...confined, unlistedTools: 'allow' }).success).toBe(false);
+  });
 
 
   it('accepts an exact Provider binding descriptor only on a configuration update', () => {

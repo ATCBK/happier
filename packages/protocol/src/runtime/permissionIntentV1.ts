@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import {
   defineProtocolLiteral,
@@ -27,6 +27,12 @@ export const AgentPermissionIntentV1Schema = defineProtocolUnion([
   defineProtocolLiteral(AGENT_PERMISSION_INTENTS_V1[4]),
 ]);
 export type AgentPermissionIntentV1 = ReturnType<typeof AgentPermissionIntentV1Schema.parse>;
+
+/** Session-owned tool policy fields; leaf placement avoids the runtime event graph. */
+export const AgentSessionToolPolicyShapeV1 = {
+  allowedTools: z.array(z.string().trim().min(1)).optional(),
+  unlistedTools: z.enum(['ask', 'deny']).optional(),
+} as const;
 
 export function parseAgentPermissionIntentV1Alias(raw: string): AgentPermissionIntentV1 | null {
   const parsed = parseSessionPermissionModeAlias(raw);

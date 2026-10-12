@@ -9,6 +9,7 @@ import {
 import { SessionInputCausalPermissionAuthorityV1Schema } from '../sessions/messages/sessionInputAdmission.js';
 import {
   AgentPermissionIntentV1Schema,
+  AgentSessionToolPolicyShapeV1,
   type AgentPermissionIntentV1 as CanonicalAgentPermissionIntentV1,
 } from './permissionIntentV1.js';
 import { SESSION_RUNTIME_ACTIVITY_ACTIVE_COUNT_MAX } from '../sessions/runtime/activity/sessionRuntimeActivity.js';
@@ -134,7 +135,10 @@ export const AgentSessionProviderResumeV1Schema = lazyZodSchema(() => z.object({
 }).strict());
 export type AgentSessionProviderResumeV1 = z.infer<typeof AgentSessionProviderResumeV1Schema>;
 
+export { AgentSessionToolPolicyShapeV1 } from './permissionIntentV1.js';
+
 const AgentSessionConfigurationSnapshotCoreV1Schema = lazyZodSchema(() => z.object({
+  ...AgentSessionToolPolicyShapeV1,
   mode: TimestampedAgentValueV1Schema(exactString(MODEL_ID_MAX).nullable()),
   model: TimestampedAgentValueV1Schema(exactString(MODEL_ID_MAX).nullable()),
   permissionIntent: TimestampedAgentValueV1Schema(asProtocolZod(AgentPermissionIntentV1Schema).nullable()),
