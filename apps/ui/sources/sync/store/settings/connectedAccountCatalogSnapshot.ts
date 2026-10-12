@@ -1,6 +1,7 @@
 import type { ConnectedAccountCatalogDiagnosticV1, ConnectedAccountCatalogKeyV1, ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type ConnectedAccountCatalogValue<K extends ConnectedAccountCatalogKeyV1> = Extract<ConnectedAccountCatalogRecordV1, { key: K }>['value'];
 export type ConnectedAccountCatalogValueSnapshot<K extends ConnectedAccountCatalogKeyV1> = Readonly<{
@@ -25,6 +26,14 @@ export function getConnectedAccountCatalogValue<K extends ConnectedAccountCatalo
 export function getConnectedAccountCatalogSnapshot(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1): ConnectedAccountCatalogSnapshotV1 | null {
     return snapshots.get(snapshotKey(scope, key))?.catalog ?? null;
 }
+export function applyAcknowledgedConnectedAccountCatalog(scope: ServerAccountScope, record: ConnectedAccountCatalogRecordV1,
+    revision: number, current: boolean): void {
+    const old = getConnectedAccountCatalogValue(scope, record.key);
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: old.revision })) return;
+    snapshots.set(snapshotKey(scope, record.key), { scope, key: record.key, catalog: { status: 'loading' },
+        value: { status: 'loading', value: record.value, revision, stale: true, reason: 'loading' } });
+    for (const listener of [...listeners]) listener();
+}
 export function applyConnectedAccountCatalogSnapshot(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1,
     catalog: ConnectedAccountCatalogSnapshotV1, current: boolean): void {
     if (!current || (catalog.status === 'unavailable' && catalog.reason === 'scope-retired')) return;
@@ -33,7 +42,7 @@ export function applyConnectedAccountCatalogSnapshot(scope: ServerAccountScope, 
     let next: ConnectedAccountCatalogValueSnapshot<ConnectedAccountCatalogKeyV1>;
     if ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.record.key === key) {
         const value = old?.value && JSON.stringify(old.value) === JSON.stringify(catalog.record.value) ? old.value : catalog.record.value;
-        next = { status: catalog.status, value, revision: catalog.revision, stale: false,
+        next = { status: catalog.status, value, revision: retainCatalogRevision(catalog, old?.revision), stale: false,
             ...(catalog.status === 'partial' ? { diagnostics: catalog.diagnostics } : {}) };
     } else {
         const reason = catalog.status === 'ready' || catalog.status === 'partial' ? 'invalid-stored-content'
@@ -41,7 +50,7 @@ export function applyConnectedAccountCatalogSnapshot(scope: ServerAccountScope, 
         const withdraw = ['account-mode-mismatch', 'encryption-material-unavailable', 'unauthorized', 'forbidden',
             'account-not-found', 'account-inconsistent', 'invalid-stored-content'].includes(reason);
         next = { status: reason === 'loading' ? 'loading' : 'unavailable', value: withdraw ? null : old?.value ?? null,
-            revision: old?.revision ?? 'absent', stale: true, reason };
+            revision: retainCatalogRevision({ status: 'unavailable' }, old?.revision), stale: true, reason };
     }
     if (old && JSON.stringify(old) === JSON.stringify(next)) next = old;
     snapshots.set(addressedKey, { scope, key, catalog, value: next });

@@ -1,4 +1,5 @@
 import { getServerProfileById } from '../../domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { normalizeTrimmedString } from '../../domains/session/listing/normalizeTrimmedString';
 import { applyReachableTargetsToSessionListRenderables } from '../../domains/session/listing/applyReachableTargetsToSessionListRenderables';
@@ -127,7 +128,7 @@ export function buildActiveServerSessionListIndex(
         ...params,
         serverScope: {
             serverId: snapshot.serverId,
-            serverName: profile?.name ?? null,
+            serverName: resolveHomeDisplayLabel(profile, snapshot.serverId),
         },
     });
 }

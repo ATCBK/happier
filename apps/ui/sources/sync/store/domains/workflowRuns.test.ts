@@ -69,6 +69,29 @@ function summary(input: Readonly<{
 }
 
 describe('workflow run body store', () => {
+    it('retains the server held count through control-only reads and refreshes it without a parent transition', () => {
+        const base = createWorkflowRunSummaryFixture({ id: 'run-1', revision: 7 });
+        const first = mergeWorkflowRunBodies({}, [workflowRunRowFromSummary({ ...base, heldCount: 5 })]);
+        const control = mergeWorkflowRunBodies(first, [workflowRunRowFromSummary({ ...base, revision: 8 })]);
+        expect(control['run-1']?.summary).toMatchObject({ revision: 8, heldCount: 5 });
+        const refreshed = mergeWorkflowRunBodies(control, [workflowRunRowFromSummary({ ...base, revision: 8, heldCount: 4 })]);
+        expect(refreshed['run-1']?.summary).toMatchObject({ heldCount: 4 });
+        const cleared = mergeWorkflowRunBodies(refreshed, [workflowRunRowFromSummary({ ...base, revision: 8, heldCount: 0 })]);
+        expect(cleared['run-1']?.summary).toMatchObject({ heldCount: 0 });
+        expect(mergeWorkflowRunBodies(cleared, [workflowRunRowFromSummary({ ...base, heldCount: 5 })])).toBe(cleared);
+        expect(mergeWorkflowRunBodies(cleared, [workflowRunRowFromSummary({ ...base, revision: 8, heldCount: 0 })])).toBe(cleared);
+    });
+    it('preserves a held-step list observation on control-only reads and clears it on the next attention projection', () => {
+        const base = createWorkflowRunSummaryFixture({ id: 'run-1', revision: 7 });
+        const heldStep = { invocationId: 'held-review', label: 'Review the changelog', laneLabel: 'Changelog' };
+        const first = mergeWorkflowRunBodies({}, [workflowRunRowFromSummary({ ...base, heldStep })]);
+        const control = mergeWorkflowRunBodies(first, [workflowRunRowFromSummary({ ...base, revision: 8 })]);
+        expect(control['run-1']?.summary).toMatchObject({ revision: 8, heldStep });
+        const cleared = mergeWorkflowRunBodies(control, [workflowRunRowFromSummary({ ...base, revision: 8, heldStep: null })]);
+        expect(cleared['run-1']?.summary).toMatchObject({ heldStep: null });
+        const stale = mergeWorkflowRunBodies(cleared, [workflowRunRowFromSummary({ ...base, heldStep })]);
+        expect(stale['run-1']?.summary).toMatchObject({ heldStep: null });
+    });
     it('retains result condition provenance through lean index updates and late suppressed observations', () => {
         const harness = createHarness();
         const index = createWorkflowInvocationIndexFixture({ id: 'report', runId: 'run-1', contentRevision: '3', lifecycle: 'completed' });

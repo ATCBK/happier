@@ -19,10 +19,16 @@ describe('refreshLoadedAttentionSpan', () => {
             [undefined, { invocations: [attentionRow('inv-a', '0'), attentionRow('inv-b', '1')], nextCursor: 'cursor-2' }],
             ['cursor-2', { invocations: [attentionRow('inv-c', '2')], nextCursor: null }],
         ]);
+        const details = [...pages.values()].flatMap(page => page.invocations.map(index => ({ index, parentRevision: 7, progress: {
+            kind: 'happier.workflow-progress.v1' as const, blockKind: 'step' as const, attempt: index.attempt,
+            logicalInvocationRecordId: index.id, invocationPath: { blockId: 'work', scope: [] },
+            timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z' },
+        } })));
         const listPage = async (input: { cursor?: string }) => {
             calls.push(input.cursor);
             const page = pages.get(input.cursor)!;
-            return { ...page, parentRevision: 7 };
+            return { ...page, parentRevision: 7,
+                invocationDetails: details.filter(detail => page.invocations.some(index => index.id === detail.index.id)) };
         };
 
         // Two pages were loaded; the helper refetches both fresh pages.
@@ -34,6 +40,7 @@ describe('refreshLoadedAttentionSpan', () => {
         expect(calls).toEqual([undefined, 'cursor-2']);
         expect(result.invocations.map((entry) => entry.id)).toEqual(['inv-a', 'inv-b', 'inv-c']);
         expect(result.nextCursor).toBeNull();
+        expect(result).toMatchObject({ invocationDetails: details });
     });
 
     it('merges an addition inside the span without losing the continuation', async () => {

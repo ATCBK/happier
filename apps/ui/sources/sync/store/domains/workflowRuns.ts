@@ -358,6 +358,7 @@ export function mergeRefreshedInvocationFilterSpan(
 export async function refreshLoadedAttentionSpan(params: Readonly<{
     listPage: (input: Readonly<{ cursor?: string; signal?: AbortSignal }>) => Promise<Readonly<{
         invocations: readonly WorkflowRunInvocationIndexV1[];
+        invocationDetails?: readonly WorkflowInvocationGetResultV1['invocation'][];
         nextCursor?: string | null;
         parentRevision: number;
     }>>;
@@ -365,11 +366,13 @@ export async function refreshLoadedAttentionSpan(params: Readonly<{
     signal?: AbortSignal;
 }>): Promise<Readonly<{
     invocations: readonly WorkflowRunInvocationIndexV1[];
+    invocationDetails: readonly WorkflowInvocationGetResultV1['invocation'][];
     nextCursor: string | null;
     parentRevision: number | null;
 }>> {
     const targetPages = Math.max(1, Math.floor(params.previousPageCount) || 1);
     const accumulated: WorkflowRunInvocationIndexV1[] = [];
+    const invocationDetails: WorkflowInvocationGetResultV1['invocation'][] = [];
     let cursor: string | undefined;
     let nextCursor: string | null = null;
     let parentRevision: number | null = null;
@@ -379,13 +382,14 @@ export async function refreshLoadedAttentionSpan(params: Readonly<{
             ...(params.signal === undefined ? {} : { signal: params.signal }),
         });
         for (const entry of result.invocations) accumulated.push(entry);
+        invocationDetails.push(...(result.invocationDetails ?? []));
         parentRevision = parentRevision === null ? result.parentRevision : Math.max(parentRevision, result.parentRevision);
         const pageCursor = result.nextCursor ?? null;
         nextCursor = pageCursor;
         if (pageCursor === null) break;
         cursor = pageCursor;
     }
-    return { invocations: accumulated, nextCursor, parentRevision };
+    return { invocations: accumulated, invocationDetails, nextCursor, parentRevision };
 }
 
 const visibleProjectionCache = new WeakMap<WorkflowRunInvocations, readonly WorkflowRunInvocationIndexV1[]>();
@@ -531,7 +535,7 @@ function selectCurrentSummaryProjection(
     if (!incoming.summary) return stored;
     if (!stored.summary) return incoming;
     let incomingSummary = incoming.summary;
-    for (const key of ['where', 'startedBy', 'stepProgress', 'stepProgressCurrentness'] as const) {
+    for (const key of ['where', 'startedBy', 'heldStep', 'heldCount', 'stepProgress', 'stepProgressCurrentness'] as const) {
         if (incomingSummary[key] === undefined && stored.summary[key] !== undefined) {
             incomingSummary = { ...incomingSummary, [key]: stored.summary[key] };
         }
@@ -551,7 +555,7 @@ function selectCurrentSummaryProjection(
     // Private list projections are opened by the authorized list host, including
     // progress which can advance without a parent control revision. Omission by
     // a control operation preserves the observation; explicit unreadability clears it.
-    for (const key of ['where', 'startedBy'] as const) {
+    for (const key of ['where', 'startedBy', 'heldStep', 'heldCount'] as const) {
         const value = incomingSummary[key];
         if (parentCurrent && value !== undefined && (summary[key] === undefined || !sameStrictJsonValue(summary[key], value))) {
             summary = { ...summary, [key]: value };

@@ -13,6 +13,8 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 
 import type { StoreGet, StoreSet } from './_shared';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createRowInventoryReceiptOrdering } from '@/sync/store/settings/rowInventoryReceiptOrdering';
 import {
     mergeWorkflowRunBodies,
     releaseWorkflowRunBodies,
@@ -41,11 +43,13 @@ type AutomationRunTraversal = Readonly<{
  */
 type AutomationRunsSlice = WorkflowRunsDomain;
 
-function mergeTriggerSets(previous: AutomationsDomain['workflowTriggerSetsById'], incoming: readonly WorkflowTriggerSetV1[]) {
+function mergeTriggerSets(previous: AutomationsDomain['workflowTriggerSetsById'], incoming: readonly WorkflowTriggerSetV1[],
+    scope: ServerAccountScope, ordering: ReturnType<typeof createRowInventoryReceiptOrdering>) {
     let next: Record<string, WorkflowTriggerSetV1> | null = null;
     for (const value of incoming) {
         const known = (next ?? previous)[value.automationId];
-        if (known && (known.revision > value.revision || sameStrictJsonValue(known, value))) continue;
+        if (!ordering.admitRead(scope, value.automationId, value.revision, known?.revision)
+            || sameStrictJsonValue(known, value)) continue;
         next ??= { ...previous };
         next[value.automationId] = value;
     }
@@ -125,6 +129,7 @@ export type AutomationsDomain = {
     /** Opened trigger content lives once; surfaces retain only query membership and drafts. */
     workflowTriggerSetsById: Readonly<Record<string, WorkflowTriggerSetV1>>;
     workflowTriggerSetIdsByQuery: Readonly<Record<string, readonly string[]>>;
+    resetWorkflowTriggerSets: () => void;
     applyWorkflowTriggerSetPage: (input: Readonly<{ queryKey: string; sets: readonly WorkflowTriggerSetV1[] }>) => void;
     upsertWorkflowTriggerSet: (input: Readonly<{ queryKey?: string; set: WorkflowTriggerSetV1 }>) => void;
     automations: Record<string, AutomationDefinition>;
@@ -143,7 +148,7 @@ export type AutomationsDomain = {
         nextCursor: string | null,
     ) => boolean;
     upsertAutomation: (automation: AutomationDefinition) => void;
-    removeAutomation: (automationId: string) => void;
+    removeAutomation: (automationId: string, removedRevision?: number) => void;
     setAutomationRuns: (
         automationId: string,
         runs: AutomationDefinitionRun[],
@@ -339,7 +344,7 @@ function seedAutomationRunWindow<S extends AutomationsDomain & AutomationRunsSli
     };
 }
 
-export function createAutomationsDomain<S extends AutomationsDomain & AutomationRunsSlice>({
+export function createAutomationsDomain<S extends AutomationsDomain & AutomationRunsSlice & { profileScope?: ServerAccountScope | null }>({
     set,
 }: {
     set: StoreSet<S>;
@@ -348,13 +353,21 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
     let nextTraversalToken = 0;
     let definitionTraversalToken: number | null = null;
     const runTraversalTokensByAutomationId = new Map<string, number>();
+    const triggerReceiptOrdering = createRowInventoryReceiptOrdering();
 
     return {
         workflowTriggerSetsById: {},
         workflowTriggerSetIdsByQuery: {},
+        resetWorkflowTriggerSets: () => {
+            triggerReceiptOrdering.reset();
+            set((state) => Object.keys(state.workflowTriggerSetsById).length === 0
+                && Object.keys(state.workflowTriggerSetIdsByQuery).length === 0 ? state
+                : { ...state, workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
+        },
         applyWorkflowTriggerSetPage: ({ queryKey, sets }) => {
             set((state) => {
-                const facts = mergeTriggerSets(state.workflowTriggerSetsById, sets);
+                if (!state.profileScope) return state;
+                const facts = mergeTriggerSets(state.workflowTriggerSetsById, sets, state.profileScope, triggerReceiptOrdering);
                 const ids = sets.map((value) => value.automationId);
                 const previous = state.workflowTriggerSetIdsByQuery[queryKey];
                 const unchanged = previous !== undefined && ids.length === previous.length && ids.every((id, index) => previous[index] === id);
@@ -369,8 +382,8 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
         },
         upsertWorkflowTriggerSet: ({ queryKey, set: written }) => {
             set((state) => {
-                const facts = mergeTriggerSets(state.workflowTriggerSetsById, [written]);
-                if ((state.workflowTriggerSetsById[written.automationId]?.revision ?? -1) > written.revision) return state;
+                if (!state.profileScope || !triggerReceiptOrdering.admit(state.profileScope, written.automationId, written.revision)) return state;
+                const facts = mergeTriggerSets(state.workflowTriggerSetsById, [written], state.profileScope, triggerReceiptOrdering);
                 let windows = state.workflowTriggerSetIdsByQuery;
                 // Retargeting an Account inline set to a saved workflow moves
                 // its membership; it is not still an inline trigger row.
@@ -488,9 +501,21 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                     }
                     : null,
             })),
-        removeAutomation: (automationId) => {
-            runTraversalTokensByAutomationId.delete(automationId);
+        removeAutomation: (automationId, removedRevision) => {
             set((state) => {
+                if (state.profileScope && !triggerReceiptOrdering.admitRemoval(state.profileScope, automationId, removedRevision)) return state;
+                runTraversalTokensByAutomationId.delete(automationId);
+                let nextTriggerSets = state.workflowTriggerSetsById;
+                if (nextTriggerSets[automationId] !== undefined) {
+                    const remaining = { ...nextTriggerSets };
+                    delete remaining[automationId];
+                    nextTriggerSets = remaining;
+                }
+                let nextTriggerQueries = state.workflowTriggerSetIdsByQuery;
+                for (const [key, ids] of Object.entries(state.workflowTriggerSetIdsByQuery)) {
+                    if (!ids.includes(automationId)) continue;
+                    nextTriggerQueries = { ...nextTriggerQueries, [key]: ids.filter(id => id !== automationId) };
+                }
                 const nextAutomations = { ...state.automations };
                 const nextRunIdsByAutomationId = { ...state.automationRunIdsByAutomationId };
                 const nextRunCursorsByAutomationId = { ...state.automationRunNextCursorByAutomationId };
@@ -508,6 +533,8 @@ export function createAutomationsDomain<S extends AutomationsDomain & Automation
                 if (nextDefinitionTraversal) delete nextDefinitionTraversal.automations[automationId];
                 return commitAutomationRunWindows(state, {
                     ...state,
+                    workflowTriggerSetsById: nextTriggerSets,
+                    workflowTriggerSetIdsByQuery: nextTriggerQueries,
                     automations: nextAutomations,
                     automationRunIdsByAutomationId: nextRunIdsByAutomationId,
                     automationRunNextCursorByAutomationId: nextRunCursorsByAutomationId,

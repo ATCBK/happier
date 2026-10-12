@@ -1,14 +1,18 @@
 import type { ConnectedMetadataCatalogV1 } from '@happier-dev/protocol/connect/connectedMetadataCatalogV1';
-import { connectedAcknowledgementSubjectKeyV1, projectConnectedPresentationLabelsV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { connectedAcknowledgementSubjectKeyV1, projectConnectedPresentationLabelsV1,
+    type ConnectedPresentationRecordV1, type ConnectedAcknowledgementsRecordV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type ConnectedMetadataCatalogSnapshot = ConnectedMetadataCatalogV1 & Readonly<{
     labelsByKey: Readonly<Record<string, string>>;
     acknowledgementsByKey: Readonly<Record<string, boolean>>;
     presentationStale: boolean;
     acknowledgementsStale: boolean;
+    presentationRevision?: number;
+    acknowledgementsRevision?: number;
 }>;
 type StoredSnapshot = Readonly<{ scope: ServerAccountScope; snapshot: ConnectedMetadataCatalogSnapshot }>;
 const snapshots = new Map<string, StoredSnapshot>();
@@ -40,6 +44,9 @@ function retainUnchangedRecord<T extends string | boolean>(previous: Readonly<Re
     const keys = Object.keys(next);
     return keys.length === Object.keys(previous).length && keys.every(key => previous[key] === next[key]) ? previous : next;
 }
+function numericRevision(revision: number | 'absent'): number | undefined {
+    return typeof revision === 'number' ? revision : undefined;
+}
 function projectSnapshot(projection: ConnectedMetadataCatalogV1, previous: ConnectedMetadataCatalogSnapshot): ConnectedMetadataCatalogSnapshot {
     const presentation = projection.presentation;
     const acknowledgements = projection.acknowledgements;
@@ -56,7 +63,22 @@ function projectSnapshot(projection: ConnectedMetadataCatalogV1, previous: Conne
         acknowledgements: JSON.stringify(previous.acknowledgements) === JSON.stringify(acknowledgements) ? previous.acknowledgements : acknowledgements,
         labelsByKey, acknowledgementsByKey,
         presentationStale: presentation.status !== 'ready', acknowledgementsStale: acknowledgements.status !== 'ready',
+        presentationRevision: numericRevision(retainCatalogRevision(presentation, previous.presentationRevision)),
+        acknowledgementsRevision: numericRevision(retainCatalogRevision(acknowledgements, previous.acknowledgementsRevision)),
     };
+}
+export function applyAcknowledgedConnectedMetadata(scope: ServerAccountScope,
+    acknowledged: Readonly<{ kind: 'presentation'; record: ConnectedPresentationRecordV1 }>
+        | Readonly<{ kind: 'acknowledgements'; record: ConnectedAcknowledgementsRecordV1 }>, revision: number, current: boolean): void {
+    const previous = getConnectedMetadataCatalog(scope);
+    const oldRevision = acknowledged.kind === 'presentation' ? previous.presentationRevision : previous.acknowledgementsRevision;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: oldRevision })) return;
+    const next = projectSnapshot(acknowledged.kind === 'presentation'
+        ? { ...previous, presentation: { status: 'ready', entries: acknowledged.record.entries, revision, diagnostics: [] } }
+        : { ...previous, acknowledgements: { status: 'ready', entries: acknowledged.record.entries, revision, diagnostics: [] } }, previous);
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, snapshot: { ...next,
+        ...(acknowledged.kind === 'presentation' ? { presentationStale: true } : { acknowledgementsStale: true }) } });
+    for (const listener of [...listeners]) listener();
 }
 /** Seed-owned display fixture only. Real Account scopes and mutation admission never use it. */
 export function setDemoConnectedMetadataCatalogProjection(projection: ConnectedMetadataCatalogV1 | null): void {

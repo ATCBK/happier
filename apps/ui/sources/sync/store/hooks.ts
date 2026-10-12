@@ -2,8 +2,9 @@ import React from 'react';
 import { readTranscriptBrowserActionIdentity } from '@/components/sessions/transcript/references/transcriptBrowserActionReference';
 import { useAiLaunchProfiles } from './useAiLaunchProfiles';
 import type { AuthoringMemory } from './domains/authoringMemory';
-import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
-import { applyProfileSecretBindingSelectionV1 } from '@happier-dev/protocol/profiles/profileOperations';
+import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/profiles/profileActionsV1';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { readSavedSecretCatalog } from '@/sync/api/account/apiSavedSecretCatalog';
 import type { SessionMessagesTailBoundary } from '@/sync/runtime/sessionMessagesTailDiscontinuity';
 import { isPendingMessageForRecipient } from '@/sync/domains/pending/pendingMessageRecipient';
 import { useShallow } from 'zustand/react/shallow';
@@ -37,7 +38,8 @@ import type {
 import type { DecryptedArtifact } from '../domains/artifacts/artifactTypes';
 import {
   collectOpenApprovalSessionReferences,
-  listOpenApprovalArtifactsForSession,
+  listTranscriptApprovalArtifactsForSession,
+  type ApprovalSettledPresentation,
   type OpenApprovalArtifactForSession,
   type OpenApprovalSessionReference,
 } from '../domains/artifacts/approvalArtifacts';
@@ -98,7 +100,8 @@ import {
   useApplyFavoriteModelSelectionReplacementIntent,
   useApplyRememberedEngineSelectionReplacementIntent,
   requireUpdatedProfileOperation,
-  useProfileOperations,
+  useAccountSettingsScope,
+  useProfileActionExecute,
   useApplySettings,
 } from './settingsWriters';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -128,7 +131,7 @@ import {
   areServerProfileIdentifiersEquivalent,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
-import { resolveServerScopedMachineInventoryKeys } from '../domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '../domains/machines/resolveServerScopedMachines';
 import {
   readSessionListRowForServerId,
   readSessionListRowsForServerId,
@@ -139,8 +142,9 @@ import {
   buildSessionOrganizationProjections,
   type SessionOrganizationProjection,
 } from '../domains/session/organization';
-import { countMachinePresence, isMachineOnline, type MachinePresenceCounts } from '@/utils/sessions/machineUtils';
-import { resolveServerScopedMachine } from './domains/machines/resolveServerScopedMachine';
+import { isMachineOnline, type MachinePresenceCounts } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary, useMachinePresenceSummaries, useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import {
   buildSessionRealtimeScmScopeFromSnapshot,
   getMountedSessionRealtimeScmConsumerScopeResetVersion,
@@ -173,11 +177,12 @@ import {
   type SessionMetadataLike,
 } from '../domains/session/listing/sessionListLookupState';
 import { resolveVisibleMachinesForActiveServerFromState } from './domains/machines/resolveMachinesForActiveServerFromState';
-import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { isMachineVisibleForSelection, isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import type { SessionsDomainSlice, StorageState } from './types';
 import { createFriendRequestCountSelector } from './friendRequestCount';
 import {
   readProjectWorkspaceRefs,
+  readProjectAtmosphere,
   readCurrentProjectAccountRows,
   EMPTY_PINNED_WORKSPACE_REF_IDS,
   EMPTY_WORKSPACE_RELATIONSHIPS,
@@ -195,6 +200,10 @@ export function useWorkspaceRefs() {
 
 export function useProjectOrganizations() {
   return getStorage()((state) => readCurrentProjectAccountRows(state)?.organizations ?? EMPTY_PROJECT_ORGANIZATIONS);
+}
+
+export function useProjectAtmosphere(project?: Readonly<{ serverId: string; projectKey: string }>) {
+  return getStorage()(state => project ? readProjectAtmosphere(state, project) : undefined);
 }
 
 export function useWorkspaceSyncRelationships() {
@@ -2157,34 +2166,39 @@ export function useCurrentSecretBindingsByProfileIdMutable(): [
   CurrentSecretBindingsByProfileId,
   (value: CurrentSecretBindingsByProfileId) => Promise<void>,
 ] {
-  const operations = useProfileOperations();
+  const scope = useAccountSettingsScope();
+  const execute = useProfileActionExecute();
   const profiles = useAiLaunchProfiles();
   const currentBindings = React.useMemo(() => projectCurrentSecretBindingsByProfileId(profiles), [profiles]);
   const setCurrentBindings = React.useCallback(
     async (nextBindings: CurrentSecretBindingsByProfileId) => {
-      if (!operations) throw new Error('Profile Account is unavailable');
+      if (!scope) throw new Error('Profile Account is unavailable');
       for (const id of new Set([...Object.keys(currentBindings), ...Object.keys(nextBindings)])) {
         const before = currentBindings[id] ?? {};
         const next = nextBindings[id] ?? {};
         const changedNames = [...new Set([...Object.keys(before), ...Object.keys(next)])]
           .filter(name => before[name] !== next[name]);
         if (changedNames.length === 0) continue;
-        const admitted = operations.read({ id });
-        if (admitted.status !== 'present' && !(admitted.status === 'invalid' && admitted.reason === 'profile-not-found')) {
-          throw new Error(admitted.status === 'unavailable' || admitted.status === 'invalid' ? admitted.reason : 'profile_binding_membership_unavailable');
-        }
-        let bindings: ProfileRecordV1['secretBindings'] = admitted.status === 'present' && 'record' in admitted
-          ? { ...admitted.record.secretBindings } : {};
-        for (const name of changedNames) {
-          const reference = next[name];
-          bindings = applyProfileSecretBindingSelectionV1(bindings, name,
-            reference === undefined ? { kind: 'none' } : { kind: 'reference', reference });
-        }
-        requireUpdatedProfileOperation(await operations.setSecretBindings({ id, secretBindings: bindings,
-          expectedRevision: profiles.find(profile => profile.id === id)?.profileRecordRevision ?? 'absent' }));
+        const catalog = changedNames.some(name => next[name] !== undefined) ? await readSavedSecretCatalog(scope) : null;
+        if (catalog && !catalog.ok) throw new Error(catalog.failure.kind);
+        const selections = changedNames.map(envName => {
+          const reference = next[envName];
+          if (reference === undefined) return { envName, selection: { kind: 'none' as const } };
+          const parsed = parseSavedSecretRefV1(reference);
+          if (parsed.kind !== 'shared_resource') throw new Error('saved-secret-unavailable');
+          const resource = catalog?.ok ? catalog.resources.find(entry => entry.resourceId === parsed.resourceId) : undefined;
+          if (!resource || resource.entry.revision === null || resource.entry.materialStatus !== 'ready' || !resource.entry.capabilities.use) {
+            throw new Error('saved-secret-unavailable');
+          }
+          return { envName, selection: { kind: 'resource' as const, resourceId: parsed.resourceId,
+            expectedResourceRevision: resource.entry.revision } };
+        });
+        requireUpdatedProfileOperation(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.secrets.select'].parse(
+          await execute({ actionId: 'launch_profiles.secrets.select', input: { id, selections,
+            expectedRevision: profiles.find(profile => profile.id === id)?.profileRecordRevision ?? 'absent' } })));
       }
     },
-    [operations, currentBindings, profiles],
+    [scope, execute, currentBindings, profiles],
   );
   return [currentBindings, setCurrentBindings];
 }
@@ -2256,18 +2270,16 @@ export function useAllMachines(): Machine[] {
 
 /**
  * This Home's machines online and offline, for always-mounted chrome (the rail's Machines tooltip,
- * the Settings Machines row). The selector returns a primitive key, so a heartbeat or a metadata
- * edit that leaves both counts unchanged re-renders nothing, and the counts keep their identity.
+ * the Settings Machines row). Shared presence membership owns recovery and grace expiry;
+ * a primitive inventory total keeps heartbeat and metadata-only changes quiet.
  */
 export function useMachinePresenceCounts(): MachinePresenceCounts {
-  const key = getStorage()((state) => {
-    const counts = countMachinePresence(resolveVisibleMachinesForActiveServerFromState(state));
-    return `${counts.online}:${counts.offline}`;
-  });
-  return React.useMemo(() => {
-    const [online = 0, offline = 0] = key.split(':').map(Number);
-    return { online, offline };
-  }, [key]);
+  const scope = useActiveServerAccountScope();
+  const membership = useMachinePresenceMembership(scope?.serverId ?? null);
+  const total = getStorage()((state) => resolveVisibleMachinesForActiveServerFromState(state, { serverId: scope?.serverId })
+    .filter(isMachineVisibleForLaunchSelection).length);
+  const online = scope ? membership.onlineMachineIds.length : 0;
+  return React.useMemo(() => ({ online, offline: total - online }), [online, total]);
 }
 
 type LaunchSelectionMachinesCache = Readonly<{
@@ -2316,7 +2328,7 @@ export function useLaunchSelectionMachines(): Machine[] {
 export function useMachineRecordValues(enabled = true): Machine[] {
   return getStorage()(
     useShallow((state) => {
-      if (!enabled || !state.isDataReady) return emptyArray as Machine[];
+      if (!enabled) return emptyArray as Machine[];
       return Object.values(state.machines);
     })
   );
@@ -2407,10 +2419,17 @@ export function useMachineListStatusByServerId(enabled = true): Record<string, '
  * really left. App data readiness (sessions) can arrive before the machine list does.
  */
 export function useIsMachineListSettled(serverId: string | null | undefined): boolean {
-  return getStorage()((state) => Boolean(serverId) && Object.entries(state.machineListStatusByServerId ?? {}).some(([inventoryServerId, status]) => (
-    status === 'idle' && areServerProfileIdentifiersEquivalent(inventoryServerId, serverId)
-    && Array.isArray(state.machineListByServerId?.[inventoryServerId])
-  )));
+  return getStorage()((state) => {
+    if (!serverId) return false;
+    const inventory = resolveServerScopedMachineInventory({
+      serverId,
+      activeServerId: '',
+      activeMachines: [],
+      machineListByServerId: state.machineListByServerId ?? {},
+      machineListStatusByServerId: state.machineListStatusByServerId,
+    });
+    return inventory.status === 'idle' && inventory.machines !== null;
+  });
 }
 
 export function useIsActiveMachineListSettled(): boolean {
@@ -2424,7 +2443,7 @@ export function useMachineListStatusForServer(serverId: string): 'idle' | 'loadi
       const status = inventory[key];
       if (status) return status;
     }
-    return 'idle';
+    return 'loading';
   });
 }
 
@@ -2473,24 +2492,23 @@ type MachineCliDetectionTargetCacheEntry = Readonly<{
   target: MachineCliDetectionTarget;
 }>;
 
-const machineCliDetectionTargetCache = new Map<string, MachineCliDetectionTargetCacheEntry>();
-
 function getStableMachineCliDetectionTarget(
+  cache: Map<string, MachineCliDetectionTargetCacheEntry>,
   machineId: string,
   machine: Machine | null,
+  isOnline: boolean,
   serverId: string | null = null,
 ): MachineCliDetectionTarget {
   const daemonStateVersion = machine?.daemonStateVersion ?? 0;
-  const isOnline = machine ? isMachineOnline(machine) : false;
   const signature = `${daemonStateVersion}:${isOnline ? 'online' : 'offline'}`;
   // The same machine ID can have different facts on independently observed Homes.
   const cacheKey = JSON.stringify([serverId, machineId]);
-  const cached = machineCliDetectionTargetCache.get(cacheKey);
+  const cached = cache.get(cacheKey);
   if (cached?.signature === signature) {
     return cached.target;
   }
   const target = { daemonStateVersion, isOnline };
-  machineCliDetectionTargetCache.set(cacheKey, { signature, target });
+  cache.set(cacheKey, { signature, target });
   return target;
 }
 
@@ -2503,11 +2521,15 @@ export function useMachineCliDetectionTarget(
   const cacheServerId = exactServerId
     ? resolveServerProfileScopeIdForIdentifier(exactServerId)
     : null;
+  const presence = useMachinePresenceSummary(serverId, normalizedMachineId);
+  // Presence includes this reader's credential binding. A newly mounting
+  // reader must not replace a settled reader's external-store snapshot.
+  const cache = React.useRef(new Map<string, MachineCliDetectionTargetCacheEntry>());
   return getStorage()((state) => {
     const machine = !normalizedMachineId ? null
       : exactServerId ? resolveServerScopedMachine(state, exactServerId, normalizedMachineId)
         : state.machines[normalizedMachineId] ?? null;
-    return getStableMachineCliDetectionTarget(normalizedMachineId, machine, cacheServerId);
+    return getStableMachineCliDetectionTarget(cache.current, normalizedMachineId, machine, presence.reachability === 'reachable', cacheServerId);
   });
 }
 
@@ -2524,13 +2546,15 @@ export function useMachineCliDetectionTargets(machineIds: readonly string[]): Ma
   const normalizedMachineIds = normalizeMachineCliDetectionTargetIds(machineIds);
   const normalizedMachineIdsKey = normalizedMachineIds.join('\u0000');
   const stableMachineIds = React.useMemo(() => normalizedMachineIds, [normalizedMachineIdsKey]);
+  const presence = useMachinePresenceSummaries(null, stableMachineIds);
+  const cache = React.useRef(new Map<string, MachineCliDetectionTargetCacheEntry>());
   const selectTargets = React.useCallback((state: StorageState): MachineCliDetectionTargets => {
     const targets: Record<string, MachineCliDetectionTarget> = {};
-    for (const machineId of stableMachineIds) {
-      targets[machineId] = getStableMachineCliDetectionTarget(machineId, state.machines[machineId] ?? null);
+    for (const [index, machineId] of stableMachineIds.entries()) {
+      targets[machineId] = getStableMachineCliDetectionTarget(cache.current, machineId, state.machines[machineId] ?? null, presence[index]?.reachability === 'reachable');
     }
     return targets;
-  }, [stableMachineIds]);
+  }, [presence, stableMachineIds]);
   return getStorage()(useShallow(selectTargets));
 }
 
@@ -3177,6 +3201,24 @@ function collectVisibleArtifacts(artifacts: Readonly<Record<string, DecryptedArt
 export function useOpenApprovalArtifactsForSession(
   target: SessionAddress | null | undefined,
 ): ReadonlyArray<OpenApprovalArtifactForSession> {
+  return useSessionApprovalArtifacts(target, null);
+}
+
+/**
+ * The transcript's approvals: open ones plus settled ones whose approval body declares a settled
+ * presentation (pass a module-stable list). Badges, counts and the composer use the open hook.
+ */
+export function useTranscriptApprovalArtifactsForSession(
+  target: SessionAddress | null | undefined,
+  settledPresentations: readonly ApprovalSettledPresentation[],
+): ReadonlyArray<OpenApprovalArtifactForSession> {
+  return useSessionApprovalArtifacts(target, settledPresentations);
+}
+
+function useSessionApprovalArtifacts(
+  target: SessionAddress | null | undefined,
+  settledPresentations: readonly ApprovalSettledPresentation[] | null,
+): ReadonlyArray<OpenApprovalArtifactForSession> {
   const targetServerId = target?.serverId ?? null;
   const targetSessionId = target?.sessionId ?? null;
   const normalizedTarget = React.useMemo<SessionAddress | null>(() => {
@@ -3205,11 +3247,12 @@ export function useOpenApprovalArtifactsForSession(
 
       previousIsDataReady = state.isDataReady;
       previousArtifacts = state.artifacts;
-      const nextApprovals = listOpenApprovalArtifactsForSession(
+      const nextApprovals = listTranscriptApprovalArtifactsForSession(
         collectVisibleArtifacts(state.artifacts),
         normalizedTarget,
         {
           knownSessionAddresses: listSessionAddressesForSessionIdFromLocalState(state, normalizedTarget.sessionId),
+          ...(settledPresentations ? { settledPresentations } : {}),
         },
       );
       const nextSignature = buildOpenApprovalArtifactsForSessionSignature(nextApprovals);
@@ -3223,7 +3266,7 @@ export function useOpenApprovalArtifactsForSession(
         : nextApprovals;
       return previousApprovals;
     };
-  }, [normalizedTarget]);
+  }, [normalizedTarget, settledPresentations]);
 
   return getStorage()(useShallow(selector));
 }
@@ -3435,6 +3478,10 @@ export function useIsDataReady(): boolean {
   return getStorage()(useShallow((state) => state.isDataReady));
 }
 
+export function useIsSessionDraftsReady(): boolean {
+  return getStorage()((state) => state.isSessionDraftsReady);
+}
+
 export function useProfile() {
   return getStorage()(useShallow((state) => state.profile));
 }
@@ -3459,7 +3506,13 @@ export function useActiveServerAccountScope(serverId?: string | null) {
     ? getStorage().getState().profileScope ?? null
     : selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), serverId), [serverId]));
   const read = React.useCallback(() => selectScope(undefined), [selectScope]);
-  return React.useSyncExternalStore(subscribe, read, read);
+  const readServerSnapshot = React.useCallback(() => {
+    const initialScope = getStorage().getInitialState().profileScope ?? null;
+    return serverId === undefined
+      ? initialScope
+      : selectActiveServerAccountScopeForServer(initialScope, serverId);
+  }, [serverId]);
+  return React.useSyncExternalStore(subscribe, read, readServerSnapshot);
 }
 
 /** Live readers renew demand and subscriptions together when even the same Account is restored. */

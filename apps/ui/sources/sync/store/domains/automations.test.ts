@@ -27,7 +27,10 @@ import {
     workflowRunRowFromSummary,
 } from './workflowRuns';
 
-type State = ReturnType<typeof createAutomationsDomain> & ReturnType<typeof createWorkflowRunsDomain>;
+type State = ReturnType<typeof createAutomationsDomain> & ReturnType<typeof createWorkflowRunsDomain>
+    & { profileScope: { serverId: string; accountId: string } };
+
+const profileScope = { serverId: 'trigger-home', accountId: 'trigger-owner' };
 
 type PaginatedRunsState = State;
 
@@ -98,6 +101,7 @@ function createHarness(): {
         state = updater(state);
     };
     state = {
+        profileScope,
         ...createWorkflowRunsDomain({ get, set } as any),
         ...createAutomationsDomain({ get, set } as any),
     };
@@ -118,6 +122,54 @@ describe('Automation attention retention', () => {
 });
 
 describe('shared workflow trigger observations', () => {
+    it('does not restore a deleted trigger set from a delayed acknowledged update beyond the displayed revision', () => {
+        const store = createStore<State>((set, get) => ({
+            profileScope,
+            ...createWorkflowRunsDomain<State>({ get, set }),
+            ...createAutomationsDomain<State>({ get, set }),
+        }));
+        const removed: WorkflowTriggerSetV1 = { automationId: '11111111-1111-4111-8111-111111111111', revision: 10,
+            enabled: true, health: 'available', triggers: [] };
+        const sibling: WorkflowTriggerSetV1 = { ...removed, automationId: '22222222-2222-4222-8222-222222222222' };
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [removed] });
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'session:other', sets: [sibling] });
+        const otherIds = store.getState().workflowTriggerSetIdsByQuery['session:other'];
+        store.getState().removeAutomation(removed.automationId, 11);
+        store.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [] });
+        // The revision-11 update committed before deletion, but its
+        // HTTP response arrives afterwards. Delete proves the actual removed revision.
+        store.getState().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set: { ...removed, revision: 11, enabled: false } });
+        expect(store.getState().workflowTriggerSetsById[removed.automationId]).toBeUndefined();
+        expect(store.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([]);
+        expect(store.getState().workflowTriggerSetsById[sibling.automationId]).toBe(sibling);
+        expect(store.getState().workflowTriggerSetIdsByQuery['session:other']).toBe(otherIds);
+    });
+    it('admits equal-revision read enrichment, suppresses duplicate ACKs, and permits authoritative recreation', () => {
+        const h = createHarness();
+        const original: WorkflowTriggerSetV1 = { automationId: 'ordered-set', revision: 10,
+            enabled: true, health: 'source_unavailable', triggers: [] };
+        h.get().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [original] });
+        const enriched: WorkflowTriggerSetV1 = { ...original, health: 'available' };
+        h.get().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [enriched] });
+        expect(h.get().workflowTriggerSetsById[original.automationId]).toBe(enriched);
+        h.get().upsertWorkflowTriggerSet({ queryKey: 'workflow:obsolete', set: original });
+        expect(h.get().workflowTriggerSetsById[original.automationId]).toBe(enriched);
+        expect(h.get().workflowTriggerSetIdsByQuery['workflow:obsolete']).toBeUndefined();
+        h.get().removeAutomation(original.automationId, 9);
+        expect(h.get().workflowTriggerSetsById[original.automationId]).toBe(enriched);
+        h.get().removeAutomation(original.automationId, 11);
+        h.get().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [{ ...original, revision: 1 }] });
+        const recreated = h.get().workflowTriggerSetsById[original.automationId];
+        expect(recreated?.revision).toBe(1);
+        h.get().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set: { ...original, revision: 11 } });
+        expect(h.get().workflowTriggerSetsById[original.automationId]).toBe(recreated);
+        h.get().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set: { ...enriched, revision: 12 } });
+        expect(h.get().workflowTriggerSetsById[original.automationId]?.revision).toBe(12);
+        h.get().resetWorkflowTriggerSets();
+        h.set((state) => ({ ...state, profileScope: { ...profileScope, accountId: 'new-owner' } }));
+        h.get().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set: { ...original, revision: 1 } });
+        expect(h.get().workflowTriggerSetsById[original.automationId]?.revision).toBe(1);
+    });
     it('invalidates only the requested workflow rather than Account inline triggers', () => {
         const h = createHarness();
         const workflowDefinitionId = '00000000-0000-4000-8000-000000000001';
@@ -170,6 +222,7 @@ describe('shared workflow trigger observations', () => {
 
     it('suppresses an unchanged observation in the real store and retires inline membership on retarget', () => {
         const store = createStore<State>((set, get) => ({
+            profileScope,
             ...createWorkflowRunsDomain<State>({ get, set }),
             ...createAutomationsDomain<State>({ get, set }),
         }));

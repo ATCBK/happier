@@ -143,7 +143,7 @@ describe('createSettingsDomain scoped account settings', () => {
             },
             version: 22,
         }));
-        store.set('pending-settings', JSON.stringify({ analyticsOptOut: true, viewInline: true }));
+        store.set('pending-settings', JSON.stringify({ analyticsOptOut: true, showLineNumbers: true }));
 
         const { getState } = createTestStore();
         requireScopedMethods(getState());
@@ -165,7 +165,7 @@ describe('createSettingsDomain scoped account settings', () => {
             }),
             version: null,
         });
-        expect(loadPendingAccountSettings(scopeA)).toEqual({ analyticsOptOut: true, viewInline: true });
+        expect(loadPendingAccountSettings(scopeA)).toEqual({ analyticsOptOut: true, showLineNumbers: true });
     });
 
     it('forwards explicit legacy identity scopes without reviving retired organization settings', async () => {

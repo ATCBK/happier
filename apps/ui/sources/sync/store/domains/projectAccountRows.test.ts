@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import { createProjectAccountRowsDomain, readMachineFreshCopies, readProjectWorkspaceRefs, type ProjectAccountRowsDomain, type ProjectAccountRowsSnapshot } from './projectAccountRows';
+import { createProjectAccountRowsDomain, readProjectAtmosphere, readMachineFreshCopies, readProjectWorkspaceRefs, type ProjectAccountRowsDomain, type ProjectAccountRowsSnapshot } from './projectAccountRows';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 function snapshot(): ProjectAccountRowsSnapshot {
@@ -14,6 +14,17 @@ function snapshot(): ProjectAccountRowsSnapshot {
 function store() { return createStore<ProjectAccountRowsDomain>()((set, get) => createProjectAccountRowsDomain({ set, get })); }
 
 describe('Project Account row projection', () => {
+    it('selects the atmosphere only from the requested Project in the active Account/Home', () => {
+        const state = store();
+        state.getState().activateProjectAccountRowsScope(scope);
+        const rows = snapshot();
+        state.getState().applyProjectAccountRowsForScope(scope, { ...rows,
+            organizations: rows.organizations.map(row => ({ ...row, value: { ...row.value, atmosphere: 'home' } })) });
+        expect(readProjectAtmosphere({ ...state.getState(), profileScope: scope }, { serverId: 'home-a', projectKey: 'anchor' })).toBe('home');
+        expect(readProjectAtmosphere({ ...state.getState(), profileScope: scope }, { serverId: 'home-b', projectKey: 'anchor' })).toBeUndefined();
+        expect(readProjectAtmosphere({ ...state.getState(), profileScope: { ...scope, accountId: 'other-account' } },
+            { serverId: 'home-a', projectKey: 'anchor' })).toBeUndefined();
+    });
     it('reads Machine fresh copies only from canonical worker provenance and its exact target direction', () => {
         const state = store();
         const policy = { v: 1 as const, selection: 'git_worktree' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };

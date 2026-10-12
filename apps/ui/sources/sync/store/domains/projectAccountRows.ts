@@ -68,8 +68,22 @@ export function readCurrentProjectAccountRows(state: Pick<ProjectAccountRowsDoma
     return state.projectAccountRows;
 }
 
+/**
+ * Whether the opened census can say a checkout is absent: an authorized, complete read. While rows
+ * are loading, failed, locked or partial, a ref that is not listed is unconfirmed, never "gone".
+ */
+export function isProjectAccountRowsCensusComplete(snapshot: Pick<ProjectAccountRowsSnapshot, 'status' | 'coverage'> | null | undefined): boolean {
+    return snapshot?.status === 'ready' && snapshot.coverage === 'complete';
+}
+
 export function readProjectWorkspaceRefs(state: Parameters<typeof readCurrentProjectAccountRows>[0]): readonly WorkspaceRefV1[] {
     return readCurrentProjectAccountRows(state)?.workspaceRefs ?? EMPTY_WORKSPACE_REFS;
+}
+
+export function readProjectAtmosphere(state: Parameters<typeof readCurrentProjectAccountRows>[0],
+    project: Readonly<{ serverId: string; projectKey: string }>): ProjectAccountOrganizationV1['atmosphere'] {
+    return readCurrentProjectAccountRows(state)?.organizations.find(row => row.key.serverId === project.serverId
+        && row.key.projectKey === project.projectKey)?.value.atmosphere;
 }
 
 export type MachineFreshCopyRow = Readonly<{

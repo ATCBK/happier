@@ -8,7 +8,6 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import {
     useAllMachines,
     useLaunchSelectionMachines,
-    useMachineCliDetectionTargets,
     useMachineListByServerId,
     useMachineListForServer,
     useMachineListStatusForServer,
@@ -220,91 +219,6 @@ describe('useAllMachines', () => {
             expect(hook.getCurrent()).not.toBe(firstSnapshot);
             expect(hook.getCurrent()).toMatchObject({ status: 'loading' });
             expect(hook.getCurrent().machines?.[0]?.activeAt).toBe(3000);
-
-            await hook.unmount();
-        } finally {
-            storage.setState(previousState);
-        }
-    });
-
-    it('projects a stable requested currentness set without subscribing to unrelated machines', async () => {
-        const previousState = storage.getState();
-        const now = Date.now();
-        const onlineMachine = {
-            id: 'm1',
-            seq: 1,
-            createdAt: now,
-            updatedAt: now,
-            active: true,
-            activeAt: now,
-            metadata: { host: 'online', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 1,
-        };
-        const offlineMachine = {
-            id: 'm3',
-            seq: 1,
-            createdAt: now,
-            updatedAt: now,
-            active: false,
-            activeAt: now - 10 * 60_000,
-            metadata: { host: 'offline', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 3,
-        };
-        const unrelatedMachine = {
-            id: 'm2',
-            seq: 1,
-            createdAt: now,
-            updatedAt: now,
-            active: true,
-            activeAt: now,
-            metadata: { host: 'unrelated', platform: 'darwin', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 1,
-        };
-        try {
-            storage.setState((state) => ({
-                ...state,
-                isDataReady: true,
-                machines: { m1: onlineMachine, m3: offlineMachine },
-            }));
-            const hook = await renderHook(() => useMachineCliDetectionTargets(['m3', 'm1', 'm3']), {
-                flushOptions: { cycles: 1, turns: 4 },
-            });
-            const firstTargets = hook.getCurrent();
-
-            expect(firstTargets).toEqual({
-                m1: { daemonStateVersion: 1, isOnline: true },
-                m3: { daemonStateVersion: 3, isOnline: false },
-            });
-
-            await act(async () => {
-                storage.setState((state) => ({
-                    ...state,
-                    machines: { ...state.machines, m2: unrelatedMachine },
-                }));
-            });
-            expect(hook.getCurrent()).toBe(firstTargets);
-
-            await act(async () => {
-                storage.setState((state) => ({
-                    ...state,
-                    machines: {
-                        ...state.machines,
-                        m3: { ...offlineMachine, active: true, activeAt: now, daemonStateVersion: 4 },
-                    },
-                }));
-            });
-            expect(hook.getCurrent()).toEqual({
-                m1: { daemonStateVersion: 1, isOnline: true },
-                m3: { daemonStateVersion: 4, isOnline: true },
-            });
-            expect(hook.getCurrent()).not.toBe(firstTargets);
-            expect(hook.getCurrent().m1).toBe(firstTargets.m1);
 
             await hook.unmount();
         } finally {

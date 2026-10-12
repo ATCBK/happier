@@ -17,14 +17,12 @@ import type { ProfileBuiltinEnabledResultV1, ProfileOperationResult, ProfileRemo
 import type {
   CurrentSessionAuthoringSelectionsRuntimeProjection,
 } from '../domains/settings/sessionAuthoringSelectionPersistence';
-import {
-  replayFavoriteModelSelectionReplacementIntent,
-} from '../domains/settings/sessionAuthoringSelectionPersistence';
+import { ModelFavoriteMutationV1Schema } from '@happier-dev/protocol/providers/modelFavoritesV1';
 import type { AuthoringMemory } from './domains/authoringMemory';
 import type { AuthoringMemoryDelta } from '@/sync/engine/authoringMemory/authoringMemorySync';
-import { createUiProfileOperations } from '@/sync/ops/profiles/createUiProfileOperations';
 import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1, type ProfileActionRequestV1 } from '@happier-dev/protocol/profiles/profileActionsV1';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 import {
   applySessionReminderPresetIntentToAccountSettings,
   type SessionReminderPresetIntent,
@@ -156,14 +154,18 @@ export function useApplySessionReminderPresetIntent(): (intent: SessionReminderP
   }, [expectedScope]);
 }
 
-export function useApplyProfileSave(): (input: Readonly<{
+export type ProfileActionExecutionOptions = Readonly<{
+  onApprovalPending?: (registration: ActionApprovalContinuation) => void;
+}>;
+
+export function useApplyProfileSave(options?: ProfileActionExecutionOptions): (input: Readonly<{
   profile: AiLaunchProfile;
   secretBindings?: Readonly<ProfileRecordV1['secretBindings']>;
   expectedRevision?: number | 'absent';
   legacyCloneSource?: ProfileLegacyCloneSourceV1;
   builtinNames?: readonly string[];
 }>) => Promise<ProfileOperationResult> {
-  const execute = useProfileActionExecute();
+  const execute = useProfileActionExecute(options);
   return React.useCallback(async input => PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.save'].parse(
     await execute({ actionId: 'launch_profiles.save', input: { id: input.profile.id, profile: input.profile,
       expectedRevision: input.expectedRevision ?? input.profile.profileRecordRevision ?? 'absent',
@@ -174,40 +176,45 @@ export function useApplyProfileSave(): (input: Readonly<{
 }
 
 /** One thin mounted ingress; Profile decisions remain in the admitted domain owner. */
-export function useProfileActionExecute() {
-  const options = useProfileOperationOptions();
+export function useProfileActionExecute(options?: ProfileActionExecutionOptions) {
+  const scope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(scope, options);
   return React.useCallback(async (request: ProfileActionRequestV1): Promise<unknown> => {
-    if (!options || !options.isCurrent()) throw new Error('Profile Account is unavailable');
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    const result = await createDefaultActionExecutor().execute(request.actionId, request.input, {
-      surface: 'ui', serverId: options.scope.serverId, expectedAccountId: options.scope.accountId,
-    });
+    const result = await execute(request.actionId, request.input);
     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode, result });
     return result.result;
-  }, [options]);
+  }, [execute]);
 }
 
-export function useDeleteAiLaunchProfile(): (profileId: string, expectedRevision?: number) => Promise<ProfileRemovalResult> {
-  const options = useProfileOperationOptions();
+/** Favorite callers retain their Settings projection; each changed id is an admitted semantic intent. */
+export function useProfileFavoriteIdsMutable(): [Settings['favoriteProfiles'],
+  (value: Settings['favoriteProfiles'] | ((current: Settings['favoriteProfiles']) => Settings['favoriteProfiles'] | null)) => Promise<void>] {
+  const favorites = getStorage()(state => state.settings.favoriteProfiles);
+  const execute = useProfileActionExecute();
+  const replace = React.useCallback(async (value: Settings['favoriteProfiles'] | ((current: Settings['favoriteProfiles']) => Settings['favoriteProfiles'] | null)) => {
+    const next = typeof value === 'function' ? value(favorites) : value;
+    if (next === null) return;
+    const before = new Set(favorites);
+    const after = new Set(next);
+    for (const id of new Set([...before, ...after])) {
+      if (before.has(id) === after.has(id)) continue;
+      const result = PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.favorite.set'].parse(
+        await execute({ actionId: 'launch_profiles.favorite.set', input: { id, favorite: after.has(id) } }));
+      if (result.status !== 'updated') throw new Error(result.status === 'conflict' ? 'profile_revision_conflict' : result.reason);
+    }
+  }, [execute, favorites]);
+  return [favorites, replace];
+}
+
+export function useDeleteAiLaunchProfile(options?: ProfileActionExecutionOptions): (profileId: string, expectedRevision?: number) => Promise<ProfileRemovalResult> {
+  const execute = useProfileActionExecute(options);
   return React.useCallback(async (profileId: string, expectedRevision?: number) => {
-    if (!options) throw new Error('Profile Account is unavailable');
-    const result = await createUiProfileOperations(options).remove({ id: profileId, expectedRevision });
+    if (expectedRevision === undefined) throw new Error('profile_review_unavailable');
+    const result = PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.delete'].parse(
+      await execute({ actionId: 'launch_profiles.delete', input: { id: profileId, expectedRevision } }));
     requireUpdatedProfileOperation(result);
     return result;
-  }, [options]);
-}
-
-function useProfileOperationOptions() {
-  const scope = useAccountSettingsScope();
-  const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [scope]);
-  return React.useMemo(() => scope ? { scope, isCurrent: () => Boolean(lifetime?.isCurrent()
-    && areAccountSettingsScopesEqual(lifetime.scope, scope)
-    && areAccountSettingsScopesEqual(getStorage().getState().settingsScope, scope)) } : null, [scope, lifetime]);
-}
-
-export function useProfileOperations() {
-  const options = useProfileOperationOptions();
-  return React.useMemo(() => options ? createUiProfileOperations(options) : null, [options]);
+  }, [execute]);
 }
 
 export function requireUpdatedProfileOperation(result: ProfileOperationResult | ProfileBuiltinEnabledResultV1): void {
@@ -216,26 +223,10 @@ export function requireUpdatedProfileOperation(result: ProfileOperationResult | 
   }
 }
 
-/** Current bindings belong to one private Profile row, never an Account Settings map. */
-export function useApplyProfileSecretBindings(): (input: Readonly<{
-  profileId: string;
-  secretBindings: Readonly<Record<string, string>>;
-  expectedRevision?: number;
-}>) => Promise<void> {
-  const operations = useProfileOperations();
-  return React.useCallback(async input => {
-    if (!operations) throw new Error('Profile Account is unavailable');
-    requireUpdatedProfileOperation(await operations.setSecretBindings({ id: input.profileId,
-      secretBindings: input.secretBindings, expectedRevision: input.expectedRevision }));
-  }, [operations]);
-}
-
-
 /**
  * Apply a typed Favorite replacement against the explicitly observed Account
- * Settings version. The reducer preserves opaque entries in the observed
- * carrier, and the canonical writer rebases the deterministic intent if a
- * concurrent field-level write wins the CAS.
+ * Settings scope. Each changed membership enters the canonical favorite
+ * Action, whose Account CAS preserves opaque and unrelated favorites.
  */
 export function useApplyFavoriteModelSelectionReplacementIntent(): (
   input: Readonly<{
@@ -243,12 +234,21 @@ export function useApplyFavoriteModelSelectionReplacementIntent(): (
     proposed: CurrentSessionAuthoringSelectionsRuntimeProjection['currentFavoriteModelSelectionsV1'];
   }>,
 ) => Promise<void> {
-  const settingsSnapshot = useAccountSettingsMutationSnapshot();
+  const scope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(scope);
   return React.useCallback(async (input) => {
-    await persistAccountSettingsOnce(settingsSnapshot.scope, requireSettingsVersion(settingsSnapshot.version), (raw) => (
-      replayFavoriteModelSelectionReplacementIntent({ raw, ...input })
-    ));
-  }, [settingsSnapshot]);
+    const key = (value: typeof input.base[number]) => JSON.stringify(value.selection.ref);
+    const before = new Set(input.base.map(key));
+    const after = new Set(input.proposed.map(key));
+    for (const selection of input.base.filter(value => !after.has(key(value)))) {
+      const result = await execute('models.favorite.set', ModelFavoriteMutationV1Schema.parse({ selection, favorite: false }));
+      if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+    }
+    for (const selection of input.proposed.filter(value => !before.has(key(value)))) {
+      const result = await execute('models.favorite.set', ModelFavoriteMutationV1Schema.parse({ selection, favorite: true }));
+      if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+    }
+  }, [execute]);
 }
 
 /**

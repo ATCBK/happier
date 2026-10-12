@@ -1,17 +1,33 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { useMachinePresenceCounts } from '@/sync/domains/state/storage';
-import { storage } from '@/sync/domains/state/storageStore';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
-afterEach(() => {
+const home = createHomeGovernanceHarness();
+const homeIdentityId = 'srv_counts';
+installHomeGovernanceBoundaries(home);
+const { useMachinePresenceCounts } = await import('@/sync/domains/state/storage');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+    await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+
+beforeEach(async () => {
+    await home.reset();
+    await home.addHome({ name: 'Counts Home', serverUrl: 'https://counts.example.test',
+        serverIdentityId: homeIdentityId, accountId: 'account' });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId: homeIdentityId, accountId: 'account' } });
+});
+
+afterEach(async () => {
     clearMachineRequestReachabilityForTest();
     standardCleanup();
+    vi.useRealTimers();
+    await home.reset();
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -43,6 +59,17 @@ function setHomeMachines(machines: readonly Machine[]) {
 }
 
 describe('useMachinePresenceCounts', () => {
+    it('expires the chrome count at the same grace boundary without another store write', async () => {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        vi.setSystemTime(Date.now());
+        setHomeMachines([machine('laptop')]);
+        const hook = await renderHook(() => useMachinePresenceCounts());
+        expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+        await act(async () => { vi.advanceTimersByTime(60_001); });
+        expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+        await hook.unmount();
+    });
+
     it('moves a machine offline on a failed request and does not recover on a subsequent heartbeat', async () => {
         const previousState = storage.getState();
         const previousApplied = getAppliedActiveServerSnapshot();
@@ -50,6 +77,7 @@ describe('useMachinePresenceCounts', () => {
         const serverId = String(getActiveServerSnapshot().serverId ?? '').trim() || 'server-active';
         const now = Date.now();
         try {
+            // Request observations belong to the authenticated Home; retain the real scope owners.
             publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId });
             storage.setState({ profileScope: { serverId, accountId: 'account' } });
             setHomeMachines([machine('laptop', { activeAt: now })]);
@@ -57,7 +85,7 @@ describe('useMachinePresenceCounts', () => {
             expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
 
             await act(async () => {
-                recordMachineRequestFailed({ serverId, machineId: 'laptop', observedAtMs: now + 1 });
+                recordMachineRequestFailed({ serverId: homeIdentityId, accountId: 'account', machineId: 'laptop', observedAtMs: now + 1 });
             });
             expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
             await act(async () => {

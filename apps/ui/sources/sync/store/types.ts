@@ -46,6 +46,7 @@ import type { WorkspaceScopeBase } from '../domains/workspaces/workspaceScope';
 import type { SessionOrganizationDomain } from './domains/sessionOrganization';
 import type { SessionListRenderableDelta } from './domains/sessionListIndexFinalization';
 import type { TranscriptLoadingDomain } from './domains/transcriptLoading';
+import type { ProjectAuthoringSessionInputs } from './domains/projectAuthoringSessions';
 
 export type KnownEntitlements = 'voice' | 'pro';
 export type SessionModelMode = NonNullable<Session['modelMode']>;
@@ -76,6 +77,7 @@ export interface ProfileDomainSlice {
 
 export interface SessionsDomainSlice {
     sessions: Record<string, Session>;
+    projectAuthoringSessions: ProjectAuthoringSessionInputs;
     /**
      * Ids this viewer has watched be deleted. Neither session map can answer "does this session
      * exist" — both are list-scoped caches that an ordinary refresh evicts from — so anything
@@ -106,7 +108,10 @@ export interface SessionsDomainSlice {
     reviewCommentsDraftsByWorkspaceCacheKey: Record<string, ReviewCommentDraft[]>;
     sessionActionDraftsByAddressKey: Record<string, SessionActionDraft[]>;
     sessionLocalStateScope: ServerAccountScope | null;
+    /** Core Account projections; independent of draft hydration and outbox recovery. */
     isDataReady: boolean;
+    /** The focused Account's draft hydration attempt has settled; local drafts remain usable offline. */
+    isSessionDraftsReady: boolean;
     activateSessionLocalStateScope: (scope: ServerAccountScope) => void;
     clearSessionLocalStateScope: () => void;
     applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: 'online' | number })[]) => void;
@@ -194,7 +199,7 @@ export interface MachinesDomainSlice {
     machineListByServerId: Record<string, Machine[] | null>;
     machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
     applyMachines: (machines: Machine[], replace?: boolean, options?: ApplyMachinesOptions) => void;
-    replaceMachineDisplays: (machines: MachineDisplayRenderable[], options?: ApplyMachinesOptions) => void;
+    replaceMachineDisplays: import('./domains/machines').MachinesDomain['replaceMachineDisplays'];
     markMachineListUnavailable: (serverId: string) => void;
 }
 

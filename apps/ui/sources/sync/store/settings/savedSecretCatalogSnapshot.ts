@@ -11,6 +11,7 @@ import {
     type ScopedSnapshotReachability,
     type ScopedSnapshotStatus,
 } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { createRowInventoryReceiptOrdering } from './rowInventoryReceiptOrdering';
 
 export type SavedSecretCatalogSnapshot = Readonly<{
     scope: ServerAccountScope;
@@ -26,6 +27,7 @@ export type SavedSecretCatalogSnapshot = Readonly<{
 }>;
 
 const snapshots = new Map<string, SavedSecretCatalogSnapshot>();
+const receiptOrdering = createRowInventoryReceiptOrdering();
 const listeners = new Set<() => void>();
 
 const key = (scope: ServerAccountScope): string => serverAccountScopeKeySuffix(scope);
@@ -41,6 +43,20 @@ export function subscribeSavedSecretCatalogSnapshots(listener: () => void): () =
 
 export function getSavedSecretCatalogSnapshot(scope: ServerAccountScope | null | undefined): SavedSecretCatalogSnapshot | null {
     return scope ? snapshots.get(key(scope)) ?? null : null;
+}
+/** A receipt establishes metadata, never permission to reuse pre-write material. */
+export function applyAcknowledgedSavedSecretCatalogEntry(scope: ServerAccountScope, entry: SavedSecretCatalogEntryV1, current: boolean): void {
+    if (!current) return;
+    const previous = getSavedSecretCatalogSnapshot(scope);
+    const old = previous?.data?.find(candidate => candidate.ref === entry.ref);
+    if (!receiptOrdering.admit(scope, entry.ref, entry.revision)) return;
+    const entries = previous?.data ?? [];
+    const data = old ? entries.map(candidate => candidate.ref === entry.ref ? entry : candidate) : [...entries, entry];
+    snapshots.set(key(scope), Object.freeze({ scope, status: 'refreshing', data: Object.freeze(data),
+        corruptEntries: previous?.corruptEntries ?? EMPTY_CORRUPT_ENTRIES, materializedSecrets: EMPTY_MATERIALIZED_SECRETS,
+        legacyImport: previous?.legacyImport ?? null, lastObservedAt: previous?.lastObservedAt ?? null,
+        stale: true, reachability: previous?.reachability ?? 'unknown', error: null }));
+    notify();
 }
 
 function preserveRows(previous: readonly SavedSecretCatalogEntryV1[] | null, incoming: readonly SavedSecretCatalogEntryV1[]): readonly SavedSecretCatalogEntryV1[] {
@@ -70,6 +86,16 @@ export function beginSavedSecretCatalogLoad(scope: ServerAccountScope): void {
 
 export function applySavedSecretCatalogPage(params: Readonly<{ scope: ServerAccountScope; entries: readonly SavedSecretCatalogEntryV1[]; corruptEntries?: readonly SavedSecretCatalogCorruptEntryV1[]; materializedSecrets?: readonly SavedSecret[]; legacyImport?: SavedSecretLegacyImportResult; observedAt: number; current?: boolean }>): void {
     const previous = getSavedSecretCatalogSnapshot(params.scope);
+    for (const entry of params.entries) receiptOrdering.retain(params.scope, entry.ref, entry.revision);
+    for (const entry of params.corruptEntries ?? []) {
+        if (!entry.repair) continue;
+        try {
+            receiptOrdering.retain(params.scope,
+                formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: entry.repair.resourceId }), entry.repair.expectedRevision);
+        } catch {
+            // An opaque corrupt identity cannot match a valid metadata receipt; preserve its repair row unchanged.
+        }
+    }
     snapshots.set(key(params.scope), Object.freeze({
         scope: params.scope,
         status: 'ready',
@@ -88,6 +114,7 @@ export function applySavedSecretCatalogPage(params: Readonly<{ scope: ServerAcco
 export function applySavedSecretCatalogFailure(params: Readonly<{ scope: ServerAccountScope; error: ScopedSnapshotError }>): void {
     const current = getSavedSecretCatalogSnapshot(params.scope);
     const authoritativeRefusal = isAuthoritativeScopedSnapshotRefusal(params.error);
+    if (authoritativeRefusal) receiptOrdering.clearScope(params.scope);
     const retained = authoritativeRefusal ? null : (current?.data ?? null);
     snapshots.set(key(params.scope), Object.freeze({
         scope: params.scope,
@@ -118,10 +145,14 @@ export function invalidateSavedSecretCatalog(scope: ServerAccountScope): void {
 }
 
 /** An acknowledged delete is authoritative even when the next catalog read fails. */
-export function removeDeletedSavedSecretCatalogResource(scope: ServerAccountScope, resourceId: string): void {
+export function removeDeletedSavedSecretCatalogResource(scope: ServerAccountScope, resourceId: string,
+    expectedRevision?: number, isCurrent = true): void {
+    if (!isCurrent) return;
     const current = getSavedSecretCatalogSnapshot(scope);
-    if (!current) return;
     const ref = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: resourceId });
+    const removedRevision = expectedRevision ?? current?.data?.find(entry => entry.ref === ref)?.revision
+        ?? current?.corruptEntries.find(entry => entry.repair?.resourceId === resourceId)?.repair?.expectedRevision;
+    if (!receiptOrdering.admitRemoval(scope, ref, removedRevision) || !current) return;
     const data = current.data?.filter(entry => entry.ref !== ref) ?? null;
     const corruptEntries = current.corruptEntries.filter(entry => entry.repair?.resourceId !== resourceId);
     const materializedSecrets = current.materializedSecrets.filter(secret => secret.id !== ref);
@@ -152,6 +183,7 @@ export function invalidateSavedSecretCatalogsForServer(serverId: string): void {
 
 export function resetSavedSecretCatalogSnapshotsForTests(): void {
     snapshots.clear();
+    receiptOrdering.reset();
     listeners.clear();
 }
 

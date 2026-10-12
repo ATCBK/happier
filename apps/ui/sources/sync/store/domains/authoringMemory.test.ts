@@ -5,6 +5,15 @@ import type { AuthoringMemoryValueV1 } from '@happier-dev/protocol';
 import { createAuthoringMemoryDomain, type AuthoringMemoryDomain } from './authoringMemory';
 
 describe('Account authoring-memory materialization', () => {
+    it('retains each unchanged Workflow target when another Workflow target changes', () => {
+        const store = createStore<AuthoringMemoryDomain>()((set, get) => createAuthoringMemoryDomain({ set, get }));
+        const first = { machineId: 'machine-a', directory: '/first' };
+        store.getState().applyAuthoringMemory({ workflowProjectTargetsByDefinitionId: { first, second: { machineId: 'machine-b', directory: '/before' } } });
+        const previous = store.getState().authoringMemory.workflowProjectTargetsByDefinitionId;
+        store.getState().applyAuthoringMemory({ workflowProjectTargetsByDefinitionId: { first, second: { machineId: 'machine-b', directory: '/after' } } });
+        expect(store.getState().authoringMemory.workflowProjectTargetsByDefinitionId.first).toBe(previous.first);
+        expect(store.getState().authoringMemory.workflowProjectTargetsByDefinitionId.second?.directory).toBe('/after');
+    });
     it('materializes domain-valid opaque selections beyond the retired Settings document depth budget', () => {
         const store = createStore<AuthoringMemoryDomain>()((set, get) => createAuthoringMemoryDomain({ set, get }));
         let opaque: AuthoringMemoryValueV1 = { futureSelection: true };

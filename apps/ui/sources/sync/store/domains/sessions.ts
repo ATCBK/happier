@@ -1,3 +1,4 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection } from '../../domains/session/sessionLifecycleProjection';
 import type {
     ScmCommitSelectionPatch,
@@ -337,6 +338,7 @@ export type SessionsDomain = {
     sessionActionDraftsByAddressKey: Record<string, SessionActionDraft[]>;
     sessionLocalStateScope: ServerAccountScope | null;
     isDataReady: boolean;
+    isSessionDraftsReady: boolean;
 
     activateSessionLocalStateScope: (scope: ServerAccountScope) => void;
     clearSessionLocalStateScope: () => void;
@@ -976,6 +978,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         sessionActionDraftsByAddressKey,
         sessionLocalStateScope,
         isDataReady: false,
+        isSessionDraftsReady: false,
         activateSessionLocalStateScope: (scope) => {
             clearDeferredWarmCacheSave();
             prepareSessionLocalStateScopeForActivation(scope);
@@ -1680,7 +1683,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     previousIndex,
                     serverScope: {
                         serverId,
-                        serverName: getServerProfileById(serverId)?.name ?? null,
+                        serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                     },
                 });
                 if (nextIndex === previousIndex) continue;
@@ -1928,7 +1931,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
                     serverScope: {
                         serverId,
-                        serverName: getServerProfileById(serverId)?.name ?? null,
+                        serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                     },
                 });
             };
@@ -2131,7 +2134,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
                         serverScope: {
                             serverId,
-                            serverName: getServerProfileById(serverId)?.name ?? null,
+                            serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                         },
                     }),
                 )
@@ -2250,7 +2253,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
                 serverScope: {
                     serverId,
-                    serverName: getServerProfileById(serverId)?.name ?? null,
+                    serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
             const nextRowsByServerId = {
@@ -2328,7 +2331,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
                 serverScope: {
                     serverId,
-                    serverName: getServerProfileById(serverId)?.name ?? null,
+                    serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
             const nextRowsByServerId = {
@@ -3306,7 +3309,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         inactiveGroupingV1: indexSettings.inactiveGroupingV1,
                         sectionModeV1: indexSettings.sectionModeV1,
                         previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
-                        serverScope: { serverId, serverName: getServerProfileById(serverId)?.name ?? null },
+                        serverScope: { serverId, serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId) },
                     });
                 }
             }

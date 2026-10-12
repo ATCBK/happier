@@ -20,7 +20,8 @@ export function updateProjectAuthoringSessionInputs(
     session: Session | undefined,
 ): ProjectAuthoringSessionInputs {
     const origin = session ? readProjectSessionAuthoringOrigin(readSessionOwnerMetadataView(session)) : null;
-    const checkoutKey = origin?.page === 'scripts' ? projectAuthoringCheckoutKey(origin.workspace, origin.accountId) : null;
+    const checkoutKey = origin?.page === 'scripts' && origin.purpose !== 'session'
+        ? projectAuthoringCheckoutKey(origin.workspace, origin.accountId) : null;
     const existing = previous[sessionId];
     if (!checkoutKey || !session) {
         if (!existing) return previous;

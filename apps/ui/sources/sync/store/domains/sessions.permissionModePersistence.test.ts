@@ -90,7 +90,6 @@ vi.mock('../../runtime/orchestration/projectManager', () => ({
         getProjects: () => [],
         getProject: () => null,
         getProjectForSession: () => null,
-        getProjectSessions: () => [],
         getProjectScmStatus: () => null,
         getSessionProjectScmStatus: () => null,
         updateSessionProjectScmStatus: () => {},

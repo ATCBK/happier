@@ -26,7 +26,6 @@ vi.mock('@/sync/domains/state/storageStore', () => {
 });
 
 import {
-    useApplyFavoriteModelSelectionReplacementIntent,
     useApplyRememberedEngineSelectionReplacementIntent,
 } from './settingsWriters';
 
@@ -60,33 +59,6 @@ describe('session-authoring Settings writers', () => {
         vi.clearAllMocks();
     });
 
-    it('applies a Favorite replacement once and retains an opaque entry in the observed carrier', async () => {
-        const base = [favorite('gpt-5.4', 1)];
-        const proposed = [...base, favorite('gpt-5.5', 2)];
-        const hook = await renderHook(() => useApplyFavoriteModelSelectionReplacementIntent());
-
-        await hook.getCurrent()({ base, proposed });
-
-        expect(mutateAccountSettingsOnce).toHaveBeenCalledOnce();
-        const input = mutateAccountSettingsOnce.mock.calls[0]?.[0];
-        expect(input.expectedSettingsScope).toEqual({ serverId: 'server-a', accountId: 'account-a' });
-        expect(input.expectedSettingsVersion).toBe(7);
-        expect(input.rebaseOnConflict).toBe(true);
-        const result = input.mutate({
-            favoriteModelSelectionsV1: [
-                base[0],
-                { v: 2, futureWriterField: 'opaque-favorite' },
-            ],
-        });
-
-        expect(result.settings).toMatchObject({
-            favoriteModelSelectionsV1: [
-                base[0],
-                { v: 2, futureWriterField: 'opaque-favorite' },
-                proposed[1],
-            ],
-        });
-    });
 
     it('routes remembered edits to authoring memory without writing the Account settings document', async () => {
         const base = RememberedEngineSelectionsByScopeV1Schema.parse({
@@ -113,19 +85,4 @@ describe('session-authoring Settings writers', () => {
         }, { expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' } });
     });
 
-    it('keeps a retained writer bound to the Account scope and revision rendered before focus changes', async () => {
-        const base = [favorite('gpt-5.4', 1)];
-        const proposed = [...base, favorite('gpt-5.5', 2)];
-        const hook = await renderHook(() => useApplyFavoriteModelSelectionReplacementIntent());
-        const writerForAccountA = hook.getCurrent();
-
-        settingsState.settingsVersion = 19;
-        settingsState.settingsScope = { serverId: 'server-b', accountId: 'account-b' };
-        await writerForAccountA({ base, proposed });
-
-        expect(mutateAccountSettingsOnce).toHaveBeenCalledWith(expect.objectContaining({
-            expectedSettingsScope: { serverId: 'server-a', accountId: 'account-a' },
-            expectedSettingsVersion: 7,
-        }));
-    });
 });

@@ -52,6 +52,21 @@ export type ApplyMachinesOptions = Readonly<{
     sourceServerId?: string | null;
 }>;
 
+type MachineUpdateObserver = (serverId: string, machineIds: readonly string[]) => void;
+const machineUpdateObservers = new Set<MachineUpdateObserver>();
+
+/**
+ * Mounted work-summary readers use exact Machine liveness invalidations (plan 42 §8).
+ * Heartbeat-only applyMachines deliberately returns the same store state and mutates
+ * activeAt in place, so neither a Machine selector nor a presence selector is notified.
+ * This receipt lets that reader compare liveness without waking broad projections;
+ * scoped inventory, presence and the reader's pending request remain their owners.
+ */
+export function subscribeMachineUpdates(observer: MachineUpdateObserver): () => void {
+    machineUpdateObservers.add(observer);
+    return () => { machineUpdateObservers.delete(observer); };
+}
+
 type MachinesDomainDependencies = Readonly<{
     sessions: Record<string, Session>;
     sessionListRowsByServerId: Readonly<Record<string, Readonly<Record<string, SessionListRenderableSession>>>>;
@@ -216,10 +231,10 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'error' },
                 };
             }),
-        applyMachines: (machines, replace = false, options) =>
+        applyMachines: (machines, replace = false, options) => {
+            const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);
+            const sourceServerId = normalizeMachineServerId(options?.sourceServerId) || activeServerId;
             set((state) => {
-                const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);
-                const sourceServerId = normalizeMachineServerId(options?.sourceServerId) || activeServerId;
                 const shouldUpdateActiveProjection = !sourceServerId || areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId);
                 const currentScopedMachines = sourceServerId
                     ? state.machineListByServerId[sourceServerId]
@@ -470,7 +485,12 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     scheduleActiveWarmMachineCacheSave(nextState as MachinesDomain & MachinesDomainDependencies);
                 }
                 return nextState;
-            }),
+            });
+            if (sourceServerId && machineUpdateObservers.size > 0) {
+                const machineIds = machines.map(machine => machine.id);
+                for (const observer of [...machineUpdateObservers]) observer(sourceServerId, machineIds);
+            }
+        },
         replaceMachineDisplays: (machines, options) =>
             set((state) => {
                 const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);

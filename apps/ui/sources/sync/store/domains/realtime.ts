@@ -12,6 +12,8 @@ export type SyncError = {
   kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
   at: number;
   serverId?: string;
+  /** Present for socket lifecycle errors; ordinary sync-operation failures omit it. */
+  source?: 'socket';
   failuresCount?: number;
   nextRetryAt?: number;
 } | null;

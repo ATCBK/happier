@@ -36,6 +36,8 @@ export function useHomeAiLaunchProfileCatalog(scope: AccountSettingsScope | null
     profiles: ReturnType<typeof readUiProfileCatalogSnapshot>['profiles'];
     selectedProfile: ReturnType<typeof readUiSelectedProfileCatalogProfile>;
     status: 'loading' | 'ready' | 'partial' | 'unavailable';
+    source: 'destination' | 'legacy' | null;
+    stale: boolean;
     /** Complete readable rows, including retained answers while their owner refreshes. */
     hasCompleteData: boolean;
 }> {
@@ -61,6 +63,7 @@ export function useHomeAiLaunchProfileCatalog(scope: AccountSettingsScope | null
     const profiles = projection.profiles;
     const status = !scope ? 'unavailable' as const : snapshot?.catalog.status ?? 'loading';
     const hasCompleteData = snapshot?.dataComplete === true && projection.unreadableCount === 0;
+    const stale = snapshot?.stale ?? true;
     const selectedProfile = React.useMemo(() => {
         if (!evidenceScope || !snapshot || !hasCompleteData) return null;
         const settings = liveEvidence ? { favoriteProfiles: liveEvidence[0], profileEnabledById: liveEvidence[1] }
@@ -68,5 +71,6 @@ export function useHomeAiLaunchProfileCatalog(scope: AccountSettingsScope | null
         const memory = { lastUsedProfile: liveEvidence ? liveEvidence[2] : loadAuthoringMemoryProjection(evidenceScope)?.lastUsedProfile ?? null };
         return readUiSelectedProfileCatalogProfile(readUiVisibleProfileCatalogSnapshot(snapshot, settings, memory), settings, selectedProfileId);
     }, [snapshot, evidenceScope?.serverId, evidenceScope?.accountId, liveEvidence, persistedEvidence, hasCompleteData, selectedProfileId]);
-    return React.useMemo(() => ({ profiles, selectedProfile, status, hasCompleteData }), [profiles, selectedProfile, status, hasCompleteData]);
+    return React.useMemo(() => ({ profiles, selectedProfile, status, source: source ?? null, stale, hasCompleteData }),
+        [profiles, selectedProfile, status, source, stale, hasCompleteData]);
 }

@@ -10,14 +10,17 @@ import {
 } from '@/sync/domains/session/authoring/rememberedEngineSelections';
 import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accountSettingsStructuralEquality';
 import type { StoreGet, StoreSet } from './_shared';
+import { WorkflowProjectTargetsByDefinitionIdV1Schema, type WorkflowProjectTargetsByDefinitionIdV1 } from '@happier-dev/protocol/account/authoringMemory';
 
 export type AuthoringMemoryValues = Readonly<{
     recentMachinePaths: Array<{ machineId: string; path: string }>;
     lastUsedProfile: string | null;
     lastEngineSelectionsByScopeV1: RetainedRememberedEngineSelectionsByScopeV1;
+    workflowProjectTargetsByDefinitionId?: WorkflowProjectTargetsByDefinitionIdV1;
 }>;
 export type AuthoringMemory = AuthoringMemoryValues & Readonly<{
     currentRememberedEngineSelectionsByScopeV1: RememberedEngineSelectionsByScopeV1;
+    workflowProjectTargetsByDefinitionId: WorkflowProjectTargetsByDefinitionIdV1;
 }>;
 export type AuthoringMemoryDomain = {
     authoringMemory: AuthoringMemory;
@@ -28,6 +31,7 @@ export type AuthoringMemoryDomain = {
 export function projectAuthoringMemory(values: AuthoringMemoryValues): AuthoringMemory {
     return {
         ...values,
+        workflowProjectTargetsByDefinitionId: values.workflowProjectTargetsByDefinitionId ?? {},
         currentRememberedEngineSelectionsByScopeV1: RememberedEngineSelectionsByScopeV1Schema.parse(values.lastEngineSelectionsByScopeV1),
     };
 }
@@ -50,7 +54,14 @@ export function createAuthoringMemoryDomain<S extends AuthoringMemoryDomain>(dep
                 ? previous.lastEngineSelectionsByScopeV1 : LegacyRememberedEngineSelectionsByScopeV1Schema.parse(delta.lastEngineSelectionsByScopeV1);
             const pathsUnchanged = areAccountSettingsJsonValuesEqual(previous.recentMachinePaths, recentMachinePaths);
             const selectionsUnchanged = areAccountSettingsJsonValuesEqual(previous.lastEngineSelectionsByScopeV1, lastEngineSelectionsByScopeV1);
-            if (pathsUnchanged && selectionsUnchanged && previous.lastUsedProfile === lastUsedProfile) return state;
+            const workflowProjects = delta.workflowProjectTargetsByDefinitionId === undefined ? previous.workflowProjectTargetsByDefinitionId
+                : WorkflowProjectTargetsByDefinitionIdV1Schema.parse(delta.workflowProjectTargetsByDefinitionId);
+            const projectsUnchanged = areAccountSettingsJsonValuesEqual(previous.workflowProjectTargetsByDefinitionId, workflowProjects);
+            const reconciledProjects = projectsUnchanged ? previous.workflowProjectTargetsByDefinitionId
+                : Object.fromEntries(Object.entries(workflowProjects).map(([id, target]) => [id,
+                    areAccountSettingsJsonValuesEqual(previous.workflowProjectTargetsByDefinitionId[id], target)
+                        ? previous.workflowProjectTargetsByDefinitionId[id]! : target] as const));
+            if (pathsUnchanged && selectionsUnchanged && projectsUnchanged && previous.lastUsedProfile === lastUsedProfile) return state;
             const currentSelections = selectionsUnchanged
                 ? previous.currentRememberedEngineSelectionsByScopeV1
                 : RememberedEngineSelectionsByScopeV1Schema.parse(lastEngineSelectionsByScopeV1);
@@ -59,6 +70,7 @@ export function createAuthoringMemoryDomain<S extends AuthoringMemoryDomain>(dep
                 authoringMemory: {
                     recentMachinePaths: pathsUnchanged ? previous.recentMachinePaths : recentMachinePaths,
                     lastUsedProfile,
+                    workflowProjectTargetsByDefinitionId: reconciledProjects,
                     lastEngineSelectionsByScopeV1: selectionsUnchanged ? previous.lastEngineSelectionsByScopeV1 : lastEngineSelectionsByScopeV1,
                     currentRememberedEngineSelectionsByScopeV1: areAccountSettingsJsonValuesEqual(previous.currentRememberedEngineSelectionsByScopeV1, currentSelections)
                         ? previous.currentRememberedEngineSelectionsByScopeV1
