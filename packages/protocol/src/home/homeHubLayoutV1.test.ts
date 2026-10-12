@@ -21,6 +21,9 @@ import {
     type HomeHubWidgetInput,
 } from './homeHubLayoutV1.js';
 
+// Mutation tests start from an explicitly empty saved layout, not the missing-Home product preset.
+const EMPTY_LAYOUT: HomeHubLayoutValue = { v: 1, order: [], hidden: [], items: [] };
+
 // The built-in section table's shape; its rows and renderers live in `homeHubSections.tsx`.
 const BUILTINS: readonly HomeHubBuiltinDefinition[] = [
     { id: 'start', hideable: false },
@@ -38,14 +41,14 @@ const AVAILABLE_ID = homeHubDefaultWidgetInstanceId(AVAILABLE.key);
 describe('configured Home placements', () => {
     it('uses the loaded effective width when admitting a default-shown child into a group', () => {
         const widget = { ...SHOWN, sizeDeclaration: { sizes: ['wide'], defaultSize: 'wide' } satisfies WidgetSizeDeclarationV1 };
-        expect(() => applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [widget],
+        expect(() => applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [widget],
             { kind: 'group_create', groupId: 'wide-group', instanceIds: [SHOWN_ID], width: 'half' })).toThrowError('widget_group_width_no_fit');
-        const grouped = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [widget],
+        const grouped = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [widget],
             { kind: 'group_create', groupId: 'wide-group', instanceIds: [SHOWN_ID], width: 'full' });
         expect(grouped.items).toMatchObject([{ kind: 'group', children: [{ size: 'wide' }] }]);
     });
     it('groups a projected default without duplicating it and restores child presentation on ungroup', () => {
-        const grouped = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [SHOWN],
+        const grouped = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [SHOWN],
             HomeHubLayoutIntentSchema.parse({ kind: 'group_create', groupId: 'reviews', instanceIds: [SHOWN_ID] }));
         expect(grouped.items).toMatchObject([{ kind: 'group', id: 'reviews', frameStyle: 'card', dividers: 'hairline', children: [{ instance: { id: SHOWN_ID } }] }]);
         const resolved = resolveHomeHubLayout(grouped, BUILTINS, [SHOWN]);
@@ -65,7 +68,7 @@ describe('configured Home placements', () => {
         ] }).success).toBe(false);
     });
     it('moves the last child out, dissolves its group, and retains its saved card frame', () => {
-        const added = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [], { kind: 'widget_add',
+        const added = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [], { kind: 'widget_add',
             instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} }, frameStyle: 'card', size: 'small', position: { nativeIndex: 1 } });
         const grouped = applyHomeHubLayoutIntent(added, BUILTINS, [], { kind: 'group_create', groupId: 'group', instanceIds: ['copy'] });
         expect(resolveHomeHubLayout(grouped, BUILTINS, []).sections.find(section => section.kind === 'group')).toMatchObject({ children: [{ frameStyle: 'plain' }] });
@@ -77,7 +80,7 @@ describe('configured Home placements', () => {
     });
     it('atomically adds a transferred child inside its destination group and retains its saved presentation', () => {
         const one = { v: 1 as const, id: 'one', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };
-        const grouped = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [], { kind: 'group_add', group: {
+        const grouped = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [], { kind: 'group_add', group: {
             kind: 'group', id: 'group', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget', instance: one, size: 'small' }] } });
         const two = { ...one, id: 'two' };
         const added = applyHomeHubLayoutIntent(grouped, BUILTINS, [], HomeHubLayoutIntentSchema.parse({ kind: 'widget_add', instance: two,
@@ -86,7 +89,7 @@ describe('configured Home placements', () => {
         expect(added.order).not.toContain('two');
     });
     it('removes grouped default children without projecting them again and keeps builtin/setup state', () => {
-        const base = setHomeSetupStepHidden(HOME_HUB_DEFAULT_LAYOUT, 'addPhone', true);
+        const base = setHomeSetupStepHidden(EMPTY_LAYOUT, 'addPhone', true);
         const grouped = applyHomeHubLayoutIntent(base, BUILTINS, [SHOWN], { kind: 'group_create', groupId: 'group', instanceIds: [SHOWN_ID] });
         const removed = applyHomeHubLayoutIntent(grouped, BUILTINS, [SHOWN], { kind: 'remove', instanceId: 'group' });
         expect(resolveHomeHubLayout(removed, BUILTINS, [SHOWN]).sections.filter(section => section.kind !== 'builtin')).toEqual([]);
@@ -96,17 +99,17 @@ describe('configured Home placements', () => {
     });
     it('projects declared defaults and normalizes stale saved size without changing the personal layout', () => {
         const widget = { ...SHOWN, sizeDeclaration: { sizes: ['wide'], defaultSize: 'wide' } satisfies WidgetSizeDeclarationV1 };
-        const defaultBefore = structuredClone(HOME_HUB_DEFAULT_LAYOUT);
-        expect(resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [widget]).sections
+        const defaultBefore = structuredClone(EMPTY_LAYOUT);
+        expect(resolveHomeHubLayout(EMPTY_LAYOUT, BUILTINS, [widget]).sections
             .find(section => section.id === SHOWN_ID)).toMatchObject({ size: 'wide' });
-        expect(HOME_HUB_DEFAULT_LAYOUT).toEqual(defaultBefore);
+        expect(EMPTY_LAYOUT).toEqual(defaultBefore);
         const tallDefault = { ...SHOWN,
             sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'tall' } satisfies WidgetSizeDeclarationV1 };
-        expect(resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [tallDefault]).sections
+        expect(resolveHomeHubLayout(EMPTY_LAYOUT, BUILTINS, [tallDefault]).sections
             .find(section => section.id === SHOWN_ID)).toMatchObject({ size: 'tall' });
-        expect(HOME_HUB_DEFAULT_LAYOUT).toEqual(defaultBefore);
+        expect(EMPTY_LAYOUT).toEqual(defaultBefore);
 
-        const stored: HomeHubLayoutValue = { ...HOME_HUB_DEFAULT_LAYOUT,
+        const stored: HomeHubLayoutValue = { ...EMPTY_LAYOUT,
             items: [{ kind: 'widget', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} }, size: 'medium', frameStyle: 'plain' }] };
         const before = structuredClone(stored);
         expect(resolveHomeHubLayout(stored, BUILTINS, [widget]).sections
@@ -123,7 +126,7 @@ describe('configured Home placements', () => {
         const artifact = { v: 1 as const, id: 'artifact', definition: { kind: 'artifact' as const, artifactId: 'authored' }, bindings: {} };
         const loaded: HomeHubWidgetInput = { key: 'artifact:authored', homeDefault: 'available',
             definition: artifact.definition, sizeDeclaration: definition.sizeDeclaration };
-        const layout: HomeHubLayoutValue = { ...HOME_HUB_DEFAULT_LAYOUT, items: [
+        const layout: HomeHubLayoutValue = { ...EMPTY_LAYOUT, items: [
             { kind: 'widget', instance: inline, size: 'medium' }, { kind: 'widget', instance: artifact, size: 'medium' }] };
         expect(resolveHomeHubLayout(layout, [], [loaded]).sections).toMatchObject([
             { id: 'inline', size: 'tall' }, { id: 'artifact', size: 'tall', widget: loaded },
@@ -135,7 +138,7 @@ describe('configured Home placements', () => {
     });
     it('stores a tall size atomically with Add and keeps an independently sized sibling', () => {
         const instance = { v: 1 as const, id: 'tall-copy', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };
-        const added = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [],
+        const added = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [],
             { kind: 'widget_add', instance, size: 'tall' });
         expect(added.items).toMatchObject([{ size: 'tall' }]);
         const sibling = { ...instance, id: 'wide-copy' };
@@ -148,8 +151,8 @@ describe('configured Home placements', () => {
         const one = { v: 1 as const, id: 'summary-one', definition: descriptor.definition,
             bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId: 'B' } } } };
         const two = { ...one, id: 'summary-two', bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId: 'C' } } } };
-        expect(resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [descriptor]).sections.filter(section => section.kind === 'widget')).toEqual([]);
-        const added = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [descriptor], { kind: 'widget_add', instance: one });
+        expect(resolveHomeHubLayout(EMPTY_LAYOUT, BUILTINS, [descriptor]).sections.filter(section => section.kind === 'widget')).toEqual([]);
+        const added = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [descriptor], { kind: 'widget_add', instance: one });
         const copies = applyHomeHubLayoutIntent(added, BUILTINS, [descriptor], { kind: 'widget_add', instance: two });
         const projected = resolveHomeHubLayout(copies, BUILTINS, [descriptor]).sections.filter(section => section.kind === 'widget');
         expect(projected).toMatchObject([{ id: one.id, widget: descriptor }, { id: two.id, widget: descriptor }]);
@@ -162,7 +165,7 @@ describe('configured Home placements', () => {
             definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'runs' } },
             bindings: { session: { kind: 'value', value: sessionId } } });
         const apply = (layout: HomeHubLayoutValue, intent: unknown) => applyHomeHubLayoutIntent(layout, BUILTINS, [AVAILABLE], intent as HomeHubLayoutIntent);
-        const one = apply(HOME_HUB_DEFAULT_LAYOUT, { kind: 'widget_add', instance: instance('one', 'A') });
+        const one = apply(EMPTY_LAYOUT, { kind: 'widget_add', instance: instance('one', 'A') });
         const two = apply(one, { kind: 'widget_add', instance: instance('two', 'B') });
         expect(two).toMatchObject({ items: [{ instance: instance('one', 'A') }, { instance: instance('two', 'B') }] });
         const edited = apply(two, { kind: 'widget_inputs', instanceId: 'one', bindings: { session: { kind: 'value', value: 'C' } } });
@@ -176,7 +179,7 @@ describe('configured Home placements', () => {
 
 describe('Home customization intents shared with Actions', () => {
     it('preserves saved overrides, including temporarily unknown widgets, across customization and clears only the requested override', () => {
-        const stored: HomeHubLayoutValue = { ...HOME_HUB_DEFAULT_LAYOUT, order: ['start', 'future-section', 'attention', 'setup', 'machines', 'usage'],
+        const stored: HomeHubLayoutValue = { ...EMPTY_LAYOUT, order: ['start', 'future-section', 'attention', 'setup', 'machines', 'usage'],
             hidden: ['setup:addPhone'],
             sections: { 'future-section': { frameStyle: 'card' } },
             items: [{ kind: 'widget', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} }, frameStyle: 'plain' }],
@@ -189,10 +192,10 @@ describe('Home customization intents shared with Actions', () => {
         expect(resolveHomeHubLayout(restored, BUILTINS, [SHOWN, AVAILABLE]).sections.find((section) => section.id === SHOWN_ID)?.frameStyle).toBe('plain');
         const cleared = applyHomeHubLayoutIntent(restored, BUILTINS, [SHOWN, AVAILABLE], { kind: 'frameStyle', sectionId: SHOWN_ID, frameStyle: null });
         expect(cleared.sections).toEqual({ 'future-section': { frameStyle: 'card' } });
-        expect(applyHomeHubLayoutIntent({ ...HOME_HUB_DEFAULT_LAYOUT, order: [], hidden: [], sections: stored.sections }, BUILTINS, [], { kind: 'reset' })).toEqual(HOME_HUB_DEFAULT_LAYOUT);
+        expect(applyHomeHubLayoutIntent({ ...EMPTY_LAYOUT, order: [], hidden: [], sections: stored.sections }, BUILTINS, [], { kind: 'reset' })).toEqual(HOME_HUB_DEFAULT_LAYOUT);
     });
     it('adds a widget, reorders without discarding unknown slots, preserves mandatory sections and restores dismissed setup', () => {
-        const stored = { ...HOME_HUB_DEFAULT_LAYOUT, order: ['start', 'future-section', 'attention', 'setup', 'machines', 'usage'], hidden: ['setup:addPhone'] };
+        const stored = { ...EMPTY_LAYOUT, order: ['start', 'future-section', 'attention', 'setup', 'machines', 'usage'], hidden: ['setup:addPhone'] };
         const added = applyHomeHubLayoutIntent(stored, WITH_DEFAULT_HIDDEN, [SHOWN, AVAILABLE], { kind: 'widget_add', instance: { v: 1, id: AVAILABLE_ID, definition: { kind: 'installed', surface: AVAILABLE.surface }, bindings: {} } });
         expect(added.order).toContain(AVAILABLE_ID);
         const reordered = applyHomeHubLayoutIntent(added, WITH_DEFAULT_HIDDEN, [SHOWN, AVAILABLE], {
@@ -225,16 +228,16 @@ function hiddenIds(layout: HomeHubLayoutValue, widgets: readonly HomeHubWidgetIn
 
 describe('home hub layout: sections off by default', () => {
     it('keeps a default-hidden section off until the person turns it on, and remembers that', () => {
-        expect(hiddenIds(HOME_HUB_DEFAULT_LAYOUT)).toEqual(['machines']);
-        const shown = setHomeHubSectionHidden(HOME_HUB_DEFAULT_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'machines', false);
+        expect(hiddenIds(EMPTY_LAYOUT)).toEqual(['machines']);
+        const shown = setHomeHubSectionHidden(EMPTY_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'machines', false);
         expect(hiddenIds(shown)).toEqual([]);
         expect(hiddenIds(setHomeHubSectionHidden(shown, WITH_DEFAULT_HIDDEN, [], 'machines', true))).toEqual(['machines']);
     });
 
     it('does not turn a default-hidden section on when another section moves', () => {
-        const moved = moveHomeHubSection(HOME_HUB_DEFAULT_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'usage', -1);
+        const moved = moveHomeHubSection(EMPTY_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'usage', -1);
         expect(hiddenIds(moved)).toEqual(['machines']);
-        const hiddenSetup = setHomeHubSectionHidden(HOME_HUB_DEFAULT_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'setup', true);
+        const hiddenSetup = setHomeHubSectionHidden(EMPTY_LAYOUT, WITH_DEFAULT_HIDDEN, [], 'setup', true);
         expect(hiddenIds(hiddenSetup)).toEqual(['setup', 'machines']);
     });
 });
@@ -251,14 +254,14 @@ describe('home hub layout: default order (lab hindex I1)', () => {
     ];
 
     it('puts default-shown widgets between Get set up and Latest runs, Machines and Usage', () => {
-        const resolved = resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, LAB, [SHOWN, AVAILABLE]);
+        const resolved = resolveHomeHubLayout(EMPTY_LAYOUT, LAB, [SHOWN, AVAILABLE]);
         expect(resolved.sections.map((section) => `${section.id}${section.hidden ? ' (off)' : ''}`)).toEqual([
             'start', 'attention', 'setup', SHOWN_ID, 'automations', 'machines (off)', 'usage',
         ]);
     });
 
     it('slots a newly shown widget into the widget row of an arranged layout, keeping the person\'s order', () => {
-        const arranged = { ...HOME_HUB_DEFAULT_LAYOUT, order: ['attention', 'start', 'setup', 'automations', 'machines', 'usage'], hidden: [] };
+        const arranged = { ...EMPTY_LAYOUT, order: ['attention', 'start', 'setup', 'automations', 'machines', 'usage'], hidden: [] };
         expect(resolveHomeHubLayout(arranged, LAB, [SHOWN]).sections.map((section) => section.id))
             .toEqual(['attention', 'start', 'setup', SHOWN_ID, 'automations', 'machines', 'usage']);
     });
@@ -266,21 +269,21 @@ describe('home hub layout: default order (lab hindex I1)', () => {
 
 describe('home hub layout: reorder by drag', () => {
     it('writes the dragged order and keeps unknown ids and unplaced widgets where they were', () => {
-        const stored = { ...HOME_HUB_DEFAULT_LAYOUT, order: ['start', 'from-a-newer-app', 'attention', 'setup', 'machines', 'usage'], hidden: [] };
+        const stored = { ...EMPTY_LAYOUT, order: ['start', 'from-a-newer-app', 'attention', 'setup', 'machines', 'usage'], hidden: [] };
         const next = reorderHomeHubSections(stored, BUILTINS, [], ['usage', 'start', 'attention', 'setup', 'machines']);
         expect(ids(next)).toEqual(['usage', 'start', 'attention', 'setup', 'machines']);
         expect(next.order.indexOf('from-a-newer-app')).toBe(1);
     });
 
     it('ignores a drag that changes nothing', () => {
-        const same = reorderHomeHubSections(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [], ['start', 'attention', 'setup', 'machines', 'usage']);
-        expect(same).toBe(HOME_HUB_DEFAULT_LAYOUT);
+        const same = reorderHomeHubSections(EMPTY_LAYOUT, BUILTINS, [], ['start', 'attention', 'setup', 'machines', 'usage']);
+        expect(same).toBe(EMPTY_LAYOUT);
     });
 });
 
 describe('home hub layout: dismissed setup steps', () => {
     it('records a dismissed step on the layout without touching the sections, and shows it again', () => {
-        const dismissed = setHomeSetupStepHidden(HOME_HUB_DEFAULT_LAYOUT, 'addPhone', true);
+        const dismissed = setHomeSetupStepHidden(EMPTY_LAYOUT, 'addPhone', true);
         expect(listHiddenHomeSetupSteps(dismissed)).toEqual(['addPhone']);
         expect(ids(dismissed)).toEqual(['start', 'attention', 'setup', 'machines', 'usage']);
         expect(setHomeSetupStepHidden(dismissed, 'addPhone', true)).toBe(dismissed);
@@ -290,7 +293,7 @@ describe('home hub layout: dismissed setup steps', () => {
 
 describe('home hub layout', () => {
     it('shows every built-in section in the default order until the person changes it', () => {
-        expect(resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, []).sections).toEqual([
+        expect(resolveHomeHubLayout(EMPTY_LAYOUT, BUILTINS, []).sections).toEqual([
             { kind: 'builtin', id: 'start', hidden: false, hideable: false },
             { kind: 'builtin', id: 'attention', hidden: false, hideable: false },
             { kind: 'builtin', id: 'setup', hidden: false, hideable: true },
@@ -300,13 +303,13 @@ describe('home hub layout', () => {
     });
 
     it('never hides "Start a session" or "Needs your attention", whatever is stored', () => {
-        const sections = resolveHomeHubLayout({ ...HOME_HUB_DEFAULT_LAYOUT, order: [], hidden: ['start', 'attention', 'usage'] }, BUILTINS, []).sections;
+        const sections = resolveHomeHubLayout({ ...EMPTY_LAYOUT, order: [], hidden: ['start', 'attention', 'usage'] }, BUILTINS, []).sections;
         expect(sections.filter((section) => section.hidden).map((section) => section.id)).toEqual(['usage']);
-        expect(setHomeHubSectionHidden(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [], 'attention', true)).toBe(HOME_HUB_DEFAULT_LAYOUT);
+        expect(setHomeHubSectionHidden(EMPTY_LAYOUT, BUILTINS, [], 'attention', true)).toBe(EMPTY_LAYOUT);
     });
 
     it('reorders by one step and keeps ids it does not know in their place', () => {
-        const stored = { ...HOME_HUB_DEFAULT_LAYOUT, order: ['usage', 'news-from-a-newer-app'], hidden: ['news-from-a-newer-app'] };
+        const stored = { ...EMPTY_LAYOUT, order: ['usage', 'news-from-a-newer-app'], hidden: ['news-from-a-newer-app'] };
         expect(ids(stored)).toEqual(['usage', 'start', 'attention', 'setup', 'machines']);
 
         const moved = moveHomeHubSection(stored, BUILTINS, [], 'machines', -1);
@@ -319,26 +322,26 @@ describe('home hub layout', () => {
     });
 
     it('hides and shows a built-in section', () => {
-        const hidden = setHomeHubSectionHidden(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [], 'machines', true);
+        const hidden = setHomeHubSectionHidden(EMPTY_LAYOUT, BUILTINS, [], 'machines', true);
         expect(resolveHomeHubLayout(hidden, BUILTINS, []).sections.find((section) => section.id === 'machines')?.hidden).toBe(true);
         const shown = setHomeHubSectionHidden(hidden, BUILTINS, [], 'machines', false);
         expect(resolveHomeHubLayout(shown, BUILTINS, []).sections.every((section) => !section.hidden)).toBe(true);
     });
 
     it('places a widget that declares itself shown after the built-in sections, and offers the others to add', () => {
-        const resolved = resolveHomeHubLayout(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [AVAILABLE, SHOWN]);
+        const resolved = resolveHomeHubLayout(EMPTY_LAYOUT, BUILTINS, [AVAILABLE, SHOWN]);
         expect(resolved.sections.map((section) => section.id))
             .toEqual(['start', 'attention', 'setup', 'machines', 'usage', SHOWN_ID]);
         expect(resolved.sections.at(-1)).toMatchObject({ kind: 'widget', widget: SHOWN });
         expect(resolved.available).toEqual([AVAILABLE, SHOWN]);
 
         // A default-shown widget appears after a layout the person already arranged, too.
-        expect(ids({ ...HOME_HUB_DEFAULT_LAYOUT, order: ['usage', 'start', 'attention', 'setup', 'machines'], hidden: [] }, [SHOWN]))
+        expect(ids({ ...EMPTY_LAYOUT, order: ['usage', 'start', 'attention', 'setup', 'machines'], hidden: [] }, [SHOWN]))
             .toEqual(['usage', 'start', 'attention', 'setup', 'machines', SHOWN_ID]);
     });
 
     it('adds an available widget at the end, and removing a widget returns it to Add widgets for good', () => {
-        const added = applyHomeHubLayoutIntent(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [SHOWN, AVAILABLE], { kind: 'widget_add', instance: { v: 1, id: AVAILABLE_ID, definition: { kind: 'installed', surface: AVAILABLE.surface }, bindings: {} } });
+        const added = applyHomeHubLayoutIntent(EMPTY_LAYOUT, BUILTINS, [SHOWN, AVAILABLE], { kind: 'widget_add', instance: { v: 1, id: AVAILABLE_ID, definition: { kind: 'installed', surface: AVAILABLE.surface }, bindings: {} } });
         expect(ids(added, [SHOWN, AVAILABLE]))
             .toEqual(['start', 'attention', 'setup', 'machines', 'usage', SHOWN_ID, AVAILABLE_ID]);
 
@@ -346,14 +349,14 @@ describe('home hub layout', () => {
         expect(ids(removed, [SHOWN, AVAILABLE])).not.toContain(SHOWN_ID);
         expect(resolveHomeHubLayout(removed, BUILTINS, [SHOWN, AVAILABLE]).available).toEqual([SHOWN, AVAILABLE]);
         // The next app launch re-reads the default; the recorded choice still wins.
-        expect(ids({ ...HOME_HUB_DEFAULT_LAYOUT, order: [], hidden: removed.hidden }, [SHOWN])).not.toContain(SHOWN_ID);
+        expect(ids({ ...EMPTY_LAYOUT, order: [], hidden: removed.hidden }, [SHOWN])).not.toContain(SHOWN_ID);
 
         const readded = applyHomeHubLayoutIntent(removed, BUILTINS, [SHOWN, AVAILABLE], { kind: 'widget_add', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} } });
         expect(ids(readded, [SHOWN, AVAILABLE])).toContain(SHOWN_ID);
     });
 
     it('keeps an uninstalled widget\'s place so it comes back where it was', () => {
-        const arranged: HomeHubLayoutValue = { ...HOME_HUB_DEFAULT_LAYOUT, items: [{ kind: 'widget', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} } }], order: ['start', SHOWN_ID, 'attention', 'setup', 'machines', 'usage'], hidden: [] };
+        const arranged: HomeHubLayoutValue = { ...EMPTY_LAYOUT, items: [{ kind: 'widget', instance: { v: 1, id: SHOWN_ID, definition: { kind: 'installed', surface: SHOWN.surface }, bindings: {} } }], order: ['start', SHOWN_ID, 'attention', 'setup', 'machines', 'usage'], hidden: [] };
         // The plugin is disabled: its widget draws nowhere and is not offered…
         const without = resolveHomeHubLayout(arranged, BUILTINS, []);
         expect(without.sections.map((section) => section.id)).toEqual(['start', SHOWN_ID, 'attention', 'setup', 'machines', 'usage']);
@@ -365,7 +368,7 @@ describe('home hub layout', () => {
     });
 
     it('moves a widget among the sections the person sees', () => {
-        const moved = moveHomeHubSection(HOME_HUB_DEFAULT_LAYOUT, BUILTINS, [SHOWN, AVAILABLE], SHOWN_ID, -1);
+        const moved = moveHomeHubSection(EMPTY_LAYOUT, BUILTINS, [SHOWN, AVAILABLE], SHOWN_ID, -1);
         expect(ids(moved, [SHOWN, AVAILABLE]))
             .toEqual(['start', 'attention', 'setup', 'machines', SHOWN_ID, 'usage']);
         // An available widget the person never added is not written into the layout by a move.

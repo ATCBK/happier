@@ -8,7 +8,7 @@ export const HOME_RUNTIME_ACTION_IDS_V1 = [
   'relay.runtime.personal_home.recover_restore', 'relay.runtime.personal_home.erase',
   'relay.runtime.personal_home.claim', 'relay.runtime.personal_home.relocate',
   'relay.runtime.personal_home.choose_archive', 'relay.runtime.personal_home.choose_backup_destination',
-  'relay.runtime.open_path', 'relay.runtime.reveal_output',
+  'relay.runtime.open_path', 'relay.runtime.reveal_output', 'relay.runtime.task.cancel',
   'home.runtime.get', 'home.runtime.restart',
 ] as const;
 export type HomeRuntimeActionIdV1 = typeof HOME_RUNTIME_ACTION_IDS_V1[number];

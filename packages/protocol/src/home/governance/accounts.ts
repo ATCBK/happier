@@ -86,7 +86,7 @@ export const HOME_ACCOUNT_PAGE_LIMIT_MAX_V1 = 100;
 export const HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1 = 512;
 export const HOME_ACCOUNT_SEARCH_QUERY_MAX_LENGTH_V1 = 256;
 
-/** Keyset page over `(createdAt, id)`; the cursor is opaque to clients. */
+/** Keyset page over captured role/unnamed/label/id keys; the cursor is opaque to clients. */
 export const HomeAccountListInputV1Schema = lazyZodSchema(() => z.object({
   cursor: z.string().min(1).max(HOME_ACCOUNT_PAGE_CURSOR_MAX_LENGTH_V1).nullable().optional(),
   limit: z.number().int().min(1).max(HOME_ACCOUNT_PAGE_LIMIT_MAX_V1).optional(),

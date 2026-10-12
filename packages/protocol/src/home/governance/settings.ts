@@ -38,6 +38,7 @@ export const HomeSettingDeclarationV1Schema = lazyZodSchema(() => z.object({
   type: z.enum(['boolean', 'int', 'float', 'string', 'enum', 'url', 'email', 'list', 'json']),
   section: z.enum(['reach', 'email', 'policies', 'features', 'data', 'runtime', 'server']),
   group: z.string().min(1).optional(),
+  appliesWhen: z.object({ key: z.string().min(1), values: z.array(z.string().min(1)).min(1) }).strict().optional(),
   family: z.string().min(1).optional(),
   featureId: z.string().min(1).optional(),
   /** Never present for a secret. */

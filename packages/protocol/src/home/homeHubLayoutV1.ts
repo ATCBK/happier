@@ -8,7 +8,8 @@ import { WidgetLayoutItemsV1Schema, WidgetLayoutItemIntentV1Schema, applyWidgetL
 import { InputPathSchema } from '../inputs/inputFields.js';
 const WidgetInstanceV1Schema = z.lazy(() => InstanceSchema);
 const WidgetInputBindingsV1Schema = z.lazy(() => BindingsSchema);
-import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, type WidgetCandidateIdentityV1 } from '../widgets/builtinWidgetDescriptorV1.js';
+import { isSameWidgetDefinitionV1, readBuiltinWidgetDescriptorV1, widgetCandidateDefinitionV1, type WidgetCandidateIdentityV1 } from '../widgets/builtinWidgetDescriptorV1.js';
+import { proposeWidgetInputDefaultBindingsV1 } from '../widgets/widgetInputAdmissionV1.js';
 import { WidgetGridSizeV1Schema, WIDGET_SIZE_POLICY_V1, normalizeWidgetSizeForSurfaceV1, type WidgetSizeDeclarationV1, type WidgetSizeV1 } from '../widgets/widgetPresentationV1.js';
 
 const id = z.string().min(1);
@@ -54,8 +55,6 @@ export type HomeHubBuiltinDefinition = Readonly<{ id: string; hideable: boolean;
 export const HOME_HUB_BUILTIN_DEFINITIONS: readonly HomeHubBuiltinDefinition[] = Object.freeze([
     { id: 'start', hideable: false }, { id: 'attention', hideable: false }, { id: 'setup', hideable: true },
     { id: 'automations', hideable: true, afterWidgets: true, card: true },
-    { id: 'machines', hideable: true, afterWidgets: true, defaultHidden: true },
-    { id: 'usage', hideable: true, afterWidgets: true },
 ]);
 export type HomeHubWidgetInput = WidgetCandidateIdentityV1 & Readonly<{
     key: string; homeDefault: 'shown' | 'available'; sizeDeclaration?: WidgetSizeDeclarationV1;
@@ -74,7 +73,12 @@ export type ResolvedHomeHubLayout<W extends HomeHubWidgetInput = HomeHubWidgetIn
 export function isHomeHubCardSection(section: HomeHubSection): boolean {
     return section.kind !== 'builtin' || HOME_HUB_BUILTIN_DEFINITIONS.find(builtin => builtin.id === section.id)?.card === true;
 }
-export const HOME_HUB_DEFAULT_LAYOUT: HomeHubLayoutValue = { v: 1, order: [], hidden: [], items: [] };
+/** Missing Home only; stored layouts (including an explicit empty one) keep their own items. */
+export const HOME_HUB_DEFAULT_LAYOUT: HomeHubLayoutValue = { v: 1, order: [], hidden: [], items: [{ kind: 'widget',
+    instance: { v: 1, id: 'default:builtin:usage_capacity', definition: { kind: 'builtin', id: 'usage_capacity' },
+        bindings: proposeWidgetInputDefaultBindingsV1(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_capacity' })!) },
+    size: 'full',
+}] };
 /** Normalize stored personal layout content without persisting recovery defaults. */
 export function normalizeHomeHubLayoutV1(value: unknown): HomeHubLayoutValue {
     const parsed = storedLayoutSchema.safeParse(value);

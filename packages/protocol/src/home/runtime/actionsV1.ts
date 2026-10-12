@@ -83,6 +83,7 @@ export const HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1 = {
   'relay.runtime.personal_home.choose_backup_destination': Empty,
   'relay.runtime.open_path': lazyZodSchema(() => z.object({ path: Id }).strict()),
   'relay.runtime.reveal_output': lazyZodSchema(() => z.object({ path: Id }).strict()),
+  'relay.runtime.task.cancel': lazyZodSchema(() => z.object({ taskId: Id }).strict()),
   'home.runtime.get': lazyZodSchema(() => z.object({ force: z.boolean().optional() }).strict()),
   'home.runtime.restart': HomeRuntimeRestartInputV1Schema,
 } as const;
@@ -96,8 +97,15 @@ export const HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1 = {
   'relay.runtime.personal_home.claim': Started, 'relay.runtime.personal_home.relocate': Started,
   'relay.runtime.personal_home.choose_archive': Picked, 'relay.runtime.personal_home.choose_backup_destination': Picked,
   'relay.runtime.open_path': Completed, 'relay.runtime.reveal_output': Completed,
+  'relay.runtime.task.cancel': lazyZodSchema(() => z.union([
+    z.object({ status: z.enum(['cancellation_requested', 'already_settled']), taskId: Id }).strict(),
+    z.object({ status: z.literal('outcome_unknown'), taskId: Id }).strict(), Unavailable,
+  ])),
   'home.runtime.get': lazyZodSchema(() => z.union([
-    z.object({ status: z.literal('ready'), serverRelease: ServerReleaseCapabilitiesSchema.nullable() }).strict(), Unavailable,
+    z.object({ status: z.literal('ready'), serverRelease: ServerReleaseCapabilitiesSchema.nullable(),
+      // Older answering clients omit this diagnostic; omission never means ready.
+      searchReadiness: z.enum(['ready', 'indexing', 'unavailable', 'unknown']).optional(),
+    }).strict(), Unavailable,
   ])),
   'home.runtime.restart': HomeRuntimeRestartOutputV1Schema,
 } as const;
@@ -131,6 +139,7 @@ export function parseHomeRuntimeActionRequestV1(actionId: HomeRuntimeActionIdV1,
     case 'relay.runtime.personal_home.choose_backup_destination': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'relay.runtime.open_path': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'relay.runtime.reveal_output': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
+    case 'relay.runtime.task.cancel': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'home.runtime.get': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'home.runtime.restart': return { actionId, input: HOME_RUNTIME_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
   }
