@@ -18,12 +18,21 @@ import { getPendingDirectoryHomeEnrollment, subscribePendingDirectoryHomeEnrollm
 import { useAccountDirectoryActivePolling } from '@/sync/ops/accountDirectory/useAccountDirectoryActivePolling';
 import { formatEnrollmentExpiry } from '@/auth/pairing/pairingPresentation';
 import { resolveServerProfileForPortableIdentity } from '@/sync/domains/server/serverProfiles';
-import { openEnrolledHomeOrReturnToShell } from '@/auth/pairing/openEnrolledHome';
+import { openEnrolledHomeOrReturnToShell, type OpenEnrolledHomeResult } from '@/auth/pairing/openEnrolledHome';
 import { useAuth } from '@/auth/context/AuthContext';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { WelcomeActionAdmissionContext } from '@/components/onboarding/preAuth/WelcomeActionList';
 import { describeAccountPostAuthResultReason, describeAccountServiceFailure } from './accountServiceFailurePresentation';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useOptionalCurrentUiContextReader, usePublishCurrentUiContext } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import type { CurrentUiContextAccountHomeContinuationCommand, CurrentUiContextMountedEnrichment } from '@/components/appShell/currentUiContext/currentUiContextModel';
+import type { AccountHomeContinuationInputV1 } from '@happier-dev/protocol/actions';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+
+type HomeContinuationStep = Omit<Extract<AccountHomeContinuationInputV1, { operation: 'choose' }>, 'commandId'>
+    | Omit<Exclude<AccountHomeContinuationInputV1, { operation: 'choose' }>, 'commandId'>;
 
 const loadRestoreScanComputerQrView = () => import('@/components/account/restore/RestoreScanComputerQrView');
 const RestoreScanComputerQrView = retryableLazy(async () => ({ default: (await loadRestoreScanComputerQrView()).RestoreScanComputerQrView }));
@@ -53,6 +62,10 @@ export function AccountServiceContinuation(props: Readonly<{
     });
     const router = useRouter();
     const auth = useAuth();
+    const activeHome = useActiveServerSnapshot();
+    const hasAuthenticatedHomeAccount = auth.isAuthenticated && auth.credentialAuthorityKind === 'account';
+    const mountedAction = useMountedActionExecution(hasAuthenticatedHomeAccount ? activeHome.serverId : null);
+    const currentContext = useOptionalCurrentUiContextReader();
     const [openUnavailable, setOpenUnavailable] = React.useState(false);
     const [pairingLink, setPairingLink] = React.useState<string | null>(null);
     const [approvalStopped, setApprovalStopped] = React.useState(false);
@@ -60,11 +73,13 @@ export function AccountServiceContinuation(props: Readonly<{
     const inFlight = React.useRef(false);
     const [busy, setBusy] = React.useState(false);
     const run = async (actionId: string, action: () => Promise<void> | void) => {
-        if (inFlight.current || props.input.signal?.aborted) return;
+        if (inFlight.current || props.input.signal?.aborted) return false;
         inFlight.current = true;
         setBusy(true);
-        try { await admission.run(actionId, action); }
+        let executed = false;
+        try { await admission.run(actionId, async () => { executed = true; await action(); }); }
         finally { inFlight.current = false; setBusy(false); }
+        return executed;
     };
     const pending = React.useSyncExternalStore(subscribePendingDirectoryHomeEnrollment, getPendingDirectoryHomeEnrollment, getPendingDirectoryHomeEnrollment);
     const ownsPending = pending?.input.session === props.input.session
@@ -80,7 +95,7 @@ export function AccountServiceContinuation(props: Readonly<{
         if (ownsPending && pending) await cancelPendingDirectoryHomeEnrollment(pending);
         props.onBack();
     };
-    const retry = async () => { await props.onResult(await resumeAccountServicePostAuth(props.input, props.result)); };
+    const retry = async (input = props.input) => { await props.onResult(await resumeAccountServicePostAuth(input, props.result)); };
     const material = props.result.kind === 'home_material_required' ? props.result : null;
     const failure = props.result.kind === 'failure' ? props.result : null;
     const failurePresentation = failure ? describeAccountServiceFailure(failure.code) : null;
@@ -130,44 +145,124 @@ export function AccountServiceContinuation(props: Readonly<{
     }, [offersScan]);
     const canOpenEnrolledHome = props.result.kind === 'home_enrolled' && targetProfile?.kind === 'resolved' && !openUnavailable;
     const stopWaiting = async () => {
-        if (ownsPending && pending) await cancelPendingDirectoryHomeEnrollment(pending);
+        const current = getPendingDirectoryHomeEnrollment();
+        if (current?.input.session === props.input.session
+            && JSON.stringify(current.input.intent) === JSON.stringify(props.input.intent)) {
+            await cancelPendingDirectoryHomeEnrollment(current);
+        }
         setApprovalStopped(true);
     };
-    const relink = async () => {
-        const confirmed = await Modal.confirm(
+    const relink = async (input = props.input, alreadyConfirmed = false) => {
+        const confirmed = alreadyConfirmed || await Modal.confirm(
             t('settingsAccount.accountServiceRelinkConfirmTitle', { accountService: verifiedAccountServiceName }),
             t('settingsAccount.accountServiceRelinkConfirmBody', { accountService: verifiedAccountServiceName }),
             { confirmText: t('common.continue'), cancelText: t('common.cancel') });
-        if (confirmed) await props.onResult(await confirmAccountServiceHomeRelink(props.input));
+        if (confirmed) await props.onResult(await confirmAccountServiceHomeRelink(input));
     };
-    const openEnrolledHome = async () => {
-        if (props.result.kind !== 'home_enrolled') return;
+    const openEnrolledHome = async (signal = props.input.signal): Promise<OpenEnrolledHomeResult> => {
+        if (props.result.kind !== 'home_enrolled') return 'cancelled';
         const profile = resolveServerProfileForPortableIdentity(props.result.homeServerIdentityId);
         if (profile.kind !== 'resolved') {
             // The saved profile went away after enrollment: nothing can be
             // opened, so the card stops offering it rather than doing nothing.
             setOpenUnavailable(true);
-            return;
+            return 'cancelled';
         }
         const generation = openHomeGenerationRef.current + 1;
         openHomeGenerationRef.current = generation;
-        const isCurrent = () => generation === openHomeGenerationRef.current && props.input.signal?.aborted !== true;
+        const isCurrent = () => generation === openHomeGenerationRef.current && signal?.aborted !== true;
         const outcome = await openEnrolledHomeOrReturnToShell({
             profileId: profile.profile.id,
             targetLabel: homeName,
             isCurrent,
             refreshAuth: auth.refreshFromActiveServer,
         });
-        if (outcome !== 'opened' || !isCurrent()) return;
+        if (outcome !== 'opened') return outcome;
+        // The authorized focus transition retires its old Account binding.
+        // Original input cancellation and actual unmount still withdraw interest.
+        if (generation !== openHomeGenerationRef.current || props.input.signal?.aborted) return 'cancelled';
         // An opened Home lands on the shell showing it. A declined retry
         // ('returned_to_shell') keeps this card, so Open and Back stay available.
         router.replace('/');
+        return 'opened';
     };
     const scanOrPaste: SurfaceStateAction = { label: t('connect.scanExistingHomeQrTitle'), onPress: () => setRecoveryView('scan') };
     const signInToHome: SurfaceStateAction | null = directHomeAuthentication
         ? { label: t('settingsAccount.accountServiceOAuth.notLinked.signInAction', { homeName }), onPress: directHomeAuthentication }
         : null;
-    const refresh: SurfaceStateAction = { label: t('common.refresh'), onPress: async () => { await props.onResult(await completeAccountServicePostAuth(props.input)); } };
+    const performStep = async (step: HomeContinuationStep, signal = props.input.signal, alreadyConfirmed = false) => {
+        signal?.throwIfAborted();
+        const input = signal === props.input.signal ? props.input : { ...props.input, signal };
+        if (step.operation === 'choose') {
+            const chosen: AccountPostAuthInput = { ...input,
+                intent: { kind: 'enter', target: { kind: 'explicit', homeServerIdentityId: step.homeServerIdentityId } } };
+            await props.onResult(await completeAccountServicePostAuth(chosen), chosen);
+        } else if (step.operation === 'retry') await retry(input);
+        else if (step.operation === 'refresh') await props.onResult(await completeAccountServicePostAuth(input));
+        else if (step.operation === 'stop_waiting') await stopWaiting();
+        else if (step.operation === 'relink') await relink(input, alreadyConfirmed);
+        else return await openEnrolledHome(signal);
+    };
+    const enrichment = React.useMemo((): CurrentUiContextMountedEnrichment | null => {
+        const account = mountedAction.binding;
+        // Before a Home Account exists there is no requester/answerer authority.
+        // The existing human bootstrap and material acquisition remain UI-only.
+        if (!hasAuthenticatedHomeAccount || !mountedAction.ready || !account || recoveryView !== 'key') return null;
+        const commands: NonNullable<CurrentUiContextMountedEnrichment['commands']>[number][] = [];
+        const add = (title: string, step: HomeContinuationStep, description?: string) => {
+            const command: CurrentUiContextAccountHomeContinuationCommand = {
+                ...step, kind: 'accountHomeContinuation', account,
+                invoke: async ({ signal, context }) => {
+                    const cancellation = mergeAbortSignals([props.input.signal, signal]);
+                    try {
+                        let outcome: OpenEnrolledHomeResult | void = undefined;
+                        const completed = await run('account.home_continuation.invoke', async () => {
+                            outcome = await performStep(step, cancellation.signal, context.surface !== 'ui');
+                        });
+                        if (!completed) throw Object.assign(new Error('Continuation is already running or retired'), { code: 'continuation_busy' });
+                        if (step.operation === 'open' && outcome !== 'opened') {
+                            const code = outcome === 'cancelled' ? 'cancelled' : 'home_open_not_completed';
+                            throw Object.assign(new Error(code), { code });
+                        }
+                        return { status: 'completed' };
+                    } finally { cancellation.dispose(); }
+                },
+            };
+            commands.push({ title, ...(description ? { description } : {}), command });
+        };
+        if (props.result.kind === 'choose_home') {
+            for (const home of props.result.homes) add(home.label,
+                { operation: 'choose', homeServerIdentityId: home.homeServerIdentityId }, home.canonicalServerUrl);
+        }
+        if (restartable || noHomes) add(t('common.refresh'), { operation: 'refresh' });
+        else if (canRetry) add(t('common.retry'), { operation: 'retry' });
+        if (props.result.kind === 'approval_required' && !approvalStopped) add(t('approvals.stopWaiting'), { operation: 'stop_waiting' });
+        if (failure?.recovery === 'relink_home') add(t('settingsAccount.accountServiceLinkThisHome'), { operation: 'relink' });
+        if (canOpenEnrolledHome) add(t('settingsAccount.accountServiceOAuth.actions.openHome', { homeName }), { operation: 'open' });
+        return { entity: { kind: 'account.home_continuation', label: serviceDisplayName }, commands };
+    }, [hasAuthenticatedHomeAccount, mountedAction.binding, mountedAction.ready, recoveryView, props.input, props.result, props.onResult,
+        auth.refreshFromActiveServer, restartable, noHomes, canRetry, approvalStopped,
+        failure?.recovery, canOpenEnrolledHome, homeName, serviceDisplayName]);
+    const currentPublication = usePublishCurrentUiContext(enrichment);
+    const requestStep = async (step: HomeContinuationStep) => {
+        if (!hasAuthenticatedHomeAccount) {
+            await run('account-home-bootstrap', () => performStep(step));
+            return;
+        }
+        if (!mountedAction.ready) return;
+        const ownedCommand = enrichment?.commands?.find(({ command }) => command.kind === 'accountHomeContinuation'
+            && command.operation === step.operation
+            && (step.operation !== 'choose' || (command.operation === 'choose' && command.homeServerIdentityId === step.homeServerIdentityId)))?.command;
+        if (!ownedCommand) return;
+        if (!await currentPublication.activateCurrent(props.input.signal)) return;
+        const descriptor = currentContext?.readCurrentUiContext()?.commands.find(({ id }) => {
+            const command = currentContext.resolveCurrentUiCommand(id)?.command;
+            return command === ownedCommand;
+        });
+        if (!descriptor) return;
+        await mountedAction.execute('account.home_continuation.invoke', { ...step, commandId: descriptor.id }, { signal: props.input.signal });
+    };
+    const refresh: SurfaceStateAction = { label: t('common.refresh'), onPress: () => requestStep({ operation: 'refresh' }) };
     const backAction: SurfaceStateAction = { label: t('common.back'), onPress: back };
 
     let content: React.ReactElement;
@@ -217,12 +312,8 @@ export function AccountServiceContinuation(props: Readonly<{
                 subtitle: home.preferred
                     ? `${home.canonicalServerUrl} · ${t('settingsAccount.accountServicePreferredHome')}`
                     : home.canonicalServerUrl,
-                disabled: busy || admission.pendingActionId !== null,
-                onPress: () => run(home.homeServerIdentityId, async () => {
-                    const input: AccountPostAuthInput = { ...props.input,
-                        intent: { kind: 'enter', target: { kind: 'explicit', homeServerIdentityId: home.homeServerIdentityId } } };
-                    await props.onResult(await completeAccountServicePostAuth(input), input);
-                }),
+                disabled: busy || admission.pendingActionId !== null || (hasAuthenticatedHomeAccount && !mountedAction.ready),
+                onPress: () => requestStep({ operation: 'choose', homeServerIdentityId: home.homeServerIdentityId }),
             }))} />
             <RoundButton title={t('common.back')} onPress={back} />
         </View>;
@@ -239,14 +330,14 @@ export function AccountServiceContinuation(props: Readonly<{
         // secondary action, never a heavier bare button beneath it.
         const [action, secondaryAction]: readonly [SurfaceStateAction, SurfaceStateAction?] = restartable
             ? [{ label: t('settingsAccount.accountServiceOAuth.actions.startAgain'), onPress: refresh.onPress }]
-            : canRetry ? [{ label: t('common.retry'), onPress: retry }]
+            : canRetry ? [{ label: t('common.retry'), onPress: () => requestStep({ operation: 'retry' }) }]
             : failure?.recovery === 'reauthenticate_account' && props.onReauthenticate
                 ? [{ label: t('common.continue'), onPress: () => run('reauthenticate', () => props.onReauthenticate!(props.input)) }]
-            : failure?.recovery === 'relink_home' ? [{ label: t('settingsAccount.accountServiceLinkThisHome'), onPress: relink }]
+            : failure?.recovery === 'relink_home' ? [{ label: t('settingsAccount.accountServiceLinkThisHome'), onPress: () => requestStep({ operation: 'relink' }) }]
             : failure?.recovery === 'use_home_auth' ? (signInToHome ? [signInToHome, scanOrPaste] : [scanOrPaste])
-            : props.result.kind === 'approval_required' ? [{ label: t('approvals.stopWaiting'), onPress: stopWaiting }]
+            : props.result.kind === 'approval_required' ? [{ label: t('approvals.stopWaiting'), onPress: () => requestStep({ operation: 'stop_waiting' }) }]
             : canOpenEnrolledHome
-                ? [{ label: t('settingsAccount.accountServiceOAuth.actions.openHome', { homeName }), onPress: openEnrolledHome }, backAction]
+                ? [{ label: t('settingsAccount.accountServiceOAuth.actions.openHome', { homeName }), onPress: () => requestStep({ operation: 'open' }) }, backAction]
             : successful ? [{ label: t('common.done'), onPress: back }]
             : noHomes ? [refresh, scanOrPaste]
             : explicitTargetNotLinked ? (signInToHome ? [signInToHome, scanOrPaste] : [scanOrPaste])

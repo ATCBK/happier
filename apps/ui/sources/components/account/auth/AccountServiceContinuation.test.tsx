@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderFixtureScreen } from '@/dev/testkit';
 import { AuthProvider } from '@/auth/context/AuthContext';
+import { useAuth } from '@/auth/context/AuthContext';
 import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
@@ -41,14 +42,56 @@ vi.mock('expo-router', async () => {
 
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-
-import { AccountServiceContinuation } from './AccountServiceContinuation';
+vi.mock('@/modal', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/modal')>(),
+    ...(await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module,
+}));
 import { Modal } from '@/modal';
 
 await initializeTerminalRouteRuntimeForTests();
+// The terminal route helper also hoists its router boundary. Install this
+// screen's observer after that initialization, before importing the screen.
+vi.doMock('expo-router', async () => {
+    const router = (await import('@/dev/testkit/mocks/router')).createExpoRouterMock();
+    routerHarness.replace = router.spies.replace;
+    return router.module;
+});
+// The terminal helper hoists a key-only route mock. Withdraw that boundary
+// before importing this copy-bearing continuation and use the real text owner.
+vi.doUnmock('@/text');
+await (await import('@/text')).preloadTranslations('en');
+const { AccountServiceContinuation } = await import('./AccountServiceContinuation');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+const { CurrentUiContextProvider, useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+const { CurrentUiContextActionHost } = await import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort');
+const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
+const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { ActionApprovalRequestCreatedResultSchema } = await import('@happier-dev/protocol/actions/actionExecutionResult');
+let currentReader: ReturnType<typeof useOptionalCurrentUiContextReader> = null;
+let mountedAuthority: unknown;
+function CurrentReaderProbe() {
+    currentReader = useOptionalCurrentUiContextReader();
+    const auth = useAuth();
+    const execution = useMountedActionExecution(getActiveServerSnapshot().serverId);
+    mountedAuthority = { authenticated: auth.isAuthenticated, kind: auth.credentialAuthorityKind,
+        scope: execution.binding?.scope, ready: execution.ready };
+    return null;
+}
 function renderScreen(children: React.ReactNode) {
     return renderFixtureScreen(<AuthProvider initialCredentials={null}>{children}</AuthProvider>);
+}
+let activateCurrent: ReturnType<typeof usePublishCurrentUiContext>['activateCurrent'] | undefined;
+const focusEnrichment = { entity: { kind: 'account.home_continuation', label: 'Focused continuation' }, commands: [] };
+function PublicationProbe() {
+    activateCurrent = usePublishCurrentUiContext(focusEnrichment).activateCurrent;
+    return null;
 }
 
 /** Non-secret binding to the Account credential a continuation was created under. */
@@ -66,10 +109,18 @@ describe('exact invoking-surface continuation', () => {
     let locks: ReturnType<typeof installWebLockManagerMock>;
     beforeEach(() => {
         restore = installLocalStorageMock().restore;
+        vi.stubGlobal('sessionStorage', globalThis.localStorage);
+        vi.stubGlobal('window', { localStorage: globalThis.localStorage, sessionStorage: globalThis.sessionStorage,
+            location: { origin: 'https://app.happier.dev' }, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+        vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
         locks = installWebLockManagerMock();
         resetServerFeaturesClientForTests();
         fixture = createDirectoryHttpFixture();
         boundary.request.mockImplementation(fixture.request);
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+            return fixture.request(url.origin, `${url.pathname}${url.search}`, init);
+        });
     });
     afterEach(async () => {
         await screen?.unmount();
@@ -80,6 +131,168 @@ describe('exact invoking-surface continuation', () => {
         locks.restore();
         restore();
         vi.unstubAllGlobals();
+        currentReader = null;
+        activateCurrent = undefined;
+    });
+
+    it('refuses stale, cancelled, and ineligible explicit current-card activation', async () => {
+        const tree = (eligible: boolean) => <AuthProvider initialCredentials={null}>
+            <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentReaderProbe />
+                <PluginSurfaceFocusEligibilityProvider active currentUiContextActive={eligible}><PublicationProbe /></PluginSurfaceFocusEligibilityProvider>
+            </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+        </AuthProvider>;
+        screen = await renderFixtureScreen(tree(true));
+        const retainedActivation = activateCurrent!;
+        const cancelled = new AbortController();
+        cancelled.abort();
+        await expect(retainedActivation(cancelled.signal)).resolves.toBe(false);
+        expect(currentReader?.readCurrentUiContext()?.entity?.label).toBe('Focused continuation');
+        await screen.update(tree(false));
+        await expect(retainedActivation()).resolves.toBe(false);
+        expect(currentReader?.readCurrentUiContext()?.entity).toBeUndefined();
+        await screen.unmount();
+        screen = undefined;
+        await expect(retainedActivation()).resolves.toBe(false);
+    });
+
+    it.each([
+        { cancelOriginal: false, secondCard: false },
+        { cancelOriginal: true, secondCard: false },
+        { cancelOriginal: false, secondCard: true },
+        { cancelOriginal: false, secondCard: false, requestApproval: true },
+        { cancelOriginal: false, secondCard: false, requestApproval: true, revokeCredential: true },
+        { cancelOriginal: false, secondCard: false, requestApproval: true, cancelDecision: true },
+    ])('opens a Home from the actual authenticated mounted continuation despite its authorized focus change ($cancelOriginal cancellation, $secondCard second card, $requestApproval approval, $revokeCredential revocation, $cancelDecision decision cancellation)', async ({ cancelOriginal, secondCard, requestApproval, revokeCredential, cancelDecision }) => {
+        const target = await adoptHomeProfile({ descriptor: fixture.home.connectionDescriptor,
+            source: 'account-directory', descriptorAuthority: 'current_connection_observation', suggestedName: fixture.home.label });
+        await adoptHomeProfile({ descriptor: { serverUrl: 'https://home-a.test', homeServerIdentityId: 'home-a' }, source: 'manual' });
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.test', accountId: 'alice',
+            request: async (url) => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+                if (path === '/v1/kv/bulk') return Response.json({ values: [] });
+                return Response.json({}, { status: 404 });
+            } });
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
+        const requestHome = async (url: RequestInfo | URL, init?: RequestInit) => {
+            const path = new URL(String(url)).pathname;
+            const artifactResponse = artifacts.handle(path, init);
+            if (artifactResponse) return await artifactResponse;
+            if (path === '/v1/auth/ping') return Response.json({});
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/kv/bulk') return Response.json({ values: [] });
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            return Response.json({}, { status: 404 });
+        };
+        setRuntimeFetch(requestHome);
+        boundary.request.mockImplementation((endpoint, path, init) => requestHome(`${endpoint}${path}`, init));
+        const cancellation = new AbortController();
+        const input = { service: fixture.service, credentialTokenDigest: ACCOUNT_CREDENTIAL_TOKEN_DIGEST, signal: cancellation.signal,
+            session: new AccountDirectorySession({ endpoint: fixture.service.endpointUrl, serverIdentityId: fixture.service.serverIdentityId }, { capability: fixture.service.capability }),
+            intent: { kind: 'enroll' as const, homeServerIdentityId: fixture.home.homeServerIdentityId } };
+        routerHarness.replace?.mockClear();
+        try {
+            screen = await renderFixtureScreen(<AuthProvider initialCredentials={connection.credentials}>
+                <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentUiContextActionHost />
+                    <CurrentReaderProbe /><PluginSurfaceFocusEligibilityProvider active currentUiContextActive><AccountServiceContinuation input={input}
+                        result={{ kind: 'home_enrolled', homeServerIdentityId: fixture.home.homeServerIdentityId }}
+                        onResult={() => {}} onBack={() => {}} />
+                        {secondCard ? <AccountServiceContinuation input={{ ...input }}
+                            result={{ kind: 'home_enrolled', homeServerIdentityId: fixture.home.homeServerIdentityId }}
+                            onResult={() => {}} onBack={() => {}} /> : null}
+                    </PluginSurfaceFocusEligibilityProvider>
+                </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+            </AuthProvider>);
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                const snapshot = currentReader?.readCurrentUiContext();
+                expect(snapshot?.commands.some(command => command.title === 'Open Home B'), JSON.stringify({ snapshot, mountedAuthority })).toBe(true);
+            });
+            const descriptor = currentReader?.readCurrentUiContext()?.commands.find(command => command.title === 'Open Home B');
+            const original = descriptor ? currentReader?.resolveCurrentUiCommand(descriptor.id) : null;
+            const executor = createDefaultActionExecutor();
+            const originServerId = getActiveServerSnapshot().serverId;
+            let approvalId: string | undefined;
+            let displacedApprovalId: string | undefined;
+            if (requestApproval || secondCard) {
+                const requested = await executor.execute('account.home_continuation.invoke', { operation: 'open', commandId: descriptor!.id }, {
+                    surface: 'agent', serverId: originServerId, expectedAccountId: 'alice', actionRequestId: 'mounted-home-open-request',
+                });
+                expect(requested, JSON.stringify(requested)).toMatchObject({ ok: true });
+                if (!requested.ok) throw new Error(requested.error);
+                approvalId = ActionApprovalRequestCreatedResultSchema.parse(requested.result).artifactId;
+                expect(JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null')).toMatchObject({
+                    status: 'open', actionId: 'account.home_continuation.invoke',
+                    actionArgs: { operation: 'open', commandId: descriptor!.id }, executionOriginV1: { accountId: 'alice' },
+                });
+                expect(getActiveServerSnapshot().serverId).toBe(originServerId);
+                expect(routerHarness.replace).not.toHaveBeenCalled();
+                if (secondCard) { displacedApprovalId = approvalId; approvalId = undefined; }
+            }
+            let releaseFocus!: () => void;
+            const focusRead = new Promise<void>(resolve => { releaseFocus = resolve; });
+            let awaitingFocusRead = false;
+            let revoked = false;
+            // Secure storage is external: let the real focus owner stage Home B
+            // and retire Home A's command while its credential read is pending.
+            vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl => {
+                if (serverUrl === fixture.home.canonicalServerUrl && !awaitingFocusRead) {
+                    awaitingFocusRead = true;
+                    await focusRead;
+                }
+                // Same Account, replaced credential: an Account-id-only
+                // settlement fallback must not borrow its successor token.
+                if (revoked && serverUrl === 'https://home-a.test') return { ...connection.credentials, token: `${connection.credentials.token}-rotated` };
+                return connection.credentials;
+            });
+            let decision: ReturnType<typeof executor.execute> | undefined;
+            const decisionCancellation = new AbortController();
+            try {
+                if (approvalId) {
+                    decision = executor.execute('approval.request.decide', { artifactId: approvalId, decision: 'approve' }, {
+                        surface: 'ui', serverId: originServerId, expectedAccountId: 'alice', signal: decisionCancellation.signal,
+                    });
+                } else if (secondCard) {
+                    const actions = screen.findAllHostsByTestId('account-service-continuation-home_enrolled-action');
+                    await act(async () => { actions.at(-1)!.props.onPress(); });
+                    expect(original?.retirementSignal.aborted).toBe(true);
+                    expect(currentReader?.resolveCurrentUiCommand(original!.id)).toBeNull();
+                } else await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
+                await vi.waitFor(async () => {
+                    await act(async () => {});
+                    expect(awaitingFocusRead).toBe(true);
+                    expect(original?.retirementSignal.aborted).toBe(true);
+                });
+                if (approvalId) expect(JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null')).toMatchObject({ status: 'executing' });
+                if (cancelOriginal) cancellation.abort();
+                if (revokeCredential) revoked = true;
+                if (cancelDecision) decisionCancellation.abort();
+            } finally { releaseFocus(); }
+            if (decision) {
+                const settled = await decision;
+                if (revokeCredential || cancelDecision) {
+                    expect(settled, JSON.stringify(settled)).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+                    expect(JSON.parse(artifacts.readPlainBody(approvalId!) ?? 'null')).toMatchObject({ status: 'executing' });
+                } else expect(settled, JSON.stringify(settled)).toMatchObject({ ok: true, result: { status: 'executed' } });
+            }
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                expect(getActiveServerSnapshot().serverId).toBe(resolveServerProfileScopeId(target));
+                if (cancelOriginal) expect(routerHarness.replace).not.toHaveBeenCalled();
+                else expect(routerHarness.replace).toHaveBeenCalledWith('/');
+            });
+            if (displacedApprovalId) {
+                expect(await executor.execute('approval.request.decide', { artifactId: displacedApprovalId, decision: 'approve' }, {
+                    surface: 'ui', serverId: originServerId, expectedAccountId: 'alice',
+                })).toMatchObject({ ok: true, result: { status: 'failed' } });
+                expect(JSON.parse(artifacts.readPlainBody(displacedApprovalId) ?? 'null')).toMatchObject({ status: 'failed' });
+                expect(routerHarness.replace).toHaveBeenCalledTimes(1);
+            }
+        } finally { await screen?.unmount(); screen = undefined; await connection.dispose(); }
     });
 
     it('requests exact service reauthentication rather than treating recovery as Back', async () => {
@@ -189,6 +402,7 @@ describe('exact invoking-surface continuation', () => {
         await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
 
         // The canonical owner focused the enrolled Home in this tab and landed on the shell.
+        await vi.waitFor(() => expect(routerHarness.replace).toHaveBeenCalledWith('/'));
         expect(getActiveServerSnapshot().serverId).toBe(resolveServerProfileScopeId(profile));
         expect(Modal.alertAsync).not.toHaveBeenCalledWith(fixture.home.label, expect.anything(), expect.anything());
         expect(routerHarness.replace).toHaveBeenCalledWith('/');
@@ -230,7 +444,7 @@ describe('exact invoking-surface continuation', () => {
 
         // The owner asked whether to retry and the user cancelled: nothing moved and
         // the card still offers Open and Back rather than silently leaving the host.
-        expect(Modal.alertAsync).toHaveBeenCalledWith('Home B', expect.anything(), expect.anything());
+        await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('Home B', expect.anything(), expect.anything()));
         expect(onBack).not.toHaveBeenCalled();
         expect(routerHarness.replace).not.toHaveBeenCalled();
         expect(actionTitle('account-service-continuation-home_enrolled-action')).toBe('Open Home B');
