@@ -15,7 +15,7 @@ import { ManagedConfigurationFactsV1Schema, ManagedOneOffSelectionV1Schema, Mana
 import { DevcontainerRebuildIntentV1Schema, ManagedIntentInputSchema, ManagedIntentResultSchema, ManagedActivityReadRequestV1Schema } from './managedIntentV1.js';
 import { MachineInstallationProofV1Schema } from '../identity/installationIdentity.js';
 import { SocketRpcMachineAdmissionContextV1Schema } from '../machineAccessV1.js';
-import { MachineProvisionerDestroyResultV1Schema, MachineProvisionerPowerResultV1Schema, MachineProvisionerRebuildResultV1Schema } from '../../plugins/contributions/machineProvisioners.js';
+import { MachineProvisionerPowerResultV1Schema, MachineProvisionerRebuildResultV1Schema } from '../../plugins/contributions/machineProvisioners.js';
 import { MachineReferenceCensusV1Schema } from '../machineReferenceCensusV1.js';
 import { MachineEnvironmentV1Schema } from './machineEnvironmentV1.js';
 export { MANAGED_MACHINE_ACTION_IDS_V1, type ManagedMachineActionIdV1 } from './actionIdsV1.js';
@@ -170,7 +170,7 @@ export const ManagedControlAdmissionInputV1Schema = lazyZodSchema(() => z.discri
   z.object({ action: z.literal('machines.managed.retire'), input: ManagedRetireInputV1Schema, requestId: id() }).strict(),
 ]));
 export type ManagedControlAdmissionInputV1 = z.infer<typeof ManagedControlAdmissionInputV1Schema>;
-export const ManagedControllerIntentReportV1Schema = lazyZodSchema(() => z.object({ ...current(), result: z.union([asProtocolZod(MachineProvisionerDestroyResultV1Schema), asProtocolZod(MachineProvisionerRebuildResultV1Schema)]), observation: mini.optional(ProviderObservationV1Schema) }).strict());
+export const ManagedControllerIntentReportV1Schema = lazyZodSchema(() => z.object({ ...current(), result: z.union([asProtocolZod(MachineProvisionerPowerResultV1Schema), asProtocolZod(MachineProvisionerRebuildResultV1Schema)]), observation: mini.optional(ProviderObservationV1Schema) }).strict());
 export type ManagedControllerIntentReportV1 = z.infer<typeof ManagedControllerIntentReportV1Schema>;
 export function managedMachineActionEndpointPathV1(action: ManagedMachineActionIdV1): string {
   const suffix = action.startsWith('machines.managed.') ? action.slice('machines.managed.'.length) : action;

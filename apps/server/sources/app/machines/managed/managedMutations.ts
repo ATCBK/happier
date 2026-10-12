@@ -269,21 +269,6 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 || pending.expectedIntentRevision !== canonical.expectedIntentRevision || pending.requestId !== canonical.requestId
                 || !sameManagedInput(pending.controller, canonical.controller)) throw new ManagedMachineError("request_conflict");
         const data: Prisma.ManagedMachineUpdateManyMutationInput = {};
-        if (canonical.result.kind === 'accepted') {
-            if (pending.intent !== 'delete') throw new ManagedMachineError('resource_mismatch');
-            const launch = readManagedLaunchSnapshot(row.launch);
-            const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
-                controller: canonical.controller, provider: launch.provider });
-            if (!declaration?.reconciliation || declaration.schemaVersion !== launch.schemaVersion) {
-                throw new ManagedMachineError('provider_unavailable');
-            }
-            const previous = projectManagedMachine(row, declaration);
-            const parsed = createManagedMachineDeclaredSchema(declaration.launchSchema, declaration.resourceSchema,
-                declaration.reconciliation.nativeOperationSchema).safeParse({ ...previous,
-                nativeOperationRef: canonical.result.nativeOperationRef });
-            if (!parsed.success) throw new ManagedMachineError('resource_mismatch');
-            data.nativeOperationRef = ManagedMachineV1Schema.parse(parsed.data).nativeOperationRef;
-        }
         if (canonical.result.kind === 'bound') {
             if (pending.intent !== 'rebuild') throw new ManagedMachineError('resource_mismatch');
             const launch = readManagedLaunchSnapshot(row.launch);
@@ -336,10 +321,7 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
             ? canonical.observation : undefined;
         if (currentObservation) {
             data.observation = currentObservation;
-            if (currentObservation.availability === "absent" && pending.intent !== 'rebuild') {
-                data.allocation = "confirmed-absent";
-                data.nativeOperationRef = getActivePrismaRuntime().DbNull;
-            }
+            if (currentObservation.availability === "absent" && pending.intent !== 'rebuild') data.allocation = "confirmed-absent";
         }
         const observedSettlement = pending.intent !== 'rebuild' && currentObservation && (pending.intent === 'delete'
             ? currentObservation.availability === 'absent'

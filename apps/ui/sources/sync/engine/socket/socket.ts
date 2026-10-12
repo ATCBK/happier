@@ -115,7 +115,6 @@ import {
     type TranscriptStreamSegmentSocketQueueEntry,
 } from './transcriptStreamSegmentSocketQueue';
 import {
-    buildMachineActivityPlaceholder,
     buildMachineFromMachineActivityEphemeralUpdate,
     buildUpdatedMachineFromSocketUpdate,
 } from '@/sync/engine/machines/syncMachines';
@@ -2457,7 +2456,19 @@ export function flushMachineActivityUpdates(params: {
 
     for (const [, updateData] of updates) {
         const existing = storage.getState().machines[updateData.id];
-        const machine = existing ?? buildMachineActivityPlaceholder(updateData);
+        const machine: Machine = existing ?? {
+            id: updateData.id,
+            seq: 0,
+            createdAt: updateData.activeAt,
+            updatedAt: updateData.activeAt,
+            active: updateData.active,
+            activeAt: updateData.activeAt,
+            revokedAt: null,
+            metadata: null,
+            metadataVersion: 0,
+            daemonState: null,
+            daemonStateVersion: 0,
+        };
         machines.push(buildMachineFromMachineActivityEphemeralUpdate({ machine, updateData }));
     }
 

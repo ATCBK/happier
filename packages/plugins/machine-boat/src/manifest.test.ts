@@ -16,14 +16,12 @@ async function activated() {
       requests.push(request);
       const path = new URL(request.url).pathname;
       const value = path.endsWith('/named-snapshots') ? { ok: true, type: 'snapshot.named.list', snapshots: [] }
-        : path.includes('/deletion-operations/') ? { ok: true, type: 'deletion.operation', operation: { id: 'bdop_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', kind: 'sandbox', targetId: 'bx_23456789', reason: 'explicit', status: 'completed', attemptCount: 1, requestedAt: '2026-10-12T00:00:00Z', completedAt: '2026-10-12T00:01:00Z' } }
-        : path.endsWith('/sandboxes/bx_23456789') && request.method === 'DELETE' ? { ok: true, type: 'sandbox.deleting', operation: { id: 'bdop_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', kind: 'sandbox', targetId: 'bx_23456789', reason: 'explicit', status: 'pending', attemptCount: 0, requestedAt: '2026-10-12T00:00:00Z', completedAt: null } }
         : path.endsWith('/sandboxes') && request.method === 'GET' ? { ok: true, type: 'sandbox.list', sandboxes: [] }
         : path.endsWith('/limits') ? { ok: true, type: 'limits.info', sandboxPlanDollars: 100, canStart: true, activeSandboxes: 0, maxActiveSandboxes: 100, billingStatus: 'active' }
         : path.endsWith('/sshkey') ? { ok: true, type: 'ssh_key.configured', success: true, machineIp: '203.0.113.8', sshEndpoint: '203.0.113.8:22', sshUser: 'user', hostKey: 'ssh-ed25519 AAAAboat' }
         : path.endsWith('/sandboxes') && request.method === 'POST' ? { ok: true, type: 'sandbox.created', status: 'provisioning', ttlSeconds: null, sandbox: { id: 'bx_23456789', state: 'provisioning' } }
         : { ok: true, type: 'sandbox.info', sandbox: { id: 'bx_23456789', state: 'ready' } };
-      return { status: request.method === 'DELETE' || request.method === 'POST' && path.endsWith('/sandboxes') ? 202 : 200, finalUrl: request.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(value)) };
+      return { status: request.method === 'POST' && path.endsWith('/sandboxes') ? 202 : 200, finalUrl: request.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(value)) };
     } },
     exec: { systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'ssh-keyscan' } }) }, run: async () => ({
       termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
@@ -80,16 +78,5 @@ describe('Boat machine provisioner contract', () => {
       '/api/v1/sandboxes', '/api/v1/sandboxes/bx_23456789', '/api/v1/sandboxes/bx_23456789/sshkey',
     ]));
     expect(JSON.stringify(acquire)).not.toContain('captured-private');
-  });
-
-  it('returns accepted destroy custody and settles only from that retained operation', async () => {
-    const runtime = await activated();
-    const accepted = await runtime.handlers.get('destroy')!({ resource: { sandboxId: 'bx_23456789' } }, runtime.context);
-    expect(accepted).toMatchObject({ kind: 'accepted', nativeOperationRef: { value: {
-      kind: 'delete', operationId: 'bdop_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', sandboxId: 'bx_23456789',
-    } } });
-    const nativeOperation = (accepted as { nativeOperationRef: { value: unknown } }).nativeOperationRef.value;
-    expect(await runtime.handlers.get('destroy')!({ nativeOperation }, runtime.context)).toEqual({ kind: 'confirmed' });
-    expect(runtime.requests.filter(request => request.method === 'DELETE')).toHaveLength(1);
   });
 });

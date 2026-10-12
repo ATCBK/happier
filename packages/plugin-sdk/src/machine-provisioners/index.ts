@@ -9,8 +9,6 @@ export { MachineProvisionerCheckInputV1Schema } from '../machineProvisioners.js'
 export type { MachineProvisionerCheckResultV1 } from '../machineProvisioners.js';
 export { MachineProvisionerCheckResultV1Schema } from '../machineProvisioners.js';
 export type { MachineProvisionerContributionV1 } from '../machineProvisioners.js';
-export type { MachineProvisionerDestroyResultV1 } from '../machineProvisioners.js';
-export { MachineProvisionerDestroyResultV1Schema } from '../machineProvisioners.js';
 export type { MachineProvisionerNativeExecResultV1 } from '../machineProvisioners.js';
 export { MachineProvisionerNativeExecResultV1Schema } from '../machineProvisioners.js';
 export type { MachineProvisionerNativeIntentV1 } from '../machineProvisioners.js';

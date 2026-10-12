@@ -1017,49 +1017,4 @@ describe('public machine provisioner role schemas', () => {
         .success,
     ).toBe(false);
   });
-
-  it('admits strict accepted destroy custody only through the declared native operation schema', () => {
-    const native = defineProtocolObject(
-      { id: defineProtocolString({ minLength: 1 }) },
-      { policy: 'closed' },
-    );
-    const reconciliation =
-      provisioners.defineMachineProvisionerReconciliationSchemas({
-        launch: native,
-        resource: native,
-        nativeOperation: native,
-      });
-    const accepted = {
-      kind: 'accepted',
-      nativeOperationRef: {
-        contributionRef: {
-          pluginId: 'happier.machine-test',
-          localId: 'guest',
-        },
-        schemaVersion: 1,
-        value: { id: 'delete-operation-1' },
-      },
-    };
-
-    expect(reconciliation.destroyResult.parse(accepted)).toEqual(accepted);
-    expect(
-      reconciliation.destroyResult.safeParse({
-        ...accepted,
-        nativeOperationRef: {
-          ...accepted.nativeOperationRef,
-          value: { id: 'delete-operation-1', future: true },
-        },
-      }).success,
-    ).toBe(false);
-    expect(
-      reconciliation.destroyResult.safeParse({
-        ...accepted,
-        nativeOperationRef: {
-          ...accepted.nativeOperationRef,
-          value: { id: 1 },
-        },
-      }).success,
-    ).toBe(false);
-  });
-
 });
