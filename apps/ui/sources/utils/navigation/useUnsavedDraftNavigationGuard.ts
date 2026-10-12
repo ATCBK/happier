@@ -39,14 +39,18 @@ export function useUnsavedDraftNavigationGuard(params: Readonly<{
     onLeave?: () => void;
     /** Back/history may pop an existing entry while an explicit discard has a fixed destination. */
     onBack?: () => void;
+    /** A source-owning host can retire a pending decision without touching its replacement draft. */
+    captureDecisionCurrentness?: () => () => boolean;
     tag: string;
-}>): Readonly<{ requestLeave: () => void; requestBack: () => void; allowSavedNavigation: () => void }> {
-    const { isDirty, navigation, onDiscard, onLeave, onBack = onLeave, onSave, tag } = params;
+}>): Readonly<{ requestLeave: () => void; requestLeaveAndWait: () => Promise<boolean>; requestBack: () => void; allowSavedNavigation: () => void }> {
+    const { isDirty, navigation, onDiscard, onLeave, onBack = onLeave, onSave, captureDecisionCurrentness, tag } = params;
     const isDirtyRef = React.useRef(isDirty);
     isDirtyRef.current = isDirty;
     const ignoreRef = React.useRef(false);
 
-    const requestDecision = React.useCallback(() => promptUnsavedChangesAlert(
+    const requestDecision = React.useCallback(async () => {
+        const isCurrent = captureDecisionCurrentness?.();
+        const decision = await promptUnsavedChangesAlert(
         (title, message, buttons) => Modal.alert(title, message, buttons),
         {
             title: t('common.discardChanges'),
@@ -55,7 +59,9 @@ export function useUnsavedDraftNavigationGuard(params: Readonly<{
             ...(onSave ? { saveText: t('common.save') } : {}),
             keepEditingText: t('common.keepEditing'),
         },
-    ), [onSave]);
+        );
+        return isCurrent && !isCurrent() ? 'keepEditing' : decision;
+    }, [captureDecisionCurrentness, onSave]);
     const discard = React.useCallback(() => {
         isDirtyRef.current = false;
         onDiscard?.();
@@ -98,9 +104,14 @@ export function useUnsavedDraftNavigationGuard(params: Readonly<{
         tag,
     });
 
-    const requestLeave = React.useCallback(() => {
-        void runUnsavedChangesGuard(guard, () => onLeave?.());
+    const requestLeaveAndWait = React.useCallback(async () => {
+        return await runUnsavedChangesGuard(guard, () => onLeave?.());
     }, [guard, onLeave]);
+    // UI event handlers open the decision without awaiting the person's response.
+    // Actions await that same decision to report its actual terminal outcome.
+    const requestLeave = React.useCallback(() => {
+        void requestLeaveAndWait();
+    }, [requestLeaveAndWait]);
 
     const requestBack = React.useCallback(() => {
         void runUnsavedChangesGuard(guard, () => onBack?.());
@@ -111,5 +122,5 @@ export function useUnsavedDraftNavigationGuard(params: Readonly<{
         isDirtyRef.current = false;
     }, []);
 
-    return React.useMemo(() => ({ requestLeave, requestBack, allowSavedNavigation }), [requestLeave, requestBack, allowSavedNavigation]);
+    return React.useMemo(() => ({ requestLeave, requestLeaveAndWait, requestBack, allowSavedNavigation }), [requestLeave, requestLeaveAndWait, requestBack, allowSavedNavigation]);
 }

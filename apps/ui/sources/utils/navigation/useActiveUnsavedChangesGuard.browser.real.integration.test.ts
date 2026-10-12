@@ -22,7 +22,11 @@ beforeAll(async () => {
     if (!address || typeof address === 'string') throw new Error('Browser harness did not bind its HTTP boundary');
     origin = `http://127.0.0.1:${address.port}`;
 }, 600_000);
-afterAll(async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
+afterAll(async () => {
+    try {
+        if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    } finally { script = ''; }
+});
 
 type Harness = { guardHarness: { mount: (phone: boolean) => Harness['app'] }; app: {
     open: (href: string) => void; back: () => void; ready: () => boolean;
