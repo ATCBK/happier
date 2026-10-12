@@ -24,7 +24,7 @@ import { resolveCodexRuntimeQuotaProbeSupport } from '../../quota/probe.js';
 import { readCodexRuntimeRateLimitsSnapshot } from '../../quota/runtimeRateLimits.js';
 import { resolveCodexUsageSubjectRef } from '../../usage/identity.js';
 import { mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot } from '../../usage/snapshot.js';
-import { buildCodexCloudAuthFile } from '../../openai/cloud/authFile.js';
+import { buildCodexCloudAuthFile, isCodexCloudAuthFileProjectionCurrent } from '../../openai/cloud/authFile.js';
 import { CODEX_OPENAI_CONNECTED_ACCOUNT_SERVICE_KEY } from '../../../../../constants.js';
 
 type RuntimeAuthTargetInput = AgentConnectedAccountRuntimeAuthTargetV1;
@@ -249,12 +249,18 @@ export function createCodexConnectedAccountNativeAuthCodec(): AgentConnectedAcco
         return { status: 'unavailable', retryable: false, reason: 'missing_expected_provider_account_id' };
       }
       let proof: ReturnType<typeof readCodexAuthStoreProviderAccountIdFromJson>;
+      let authFile: unknown;
       try {
-        proof = readCodexAuthStoreProviderAccountIdFromJson(JSON.parse(new TextDecoder().decode(bytes)));
+        authFile = JSON.parse(new TextDecoder().decode(bytes));
+        proof = readCodexAuthStoreProviderAccountIdFromJson(authFile);
       } catch {
         proof = { status: 'missing' };
       }
-      if (proof.status === 'resolved' && proof.accountId === expectedProviderAccountId) {
+      if (proof.status === 'resolved' && proof.accountId === expectedProviderAccountId
+        && record?.kind === 'oauth' && isCodexCloudAuthFileProjectionCurrent(authFile, {
+          accessToken: record.oauth.accessToken, idToken: record.oauth.idToken,
+          accountId: record.oauth.providerAccountId,
+        })) {
         return {
           status: 'verified',
           providerAccountId: proof.accountId,

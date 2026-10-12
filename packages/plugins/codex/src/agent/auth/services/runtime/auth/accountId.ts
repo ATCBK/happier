@@ -115,8 +115,10 @@ export function readCodexActiveProviderAccount(value: unknown): CodexActiveProvi
   const account = readRecord(record.account);
   const auth = readRecord(record.auth);
   const profile = readRecord(record.profile);
+  const workspaceRouting = readRecord(record.workspaceRouting);
   return {
-    providerAccountId: readString(record.chatgptAccountId)
+    providerAccountId: readString(workspaceRouting?.chatgptAccountId)
+      ?? readString(record.chatgptAccountId)
       ?? readString(record.chatgpt_account_id)
       ?? readString(record.accountId)
       ?? readString(record.account_id)

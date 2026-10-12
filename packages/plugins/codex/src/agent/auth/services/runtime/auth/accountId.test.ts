@@ -16,6 +16,13 @@ function buildJwt(payload: Record<string, unknown>): string {
 }
 
 describe('readCodexAuthStoreProviderAccountId', () => {
+  it('uses the native workspace routing identity instead of a legacy account id', () => {
+    expect(readCodexActiveProviderAccount({
+      account: { type: 'chatgpt', id: 'legacy-account', email: 'runtime@example.test' },
+      workspaceRouting: { chatgptAccountId: 'workspace-runtime' },
+    })).toEqual({ providerAccountId: 'workspace-runtime', providerEmail: 'runtime@example.test' });
+  });
+
   it('reads the connected-service flat Codex auth account id', () => {
     expect(readCodexAuthStoreProviderAccountIdFromJson({
       auth_mode: 'chatgpt',

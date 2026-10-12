@@ -18,6 +18,7 @@ describe('verifyResumeReachableCodex', () => {
     const sessionFiles = createLookup([{
       fileName: `rollout-2026-08-28T12-00-00-${vendorResumeId}.jsonl`,
       nativeSessionId: null,
+      stateEntryPath: 'sessions',
     }]);
 
     await expect(verifyResumeReachableCodex({
@@ -35,6 +36,7 @@ describe('verifyResumeReachableCodex', () => {
     const strippedOnly = createLookup([{
       fileName: `rollout-2026-09-13T12-00-00-${strippedVendorResumeId}.jsonl`,
       nativeSessionId: null,
+      stateEntryPath: 'sessions',
     }]);
     await expect(verifyResumeReachableCodex({
       vendorResumeId: exactVendorResumeId,
@@ -44,6 +46,7 @@ describe('verifyResumeReachableCodex', () => {
     const exactOnly = createLookup([{
       fileName: `rollout-2026-09-13T12-00-00-${exactVendorResumeId}.jsonl`,
       nativeSessionId: null,
+      stateEntryPath: 'sessions',
     }]);
     await expect(verifyResumeReachableCodex({
       vendorResumeId: exactVendorResumeId,
@@ -69,5 +72,14 @@ describe('verifyResumeReachableCodex', () => {
       sessionFiles,
     })).resolves.toEqual({ ok: false, reason: 'codex_session_file_not_found' });
     expect(sessionFiles.findDeclaredCandidate).not.toHaveBeenCalled();
+  });
+
+  it.each(['archived_sessions', undefined])('does not accept a rollout from %s state evidence', async (stateEntryPath) => {
+    const vendorResumeId = '019e7327-46cc-7dca-bb14-8473727db321';
+    await expect(verifyResumeReachableCodex({ vendorResumeId, sessionFiles: createLookup([{
+      fileName: `rollout-2026-08-28T12-00-00-${vendorResumeId}.jsonl`,
+      nativeSessionId: vendorResumeId,
+      ...(stateEntryPath === undefined ? {} : { stateEntryPath }),
+    }]) })).resolves.toEqual({ ok: false, reason: 'codex_session_file_not_found' });
   });
 });

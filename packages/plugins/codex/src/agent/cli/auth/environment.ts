@@ -130,3 +130,33 @@ export function readCodexAuthTokensFromJson(parsed: unknown): CodexEnvironmentAu
     accountLabel: hasUsableToken ? (decodeJwtEmail(idToken) ?? decodeJwtEmail(accessToken)) : null,
   };
 }
+
+export type CodexNativeAuthCredentials = Readonly<{
+  idToken: string;
+  accessToken: string;
+  refreshToken: string;
+  accountId: string;
+  expiresAt: number | null;
+}>;
+
+/** Strict native import policy; ordinary external auth retains host-owned recovery material. */
+export function readCodexNativeAuthCredentialsFromJson(parsed: unknown): CodexNativeAuthCredentials | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if ((record.auth_mode != null && record.auth_mode !== 'chatgpt')
+    || (record.auth_mode == null && typeof record.OPENAI_API_KEY === 'string' && record.OPENAI_API_KEY.trim())) {
+    return null;
+  }
+  const { idToken, accessToken, accountId } = readCodexAuthTokensFromJson(parsed);
+  const tokens = record.tokens;
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return null;
+  const refresh = (tokens as Record<string, unknown>).refresh_token;
+  const refreshToken = typeof refresh === 'string' ? refresh.trim() : '';
+  if (!idToken?.trim() || !accessToken?.trim() || !refreshToken || !accountId || !hasUsableJwtLifetime(accessToken)) {
+    return null;
+  }
+  return {
+    idToken: idToken.trim(), accessToken: accessToken.trim(), refreshToken, accountId,
+    expiresAt: readJwtExpMs(accessToken),
+  };
+}

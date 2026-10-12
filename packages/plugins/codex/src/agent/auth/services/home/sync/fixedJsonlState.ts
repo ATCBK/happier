@@ -1,5 +1,4 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 type CodexJsonlStateFile = Readonly<{
   name: 'history.jsonl' | 'session_index.jsonl';
@@ -15,15 +14,6 @@ type SessionIndexRecord = Readonly<{
   id: string;
   updatedAt: string;
 }>;
-
-async function readOptionalFile(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
 
 function nonEmptyLines(content: string | null): string[] {
   return (content ?? '').split(/\r?\n/u).filter((line) => line.length > 0);
@@ -74,25 +64,12 @@ function resolveMissingSessionIndexLines(current: string | null, incoming: strin
   return missing;
 }
 
-async function appendJsonlLines(path: string, current: string | null, lines: readonly string[]): Promise<void> {
-  if (lines.length === 0) return;
-  await mkdir(dirname(path), { recursive: true });
-  const separator = current && !current.endsWith('\n') ? '\n' : '';
-  await appendFile(path, `${separator}${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
-}
-
-export async function reconcileCodexSharedJsonlState(params: Readonly<{
-  materializedRootDir: string;
-  sourceRoot: string;
-}>): Promise<void> {
-  for (const file of CODEX_JSONL_STATE_FILES) {
-    const incoming = await readOptionalFile(join(params.materializedRootDir, file.name));
-    if (incoming === null) continue;
-    const destinationPath = join(params.sourceRoot, file.name);
-    const current = await readOptionalFile(destinationPath);
-    const missing = file.kind === 'history'
-      ? resolveMissingHistoryLines(current, incoming)
-      : resolveMissingSessionIndexLines(current, incoming);
-    await appendJsonlLines(destinationPath, current, missing);
-  }
-}
+export const reconcileCodexSharedJsonlState: AgentConnectedAccountSharedStateFileMergeV1 = (input) => {
+  const file = CODEX_JSONL_STATE_FILES.find(candidate => candidate.name === input.entryPath);
+  if (!file) return null;
+  const missing = file.kind === 'history'
+    ? resolveMissingHistoryLines(input.currentContents, input.incomingContents)
+    : resolveMissingSessionIndexLines(input.currentContents, input.incomingContents);
+  const separator = input.currentContents && !input.currentContents.endsWith('\n') ? '\n' : '';
+  return { appendText: missing.length === 0 ? '' : `${separator}${missing.join('\n')}\n` };
+};

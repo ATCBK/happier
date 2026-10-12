@@ -272,5 +272,15 @@ describe('Codex runtime auth adapter', () => {
       status: 'verified',
       providerAccountId: 'acct-work',
     });
+    for (const contents of [
+      { tokens: { account_id: 'acct-work' } },
+      { ...JSON.parse(new TextDecoder().decode(materialized.files['auth.json'])), tokens: {
+        access_token: 'newer-access', refresh_token: '', id_token: 'newer-id', account_id: 'acct-work',
+      } },
+    ]) {
+      expect(codec.inspect({ credential, selection: { serviceId: 'openai-codex', profileId: 'work' },
+        files: { 'auth.json': new TextEncoder().encode(JSON.stringify(contents)) },
+      })).toMatchObject({ status: 'mismatch', reason: 'provider_account_auth_store_mismatch' });
+    }
   });
 });
