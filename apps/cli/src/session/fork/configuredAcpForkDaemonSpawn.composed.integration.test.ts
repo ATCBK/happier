@@ -40,8 +40,7 @@ function configuredBackendEntry(params: Readonly<{
         id: params.id,
         name: params.id,
         title: params.title,
-        command: `${params.id}-acp`,
-        args: ['--stdio'],
+        launch: { kind: 'command' as const, command: `${params.id}-acp`, args: ['--stdio'] },
         env: {},
         capabilities: {
             supportsLoadSession: params.supportsLoadSession,

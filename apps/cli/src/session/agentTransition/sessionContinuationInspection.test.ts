@@ -280,8 +280,8 @@ describe('configured continuation target resolution', () => {
 
   it('refuses the captured target when its catalog changes during runtime composition', async () => {
     const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-      id: 'target-a', name: 'target-a', title: 'Before refresh', command: process.execPath,
-      args: [], env: {}, capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
+      id: 'target-a', name: 'target-a', title: 'Before refresh', launch: { kind: 'command' as const, command: process.execPath, args: [] },
+       env: {}, capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
     }] });
     const scopeKey = resolveAccountSettingsScopeKey({ token: 'test-token', encryption: null });
     setActiveAccountSettingsSnapshot({
@@ -311,7 +311,7 @@ describe('configured continuation target resolution', () => {
 
   it('resolves two configurations sharing an executable as distinct exact Session targets', async () => {
     const configuredCatalog = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['target-a', 'target-b'].map(id => ({
-      id, name: id, title: id, command: process.execPath, args: [id], env: {},
+      id, name: id, title: id, launch: { kind: 'command' as const, command: process.execPath, args: [id] }, env: {},
       capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
     })) });
     setActiveAccountSettingsSnapshot({
@@ -392,8 +392,8 @@ describe('configured continuation target resolution', () => {
   ])('refuses a configured continuation before runtime composition when the catalog is $status', async catalog => {
     setActiveAccountSettingsSnapshot({
       source: 'network', settings: accountSettingsParse({ acpCatalogSettingsV1: { v: 2, backends: [{
-        id: 'target-a', name: 'target-a', title: 'target-a', command: process.execPath,
-        args: [], env: {}, capabilities: {}, createdAt: 1, updatedAt: 1,
+        id: 'target-a', name: 'target-a', title: 'target-a', launch: { kind: 'command' as const, command: process.execPath, args: [] },
+         env: {}, capabilities: {}, createdAt: 1, updatedAt: 1,
       }] } }), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
       scopeKey: resolveAccountSettingsScopeKey({ token: 'test-token', encryption: null }), acpCatalog: catalog,
     });
