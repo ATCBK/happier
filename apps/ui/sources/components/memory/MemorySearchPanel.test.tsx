@@ -5,7 +5,6 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { MemoryDocumentSearchCoverageV1, MemorySearchResultHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createMachineAdministrationFixture } from '@/dev/testkit/fixtures/machineAdministrationFixture';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -34,6 +33,7 @@ vi.mock('react-native-unistyles', async () => {
 const homes = createHomeGovernanceHarness();
 installDisconnectedServerSocketBoundary();
 installHomeGovernanceBoundaries(homes);
+const { createMachineAdministrationFixture } = await import('@/dev/testkit/fixtures/machineAdministrationFixture');
 await loadSyncSingletonForTests();
 const { sync } = await import('@/sync/sync');
 const { storage } = await import('@/sync/domains/state/storage');

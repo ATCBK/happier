@@ -30,14 +30,10 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { HappierDisclosure } from '@happier-dev/plugin-ui/presentation';
 import { readPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
-import { ItemList } from '@/components/ui/lists/ItemList';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
-import { memoryDocumentActions } from '@/sync/ops/promptLibrary/memoryDocuments';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -64,6 +60,10 @@ vi.mock('@/modal', async () => {
 installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
+const { InlineAddExpander } = await import('@/components/ui/forms/InlineAddExpander');
+const { ItemList } = await import('@/components/ui/lists/ItemList');
+const { memoryDocumentActions } = await import('@/sync/ops/promptLibrary/memoryDocuments');
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { sync } = await import('@/sync/sync');
