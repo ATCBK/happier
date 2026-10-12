@@ -19,6 +19,10 @@ export const SAPLING_PLUGIN = definePlugin({
     version: '0.0.0',
     displayName: 'Sapling SCM backend',
     description: 'Provides the first-party local Sapling SCM backend with audited limited capabilities.',
+    brand: { iconResourceId: 'brand-icon', monochrome: true },
+    resources: {
+      'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+    },
     engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
     entrypoints: { daemon: './.happier-plugin/daemon.js' },
     hostAccess: {
