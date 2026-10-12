@@ -7,6 +7,10 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   version: '0.0.0',
   displayName: 'OpenAI',
   description: 'Use OpenAI API models through a SavedSecret-backed provider connection.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   hostAccess: { required: [], optional: [] },
   providers: {
