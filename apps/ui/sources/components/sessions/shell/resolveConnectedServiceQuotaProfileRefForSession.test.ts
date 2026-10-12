@@ -64,6 +64,7 @@ describe('resolveConnectedServiceQuotaProfileRefForSession', () => {
                         source: 'connected',
                         selection: 'profile',
                         profileId: 'work',
+                        retired: { profileId: 'personal' },
                     },
                 },
             }),
@@ -176,5 +177,27 @@ describe('resolveConnectedServiceQuotaProfileRefForSession', () => {
             agentId: 'codex',
             accountProfileConnectedServicesV2: [],
         })).toBeNull();
+    });
+
+    it('does not reinterpret retained Team identities or malformed controls as a personal quota profile', () => {
+        const binding = {
+            source: 'team_resource', resourceId: 'resource-1', deliveryMode: 'direct',
+            disclosedMember: {
+                service: { pluginId: 'happier.agent.codex', localId: 'openai-codex', retired: true },
+                accountId: 'work', retired: true,
+            },
+            profileId: 'work', retired: true,
+        };
+        for (const candidate of [
+            binding,
+            { ...binding, disclosedMember: { ...binding.disclosedMember, accountId: ' ' } },
+            { ...binding, deliveryMode: 'unknown' },
+        ]) {
+            expect(resolveConnectedServiceQuotaProfileRefForSession({
+                metadata: metadataWithBindings({ bindingsByServiceId: { [CODEX_SERVICE_KEY]: candidate } }),
+                agentId: 'codex',
+                accountProfileConnectedServicesV2: [CODEX_V2_SERVICE],
+            })).toBeNull();
+        }
     });
 });

@@ -83,7 +83,7 @@ function readQualifiedServiceBindingLookup(
 ): Readonly<Record<string, ConnectedServicesServiceBinding>> {
     const out: Record<string, ConnectedServicesServiceBinding> = {};
     for (const [serviceId, value] of entries) {
-        const binding = parseConnectedServicesServiceBinding(value);
+        const binding = parseConnectedServicesServiceBinding(value, 'stored');
         const qualifiedServiceKey = resolveQualifiedConnectedAccountServiceKey(serviceId);
         if (!qualifiedServiceKey || !binding) continue;
         out[qualifiedServiceKey] ??= binding;
