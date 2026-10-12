@@ -393,6 +393,18 @@ export async function inspectProjectSetupReadiness(input: ProjectSetupPreparatio
     }
 }
 
+/** Shared requester-bound settings input for Project setup and service-effect review. */
+export function readProjectActionApprovalSettings(input: Pick<ProjectSetupPreparationInput, 'approvalContext' | 'requester' | 'secretEnvironment'>) {
+    const requester = readRequesterAccountActionContext(input.requester.authorization);
+    return input.approvalContext?.actionsSettings ?? (requester
+        ? normalizeActionsSettingsV1(requester.accountSettingsContext.settings.actionsSettingsV1)
+        : input.secretEnvironment
+            ? normalizeActionsSettingsV1(input.secretEnvironment.accountSettings.actionsSettingsV1)
+            : input.requester.credentials
+                ? createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKey(input.requester.credentials) }).getActionsSettings()
+                : normalizeActionsSettingsV1(undefined));
+}
+
 /** Produces an execution plan and consent facts. It never launches or records completion. */
 export async function prepareProjectSetup(input: ProjectSetupPreparationInput & Readonly<{ expectedEffectDigest?: string; skipForInvocation?: boolean }>): Promise<ProjectSetupPreparationOutcome> {
     const reviewed = await reviewProjectSetupEffect(input);
@@ -413,14 +425,7 @@ export async function prepareProjectSetup(input: ProjectSetupPreparationInput & 
             if (decision.reviewedEffectDigest !== plan.reviewedEffectDigest) return { kind: 'pendingApproval', code: 'project_setup_effect_changed', plan };
             consent = 'thisTime';
         } else {
-            const requester = readRequesterAccountActionContext(input.requester.authorization);
-            const settings = input.approvalContext?.actionsSettings ?? (requester
-                ? normalizeActionsSettingsV1(requester.accountSettingsContext.settings.actionsSettingsV1)
-                : input.secretEnvironment
-                    ? normalizeActionsSettingsV1(input.secretEnvironment.accountSettings.actionsSettingsV1)
-                    : input.requester.credentials
-                        ? createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKey(input.requester.credentials) }).getActionsSettings()
-                        : normalizeActionsSettingsV1(undefined));
+            const settings = readProjectActionApprovalSettings(input);
             if (!isApprovalRequiredByActionsSettings('projects.prepare', settings, input.approvalContext)) {
                 // The person's policy permits this invocation; it does not write a
                 // Project trust grant or turn an agent into an approving user.
