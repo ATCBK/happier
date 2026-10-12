@@ -136,29 +136,35 @@ async function flushDevTarget(
     args: ['sync', 'flush', sessionName],
     syncFlushSession: sessionName,
   });
-  const result = await runCaptureResultImpl({
-    command: launch.command,
-    args: launch.args,
-    env: runtime.env,
-    streamLabel: `sync:${target.name}`,
-    stdoutDiagnosticStream: process.stderr,
-    ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
-  });
-  if (!result?.ok) {
-    const detail = String(result?.err ?? '').trim();
-    throw new Error(
-      `[dev-targets] ${target.name} synchronization flush failed`
-        + (detail ? `: ${detail}` : ''),
-    );
+  for (let recoveryUsed = false; ; recoveryUsed = true) {
+    const result = await runCaptureResultImpl({
+      command: launch.command,
+      args: launch.args,
+      env: runtime.env,
+      streamLabel: `sync:${target.name}`,
+      stdoutDiagnosticStream: process.stderr,
+      ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
+    });
+    if (!result?.ok) {
+      const detail = String(result?.err ?? '').trim();
+      throw new Error(
+        `[dev-targets] ${target.name} synchronization flush failed`
+          + (detail ? `: ${detail}` : ''),
+      );
+    }
+    if (process.platform === 'win32') {
+      const postFlushStatus = await inspectDevTargetSync(
+        { target, stackBaseDir, env, timeoutMs },
+        { runCaptureResult: runCaptureResultImpl },
+      );
+      if (postFlushStatus.recovery === 'rescan' && !recoveryUsed) {
+        console.error(`[dev-targets] ${target.name} retrying transient problems through one fresh flush`);
+        continue;
+      }
+      assertReadySyncStatus(postFlushStatus);
+    }
+    return { state: 'ready', sessionName, flushed: true };
   }
-  if (process.platform === 'win32') {
-    const postFlushStatus = await inspectDevTargetSync(
-      { target, stackBaseDir, env, timeoutMs },
-      { runCaptureResult: runCaptureResultImpl },
-    );
-    assertReadySyncStatus(postFlushStatus);
-  }
-  return { state: 'ready', sessionName, flushed: true };
 }
 
 export async function syncDevTarget(

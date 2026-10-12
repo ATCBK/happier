@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { parseMutagenSyncList } from './utils/dev_targets/mutagen_runtime.mjs';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const controlExecutable = resolve(testDir, '..', 'bin', 'hstack-dev-target-control');
@@ -112,6 +113,61 @@ test('dispatch recovery rescans transient scan problems and rejects persistent o
   await rm(flushed);
   assert.equal(recover('transient').status, 0);
   assert.equal(await readFile(flushed, 'utf8'), 'cycle');
+});
+
+test('the causal barrier retries known transient transition problems once and requires clean final evidence', {
+  skip: process.platform === 'win32',
+}, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-sync-transition-recovery-'));
+  t.after(() => removeFixture(root));
+  const binDir = join(root, 'bin');
+  const marker = join(root, 'flushes');
+  await mkdir(binDir);
+  await executable(join(binDir, 'mutagen'), [
+    '#!/bin/sh',
+    'case "$2" in',
+    '  flush) printf cycle >> "$FLUSH_MARKER"; exit 0 ;;',
+    '  list)',
+    '    transition=1/0',
+    '    if [ "$PROBLEM_MODE" = clears ] && [ -e "$FLUSH_MARKER" ]; then transition=0/0; fi',
+    '    if [ "$PROBLEM_MODE" = postflush ] && [ ! -e "$FLUSH_MARKER" ]; then transition=0/0; fi',
+    '    if [ "$PROBLEM_MODE" = postflush ] && [ "$(cat "$FLUSH_MARKER" 2>/dev/null)" = cyclecycle ]; then transition=0/0; fi',
+    '    if [ "$PROBLEM_MODE" = excluded ]; then transition=1/1; fi',
+    '    printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|%s|active|2|ok|0|0\\n" "$3" "$transition"',
+    '    [ "$transition" = 0/0 ] || printf "%s\\n" "$TRANSITION_ERROR" ;;',
+    'esac',
+  ].join('\n'));
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    MUTAGEN_DATA_DIRECTORY: join(root, 'mutagen', 'data'), DBUS_SESSION_BUS_ADDRESS: '', FLUSH_MARKER: marker };
+  const run = (mode, error, flush = false) => spawnSync(controlExecutable, flush
+    ? ['--sync-flush', 'happier-linux', '--', 'mutagen', 'sync', 'flush', 'happier-linux']
+    : ['--sync-check', 'happier-linux'], { env: { ...env, PROBLEM_MODE: mode, TRANSITION_ERROR: error }, encoding: 'utf8' });
+  const errors = ['unable to validate existing file: modification detected',
+    'unable to walk to parent path: leaf name does not exist or has incorrect casing',
+    'unable to set staged file permissions: chmod /tmp/staged: no such file or directory'];
+  const inspect = (error, excludedTransitionProblems = 0) => parseMutagenSyncList(JSON.stringify([{
+    name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 2,
+    alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true,
+      transitionProblems: [{ path: 'source', error }], excludedTransitionProblems },
+  }]), 'happier-linux');
+  for (const error of errors) {
+    assert.equal(inspect(error).recovery, 'rescan', 'JSON and native consumers must share the same recovery policy');
+    const recovered = run('clears', error);
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.equal(await readFile(marker, 'utf8'), 'cycle');
+    await rm(marker);
+  }
+  assert.notEqual(run('persistent', errors[0]).status, 0);
+  assert.equal(await readFile(marker, 'utf8'), 'cycle', 'persistent problems cannot cause an unbounded retry');
+  await rm(marker);
+  for (const [mode, error] of [['persistent', 'unable to set staged file permissions: permission denied'], ['excluded', errors[0]]]) {
+    assert.equal(inspect(error, mode === 'excluded' ? 1 : 0).recovery, undefined);
+    assert.notEqual(run(mode, error).status, 0);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  }
+  const postflush = run('postflush', errors[0], true);
+  assert.equal(postflush.status, 0, postflush.stderr);
+  assert.equal(await readFile(marker, 'utf8'), 'cyclecycle', 'a race during the admitted flush gets one fresh cycle');
 });
 
 test('no-watch first dispatch is eligible but its barrier still requires a completed clean cycle', {
@@ -320,6 +376,7 @@ test('a waiter joining a successful flush still rejects fresh session problems',
     `printf '%s\\n' "$count" > ${JSON.stringify(checks)}`,
     'problems=0/0; [ "$count" != 2 ] || problems=1/0',
     'printf "%s|Watching|false|true|1|0/0|%s|true|1|0/0|0/0|active|2|ok|0|0\\n" "$3" "$problems"',
+    '[ "$problems" = 0/0 ] || printf "apply failed\\n"',
   ].join('\n'));
   const env = {
     ...process.env,
@@ -343,7 +400,7 @@ test('a waiter joining a successful flush still rejects fresh session problems',
   await lockResult;
   const results = await Promise.all([first.result, second.result]);
   assert.deepEqual(results.map(({ code }) => code).sort(), [0, 1]);
-  assert.match(results.find(({ code }) => code === 1).stderr, /alpha transition problems/u);
+  assert.match(results.find(({ code }) => code === 1).stderr, /transition problems/u);
   assert.equal(await readFile(flushLog, 'utf8'), 'flush\n', 'both pre-start demands share one cycle');
   assert.equal((await launch().result).code, 0, 'a new request must recover with another flush');
   assert.equal(await readFile(flushLog, 'utf8'), 'flush\nflush\n');
@@ -401,12 +458,12 @@ test('native sync admission rejects every problem-bearing public-model fact and 
     ['happier-linux|Disconnected|true|false|X|X|X|false|X|X|X|paused|0|ok|0|0', /paused/u],
     ['happier-linux|Disconnected|false|false|X|X|X|false|X|X|X|active|2|ok|0|0', /status is not clean/u],
     ['happier-linux|Watching|false|true|0|0\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /synchronizing/u],
-    ['happier-linux|Watching|false|true|1|1\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /scan problems/u],
-    ['happier-linux|Watching|false|true|1|0\/2|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /scan problems/u],
-    ['happier-linux|Watching|false|true|1|0\/0|1\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /alpha transition problems/u],
-    ['happier-linux|Watching|false|true|1|0\/0|0\/3|true|1|0\/0|0\/0|active|2|ok|0|0', /alpha transition problems/u],
-    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|1\/0|0\/0|active|2|ok|0|0', /scan problems/u],
-    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/4|active|2|ok|0|0', /beta transition problems/u],
+    ['happier-linux|Watching|false|true|1|1\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
+    ['happier-linux|Watching|false|true|1|0\/2|0\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
+    ['happier-linux|Watching|false|true|1|0\/0|1\/0|true|1|0\/0|0\/0|active|2|ok|0|0', /transition problems/u],
+    ['happier-linux|Watching|false|true|1|0\/0|0\/3|true|1|0\/0|0\/0|active|2|ok|0|0', /transition problems/u],
+    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|1\/0|0\/0|active|2|ok|0|0', /fresh scan/u],
+    ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/4|active|2|ok|0|0', /transition problems/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/0|active|2|error|0|0', /recorded error/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|1|0', /unresolved conflicts/u],
     ['happier-linux|Watching|false|true|1|0\/0|0\/0|true|1|0\/0|0\/0|active|2|ok|0|2', /unresolved conflicts/u],
@@ -429,7 +486,7 @@ test('the no-flock platform path still performs a fresh post-flush health check'
   const flushMarker = join(root, 'flush-ran');
   await mkdir(binDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });
-  for (const command of ['mkdir', 'sed']) {
+  for (const command of ['mkdir', 'sed', 'id', 'wc', 'tr', 'grep']) {
     await executable(join(binDir, command), `#!/bin/sh\nexec /usr/bin/${command} "$@"\n`);
   }
   await executable(join(binDir, 'mutagen'), [
@@ -457,7 +514,7 @@ test('the no-flock platform path still performs a fresh post-flush health check'
 
   assert.equal(result.status, 1);
   assert.equal(await readFile(flushMarker, 'utf8'), '');
-  assert.match(result.stderr, /alpha transition problems/i);
+  assert.match(result.stderr, /transition problems/i);
 });
 
 test('critical-slice placement runs the requested flush in the protected slice', {

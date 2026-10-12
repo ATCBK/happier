@@ -175,7 +175,7 @@ async function inspectAndRepairSync({
   let status = await inspectSync({ target, stackBaseDir, env });
   // With both endpoints unwatched, Mutagen waits for a flush even for the
   // first scan. Seed it here so normal command admission can require a scan.
-  if (status.state === 'needs-flush') {
+  if (status.state === 'needs-flush' || status.recovery === 'rescan') {
     await flushDevTargetSync({ target, env });
     status = await inspectSync({ target, stackBaseDir, env });
   }

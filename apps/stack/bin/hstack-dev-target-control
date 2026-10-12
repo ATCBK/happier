@@ -101,7 +101,7 @@ check_sync_session_clean() {
     printf '%s\n' 'hstack-dev-target-control: MUTAGEN_DATA_DIRECTORY is required for sync inspection' >&2
     return 1
   }
-  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}{{end}}'
+  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}{{println}}{{range .Alpha.TransitionProblems}}{{println .Error}}{{end}}{{range .Beta.TransitionProblems}}{{println .Error}}{{end}}{{end}}'
   if ! status_output=$(mutagen sync list "$session_name" --template "$sync_template" 2>/dev/null); then
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization status inspection failed" >&2
     return 1
@@ -137,14 +137,6 @@ EOF
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization is missing connected endpoint evidence" >&2
     return 1
   }
-  [ "$s_alpha_trans" = "0/0" ] || {
-    printf '%s\n' "hstack-dev-target-control: $session_name synchronization has alpha transition problems: $s_alpha_trans" >&2
-    return 1
-  }
-  [ "$s_beta_trans" = "0/0" ] || {
-    printf '%s\n' "hstack-dev-target-control: $session_name synchronization has beta transition problems: $s_beta_trans" >&2
-    return 1
-  }
   [ "$s_error" = ok ] || {
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization has a recorded error" >&2
     return 1
@@ -153,12 +145,28 @@ EOF
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization has unresolved conflicts: ${s_conflicts-?}/${s_excluded-?}" >&2
     return 1
   }
-  # Only well-formed scan-only problems may request a fresh cycle. Conflicts,
-  # transition failures, paused sessions and missing evidence stay fail-closed.
-  for scan_counts in "$s_alpha_scan" "$s_beta_scan"; do
+  # Unknown/excluded transition failures, conflicts and missing evidence stay
+  # fail-closed. The shared generated policy recognizes only known races.
+  for scan_counts in "$s_alpha_scan" "$s_beta_scan" "$s_alpha_trans" "$s_beta_trans"; do
     case "$scan_counts" in ''|*[!0-9/]*|/*|*/|*/*/*) return 1 ;; esac
     case "$scan_counts" in */*) ;; *) return 1 ;; esac
   done
+  sync_fact_transientTransitionProblems=0
+  if [ "$s_alpha_trans" != '0/0' ] || [ "$s_beta_trans" != '0/0' ]; then
+    if [ "${s_alpha_trans#*/}" != 0 ] || [ "${s_beta_trans#*/}" != 0 ]; then
+      printf '%s\n' "hstack-dev-target-control: $session_name synchronization has excluded transition problems" >&2
+      return 1
+    fi
+    transition_errors=$(printf '%s\n' "$status_output" | sed '1d')
+    transition_count=$(printf '%s\n' "$transition_errors" | wc -l | tr -d ' ')
+    expected_transition_count=$(( ${s_alpha_trans%/*} + ${s_beta_trans%/*} ))
+    if [ "$transition_count" != "$expected_transition_count" ] \
+      || ! classify_transient_mutagen_transition_errors "$transition_errors"; then
+      printf '%s\n' "hstack-dev-target-control: $session_name synchronization has unsafe transition problems: $transition_errors" >&2
+      return 1
+    fi
+    sync_fact_transientTransitionProblems=1
+  fi
   sync_fact_watching=0; [ "$s_status" != Watching ] || sync_fact_watching=1
   sync_fact_noWatch=0
   if [ "$s_alpha_watch" = WatchModeNoWatch ] && [ "$s_beta_watch" = WatchModeNoWatch ]; then sync_fact_noWatch=1; fi
@@ -172,7 +180,7 @@ EOF
   if [ "$s_alpha_scan" != "0/0" ] || [ "$s_beta_scan" != "0/0" ]; then sync_fact_scanProblems=1; fi
   classify_clean_mutagen_readiness
   if [ "$sync_readiness" = rescan ]; then
-    printf '%s\n' "hstack-dev-target-control: $session_name synchronization has scan problems (alpha=$s_alpha_scan beta=$s_beta_scan)" >&2
+    printf '%s\n' "hstack-dev-target-control: $session_name synchronization needs a fresh scan (scan=$s_alpha_scan/$s_beta_scan transition=$s_alpha_trans/$s_beta_trans)" >&2
     return 2
   fi
   if [ "$sync_readiness" != ready ] && { [ "$sync_readiness" != needs-flush ] || [ "$allow_needs_flush" != 1 ]; }; then
@@ -183,6 +191,35 @@ EOF
     printf '%s\n' "$status_line"
   fi
   return 0
+}
+
+flush_and_check_sync() {
+  recovery_used=${HSTACK_SYNC_RECOVERY_USED-0}
+  control_child=''
+  cancel_control_flush() {
+    trap - HUP INT TERM
+    if [ -n "$control_child" ]; then
+      kill -TERM "$control_child" 2>/dev/null || true
+      wait "$control_child" 2>/dev/null || true
+    fi
+    exit 130
+  }
+  trap 'cancel_control_flush' HUP INT TERM
+  while :; do
+    "$control_path" -- "$@" &
+    control_child=$!
+    wait "$control_child"
+    status=$?
+    control_child=''
+    [ "$status" -eq 0 ] || break
+    check_sync_session_clean "$session_name"
+    status=$?
+    if [ "$status" -ne 2 ] || [ "$recovery_used" = 1 ]; then break; fi
+    recovery_used=1
+    printf '%s\n' "hstack-dev-target-control: $session_name retrying transient problems through one fresh flush" >&2
+  done
+  trap - HUP INT TERM
+  return "$status"
 }
 
 read_sync_flight() {
@@ -215,29 +252,15 @@ locked_sync_flush() {
   read_sync_flight || exit 1
   if [ "$flight_success" -eq "$flight_started" ] && [ "$flight_success" -gt "$observed_started" ]; then
     check_sync_session_clean "$session_name"
-    exit "$?"
+    shared_status=$?
+    [ "$shared_status" -ne 0 ] || exit 0
+    [ "$shared_status" -eq 2 ] || exit "$shared_status"
+    HSTACK_SYNC_RECOVERY_USED=1
   fi
   # Publish start before dispatch so demand during this flight cannot join it.
   flight_started=$((flight_started + 1))
   write_sync_flight || exit 1
-  control_child=''
-  cancel_locked_flush() {
-    trap - HUP INT TERM
-    if [ -n "$control_child" ]; then
-      kill -TERM "$control_child" 2>/dev/null || true
-      wait "$control_child" 2>/dev/null || true
-    fi
-    exit 130
-  }
-  trap 'cancel_locked_flush' HUP INT TERM
-  "$control_path" -- "$@" &
-  control_child=$!
-  wait "$control_child"
-  status=$?
-  control_child=''
-  trap - HUP INT TERM
-  [ "$status" -eq 0 ] || exit "$status"
-  check_sync_session_clean "$session_name"
+  flush_and_check_sync "$@"
   check_status=$?
   [ "$check_status" -eq 0 ] || exit "$check_status"
   flight_success=$flight_started
@@ -261,7 +284,7 @@ case "${1-}" in
     status=$?
     if [ "$status" -eq 2 ]; then
       printf '%s\n' "hstack-dev-target-control: $session_name requesting a fresh scan through the dispatch flush barrier" >&2
-      "$control_path" --sync-flush "$session_name" -- mutagen sync flush "$session_name" || exit 1
+      HSTACK_SYNC_RECOVERY_USED=1 "$control_path" --sync-flush "$session_name" -- mutagen sync flush "$session_name" || exit 1
       check_sync_session_clean "$session_name"
       status=$?
     fi
@@ -304,24 +327,7 @@ case "${1-}" in
       exit "$status"
     fi
     shift
-    direct_child=''
-    cancel_direct_flush() {
-      trap - HUP INT TERM
-      if [ -n "$direct_child" ]; then
-        kill -TERM "$direct_child" 2>/dev/null || true
-        wait "$direct_child" 2>/dev/null || true
-      fi
-      exit 130
-    }
-    trap 'cancel_direct_flush' HUP INT TERM
-    "$control_path" -- "$@" &
-    direct_child=$!
-    wait "$direct_child"
-    status=$?
-    direct_child=''
-    trap - HUP INT TERM
-    [ "$status" -eq 0 ] || exit "$status"
-    check_sync_session_clean "$session_name"
+    flush_and_check_sync "$@"
     exit "$?"
     ;;
   --)

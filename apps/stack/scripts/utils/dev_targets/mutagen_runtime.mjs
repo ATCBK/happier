@@ -11,6 +11,7 @@ export const DEV_TARGET_MUTAGEN_RUNTIME_OWNER = 'stack-dev-targets';
 // Endpoint/error/conflict validation belongs to each transport boundary; these
 // rules decide when clean connected evidence can enter the causal flush.
 const SYNC_READINESS_RULES = [
+  { when: { transientTransitionProblems: true }, state: 'rescan' },
   { when: { scanProblems: true, scanned: true, completed: true }, state: 'rescan' },
   { when: { scanProblems: true }, state: 'unhealthy' },
   { when: { cyclesValid: false }, state: 'synchronizing' },
@@ -19,6 +20,15 @@ const SYNC_READINESS_RULES = [
   { when: { completed: false }, state: 'synchronizing' },
   { when: {}, state: 'ready' },
 ];
+
+// Mutagen 0.18.1 core/transition.go: these races are re-evaluated by a fresh
+// scan. Permission denial, unknown or excluded errors remain fail-closed.
+const TRANSIENT_TRANSITION_ERRORS = [
+  '(^|: )unable to validate existing file: modification detected$',
+  '(^|: )leaf name does not exist( or has incorrect casing)?$',
+  'unable to set staged file permissions: .*(: no such file or directory|: The system cannot find the file specified\\.)$',
+];
+const transientTransitionError = new RegExp(TRANSIENT_TRANSITION_ERRORS.join('|'), 'i');
 
 export function classifyCleanMutagenReadiness(facts) {
   return SYNC_READINESS_RULES.find(({ when }) => (
@@ -37,6 +47,10 @@ export function renderNativeSyncReadinessPolicy() {
         ? [`  if ${conditions.join(' && ')}; then`, `    sync_readiness=${state}`, '    return', '  fi']
         : [`  sync_readiness=${state}`];
     }),
+    '}',
+    'classify_transient_mutagen_transition_errors() {',
+    `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_TRANSITION_ERRORS.join('|')}' >/dev/null`,
+    '  case "$?" in 1) return 0 ;; *) return 1 ;; esac',
     '}',
     '',
   ].join('\n');
@@ -206,6 +220,8 @@ export function parseMutagenSyncList(raw, sessionName) {
     return { state: 'unhealthy', sessionName: expectedName, lastError: 'missing connected endpoint evidence', session };
   }
   const scanDetails = [];
+  const transitionDetails = [];
+  let transientTransitions = true;
   for (const [endpointName, endpoint] of [['alpha', alpha], ['beta', beta]]) {
     const scanProblems = endpoint.scanProblems == null ? [] : endpoint.scanProblems;
     const excludedScan = endpoint.excludedScanProblems == null ? 0 : endpoint.excludedScanProblems;
@@ -234,12 +250,10 @@ export function parseMutagenSyncList(raw, sessionName) {
       const parts = [];
       if (scanProblems.length > 0 || hasExcludedScan) parts.push(`${scanProblems.length + (hasExcludedScan ? excludedScan : 0)} scan problems`);
       if (transitionProblems.length > 0 || hasExcludedTransition) parts.push(`${transitionProblems.length + (hasExcludedTransition ? excludedTransition : 0)} transition problems`);
-      return {
-        state: 'unhealthy',
-        sessionName: expectedName,
-        lastError: `${endpointName} has ${parts.join(' and ')}`,
-        session,
-      };
+      transitionDetails.push(`${endpointName} has ${parts.join(' and ')}`);
+      transientTransitions &&= !hasExcludedTransition && transitionProblems.every(problem => (
+        typeof problem?.error === 'string' && transientTransitionError.test(problem.error)
+      ));
     }
     if (scanProblems.length > 0 || hasExcludedScan) {
       const detail = scanProblems.map(problem => `${String(problem?.path ?? '')}: ${String(problem?.error ?? '')}`).join('; ');
@@ -248,6 +262,7 @@ export function parseMutagenSyncList(raw, sessionName) {
   }
   const cycles = session.successfulCycles === undefined ? 0 : session.successfulCycles;
   const readiness = classifyCleanMutagenReadiness({
+    transientTransitionProblems: transitionDetails.length > 0 && transientTransitions,
     watching: status === 'watching',
     noWatch: alpha.watch?.mode === 'no-watch' && beta.watch?.mode === 'no-watch',
     scanned: alpha.scanned === true && beta.scanned === true,
@@ -255,6 +270,10 @@ export function parseMutagenSyncList(raw, sessionName) {
     completed: Number.isSafeInteger(cycles) && cycles > 0,
     scanProblems: scanDetails.length > 0,
   });
+  if (transitionDetails.length) {
+    return { state: 'unhealthy', sessionName: expectedName, lastError: transitionDetails.join('; '),
+      ...(transientTransitions && readiness === 'rescan' ? { recovery: 'rescan' } : {}), session };
+  }
   if (scanDetails.length) {
     return {
       state: 'unhealthy', sessionName: expectedName, lastError: scanDetails.join('; '),
