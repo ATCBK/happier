@@ -134,8 +134,10 @@ describe("Home retention", () => {
         });
         await seedEvents(60, 2);
         let clock = 0;
+        const env = await readHomeConfigEnv(process.env);
+        expect(env.HAPPIER_SERVER_RETENTION__SWEEP_TIME_BUDGET_MS).toBe("5");
         const outcome = await runRetentionDryRun({
-            env: await readHomeConfigEnv(process.env),
+            env,
             // Every read advances 10 ms: a 5 ms budget is spent before the first rule runs.
             readClockMs: () => (clock += 10),
         });
