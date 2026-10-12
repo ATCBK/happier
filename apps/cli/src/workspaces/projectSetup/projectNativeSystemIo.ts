@@ -10,7 +10,7 @@ export const projectNativeSystemIo: ProjectNativeCommandIo = {
     // The runtime owner returns installed package metadata plus its actual JS
     // entrypoint; a PATH package-manager shim never becomes the executable.
     if (isDeniedPathOnlyRuntimeName(tool)) {
-      const installed = await resolveInstalledJavaScriptTool(tool);
+      const installed = await resolveInstalledJavaScriptTool(tool, process.env, request.version);
       request.signal?.throwIfAborted();
       return installed;
     }
