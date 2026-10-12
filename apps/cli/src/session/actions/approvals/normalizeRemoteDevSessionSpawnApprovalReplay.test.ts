@@ -75,7 +75,7 @@ describe('remote-dev Session-spawn approval replay normalizer', () => {
       input: {
         creationKey: 'approval-artifact:approval-remote-dev-1',
         executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
-        directory: '/workspace/project',
+        directory: { kind: 'path', path: '/workspace/project' },
         agentTarget: {
           kind: 'agent',
           identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
@@ -98,13 +98,13 @@ describe('remote-dev Session-spawn approval replay normalizer', () => {
             reasoning_effort: { value: 'high', updatedAtMs: 42 },
           },
         },
-        connectedServices: { v: 1, bindingsByServiceId: {} },
-        mcpSelection: {
+        connectedServices: { v: 2, bindingsByServiceId: {} },
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: true,
           forceIncludeServerIds: [],
           forceExcludeServerIds: [],
-        },
+        } },
         transcriptStorage: 'persisted',
         terminal: { mode: 'tmux', tmux: { sessionName: 'legacy-session' } },
       },

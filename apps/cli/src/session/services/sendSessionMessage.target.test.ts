@@ -6,6 +6,8 @@ import { executeExternalAction } from '@/daemon/externalActions/executeExternalA
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { sendSessionMessage } from './sendSessionMessage';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 // HTTP and fetch are the real process boundaries; authoring, crypto envelopes,
 // Session resolution, capability parsing and Pending transport stay real.
@@ -29,7 +31,7 @@ const correspondence = {
     organization: { folderId: null, tagIds: [] },
     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
     modelSelection: null, profileId: null, requestedPermissionMode: null,
-    agentModeId: null, configuration: null, connectedServices: null, mcpSelection: null,
+    agentModeId: null, configuration: null, connectedServices: null, capabilitySelection: null,
     transcriptStorage: null, terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
   },
 };
@@ -196,8 +198,37 @@ describe('target Session input authoring through HTTP', () => {
     expect(result).toMatchObject({ ok: true, admissionResult: { status: 'accepted', localId: 'input-a' } });
     expect(machineAdmissionTransport).toHaveBeenCalledWith(expect.objectContaining({
       v: 2, sessionId, recipient, targetMachineId: 'machine-a', localId: 'input-a',
-    }));
+    }), expect.objectContaining({ timeoutMs: 1000 }));
     expect(http.post).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Start admission budget through Message authoring and the real Machine ACK owner', async () => {
+    vi.useFakeTimers();
+    const client = new ApiMachineClient('token', { id: 'machine-a', encryptionMode: 'plain',
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (_event, raw) => {
+      const request = raw as { localId: string };
+      return new Promise(resolve => setTimeout(() => resolve({ v: 1,
+        result: { status: 'accepted', localId: request.localId } }), 11_000));
+    } });
+    Reflect.set(client, 'socket', socket);
+    try {
+      const pending = sendSessionMessage({ credentials, idOrPrefix: sessionId, message: 'First turn',
+        localId: 'start-input', wait: false, timeoutMs: 60_000, resumeInactiveSession: false,
+        inputAdmission: { provenance: { v: 1, kind: 'pluginSession', pluginId: 'example.plugin',
+          contributionLocalId: 'start', surface: 'background' },
+          request: { v: 1, producer: 'pluginSession',
+            caller: { kind: 'plugin', pluginId: 'example.plugin', contributionLocalId: 'start' }, permission: {} } },
+        machineAdmissionTransport: (request, options) => client.enqueueSessionPendingByMachine(request, options) });
+      // Resolve authoring's HTTP reads before advancing the actual ACK owner.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.emitWithAck).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(11_000);
+      await expect(pending).resolves.toMatchObject({ ok: true,
+        admissionResult: { status: 'accepted', localId: 'start-input' } });
+      expect(socket.emitWithAck).toHaveBeenCalledOnce();
+      expect(http.post).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('classifies a missing strict target resource as unavailable without a main retry', async () => {
@@ -466,7 +497,7 @@ describe('target Session input authoring through HTTP', () => {
           content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', data: {
             type: terminalType, id: 'turn-a', sidechainId: 'sidechain-a',
           } }, meta: { happierExecutionRunInputTurnV1: {
-            turnId: 'turn-a', inputIds: ['input-a', 'input-b'], state: _state,
+            turnId: 'turn-a', inputIds: ['input-a', 'input-b'], state: _state, retiredField: true,
           } } } },
         },
       ] } };

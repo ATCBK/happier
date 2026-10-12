@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
+import { ACCOUNT_SECURITY_PATH_V1 } from '@happier-dev/protocol/auth/accountSecurity';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -8,9 +11,10 @@ import { createCliActionExecutorFromCredentials } from './createCliActionExecuto
 
 const axiosGet = vi.hoisted(() => vi.fn());
 
-vi.mock('axios', () => ({
-  default: { get: axiosGet },
-}));
+vi.mock('axios', async (importOriginal) => {
+  const original = await importOriginal<typeof import('axios')>();
+  return { ...original, default: { ...original.default, get: axiosGet } };
+});
 
 afterEach(() => {
   resetInMemoryAccountSettingsContextForTests();
@@ -19,6 +23,48 @@ afterEach(() => {
 });
 
 describe('credentialed Action policy binding before settings bootstrap', () => {
+  it.each(['execute', 'prepare'] as const)('reads Account Role overrides on a cold %s invocation', async method => {
+    resetInMemoryAccountSettingsContextForTests();
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: `cold-role-${method}` })).toString('base64url')}.signature`,
+      encryption: null, credentialProvenance: 'stored_session' as const };
+    // Home HTTP is the boundary; bootstrap, catalog hydration, role resolution
+    // and Action preparation/execution all use their real canonical owners.
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 404, data: {} };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows:
+        PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v:
+          key === 'role-overrides' ? { key, value: { v: 1, overrides: { scout: { roleId: 'scout',
+            instructionsOverride: 'Use the Account override.' } } } } : emptyPromptLibraryRecordV1(key) } })) } };
+      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      throw new Error(`Unexpected cold Role HTTP read ${path}`);
+    });
+    const executor = createCliActionExecutorFromCredentials({ credentials, pluginActionExecutionOwner: 'current_process' });
+    const context = { surface: 'cli', authority: 'present_user' } as const;
+    const result = method === 'execute' ? await executor.execute('roles.list', {}, context)
+      : await (async () => {
+        const prepared = await executor.prepare('roles.list', {}, context);
+        expect(prepared.kind).toBe('ready');
+        return prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
+      })();
+    expect(result).toMatchObject({ ok: true, result: { items: expect.arrayContaining([
+      expect.objectContaining({ roleId: 'scout' }),
+    ]) } });
+    expect(getActiveAccountSettingsSnapshot()?.promptLibraryCatalog).toMatchObject({ status: 'ready', rows: expect.arrayContaining([
+      expect.objectContaining({ record: { key: 'role-overrides', value: { v: 1, overrides: {
+        scout: { roleId: 'scout', instructionsOverride: 'Use the Account override.' },
+      } } } }),
+    ]) });
+    expect(await executor.execute('roles.get', { roleId: 'scout' }, context)).toMatchObject({ ok: true,
+      result: { roleId: 'scout' } });
+  });
   it.each(['execute', 'prepare'] as const)(
     'uses an explicit reviewed policy for %s without bootstrapping ambient Account settings',
     async (method) => {
@@ -68,9 +114,16 @@ describe('credentialed Action policy binding before settings bootstrap', () => {
         settingsVersion: 1, settingsSecretsReadKeys: [], settings: accountSettingsParse({}) });
     }
     let resolvePolicyRequest!: (response: unknown) => void;
-    axiosGet.mockReturnValueOnce(new Promise((resolve) => {
-      resolvePolicyRequest = resolve;
-    }));
+    // HTTP is the boundary. The real policy owner first reads Account Security;
+    // only the Settings request is held pending by this admission fixture.
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 404, data: { error: 'not_found' } };
+      if (path === '/v2/account/settings') {
+        return await new Promise((resolve) => { resolvePolicyRequest = resolve; });
+      }
+      throw new Error(`Unexpected policy fixture HTTP read ${path}`);
+    });
     const executor = createCliActionExecutorFromCredentials({
       credentials,
       ...(kind === 'refreshing' ? { readCredentials: async () => credentials } : {}),
@@ -80,7 +133,7 @@ describe('credentialed Action policy binding before settings bootstrap', () => {
     const pending = method === 'execute'
       ? executor.execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' })
       : executor.prepare('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
-    await vi.waitFor(() => expect(axiosGet).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(resolvePolicyRequest).toEqual(expect.any(Function)));
     let settled = false;
     void pending.finally(() => { settled = true; });
     await Promise.resolve();

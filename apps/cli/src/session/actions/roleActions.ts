@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { createAccountRoleActionExecutorV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
+import { createAccountRoleActionExecutorV1, RoleActionRefusalV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
 import { readSessionRolesV1, writeSessionRoleIdV1ToMetadata, writeSessionRoleConfigurationV1ToMetadata, SessionRoleConfigurationV1Schema, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { resolveRoleSelectionV1, readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import type { ActionExecutorDeps, PluginRoleContributionV1, SessionRoleConfigurationV1, ActionExecutorContext } from '@happier-dev/protocol';
 import type { AccountRoleOverridesReadV1, RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -18,7 +19,7 @@ export type RoleWorkspaceWritesPolicyPreparer = (
 ) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; errorCode: string }>>;
 
 function refuse(code: string): never {
-  throw Object.assign(new Error(code), { code });
+  throw new RoleActionRefusalV1(code);
 }
 
 /** Artifact and outbox ports are genuine storage boundaries; role resolution remains canonical. */
@@ -92,12 +93,17 @@ export function createRoleActionExecutor(params: Readonly<{
       const request = RoleActionInputSchemasV1[actionId].parse(input);
       if (request.sessionId !== params.sessionId) refuse('session_target_unavailable');
       if (!params.stageSessionStateMutation || !params.readSessionMetadata) refuse('session_target_unavailable');
-      const inventory = await listEntries(context.signal);
       const metadata = params.readSessionMetadata();
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
       writeSessionRoleIdV1ToMetadata(metadata as Record<string, unknown>, request.roleId);
       const snapshot = readSessionRolesV1(metadata) ?? undefined;
       const settingsOverrides = await readSettingsOverrides();
+      // Built-ins and their Account/Session overrides are already authoritative
+      // here. An external requested or current role still needs source inventory;
+      // unrelated Artifact/legacy reads must not postpone a native-policy refusal.
+      const needsExternalSources = !Object.hasOwn(BUILT_IN_ROLES_V1, request.roleId)
+        || (snapshot?.roleId != null && !Object.hasOwn(BUILT_IN_ROLES_V1, snapshot.roleId));
+      const inventory = needsExternalSources ? await listEntries(context.signal) : undefined;
       const resolve = (roleId: string) => resolveRoleSelectionV1({ roleId, roleSourceInventory: inventory,
         settingsOverrides, sessionRoles: snapshot, pluginRoles: params.readPluginRoles?.() });
       const selection = resolve(request.roleId);

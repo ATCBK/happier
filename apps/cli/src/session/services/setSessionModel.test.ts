@@ -144,6 +144,15 @@ describe('setSessionModel', () => {
     }));
     expect(updateSessionMetadataWithRetry).not.toHaveBeenCalled();
   });
+  it('forwards deferred timing and retains applied versus armed selections from the exact running owner', async () => {
+    resolveSessionTransportContext.mockResolvedValue(transport(true));
+    const requestedSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'next' };
+    callSessionRpc.mockResolvedValue({ ok: true, status: 'armed', activeSelection: metadata.modelSelectionIntentV1.selection, requestedSelection });
+    expect(await setSessionModel({ credentials, idOrPrefix: 'sess-1', modelId: 'next', providerConnectionId: null, applyTiming: 'next_prompt' }))
+      .toMatchObject({ ok: true, status: 'armed', requestedSelection, activeSelection: metadata.modelSelectionIntentV1.selection });
+    expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({ request: { v: 1, selection: requestedSelection, applyTiming: 'next_prompt' } }));
+    expect(updateSessionMetadataWithRetry).not.toHaveBeenCalled();
+  });
 
   it('returns owner_unavailable for an active transport failure without metadata fallback', async () => {
     resolveSessionTransportContext.mockResolvedValue(transport(true));

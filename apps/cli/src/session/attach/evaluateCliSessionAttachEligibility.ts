@@ -263,7 +263,7 @@ export async function evaluateCliSessionAttachEligibility(params: Readonly<{
     });
     if (hosted.eligible) return hosted;
   }
-  const owner = createSessionOwnerMetadataV1({ metadata });
+  const owner = createSessionOwnerMetadataV1({ metadata }, 'stored');
   const localControl = owner.ok ? owner.ownerMetadata.runtime?.agentRuntimeCapabilitiesV1?.localControl : null;
   const selectedTerminal = owner.ok ? owner.ownerMetadata.runtime?.terminal : null;
   const selectedHost = selectedTerminal?.mode === 'plain' ? selectedTerminal.requested : selectedTerminal?.mode;

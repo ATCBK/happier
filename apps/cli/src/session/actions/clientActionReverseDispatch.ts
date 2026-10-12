@@ -3,6 +3,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { UiActionDispatchRequestV1Schema, clientActionUnavailable, parseClientActionDispatchResult } from '@happier-dev/protocol/actions/clientDispatchV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { projectApprovalExecutionOriginCaller } from '@happier-dev/protocol/actions/actionExecutor';
+import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraftGetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 
 export type ClientActionMachineRpc = Readonly<{
   hasConnectedClientRpcHandler(method: string): boolean;
@@ -18,7 +19,11 @@ export function createClientActionReverseDispatcher(
   return async ({ actionId, input, context }) => {
     const unavailable = () => clientActionUnavailable(actionId);
     const client = getMachineClient();
-    if (!client?.hasConnectedClientRpcHandler(RPC_METHODS.UI_ACTION_EXECUTE)) return unavailable();
+    // Project only the address from the already-admitted full Action input.
+    const address = isWorkflowAuthoringActionId(actionId) && input && typeof input === 'object'
+      ? WorkflowDraftGetInputV1Schema.safeParse({ scope: Reflect.get(input, 'scope'), draftId: Reflect.get(input, 'draftId') }) : null;
+    const method = address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE;
+    if (!client?.hasConnectedClientRpcHandler(method)) return unavailable();
     if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const actionCaller = context.actionCaller ? projectApprovalExecutionOriginCaller(context.actionCaller) : undefined;
     if (context.actionCaller && !actionCaller) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -36,7 +41,7 @@ export function createClientActionReverseDispatcher(
     let issued = false;
     const unknownOutcome = () => ({ ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' });
     try {
-      const response = await client.callConnectedClientRpc(RPC_METHODS.UI_ACTION_EXECUTE, request.data, {
+      const response = await client.callConnectedClientRpc(method, request.data, {
         timeoutMs: null, ...(context.signal ? { signal: context.signal } : {}), onIssued: () => {
           issued = true;
           context.onTransportIssued?.();

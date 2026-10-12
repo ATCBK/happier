@@ -14,6 +14,7 @@ import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protoco
 import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { normalizeParticipantRecipientRoutingIdentityV1, withParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { ExecutionRunGetResponseSchema, ExecutionRunInputTurnV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { fetchEncryptedTranscriptPageAfterSeq } from '@/api/session/fetchEncryptedTranscriptWindow';
 import {
@@ -221,7 +222,7 @@ type SendSessionMessageParams = Readonly<{
   /** Authenticated daemon transport. Machine-only assertions never fall back to Account admission. */
   machineAdmissionTransport?: (
     request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2,
-    options?: Readonly<{ signal?: AbortSignal; callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1 }>,
+    options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number; callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1 }>,
   ) => Promise<SessionInputAdmissionResultV1>;
   /** Exact creation target when admission precedes the Session metadata projection. */
   targetMachineId?: string;
@@ -916,7 +917,7 @@ async function readExecutionRunInputTranscriptOutcome(params: Readonly<{
       if (decoded?.sidechainId !== params.sidechainId) continue;
       const record = asRecord(decrypted);
       const meta = asRecord(record?.meta);
-      const inputTurn = ExecutionRunInputTurnV1Schema.safeParse(meta?.happierExecutionRunInputTurnV1);
+      const inputTurn = createStoredReadSchema(ExecutionRunInputTurnV1Schema).safeParse(meta?.happierExecutionRunInputTurnV1);
       if (!inputTurn.success || !inputTurn.data.inputIds.includes(params.localId)) continue;
       const failure = readAssistantTurnFailure(decrypted);
       if (failure?.kind === 'failed') return 'failed';
@@ -1223,7 +1224,10 @@ export async function sendSessionMessage(
         request: SessionInputRequestSchema.parse(params.inputAdmission.request),
       }
     : null;
-  const shouldProjectTargetDefaults = protectedAdmission === null && executionRunRecipient === undefined;
+  // CLI admission adds immutable authority without changing the ordinary
+  // human-send contract: absent overrides still inherit the target defaults.
+  const shouldProjectTargetDefaults = (protectedAdmission === null || protectedAdmission.request.producer === 'cli')
+    && executionRunRecipient === undefined;
   const hasExplicitPermissionMode = typeof params.permissionModeOverride === 'string'
     && params.permissionModeOverride.trim().length > 0;
   const hasExplicitModelSelection = params.modelSelectionInput !== undefined
@@ -1366,12 +1370,11 @@ export async function sendSessionMessage(
         requestedAction,
         ...(requestEqualityEvidenceV1 ? { requestEqualityEvidenceV1 } : {}),
       } satisfies SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2;
-      const result = params.signal || params.callerInputAuthorization
-        ? await params.machineAdmissionTransport(machineAdmissionRequest, {
-            ...(params.signal ? { signal: params.signal } : {}),
-            ...(params.callerInputAuthorization ? { callerInputAuthorization: params.callerInputAuthorization } : {}),
-          })
-        : await params.machineAdmissionTransport(machineAdmissionRequest);
+      const result = await params.machineAdmissionTransport(machineAdmissionRequest, {
+        timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.callerInputAuthorization ? { callerInputAuthorization: params.callerInputAuthorization } : {}),
+      });
       if (result.status === 'rejected') {
         return {
           ok: false,

@@ -102,7 +102,7 @@ function deriveExternalHistoryOrigin(params: Readonly<{
   externalShareableActor: unknown;
   callerPluginId?: string | null;
 }>): ExternalShareableOriginV1 | null {
-  const provenance = readSessionMessageProvenanceV1(params.meta);
+  const provenance = readSessionMessageProvenanceV1(params.meta, 'stored');
   if (
     provenance?.kind !== 'host'
     || provenance.producer !== 'externalSessionHistory'
@@ -142,8 +142,8 @@ function deriveUserFact(params: Readonly<{
     externalShareableActor: params.row.externalShareableActor,
     callerPluginId: params.callerPluginId,
   });
-  const authority = historicalOrigin ? null : readSessionInputAuthorityV1(record.meta);
-  const provenance = historicalOrigin ? null : readSessionMessageProvenanceV1(record.meta);
+  const authority = historicalOrigin ? null : readSessionInputAuthorityV1(record.meta, 'stored');
+  const provenance = historicalOrigin ? null : readSessionMessageProvenanceV1(record.meta, 'stored');
   const origin = historicalOrigin ?? (authority
     ? deriveExternalOrigin({
       authority,

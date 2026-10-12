@@ -13,6 +13,7 @@ export type SocketAckErrorCode = 'socket_not_connected' | 'socket_ack_timeout';
 
 export class SocketAckAbortError extends Error {
   readonly event: string;
+  readonly retryable = false;
 
   constructor(event: string) {
     super(`Socket ACK wait was cancelled for ${event}`);
@@ -44,7 +45,7 @@ export class SocketAckError extends Error {
 
 function resolveAckTimeoutMs(timeoutMs?: number): number {
   if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    return Math.min(60_000, Math.trunc(timeoutMs));
+    return Math.trunc(timeoutMs);
   }
   return resolveSessionControlSocketAckTimeoutMs();
 }
@@ -72,15 +73,16 @@ export async function emitSocketWithAck<
   socket: AckableSocket<NoInfer<TEvent>, NoInfer<TPayload>>;
   event: TEvent;
   payload: TPayload;
-  timeoutMs?: number;
+  /** null keeps the wait under the containing operation's lifetime and cancellation. */
+  timeoutMs?: number | null;
   signal?: AbortSignal;
 }>): Promise<T> {
   ensureSocketConnected(params.socket, params.event);
   if (params.signal?.aborted) {
     throw new SocketAckAbortError(params.event);
   }
-  const timeoutMs = resolveAckTimeoutMs(params.timeoutMs);
-  const socketWithTimeout = params.socket.timeout?.(timeoutMs) ?? params.socket;
+  const timeoutMs = params.timeoutMs === null ? null : resolveAckTimeoutMs(params.timeoutMs);
+  const socketWithTimeout = timeoutMs === null ? params.socket : params.socket.timeout?.(timeoutMs) ?? params.socket;
   if (typeof socketWithTimeout.emitWithAck !== 'function') {
     throw new Error(`Socket does not support emitWithAck for ${params.event}`);
   }
@@ -88,7 +90,7 @@ export async function emitSocketWithAck<
   const ackPromise = Promise.resolve(socketWithTimeout.emitWithAck(params.event, params.payload));
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     let onAbort = () => {};
     const cleanup = () => {
       clearTimeout(timeout);
@@ -101,15 +103,17 @@ export async function emitSocketWithAck<
       operation();
     };
     onAbort = () => settle(() => reject(new SocketAckAbortError(params.event)));
-    timeout = setTimeout(
-      () => settle(() => reject(new SocketAckError({ code: 'socket_ack_timeout', event: params.event, timeoutMs }))),
-      timeoutMs,
-    );
+    if (timeoutMs !== null) {
+      timeout = setTimeout(
+        () => settle(() => reject(new SocketAckError({ code: 'socket_ack_timeout', event: params.event, timeoutMs }))),
+        timeoutMs,
+      );
+    }
     params.signal?.addEventListener('abort', onAbort, { once: true });
     ackPromise.then(
       (value) => settle(() => resolve(value as T)),
       (error: unknown) => settle(() => reject(isSocketIoAckTimeoutError(error)
-        ? new SocketAckError({ code: 'socket_ack_timeout', event: params.event, timeoutMs })
+        ? new SocketAckError({ code: 'socket_ack_timeout', event: params.event, ...(timeoutMs === null ? {} : { timeoutMs }) })
         : error)),
     );
   });

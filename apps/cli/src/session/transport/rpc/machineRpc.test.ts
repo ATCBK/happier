@@ -91,9 +91,15 @@ import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sess
 import { openSessionRequesterBootstrapRpcRequestV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createManagedGuestActivityTransport } from '@/machines/managed/managedActivityTransport';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema, MachineStoragePileResultV1Schema, PileReviewV1Schema } from '@happier-dev/protocol/storage/storageV1';
 
 /** Account content material exactly as the CLI persists it: a box seed plus its own public key. */
 function accountDataKeyCredentials(seedByte: number) {
@@ -147,6 +153,195 @@ async function responseForRequest(key: Uint8Array, request: { method: string; pa
 }
 
 describe('callMachineRpc', () => {
+  it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('delivers only the signed approved storage subset to the real cleanup receiver', async () => {
+    const [{ mkdtemp, realpath, mkdir, writeFile, lstat, rm }, { tmpdir }, { join, resolve }, { execFile }, { promisify },
+      artifacts, { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers }, { createActivityLog },
+      { createMachineVitalsSampler }, { createMinuteHistoryStore }, { createMachineResourceSummary }] = await Promise.all([
+      import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process'), import('node:util'),
+      import('@happier-dev/cli-common/componentArtifacts'), import('@/rpc/handlers/storage'), import('@/daemon/guard/activityLog'),
+      import('@/daemon/vitals/createMachineVitalsSampler'), import('@/daemon/vitals/history/minuteHistoryStore'),
+      import('@/daemon/resources/machineResourceSummary'),
+    ]);
+    const scratch = await realpath(await mkdtemp(join(tmpdir(), 'storage-signed-subset-')));
+    const executable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+    const execute = promisify(execFile);
+    let retire = async () => {};
+    try {
+      const payload = join(scratch, 'payload');
+      await artifacts.stageProcessCustodyRuntime({ repoRoot: resolve('../..'), payloadDir: payload,
+        target: artifacts.resolveCurrentBinaryTarget({ availableTargets: artifacts.CLI_BINARY_TARGETS }),
+        runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); },
+      });
+      Object.defineProperty(process, 'execPath', { ...executable, value: join(payload, 'happier') });
+      const home = join(scratch, 'home'); const server = join(home, 'server');
+      const chosenPath = join(home, 'logs', 'chosen.log'); const retainedPath = join(home, 'logs', 'retained.log');
+      await mkdir(join(home, 'logs'), { recursive: true }); await mkdir(server, { recursive: true });
+      await writeFile(chosenPath, Buffer.alloc(4096, 1)); await writeFile(retainedPath, Buffer.alloc(4096, 2));
+      const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+        historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
+      const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+      const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
+      const identity = { serverId: 'home', machineId: 'machine-target', installationId: 'target-installation', custodianAccountId: 'owner' };
+      const { createManagedSessionDirectories } = await import('@/session/creation/managedSessionDirectories');
+      const directories = createManagedSessionDirectories({ activeServerDir: server });
+      const own = await directories.materializeForFreshSpawn({ sessionCreationTag: 'own' });
+      const foreign = await directories.materializeForFreshSpawn({ sessionCreationTag: 'foreign' });
+      await directories.bind({ allocationId: own.allocationId, sessionId: 'own-session' });
+      await directories.bind({ allocationId: foreign.allocationId, sessionId: 'foreign-session' });
+      await writeFile(join(own.directory, 'own.txt'), 'owned attachment');
+      await writeFile(join(foreign.directory, 'foreign.txt'), 'foreign attachment');
+      let ownSessionIds = new Set(['own-session']);
+      let revokeDuringProtectionRead = false;
+      let revokeDuringProjectionFactsRead = false;
+      const sessionStoppedAt = Date.now();
+      const routes = createDaemonStorageRoutes({ target: () => identity,
+        readOwnSessionIds: accountId => accountId === 'recipient' ? ownSessionIds : new Set<string>(), deps: () => ({
+        serverId: identity.serverId, machineId: identity.machineId, custodianAccountId: identity.custodianAccountId, activityLog, homeDir: scratch,
+        attributionFor: accountId => ({ serverId: identity.serverId, accountId, machineId: identity.machineId,
+          installationId: identity.installationId }),
+        readStorageProtectionFacts: async () => {
+          if (revokeDuringProjectionFactsRead) ownSessionIds = new Set();
+          return {};
+        },
+        catalog: { happyHomeDir: home, activeServerDir: server, tempRoot: join(scratch, 'absent-temp'),
+          managedSessionDirectories: directories,
+          readTrackedSessions: () => ['own-session', 'foreign-session'].map(sessionId => ({ sessionId, cwd: home,
+            running: false, stoppedAt: sessionStoppedAt })),
+          readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: async () => {
+            // OS liveness is an asynchronous boundary; Home custody may change
+            // while an accepted daemon cleanup is waiting for those facts.
+            if (revokeDuringProtectionRead) ownSessionIds = new Set();
+            return { reliable: true, paths: [] };
+          } },
+        readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
+      }) });
+      retire = async () => { routes.dispose(); resourceSummary.stop(); await sampler.stop(); };
+      // Home admission and Socket.IO are network boundaries; strict receiver,
+      // review, native sizing, pile, Trash and durable Activity owners stay real.
+      const receiver = new RpcHandlerManager({ scopePrefix: identity.machineId, localMachineId: identity.machineId,
+        encryptionMode: 'plain', logger: () => {}, authorizeRequest: async () => ({ ok: true }) });
+      registerDaemonStorageRpcHandlers(receiver, routes);
+      const ingress = { machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: identity.machineId,
+        installationId: identity.installationId, role: 'manage' as const, encryptionMode: 'plain' as const }, callerAuthority: 'account_automation' as const };
+      const invoke = async (method: string, params: unknown) => receiver.handleRequest({ method: `${identity.machineId}:${method}`, params, ...ingress });
+      const listed = MachineStorageCategoryListResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST,
+        { machineId: identity.machineId, categoryId: 'logs' }));
+      const refs = listed.items.map(({ itemId, path }) => ({ itemId, path }));
+      const collected = MachineStoragePileResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_SET,
+        { machineId: identity.machineId, add: refs }));
+      expect(collected.items.every(ref => ref.collectedBy.accountId === 'owner' && ref.collectedBy.kind === 'agent')).toBe(true);
+      expect(await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { machineId: identity.machineId })).toMatchObject({ pile: { count: 2 } });
+      const review = PileReviewV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK,
+        { machineId: identity.machineId, refs: collected.items.map(({ itemId, path }) => ({ itemId, path })) }));
+      const original = { machineId: identity.machineId, serverId: identity.serverId, emptyAfter: true,
+        items: review.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) };
+      const selected = original.items.find(item => item.ref.path === chosenPath)!;
+      const narrowed = { ...original, emptyAfter: false, items: [selected] };
+      const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+      const target = { kind: 'machine' as const, machineId: identity.machineId };
+      const authorization = { v: 1 as const, token: 'home-cleanup-proof', binding: { accountId: 'owner', custodianAccountId: 'owner',
+        authentication: { kind: 'account' as const, tokenEpoch: 1 }, accountEncryptionMode: 'plain' as const,
+        serverIdentityId: 'srv_home', machineId: identity.machineId, installationId: identity.installationId,
+        actionId: 'machines.storage.trash.move', requestId: 'cleanup-request', requestEnvelopeDigest: 'a'.repeat(43), target } };
+      axiosGet.mockResolvedValue({ data: { machine: { storageMode: 'plain', id: identity.machineId, installationId: identity.installationId,
+        dataEncryptionKey: encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: null }))) } } });
+      let forwarded: unknown;
+      socket.emit.mockImplementation(async (event, packet, ack) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        forwarded = packet.params;
+        expect(verifyExternalActionMachineRpcRequestV1({ authorizationToken: authorization.token, effectActionId: authorization.binding.actionId,
+          target, installationId: identity.installationId, event, method: packet.method, requestId: packet.requestId,
+          params: packet.params, signature: packet.externalActionExecution.machineSignature, publicKey: keys.publicKey })).toBe(true);
+        ack({ ok: true, result: await receiver.handleRequest({ method: packet.method, params: packet.params, ...ingress }) });
+      });
+      let stored: ApprovalRequest | null = null;
+      const executor = createActionExecutor({
+        ...createUnavailableActionTransportDeps(),
+        approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request))); return { artifactId: 'cleanup-approval' }; },
+        approvalsGet: async () => stored,
+        approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request))); return { ok: true }; },
+        isActionApprovalRequired: () => true,
+        isApprovalExecutionOriginCurrent: async ({ origin, request }) => !!origin.target && verifyExternalActionApprovalInputV1({
+          authorizationToken: origin.externalActionExecutionAuthorization?.token ?? '', actionId: request.actionId,
+          target: origin.target, input: request.actionArgs, signature: origin.externalActionInputSignature ?? '', publicKey: keys.publicKey }),
+        machineStorageAction: async ({ actionId, input, context }) => await callExactMachineRpc({
+          credentials: { token: 'owner-token', encryption: null }, machineId: identity.machineId,
+          method: getActionSpec(actionId).bindings!.rpcMethod!, request: input,
+          externalAction: { context, effectActionId: actionId, installationId: identity.installationId, privateKey: keys.secretKey },
+        }),
+      } satisfies ActionExecutorDeps);
+      const context: ActionExecutorContext = { surface: 'ui', authority: 'account_automation', serverId: identity.serverId,
+        actionCaller: { kind: 'host' }, actionRequestId: authorization.binding.requestId, runtimeAccountId: 'owner',
+        defaultSessionMachineId: identity.machineId, externalActionTarget: target, externalActionExecutionAuthorization: authorization,
+        signExternalActionApprovalInput: input => signExternalActionApprovalInputV1({ authorizationToken: input.authorization.token,
+          actionId: input.actionId, target: input.target, input: input.input, privateKey: keys.secretKey }) };
+      const created = await executor.execute('machines.storage.trash.move', original, context);
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const approved = await executor.execute('approval.request.decide', { artifactId: 'cleanup-approval', decision: 'approve', narrowedInput: narrowed },
+        { surface: 'ui', authority: 'present_user', serverId: identity.serverId });
+      expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'executed',
+        execution: { ok: true, result: { outcomes: [{ itemId: selected.ref.itemId, status: 'moved' }] } } } });
+      expect(forwarded).toEqual(narrowed);
+      await expect(lstat(chosenPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await lstat(retainedPath)).size).toBe(4096);
+      expect(await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { machineId: identity.machineId })).toMatchObject({ pile: { count: 1 } });
+      expect((await activityLog.list({ range: 'today' })).entries.filter(entry => entry.kind === 'trash_moved')).toHaveLength(1);
+      const recipientInvoke = async (method: string, params: unknown) => receiver.handleRequest({ method: `${identity.machineId}:${method}`, params,
+        machineAdmission: { ...ingress.machineAdmission, actorAccountId: 'recipient', role: 'use' }, callerAuthority: 'present_user' });
+      await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_SET, { machineId: identity.machineId, clear: true });
+      revokeDuringProtectionRead = true;
+      const revokedCategory = MachineStorageCategoryListResultV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST,
+        { machineId: identity.machineId, categoryId: 'sessionFolders' }));
+      expect(ownSessionIds.size).toBe(0);
+      expect.soft(revokedCategory.items).toEqual([]);
+      revokeDuringProtectionRead = false;
+      ownSessionIds = new Set(['own-session']);
+      const ownItems = MachineStorageCategoryListResultV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST,
+        { machineId: identity.machineId, categoryId: 'sessionFolders' }));
+      const ownItem = ownItems.items.find(item => item.path === own.directory)!;
+      expect(ownItem).toBeDefined();
+      await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_SET, { machineId: identity.machineId,
+        add: [{ itemId: ownItem.itemId, path: ownItem.path }] });
+      const ownSummary = await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { machineId: identity.machineId });
+      expect(ownSummary).toMatchObject({ pile: { count: 1 }, categories: [], suggestionsTop: [], trash: { count: 0, allocatedBytes: 0 } });
+      expect.soft(HappierStorageSummaryV1Schema.parse(ownSummary).volumes[0]?.pileBytes).toBeGreaterThan(0);
+      expect(JSON.stringify(ownSummary)).not.toContain(foreign.directory);
+      const ownPile = MachineStoragePileResultV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET,
+        { machineId: identity.machineId }));
+      expect(ownPile).toMatchObject({ items: [{ path: own.directory, collectedBy: { accountId: 'recipient', kind: 'person' } }] });
+      revokeDuringProjectionFactsRead = true;
+      const revokedDuringRead = await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET, { machineId: identity.machineId });
+      expect(ownSessionIds.size).toBe(0);
+      expect.soft(revokedDuringRead).not.toHaveProperty('items');
+      expect.soft(JSON.stringify(revokedDuringRead)).not.toContain(own.directory);
+      expect.soft(revokedDuringRead).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      revokeDuringProjectionFactsRead = false;
+      ownSessionIds = new Set(['own-session']);
+      const ownReview = PileReviewV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK,
+        { machineId: identity.machineId, refs: ownPile.items.map(({ itemId, path }) => ({ itemId, path })) }));
+      expect(ownReview.items).toHaveLength(1);
+      revokeDuringProtectionRead = true;
+      await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE, { machineId: identity.machineId,
+        items: ownReview.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) });
+      expect(ownSessionIds.size).toBe(0);
+      expect((await lstat(own.directory)).isDirectory()).toBe(true);
+      revokeDuringProtectionRead = false;
+      const survivingRevokedPile = MachineStoragePileResultV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET,
+        { machineId: identity.machineId }));
+      expect(survivingRevokedPile).toMatchObject({ items: [], summary: { count: 0, droppedSinceLastView: [] } });
+      // Scope can be revoked after collection. A missing ref no longer supplies
+      // current Session custody proof, so neither read may reveal its old path.
+      ownSessionIds = new Set();
+      await rm(own.directory, { recursive: true, force: true });
+      const revokedPile = MachineStoragePileResultV1Schema.parse(await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET,
+        { machineId: identity.machineId }));
+      expect(revokedPile).toMatchObject({ items: [], summary: { count: 0, droppedSinceLastView: [] } });
+      expect(JSON.stringify(revokedPile)).not.toContain(own.directory);
+      const revokedSummary = await recipientInvoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { machineId: identity.machineId });
+      expect(revokedSummary).toMatchObject({ pile: { count: 0, droppedSinceLastView: [] } });
+      expect(JSON.stringify(revokedSummary)).not.toContain(own.directory);
+    } finally { await retire(); Object.defineProperty(process, 'execPath', executable); await rm(scratch, { recursive: true, force: true }); }
+  });
   it.each(['success', 'error', 'abandon'] as const)('recovers the original accepted spawn observation after disconnect (%s)', async (kind) => {
     if (kind === 'abandon') vi.stubEnv('HAPPIER_SPAWN_ABANDON_TIMEOUT_MS', '5000');
     axiosGet.mockResolvedValue({ data: { machine: { storageMode: 'plain', id: 'machine-session',
@@ -1309,6 +1504,28 @@ describe('callMachineRpc', () => {
     expect(readMachineRpcRequestDisposition(afterEmission)).toBe('outcomeUnknown');
   });
 
+  it('spends one machine RPC budget across the Machine read and acknowledgement', async () => {
+    vi.useFakeTimers();
+    try {
+      axiosGet.mockImplementationOnce(async () => {
+        await new Promise(resolve => setTimeout(resolve, 80));
+        return { data: { machine: { storageMode: 'plain', id: 'machine-plain',
+          dataEncryptionKey: encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: null })), 'base64') } } };
+      });
+      socket.emit.mockImplementationOnce(() => undefined);
+      let error: unknown;
+      const pending = callExactMachineRpc({ credentials: { token: 'plain-token', encryption: null },
+        machineId: 'machine-plain', method: 'status', request: {}, timeoutMs: 100,
+      }).catch(value => { error = value; });
+      await vi.advanceTimersByTimeAsync(80);
+      await vi.advanceTimersByTimeAsync(21);
+      expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+      expect(readMachineRpcRequestDisposition(error)).toBe('outcomeUnknown');
+      await vi.advanceTimersByTimeAsync(100);
+      await pending;
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps caller-lifecycle machine RPC acknowledgement open until cancellation', async () => {
     vi.useFakeTimers();
     axiosGet.mockResolvedValueOnce({
@@ -1334,18 +1551,23 @@ describe('callMachineRpc', () => {
     });
     const errorPromise = promise.catch((error) => error);
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(socket.disconnect).not.toHaveBeenCalled();
-    const callPayload = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)?.[1];
-    expect(callPayload).not.toHaveProperty('timeoutMs');
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+      const callPayload = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)?.[1];
+      expect(callPayload).toHaveProperty('timeoutMs', null);
 
-    abort.abort();
-    const error = await errorPromise;
-    expect(error).toMatchObject({ name: 'AbortError' });
-    expect(readMachineRpcRequestDisposition(error)).toBe('outcomeUnknown');
-    expect(socket.disconnect).toHaveBeenCalledOnce();
-    expect(socket.close).toHaveBeenCalledOnce();
-    vi.useRealTimers();
+      abort.abort();
+      const error = await errorPromise;
+      expect(error).toMatchObject({ name: 'AbortError' });
+      expect(readMachineRpcRequestDisposition(error)).toBe('outcomeUnknown');
+      expect(socket.disconnect).toHaveBeenCalledOnce();
+      expect(socket.close).toHaveBeenCalledOnce();
+    } finally {
+      abort.abort();
+      await errorPromise;
+      vi.useRealTimers();
+    }
   });
 
   it('settles an emitted machine RPC when its socket disconnects before acknowledgement', async () => {
@@ -1600,7 +1822,13 @@ describe('callMachineRpc', () => {
         timeoutMs: 10,
       })).rejects.toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
 
-      expect(socket.emit).toHaveBeenCalledTimes(1);
+      // The total deadline cancels its submitted request, never a successor
+      // request. Observe event identities rather than conflating cancellation
+      // with replay.
+      expect(socket.emit.mock.calls.map(([event]) => event)).toEqual([SOCKET_RPC_EVENTS.CALL, SOCKET_RPC_EVENTS.CANCEL]);
+      const request = socket.emit.mock.calls[0][1];
+      expect(request.method).toBe('machine-old:status');
+      expect(socket.emit.mock.calls[1][1]).toEqual({ requestId: request.requestId });
       expect(axiosGet).toHaveBeenCalledTimes(1);
     });
   });

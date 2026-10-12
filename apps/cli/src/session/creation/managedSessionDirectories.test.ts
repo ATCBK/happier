@@ -1,8 +1,9 @@
-import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { createManagedSessionDirectories } from './managedSessionDirectories';
 import { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessionCreationTerminalSpawnErrorDetail';
 
@@ -17,6 +18,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 const roots: string[] = [];
+let disposeNative: (() => Promise<void>) | undefined;
+beforeAll(async () => { disposeNative = await createProcessCustodyFixture(); });
+afterAll(async () => { await disposeNative?.(); });
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.mocked(fs.rm).mockReset();
@@ -31,6 +35,43 @@ async function fixture() {
 }
 
 describe('managed session directory ownership', () => {
+  it('converges a restore interrupted after moving bytes but before committing active ownership', async () => {
+    const { activeServerDir, owner } = await fixture();
+    const allocation = await owner.materializeForFreshSpawn({ sessionCreationTag: 'restore-crash' });
+    await owner.bind({ allocationId: allocation.allocationId, sessionId: 'session-crash' });
+    await writeFile(join(allocation.directory, 'bytes'), 'retained-session');
+    const payloadPath = join(activeServerDir, 'crash-payload');
+    await owner.retireToTrash({ allocationId: allocation.allocationId, payloadPath });
+    // The actual filesystem move represents the crash point, not a fake owner.
+    await rename(payloadPath, allocation.directory);
+    const restarted = createManagedSessionDirectories({ activeServerDir });
+    await restarted.reinstateFromTrash({ allocationId: allocation.allocationId, payloadPath, restorePath: allocation.directory });
+    await restarted.reinstateFromTrash({ allocationId: allocation.allocationId, payloadPath, restorePath: allocation.directory });
+    expect(await restarted.resolveForSession({ sessionId: 'session-crash', path: allocation.directory })).toMatchObject({ ok: true });
+    expect((await restarted.listRecords())[0]?.inTrash).toBeUndefined();
+    expect(await readFile(join(allocation.directory, 'bytes'), 'utf8')).toBe('retained-session');
+  });
+  it('retains ownership through Trash, refuses recreation there, and resumes the byte-identical restored allocation', async () => {
+    const { activeServerDir, owner } = await fixture();
+    const allocation = await owner.materializeForFreshSpawn({ sessionCreationTag: 'trash-resume' });
+    await owner.bind({ allocationId: allocation.allocationId, sessionId: 'session' });
+    await writeFile(join(allocation.directory, 'keep'), 'resume-data');
+    const payloadPath = join(activeServerDir, 'trash-payload');
+    await owner.retireToTrash({ allocationId: allocation.allocationId, payloadPath });
+    expect(await owner.listRecords()).toEqual([]);
+    const recordPath = join(activeServerDir, 'session-directories', '.owners', `${allocation.allocationId}.json`);
+    expect(JSON.parse(await readFile(recordPath, 'utf8'))).toMatchObject({ sessionId: 'session', inTrash: { payloadPath } });
+    expect(await owner.resolveForSession({ sessionId: 'session', path: allocation.directory })).toMatchObject({ ok: false });
+    await expect(owner.materializeForFreshSpawn({ sessionCreationTag: 'trash-resume' })).rejects.toThrow();
+    await expect(owner.reinstateFromTrash({ allocationId: allocation.allocationId, payloadPath,
+      restorePath: `${allocation.directory} (restored)` })).rejects.toMatchObject({ code: 'restore_path_unsupported' });
+    await owner.reinstateFromTrash({ allocationId: allocation.allocationId, payloadPath, restorePath: allocation.directory });
+    expect(await owner.resolveForSession({ sessionId: 'session', path: allocation.directory })).toMatchObject({ ok: true, allocationId: allocation.allocationId });
+    expect(await readFile(join(allocation.directory, 'keep'), 'utf8')).toBe('resume-data');
+    expect(await owner.listRecords()).toMatchObject([{ allocationId: allocation.allocationId, sessionId: 'session' }]);
+    expect(JSON.parse(await readFile(recordPath, 'utf8'))).not.toHaveProperty('inTrash');
+  });
+
   it('reads known ownership fields from retained records and rewrites only canonical fields', async () => {
     const { activeServerDir, owner } = await fixture();
     const allocation = await owner.materializeForFreshSpawn({ sessionCreationTag: 'additive-owner' });

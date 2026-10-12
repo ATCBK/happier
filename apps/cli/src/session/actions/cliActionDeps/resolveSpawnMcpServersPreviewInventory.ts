@@ -50,7 +50,7 @@ export async function resolveSpawnMcpServersPreviewInventory(params: Readonly<{
     machineId: params.machineId,
     directory: params.directory,
     agentId: params.agentId,
-    ...(params.selection ? { selection: params.selection } : {}),
+    ...(params.selection ? { capabilitySelection: { mcp: params.selection } } : {}),
     detectedServers: detected.servers,
     detectedWarnings: detected.warnings,
   });

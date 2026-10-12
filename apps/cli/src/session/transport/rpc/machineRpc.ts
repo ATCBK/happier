@@ -37,6 +37,7 @@ import {
 import {
   callSocketRpc,
   isSocketIoAckTimeoutError,
+  raceSocketIoAckTimeout,
   markRpcRequestDisposition,
   readRpcRequestDisposition,
   type RpcRequestDisposition,
@@ -253,7 +254,6 @@ export async function callExactMachineRpc(params: Readonly<{
   machineId: string;
   serverUrl?: string;
   method: string;
-  request: unknown;
   /** Host-owned original invocation correlation; ordinary calls retain a fresh id. */
   requestId?: string;
   authorization?: SocketRpcAuthorizationContext;
@@ -276,9 +276,15 @@ export async function callExactMachineRpc(params: Readonly<{
     installationId: string;
     privateKey: ExternalActionMachineRequestSigningKey;
   }>;
-}>): Promise<unknown> {
+}> & (
+  | Readonly<{ request: unknown; prepareRequest?: never }>
+  | Readonly<{ request?: never; prepareRequest: () => unknown }>
+)): Promise<unknown> {
+  let issued = false;
+  const deadlineController = new AbortController();
+  const signal = params.signal ? AbortSignal.any([params.signal, deadlineController.signal]) : deadlineController.signal;
   try {
-    params.signal?.throwIfAborted();
+    signal.throwIfAborted();
     const machineId = params.machineId.trim();
     if (!machineId) throw new Error('Machine id is required');
     const timeoutMs = params.timeoutMs === null ? null
@@ -286,12 +292,14 @@ export async function callExactMachineRpc(params: Readonly<{
     const setupTimeoutMs = timeoutMs ?? DEFAULT_MACHINE_RPC_TIMEOUT_MS;
     const connectTimeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
       ? setupTimeoutMs : resolveSessionControlSocketConnectTimeoutMs();
-    return await withUserScopedRpcSocket({
+    const deadlineAtMs = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const remainingTimeoutMs = () => deadlineAtMs === null ? null : Math.max(1, deadlineAtMs - Date.now());
+    const operation = withUserScopedRpcSocket({
       token: params.credentials.token,
       ...(params.authorityCeiling ? { authorityCeiling: params.authorityCeiling } : {}),
       ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
       connectTimeoutMs,
-      signal: params.signal,
+      signal,
       ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
       disconnectMessage: 'Machine RPC socket disconnected before acknowledgement',
     }, async (socket, connect, attemptSignal) => {
@@ -299,7 +307,7 @@ export async function callExactMachineRpc(params: Readonly<{
         credentials: params.credentials,
         machineId,
         serverUrl: params.serverUrl,
-        timeoutMs: setupTimeoutMs,
+        timeoutMs: remainingTimeoutMs() ?? setupTimeoutMs,
         ...(params.expectedRunnerMachineContentKeyBinding ? { expectedRunnerMachineContentKeyBinding: params.expectedRunnerMachineContentKeyBinding } : {}),
         ...(params.requireCurrentMachine ? { requireCurrentMachine: true } : {}),
         ...(params.requiredMachineKind ? { requiredMachineKind: params.requiredMachineKind } : {}),
@@ -310,7 +318,10 @@ export async function callExactMachineRpc(params: Readonly<{
       if (params.expectedEncryptionMode !== undefined && machineCodec.mode !== params.expectedEncryptionMode) {
         throw new MachineRpcEncryptionModeMismatchError(machineId);
       }
-      let request = params.request;
+      // Some private payloads are meaningful only after the exact Machine
+      // class and content authority have been admitted. Keep that check with
+      // the transport owner rather than asking callers to read the row twice.
+      let request = params.prepareRequest ? params.prepareRequest() : params.request;
       if (request && typeof request === 'object' && 'kind' in request
         && (request.kind === 'requester_session_bootstrap_v1' || request.kind === 'requester_session_handoff_bootstrap_v1'
           || request.kind === 'requester_session_handoff_preflight_bootstrap_v1')) {
@@ -400,7 +411,8 @@ export async function callExactMachineRpc(params: Readonly<{
             params: request,
             content,
             requestId: params.requestId ?? randomUUID(),
-            timeoutMs,
+            timeoutMs: remainingTimeoutMs(),
+            onIssued: () => { issued = true; },
             signal: attemptSignal,
             authorization: params.authorization,
             ...(createExternalActionExecution ? { createExternalActionExecution } : {}),
@@ -410,11 +422,14 @@ export async function callExactMachineRpc(params: Readonly<{
         },
       });
     });
+    return await raceSocketIoAckTimeout(operation, timeoutMs ?? undefined, signal);
   } catch (error) {
     if (isSocketIoAckTimeoutError(error)) {
-      throw markRpcRequestDisposition(Object.assign(new Error('Machine RPC call timeout'), { code: 'MACHINE_RPC_TIMEOUT' }), 'outcomeUnknown');
+      throw markRpcRequestDisposition(Object.assign(new Error('Machine RPC call timeout'), { code: 'MACHINE_RPC_TIMEOUT' }), issued ? 'outcomeUnknown' : 'notSent');
     }
     throw readRpcRequestDisposition(error) === null ? markRpcRequestDisposition(error, 'notSent') : error;
+  } finally {
+    deadlineController.abort();
   }
 }
 

@@ -18,6 +18,7 @@ import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePro
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveWorkflowAuthorizedSession } from '@/daemon/workflows/invocationRecoveryObserver';
+import type { WorkflowTargetUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 type Materialization = Pick<Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0], 'roleSelection' | 'effects'>;
 type RoleSelection = Omit<ResolveRoleSelectionV1Input, 'roleId' | 'workflowRoles' | 'runOverrides'>;
@@ -158,37 +159,49 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
         readLaunchProfile: (profileId) => deps.readLaunchProfile(profileId, target.signal),
         readActionContract,
         resolveTargetAvailability: async (leaf, { sessionIds }) => {
+          const unavailable = (reason: WorkflowTargetUnavailableDetailsV1['reason'],
+            facts: Pick<WorkflowTargetUnavailableDetailsV1, 'agentId' | 'errorCode' | 'platformReason'> = {}): WorkflowTargetUnavailableDetailsV1 => (
+            { code: 'target_unavailable', reason, ...facts }
+          );
           for (const sessionId of sessionIds) {
-            if (!await readSessionAvailability(sessionId)) return false;
+            if (!await readSessionAvailability(sessionId)) return unavailable('session_unavailable');
           }
           if (leaf.kind === 'wait' || leaf.kind === 'workflow') return true;
-          if (leaf.actionId) return (await readActionContract(leaf.actionId)) !== null;
+          if (leaf.actionId) return (await readActionContract(leaf.actionId)) !== null || unavailable('action_unavailable');
           const selection = leaf.selection;
           // Bound Session steps continue that Session's own Agent. Synthetic
           // Action Agent-start checks still require creation inventory.
           if (leaf.kind === 'step' && leaf.executionTarget.kind === 'session'
             && (selection.conversation?.kind === 'origin_session' || selection.conversation?.kind === 'existing_session')) return true;
-          if (!selection.agentTarget) return false;
+          if (!selection.agentTarget) return unavailable('selection_unavailable');
           const definitionIds = selection.agentTarget.definitionId === undefined ? [] : await readDefinitionIds(true);
-          if (selection.agentTarget.definitionId !== undefined && !definitionIds.includes(selection.agentTarget.definitionId)) return false;
+          if (selection.agentTarget.definitionId !== undefined && !definitionIds.includes(selection.agentTarget.definitionId)) return unavailable('selection_unavailable');
           const key = buildBackendTargetKeyV2(selection.agentTarget);
           const machine = await readMachine();
-          if (!machine) return false;
+          if (!machine) return unavailable('machine_check_failed');
           const { roster, inventory, detachedFacts, detachedBackends, detachedFeatures } = machine;
           const entry = Object.entries(roster.projection.agentsById).find(([, agent]) => agent.identity
             && listAgentExecutionTargetsV1(agent.identity, definitionIds).some((executionTarget) => buildBackendTargetKeyV2(executionTarget) === key));
-          if (!entry) return false;
+          if (!entry) return unavailable('selection_unavailable');
           const [agentId, agent] = entry;
           const backend = object(detachedBackends?.[selection.agentTarget.definitionId === undefined ? agent.catalogAgentId ?? agentId : key]);
           if (leaf.executionTarget.kind === 'session') {
+            if (agent.capabilities?.sessions?.open.includes('create') !== true) return unavailable('session_creation_unavailable', { agentId });
             if (selection.agentTarget.definitionId !== undefined) {
-              return backend?.available === true && agent.capabilities?.sessions?.open.includes('create') === true;
+              return backend?.available === true || unavailable('selection_unavailable', { agentId });
             }
             const current = inventory.items.find((item) => item.agentId === agentId);
-            return Boolean(current?.installed && current.platform.supported && current.dependencies.every((dependency) => dependency.installed)
-              && agent.capabilities?.sessions?.open.includes('create') === true);
+            if (!current) {
+              const failed = inventory.unavailable?.find((item) => item.agentId === agentId);
+              return unavailable('agent_probe_failed', { agentId, ...(failed?.errorCode ? { errorCode: failed.errorCode } : {}) });
+            }
+            if (!current.installed) return unavailable('agent_not_installed', { agentId });
+            if (!current.platform.supported) return unavailable('platform_unsupported', { agentId, platformReason: current.platform.reason });
+            if (!current.dependencies.every((dependency) => dependency.installed)) return unavailable('dependency_not_installed', { agentId });
+            return true;
           }
-          return detachedFacts?.available === true && detachedFeatures?.detachedScope === true && backend?.available === true;
+          return (detachedFacts?.available === true && detachedFeatures?.detachedScope === true && backend?.available === true)
+            || unavailable('detached_execution_unavailable', { agentId });
         },
       },
     };

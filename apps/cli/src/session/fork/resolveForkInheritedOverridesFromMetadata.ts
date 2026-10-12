@@ -2,17 +2,18 @@ import { isPermissionMode, type Metadata, type PermissionMode } from '@/api/type
 import { AcpConfigOptionOverridesV1Schema, AcpSessionModeOverrideV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { AgentModelOptionOverrideRuleReadSchema } from '@happier-dev/protocol/models/descriptor';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionModelSelectionResolutionError, sessionModelSelectionIntentRequiresAgentTargetV1 } from '@happier-dev/protocol/providers/model-selection';
 import { readSessionModesMetadata, projectSessionModesV1Compatibility } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV2, ConnectedServiceBindingsV2, ConnectedServiceMaterializationIdentityV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1 } from '@happier-dev/protocol';
 import { readPersistedProviderResumeState } from '@/providers/lifecycle/readPersistedResumeSelection';
+import { readSessionMetadataConnectedServiceBindings } from '@happier-dev/agents/runtime/identity/session-metadata';
 import {
   readAcpSessionModeIntentFromMetadata,
-  readSessionMetadataConnectedServiceBindings,
   resolveModelSelectionIntentFromSessionMetadata,
   resolvePermissionIntentFromSessionMetadata,
-} from '@happier-dev/agents';
+} from '@happier-dev/agents/session/state/metadataReaders';
 import {
   applyAcpConfigOptionIntentSessionMetadata,
   applyAcpSessionModeIntentSessionMetadata,
@@ -274,7 +275,7 @@ function resolveInheritedConnectedServices(
   metadata: Record<string, unknown> | null | undefined,
   agentTarget: BackendTargetRefV2 | null,
 ): ConnectedServiceBindingsV2 | null {
-  const explicit = ConnectedServiceBindingsV2IngressSchema.safeParse(metadata?.connectedServices);
+  const explicit = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(metadata?.connectedServices);
   if (explicit.success) return explicit.data;
 
   const legacyAgentId = agentTarget?.sourceKind === 'built_in'

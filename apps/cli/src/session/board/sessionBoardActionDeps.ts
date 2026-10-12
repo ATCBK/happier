@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { applySessionBoardItemPlacementV1, applySessionBoardLayoutOperationV1, resolveSessionBoardItemPlacementDestinationV1, removeSessionBoardItemPlacementsV1 } from '@happier-dev/protocol/sessions/board/layoutOperations';
-import { isSessionSurfaceItemSourceCompatible, SessionSurfaceItemV1Schema, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board/item';
-import { bindSessionBoardMutationRequestV1, classifySessionBoardMutationTransportResultV1, createSessionBoardFailureV1, createSessionBoardOutcomeUnknownFailureV1, projectSessionBoardActionFailureV1, projectSessionBoardAdapterFailureV1, SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1, SessionBoardGetInputV1Schema, SessionBoardItemRemoveInputV1Schema, SessionBoardLayoutUpdateInputV1Schema, SessionBoardItemUpsertInputV1Schema, SessionBoardMutationActionResultV1Schema, projectSessionBoardGetResultV1, sessionBoardActionUsesLayoutV1 } from '@happier-dev/protocol/sessions/board/actions';
+import { isSessionSurfaceItemSourceCompatible, SessionSurfaceItemV1Schema, SessionSurfaceItemV1StoredSchema, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board/item';
+import { bindSessionBoardMutationRequestV1, classifySessionBoardMutationTransportResultV1, createSessionBoardFailureV1, createSessionBoardOutcomeUnknownFailureV1, projectSessionBoardActionFailureV1, projectSessionBoardAdapterFailureV1, SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1, SessionBoardGetInputV1Schema, SessionBoardItemRemoveInputV1Schema, SessionBoardLayoutUpdateInputV1Schema, SessionBoardItemUpsertInputV1Schema, SessionBoardMutationActionResultV1Schema, SessionBoardActionFailureV1Schema, projectSessionBoardGetResultV1, sessionBoardActionUsesLayoutV1 } from '@happier-dev/protocol/sessions/board/actions';
 import { projectSessionBoardFeatureDecisionFailureV1 } from '@happier-dev/protocol/sessions/board/errors';
 import { SessionBoardLayoutV1Schema } from '@happier-dev/protocol/sessions/board/layout';
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
@@ -60,7 +60,7 @@ export function createSessionBoardActionDeps(options: Readonly<{
   resolveExactSessionEncryptionMaterial?: (sessionId: string) => SessionTransportEncryptionMaterial | null;
   /** Reuses the Artifact publication caller's proven local Session workspace authority. */
   resolvePublishCaller?: (context: ActionExecutorContext) => Promise<ArtifactWorkspaceCaller | null>;
-}> & ExternalActionHomeBinding & SessionBoardActionFixedHome): Pick<ActionExecutorDeps, 'sessionBoardAction'> {
+}> & ExternalActionHomeBinding & SessionBoardActionFixedHome): Pick<ActionExecutorDeps, 'sessionBoardAction' | 'sessionBoardPrepareItem'> {
   if (
     (options.serverId === undefined) !== (options.serverHttpBaseUrl === undefined)
     || (options.serverId !== undefined && options.serverId.trim().length === 0)
@@ -70,6 +70,27 @@ export function createSessionBoardActionDeps(options: Readonly<{
   }
   const serverId = options.serverId ?? configuration.activeServerId;
   const serverUrl = options.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+  const sessionBoardPrepareItem: NonNullable<ActionExecutorDeps['sessionBoardPrepareItem']> = async ({ input, context, signal }) => {
+    if (context.serverId && context.serverId !== serverId) return createSessionBoardFailureV1('server_target_mismatch');
+    if (signal?.aborted) return createSessionBoardFailureV1('cancelled');
+    const parsed = SessionBoardItemUpsertInputV1Schema.safeParse(input);
+    if (!parsed.success) return createSessionBoardFailureV1('session_board_invalid');
+    const args = parsed.data;
+    if (!('item' in args)) return createSessionBoardFailureV1('session_board_invalid');
+    if (args.item.source.kind !== 'hostedHtml' || !('publicationSource' in args.item.source)) return args;
+    try {
+      const caller = await options.resolvePublishCaller?.(context);
+      if (!caller || caller.sessionId !== (args.sessionId ?? context.defaultSessionId)) return createSessionBoardFailureV1('unsupported_action');
+      const acquired = await readArtifactWorkspaceFile({ caller, ...args.item.source.publicationSource, signal });
+      if (!acquired.bundle) return createSessionBoardFailureV1('session_board_invalid');
+      return SessionBoardItemUpsertInputV1Schema.parse({ ...args, item: { ...args.item, source: {
+        kind: 'hostedHtml', source: acquired.bundle,
+        ...(args.item.source.requestedCapabilities ? { requestedCapabilities: args.item.source.requestedCapabilities } : {}),
+      } } });
+    } catch (error) {
+      return projectSessionBoardAdapterFailureV1(error, signal?.aborted ? 'cancelled' : 'session_board_invalid');
+    }
+  };
   async function put(
     actionId: SessionBoardActionIdV1,
     sessionId: string,
@@ -204,8 +225,8 @@ export function createSessionBoardActionDeps(options: Readonly<{
       for (const record of records) {
         if (!record) { entries.push({ status: 'unavailable' }); continue; }
         try {
-          const item = SessionSurfaceItemV1Schema.parse(openSessionSystemRecord(crypto, record).content);
-          entries.push({ status: 'ready', itemId: record.address.localId, revision: record.revision, item });
+          const item = SessionSurfaceItemV1StoredSchema.parse(openSessionSystemRecord(crypto, record).content);
+          entries.push({ status: 'ready', itemId: record.address.localId, revision: record.revision, item, creator: record.creator });
         } catch { entries.push({ status: 'unavailable' }); }
       }
       return projectSessionBoardGetResultV1({ serverId, sessionId, layout, entries,
@@ -262,23 +283,14 @@ export function createSessionBoardActionDeps(options: Readonly<{
         currentItemRevision: current?.revision ?? null,
       });
     }
-    let authoredItem: SessionSurfaceItemV1;
-    if (args.item.source.kind === 'hostedHtml' && 'publicationSource' in args.item.source) {
-      const caller = await options.resolvePublishCaller?.(context);
-      if (!caller) return createSessionBoardFailureV1('unsupported_action');
-      const acquired = await readArtifactWorkspaceFile({ caller, ...args.item.source.publicationSource, signal });
-      if (!acquired.bundle) return createSessionBoardFailureV1('session_board_invalid');
-      authoredItem = SessionSurfaceItemV1Schema.parse({ ...args.item, source: {
-        kind: 'hostedHtml', source: acquired.bundle,
-        ...(args.item.source.requestedCapabilities ? { requestedCapabilities: args.item.source.requestedCapabilities } : {}),
-      } });
-    } else {
-      authoredItem = SessionSurfaceItemV1Schema.parse(args.item);
-    }
+    const prepared = await sessionBoardPrepareItem({ input: args, context, signal });
+    if ('ok' in prepared) return SessionBoardActionFailureV1Schema.parse(prepared);
+    if (!('item' in prepared)) return createSessionBoardFailureV1('session_board_invalid');
+    const authoredItem: SessionSurfaceItemV1 = SessionSurfaceItemV1Schema.parse(prepared.item);
     let itemDestination = args.destination;
     if (current) {
-      const previous = SessionSurfaceItemV1Schema.parse(openSessionSystemRecord(crypto, current).content);
-      itemDestination = previous.destination ?? 'board';
+      const previous = SessionSurfaceItemV1StoredSchema.parse(openSessionSystemRecord(crypto, current).content);
+      itemDestination = previous.destination;
       if (!isSessionSurfaceItemSourceCompatible(previous, { ...authoredItem, destination: itemDestination })) return createSessionBoardFailureV1('session_board_source_conflict');
     }
     let layout: SessionBoardLayoutV1 | null = null;
@@ -310,7 +322,7 @@ export function createSessionBoardActionDeps(options: Readonly<{
         : null,
     });
   };
-  return { sessionBoardAction: async (args) => {
+  return { sessionBoardPrepareItem, sessionBoardAction: async (args) => {
     try {
       return await sessionBoardAction(args);
     } catch (error) {

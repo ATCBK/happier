@@ -119,7 +119,7 @@ describe('sendSessionMessage machine admission', () => {
           agentModeId: null,
           configuration: null,
           connectedServices: null,
-          mcpSelection: null,
+          capabilitySelection: null,
           transcriptStorage: null,
           terminal: null,
           agentSessionStartupInstructionsMarkerV1: null,
@@ -212,7 +212,7 @@ describe('sendSessionMessage machine admission', () => {
       localId: 'plugin-input-v1:stable',
       content: expect.objectContaining({ t: 'plain' }),
       requestedAction: { v: 1, kind: 'steer_if_active' },
-    }));
+    }), expect.objectContaining({ timeoutMs: 30_000 }));
     expect(mocks.enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
   });
 
@@ -245,7 +245,7 @@ describe('sendSessionMessage machine admission', () => {
       targetMachineId: 'target-machine',
       localId,
       requestEqualityEvidenceV1: { kind: 'e2eeTag', tag: expect.any(String) },
-    }));
+    }), expect.objectContaining({ timeoutMs: 30_000 }));
     expect(mocks.enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
   });
 
@@ -348,7 +348,7 @@ describe('sendSessionMessage machine admission', () => {
     });
     const [request, options] = machineAdmissionTransport.mock.calls[0] ?? [];
     expect(request).not.toHaveProperty('signal');
-    expect(options).toEqual({ signal: cancellation.signal });
+    expect(options).toEqual({ signal: cancellation.signal, timeoutMs: 30_000 });
     expect(mocks.enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
   });
 
@@ -421,7 +421,7 @@ describe('sendSessionMessage machine admission', () => {
             agentModeId: null,
             configuration: null,
             connectedServices: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             transcriptStorage: null,
             terminal: null,
             agentSessionStartupInstructionsMarkerV1: null,
@@ -447,7 +447,7 @@ describe('sendSessionMessage machine admission', () => {
             agentModeId: null,
             configuration: null,
             connectedServices: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             transcriptStorage: null,
             terminal: null,
             agentSessionStartupInstructionsMarkerV1: null,
@@ -561,7 +561,7 @@ describe('sendSessionMessage machine admission', () => {
         kind: 'e2eeTag',
         tag: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
       },
-    }));
+    }), expect.objectContaining({ timeoutMs: 30_000 }));
     expect(machineAdmissionTransport).toHaveBeenCalledTimes(2);
     expect(mocks.enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
   });
@@ -594,7 +594,7 @@ describe('sendSessionMessage machine admission', () => {
     });
     expect(machineAdmissionTransport).toHaveBeenCalledWith(expect.objectContaining({
       requestedAction: { v: 1, kind: 'send_now' },
-    }));
+    }), expect.objectContaining({ timeoutMs: 30_000 }));
     expect(mocks.requestInactiveSessionResume).toHaveBeenCalledOnce();
   });
 
@@ -785,7 +785,7 @@ describe('sendSessionMessage machine admission', () => {
             agentModeId: null,
             configuration: null,
             connectedServices: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             transcriptStorage: null,
             terminal: null,
             agentSessionStartupInstructionsMarkerV1: null,
@@ -811,7 +811,7 @@ describe('sendSessionMessage machine admission', () => {
             agentModeId: null,
             configuration: null,
             connectedServices: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             transcriptStorage: null,
             terminal: null,
             agentSessionStartupInstructionsMarkerV1: null,

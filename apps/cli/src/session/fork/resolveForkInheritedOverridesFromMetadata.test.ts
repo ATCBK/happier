@@ -55,6 +55,17 @@ const providerBinding = {
 };
 
 describe('resolveForkInheritedOverridesFromMetadata', () => {
+  it('retains connected account selection despite retired persisted binding fields', () => {
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'profile-1' },
+    } };
+    const result = resolveForkInheritedOverridesFromMetadata({ connectedServices: {
+      ...connectedServices, retiredField: true, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { ...connectedServices.bindingsByServiceId['happier.agent.codex/openai-codex'], retiredField: true },
+      },
+    } }, codexTarget);
+    expect(result.spawn.connectedServices).toEqual(connectedServices);
+  });
   it('uses canonical legacy normalization before deciding whether a missing agent target is an error', () => {
     for (const modelId of [' default ', '   ', 'invalid legacy model']) {
       expect(resolveForkInheritedOverridesFromMetadata({
@@ -143,6 +154,17 @@ describe('resolveForkInheritedOverridesFromMetadata', () => {
     expect(result.metadata.sessionModesV2).toEqual(state);
     expect(result.metadata.sessionModesV1).toBeUndefined();
     expect(result.spawn.agentModeId).toBeUndefined();
+  });
+
+  it('retains config override intent despite retired parent fields', () => {
+    const result = resolveForkInheritedOverridesFromMetadata({
+      sessionConfigOptionOverridesV1: { v: 1, updatedAt: 2, retiredField: true,
+        overrides: { speed: { value: 'fast', updatedAt: 2, retiredField: true } } },
+      acpConfigOptionOverridesV1: { v: 1, updatedAt: 1, retiredField: true,
+        overrides: { sandbox: { value: 'workspace-write', updatedAt: 1, retiredField: true } } },
+    }, codexTarget);
+    expect(result.spawn.sessionConfigOptionOverrides).toEqual({ v: 1, updatedAt: 2,
+      overrides: { speed: { value: 'fast', updatedAt: 2 }, sandbox: { value: 'workspace-write', updatedAt: 1 } } });
   });
 
   it('returns spawn seeds plus metadata overrides for valid parent overrides', () => {

@@ -1,7 +1,9 @@
 import type { StoredCredentials } from '@/persistence';
-import { SessionForkVisualCopyV1Schema, SessionForkVisualOriginV1Schema, resolveTranscriptSessionBoardItemReferenceV1, type SessionForkVisualCopyV1 } from '@happier-dev/protocol/sessions/board';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { SessionForkVisualCopyV1Schema, SessionForkVisualOriginV1Schema, type SessionForkVisualCopyV1 } from '@happier-dev/protocol/sessions/board';
 import { SessionSurfaceItemV1StoredSchema } from '@happier-dev/protocol/sessions/board/item';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { getSessionTranscriptSurfaceItemReferenceSourceKeyV1, type SessionTranscriptSurfaceItemReferenceMemberV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { applyReducedMessages, createRawMessageNormalizationSequenceState, createReducer, normalizeRawMessageInSequence, reducer, type OrderedTranscript } from '@happier-dev/session-core';
 import { configuration } from '@/configuration';
@@ -19,6 +21,9 @@ import { logger } from '@/ui/logger';
 import { fetchForkTranscriptSegments, type ForkTranscriptSegment } from '@/session/replay/fetchForkTranscriptSegments';
 import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import type { SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionEncryptionContext';
+import { resolveTranscriptVisualReference } from '@/session/board/resolveTranscriptVisualReference';
+import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 function record(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -63,7 +68,7 @@ async function readSegmentVisualCandidates(params: SeedParams, segment: ForkTran
                     // Inherited seed rows precede this Session's own segment in the
                     // canonical projection, irrespective of their child storage seq.
                     if (row.seq > cutoffSeqInclusive && (!hasInheritedSeed
-                        || !SessionForkVisualOriginV1Schema.safeParse(record(raw.meta)?.forkVisualOriginV1).success)) continue;
+                        || !createStoredReadSchema(SessionForkVisualOriginV1Schema).safeParse(record(raw.meta)?.forkVisualOriginV1).success)) continue;
                     const normalized = normalizeRawMessageInSequence({ id: row.id, localId: typeof row.localId === 'string' ? row.localId : null,
                         createdAt: typeof row.createdAt === 'number' ? row.createdAt : 0, seq: row.seq, raw }, sequence);
                     if (!normalized) continue;
@@ -113,21 +118,37 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
     for (const segment of segments) candidates.push(...await readSegmentVisualCandidates(params, segment));
 
     const mutation = createSessionBoardActionDeps({ credentials: params.credentials }).sessionBoardAction;
+    const activeServerId = configuration.activeServerId;
+    const homeIdentityId = await resolveServerProfileHomeIdentityId(activeServerId);
+    // Only the saved exact profile binding proves equivalence. Transcript hints
+    // cannot authorize this Home's transport to read a different Home's records.
+    const resolveServerScopeId = (id: string) => homeIdentityId && (id === activeServerId || id === homeIdentityId) ? homeIdentityId : null;
     const copiedByOrigin = new Map<string, { entry: SessionForkVisualCopyV1; revision: string | null }>();
     const lineageIndexBySessionId = new Map(segments.map((segment, index) => [segment.sessionId, index]));
-    const importRows = new Map<string, { lineageIndex: number; sourceSeq: number; item: {
-        id: string; content: ReturnType<typeof sealSessionStoredContent>;
-        surfaceItemReference?: { v: 1; itemId: string; itemRevision: string; sourceAddress: { serverId: string; sessionId: string } } } }>();
+    const importRows = new Map<string, { lineageIndex: number; sourceSeq: number;
+        referencesBySource: Map<string, { originKey: string; reference: Pick<SessionTranscriptSurfaceItemReferenceMemberV1,
+            'sourceAddress' | 'sourceItemId' | 'sourceItemRevision'> }>;
+        item: { id: string; content: ReturnType<typeof sealSessionStoredContent> } }>();
     for (const { message, rows, segment, crypto: sourceCrypto } of candidates) {
-        const originMeta = SessionForkVisualOriginV1Schema.safeParse(message.meta?.forkVisualOriginV1);
-        const originAddress = originMeta.success ? originMeta.data : { serverId: configuration.activeServerId, sessionId: segment.sessionId };
-        const reference = resolveTranscriptSessionBoardItemReferenceV1({ toolName: message.tool.name, state: message.tool.state,
+        const originMeta = createStoredReadSchema(SessionForkVisualOriginV1Schema).safeParse(message.meta?.forkVisualOriginV1);
+        const originAddress = originMeta.success
+            ? { serverId: originMeta.data.serverId, sessionId: originMeta.data.sessionId }
+            : { serverId: configuration.activeServerId, sessionId: segment.sessionId };
+        const acknowledgedReference = await resolveTranscriptVisualReference({ toolName: message.tool.name, state: message.tool.state,
             input: message.tool.input, result: message.tool.result, address: originAddress });
-        if (!reference) continue;
+        if (!acknowledgedReference || !areServerProfileIdentifiersEquivalent(acknowledgedReference.address.serverId,
+            activeServerId, resolveServerScopeId)) continue;
+        // One proven Home identity owns copy identity and imported provenance,
+        // even when old and current acknowledgements use different profile labels.
+        const reference = { ...acknowledgedReference, address: { ...acknowledgedReference.address,
+            serverId: homeIdentityId ?? acknowledgedReference.address.serverId } };
+        const sourceReference = { sourceAddress: reference.address, sourceItemId: reference.itemId, sourceItemRevision: reference.itemRevision };
+        const sourceReferenceKey = getSessionTranscriptSurfaceItemReferenceSourceKeyV1(sourceReference);
         const origin = { originServerId: reference.address.serverId, originSessionId: reference.address.sessionId, originItemId: reference.itemId };
         const key = JSON.stringify(origin);
         let settled = copiedByOrigin.get(key);
-        if (!settled) {
+        if (!settled || settled.entry.status === 'not_copied') {
+            const existingCopyIndex = settled ? copies.indexOf(settled.entry) : -1;
             const itemId = createStableSpawnNonce('session.fork.visual', { childSessionId: params.childSessionId, ...origin });
             let entry: SessionForkVisualCopyV1 = { ...origin, status: 'not_copied' };
             let revision: string | null = null;
@@ -135,11 +156,11 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
                 // An inherited raw acknowledgement still names its original Session. The
                 // source fork's settled map points to its independent local Item copy.
                 const inherited = record(segment.metadata?.forkV1)?.visualCopies;
-                const sourceCopy = Array.isArray(inherited) ? inherited.map(value => SessionForkVisualCopyV1Schema.safeParse(value))
-                    .find(value => value.success && value.data.originServerId === origin.originServerId
+                const sourceCopy = Array.isArray(inherited) ? inherited.map(value => createStoredReadSchema(SessionForkVisualCopyV1Schema).safeParse(value))
+                    .find(value => value.success && areServerProfileIdentifiersEquivalent(value.data.originServerId, origin.originServerId, resolveServerScopeId)
                         && value.data.originSessionId === origin.originSessionId && value.data.originItemId === origin.originItemId) : undefined;
                 const sourceItemId = sourceCopy?.success && sourceCopy.data.status === 'copied' ? sourceCopy.data.itemId
-                    : reference.address.sessionId === segment.sessionId && reference.address.serverId === configuration.activeServerId ? reference.itemId : null;
+                    : reference.address.sessionId === segment.sessionId ? reference.itemId : null;
                 const address = { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: itemId } as const;
                 const existing = await readSessionSystemRecordV1({ token: params.credentials.token, sessionId: params.childSessionId, address });
                 if (existing) {
@@ -167,30 +188,44 @@ export async function seedForkVisualCopies(params: SeedParams): Promise<readonly
             }
             settled = { entry, revision };
             copiedByOrigin.set(key, settled);
-            copies.push(entry);
+            if (existingCopyIndex >= 0) copies[existingCopyIndex] = entry;
+            else copies.push(entry);
         }
         for (const row of rows) {
-            const original = SessionForkVisualOriginV1Schema.safeParse(record(row.raw.meta)?.forkVisualOriginV1);
-            const forkVisualOriginV1 = original.success ? original.data : { v: 1 as const, ...originAddress, sourceMessageId: row.id, sourceSeq: row.seq };
+            const original = createStoredReadSchema(SessionForkVisualOriginV1Schema).safeParse(record(row.raw.meta)?.forkVisualOriginV1);
+            // Preserve source-message provenance while carrying the recognized
+            // Home identity, so another device need not know this CLI's profile label.
+            const forkVisualOriginV1 = original.success ? { ...original.data, ...reference.address }
+                : { v: 1 as const, ...reference.address, sourceMessageId: row.id, sourceSeq: row.seq };
             const id = createStableSpawnNonce('session.fork.visual-row', { childSessionId: params.childSessionId,
                 serverId: forkVisualOriginV1.serverId, sessionId: forkVisualOriginV1.sessionId, sourceMessageId: forkVisualOriginV1.sourceMessageId });
             // The closest source copy wins, while the one historical writer retains
             // the admitted root-to-child transcript order for child-only readers.
-            if (importRows.has(id)) continue;
-            const lineageIndex = (forkVisualOriginV1.serverId === configuration.activeServerId
+            const existingRow = importRows.get(id);
+            if (existingRow) {
+                existingRow.referencesBySource.set(sourceReferenceKey, { originKey: key, reference: sourceReference });
+                continue;
+            }
+            const lineageIndex = (areServerProfileIdentifiersEquivalent(forkVisualOriginV1.serverId, activeServerId, resolveServerScopeId)
                 ? lineageIndexBySessionId.get(forkVisualOriginV1.sessionId) : undefined)
                 ?? lineageIndexBySessionId.get(segment.sessionId)!;
-            importRows.set(id, { lineageIndex, sourceSeq: forkVisualOriginV1.sourceSeq, item: { id, content: sealSessionStoredContent({ ...childCrypto, idempotencyKey: id,
+            importRows.set(id, { lineageIndex, sourceSeq: forkVisualOriginV1.sourceSeq,
+                referencesBySource: new Map([[sourceReferenceKey, { originKey: key, reference: sourceReference }]]),
+                item: { id, content: sealSessionStoredContent({ ...childCrypto, idempotencyKey: id,
                 payload: StrictJsonValueSchema.parse({ ...row.raw, meta: { ...record(row.raw.meta), forkVisualOriginV1 } }) }),
-                ...(settled.entry.status === 'copied' && settled.revision ? { surfaceItemReference: {
-                    v: 1 as const, itemId: settled.entry.itemId, itemRevision: settled.revision, sourceAddress: reference.address,
-                } } : {}),
             } });
         }
     }
     try {
         // Historical imports already own local-id deduplication and never dispatch a turn.
-        const items = [...importRows.values()].sort((a, b) => b.lineageIndex - a.lineageIndex || a.sourceSeq - b.sourceSeq).map(row => row.item);
+        const items = [...importRows.values()].sort((a, b) => b.lineageIndex - a.lineageIndex || a.sourceSeq - b.sourceSeq).map(row => {
+            const references: SessionTranscriptSurfaceItemReferenceMemberV1[] = [...row.referencesBySource.values()].flatMap(({ originKey, reference }) => {
+                const settled = copiedByOrigin.get(originKey)!;
+                return settled.entry.status === 'copied' && settled.revision ? [{ v: 1 as const,
+                    itemId: settled.entry.itemId, itemRevision: settled.revision, ...reference }] : [];
+            });
+            return { ...row.item, ...(references.length > 0 ? { surfaceItemReference: { v: 1 as const, references } } : {}) };
+        });
         await importHistoricalSessionTranscript({ token: params.credentials.token, sessionId: params.childSessionId, items });
     } catch (error) {
         logger.debug('[fork] Visual transcript seed unavailable', { childSessionId: params.childSessionId, error });

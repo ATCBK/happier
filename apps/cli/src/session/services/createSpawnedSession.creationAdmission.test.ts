@@ -12,11 +12,13 @@ import {
   createActionExecutor,
   SessionSpawnNewInputV2Schema,
   accountSettingsParse,
+  FeaturesResponseSchema,
 } from '@happier-dev/protocol';
 import { getWorkflowStarterExamplesV1 } from '@happier-dev/protocol/workflows/builtins/examples';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { configuration } from '@/configuration';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { createSpawnedSession } from './createSpawnedSession';
 import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { buildSessionSpawnInitialInputAdmissionForLocalIdV1 } from './sessionInputAdmissionIdentity';
@@ -46,7 +48,7 @@ vi.mock('@/api/session/sockets', async (importOriginal) => ({
     return { socket, transport: createSocketTransportAdapter(socket) };
   },
 }));
-afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); });
 
 const sessionCreationTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'user', creationKey: 'admission-test' });
 const sessionCreationCorrespondence = SessionCreationCorrespondenceV1Schema.parse({
@@ -57,7 +59,7 @@ const sessionCreationCorrespondence = SessionCreationCorrespondenceV1Schema.pars
     organization: { folderId: null, tagIds: [] },
     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
     modelSelection: null, profileId: null, requestedPermissionMode: null, agentModeId: null,
-    configuration: null, connectedServices: null, mcpSelection: null, transcriptStorage: null,
+    configuration: null, connectedServices: null, capabilitySelection: null, transcriptStorage: null,
     terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
   },
 });
@@ -113,6 +115,53 @@ describe('canonical Session creation admission', () => {
       sessionId: 'session-created', disposition: 'created',
     });
     expect(spawn.mock.calls[0]![0]).toMatchObject({ initialTriggers });
+  });
+
+  it('commits attested facts privately before dispatch and never puts them in raw spawn RPC', async () => {
+    const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    resetServerFeaturesClientForTests();
+    // Features use fetch; Session creation uses axios. Both HTTP boundaries
+    // describe the same current plain-capable Home, with real policy parsing.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } })),
+    { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    vi.mocked(axios.get).mockImplementation(async (url) => {
+      if (String(url).includes('/v1/access-keys/')) return { status: 200, data: { accessKey: 'existing' } };
+      throw new Error(`Unexpected HTTP read ${url}`);
+    });
+    let committed = false;
+    let createdRow: Record<string, unknown> | null = null;
+    vi.mocked(axios.post).mockImplementation(async (url, raw) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: createdRow ? [createdRow] : [] } };
+      if (String(url).endsWith('/v1/sessions')) {
+        const input = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields>;
+        expect(input.ownerMetadata).toMatchObject({ t: 'plain', v: { system: { attestedContext } } });
+        expect(input.sharedMetadata.ciphertext).not.toContain('sales@batiplus.ch');
+        committed = true;
+        createdRow = { id: 'session-created', seq: 0, createdAt: 1, updatedAt: 1,
+          active: false, activeAt: 1, metadataVersion: 1, metadataLayoutVersion: 1,
+          metadata: input.sharedMetadata.ciphertext, ownerMetadata: input.ownerMetadata, encryptionMode: 'plain',
+          agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
+        return { status: 200, data: { session: createdRow, created: true } };
+      }
+      throw new Error(`Unexpected HTTP write ${url}`);
+    });
+    spawn.mockImplementation(async (request) => {
+      expect(committed).toBe(true);
+      expect(request).not.toHaveProperty('attestedContext');
+      expect(request).toMatchObject({ existingSessionId: 'session-created' });
+      return { type: 'success', sessionId: 'session-created' };
+    });
+    await expect(createSpawnedSession({ ...params, accountSettings: {}, attestedContext })).resolves.toMatchObject({
+      sessionId: 'session-created', disposition: 'created', attestedContext,
+    });
+    // A new message can recreate a deleted thread binding with the same birth
+    // key. It must recover the original assertion rather than change it.
+    await expect(createSpawnedSession({ ...params, accountSettings: {}, attestedContext: {
+      externalPrincipalId: 'other@batiplus.ch', sourceMessageId: '<followup@example.test>',
+    } })).resolves.toMatchObject({ sessionId: 'session-created', disposition: 'rejoined', attestedContext });
   });
 
   it.each([

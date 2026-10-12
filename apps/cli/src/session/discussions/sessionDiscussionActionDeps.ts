@@ -5,7 +5,7 @@ import { bindSessionDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/
 import { buildSessionDiscussionMutationRequestBodyV1, SessionDiscussionCreateResponseV1Schema, SessionDiscussionDetailsResponseV1Schema, SessionDiscussionErrorResponseV1Schema, SessionDiscussionListResponseV1Schema, SessionDiscussionMessagesResponseV1Schema, SessionDiscussionAgentPostRequestV1Schema, SessionDiscussionAgentPostResponseV1Schema, SessionDiscussionPostResponseV1Schema, SessionDiscussionReadResponseV1Schema } from '@happier-dev/protocol/sessions/discussions/api';
 import { SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1, SessionDiscussionCreateInputV1Schema, SessionDiscussionCreateResultV1Schema, SessionDiscussionDetailsResultV1Schema, SessionDiscussionListResultV1Schema, SessionDiscussionOpenedMessageV1Schema, SessionDiscussionOpenedSummaryV1Schema, SessionDiscussionPostInputV1Schema, SessionDiscussionPostResultV1Schema, SessionDiscussionReadInputV1Schema, SessionDiscussionReadResultV1Schema, SessionDiscussionReadStateResultV1Schema, SessionDiscussionRenameInputV1Schema } from '@happier-dev/protocol/sessions/discussions/actions';
 import { SessionDiscussionMessageV1Schema, SessionDiscussionSummaryV1Schema } from '@happier-dev/protocol/sessions/discussions/models';
-import { SessionDiscussionMessageContentV1Schema, SessionDiscussionTitleV1Schema } from '@happier-dev/protocol/sessions/discussions/content';
+import { SessionDiscussionMessageContentV1StoredSchema, SessionDiscussionTitleV1Schema, SessionDiscussionTitleV1StoredSchema } from '@happier-dev/protocol/sessions/discussions/content';
 import { serializeSessionDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/sessions/discussions/equality';
 import { SESSION_DISCUSSION_MUTATION_EQUALITY_HKDF_LABEL_V1, deriveSessionMutationEqualityTagV1 } from '@happier-dev/protocol/sessions/mutations/sessionMutationEqualityV1';
 import type { ActionExecutorDeps, SessionDiscussionActionIdV1, SessionDiscussionAgentPostRequestV1, SessionDiscussionAgentPostResponseV1, SessionDiscussionMessageContentV1, StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol';
@@ -108,7 +108,7 @@ function openTitle(
   crypto: SessionStoredContentCryptoContext,
   value: StrictSessionStoredMessageContentEnvelope,
 ): string | null {
-  const parsed = SessionDiscussionTitleV1Schema.safeParse(openDiscussionPayload(crypto, value));
+  const parsed = SessionDiscussionTitleV1StoredSchema.safeParse(openDiscussionPayload(crypto, value));
   return parsed.success ? parsed.data.title : null;
 }
 
@@ -116,7 +116,7 @@ function openContent(
   crypto: SessionStoredContentCryptoContext,
   value: StrictSessionStoredMessageContentEnvelope,
 ): SessionDiscussionMessageContentV1 | null {
-  const parsed = SessionDiscussionMessageContentV1Schema.safeParse(openDiscussionPayload(crypto, value));
+  const parsed = SessionDiscussionMessageContentV1StoredSchema.safeParse(openDiscussionPayload(crypto, value));
   return parsed.success ? parsed.data : null;
 }
 

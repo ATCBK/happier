@@ -35,6 +35,7 @@ export async function runRequesterSessionLifecycle<T>(params: Readonly<{
         if (!await isCurrent()) return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
             errorMessage: 'Requester Session authority is unavailable' };
         const prepared = await prepareRequesterSessionBootstrap({ credentials: requester.credentials,
+            machineAdmission: params.context?.machineAdmission ?? requester.savedSecretOperationContext.machineAdmission,
             attribution: requester.attribution, boundary: { serverId: requester.attribution.serverId,
                 serverHttpBaseUrl: requester.serverHttpBaseUrl, happyHomeDir: configuration.happyHomeDir },
             verifyMachineAdmissionCurrent: isCurrent, ...(params.context?.signal ? { signal: params.context.signal } : {}) });

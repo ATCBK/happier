@@ -5,6 +5,7 @@ import { BackendTargetKeySchema, BackendTargetRefSchema, buildBackendTargetKey }
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readCapabilitySelectionCarrierV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionPermissionModeSchema } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SpawnConfigOptionValueSchema, findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
@@ -267,10 +268,11 @@ export function createRemoteDevSessionSpawnApprovalReplayNormalizer(params: Read
         }
       : input.terminal;
 
+    const capabilitySelection = readCapabilitySelectionCarrierV1(input);
     const candidate = {
       creationKey: `approval-artifact:${artifactId}`,
       executionTarget: { serverId, machineId },
-      directory,
+      directory: { kind: 'path', path: directory },
       agentTarget: { kind: 'agent' as const, identity: agent.identity },
       ...(input.modelId && input.modelId !== 'default'
         ? {
@@ -290,7 +292,7 @@ export function createRemoteDevSessionSpawnApprovalReplayNormalizer(params: Read
       ...(input.agentModeId ? { agentModeId: input.agentModeId } : {}),
       ...(configuration ? { configuration } : {}),
       ...(input.connectedServices ? { connectedServices: input.connectedServices } : {}),
-      ...(input.mcpSelection ? { mcpSelection: input.mcpSelection } : {}),
+      ...(capabilitySelection ? { capabilitySelection } : {}),
       ...(input.transcriptStorage ? { transcriptStorage: input.transcriptStorage } : {}),
       ...(terminal ? { terminal } : {}),
       ...(input.profileId ? { profileId: input.profileId } : {}),

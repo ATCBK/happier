@@ -3,6 +3,28 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHostSubagentStore } from './hostSubagentStore';
 
 describe('host subagent projection store', () => {
+    it('keeps observation failure outside subagent write custody', async () => {
+        const store = createHostSubagentStore();
+        store.subscribeLiveWork('parent', () => { throw new Error('observer failed'); });
+        await expect(store.upsert({ actor: { kind: 'host' }, input: { id: 'child', parentSessionId: 'parent', origin: 'agent', kind: 'native' } }))
+            .resolves.toMatchObject({ status: 'pending' });
+        expect(store.readLiveWork('parent')).toEqual({ state: 'active', activeCount: 1 });
+    });
+    it('observes all live subagents without the presentation list limit and releases the subscription', async () => {
+        const store = createHostSubagentStore({ maxListResults: 1 });
+        const states: unknown[] = [];
+        const unsubscribe = store.subscribeLiveWork('session-1', () => states.push(store.readLiveWork('session-1')));
+        await store.upsert({ actor: { kind: 'host' }, input: { id: 'finished', parentSessionId: 'session-1', origin: 'agent', kind: 'native' } });
+        await store.complete({ actor: { kind: 'host' }, id: 'finished', parentSessionId: 'session-1' });
+        await store.upsert({ actor: { kind: 'host' }, input: { id: 'running', parentSessionId: 'session-1', origin: 'agent', kind: 'native', status: 'running' } });
+        expect(store.readLiveWork('session-1')).toEqual({ state: 'active', activeCount: 1 });
+        await store.complete({ actor: { kind: 'host' }, id: 'running', parentSessionId: 'session-1' });
+        expect(store.readLiveWork('session-1')).toEqual({ state: 'settled', activeCount: 0 });
+        unsubscribe();
+        const length = states.length;
+        await store.upsert({ actor: { kind: 'host' }, input: { id: 'next', parentSessionId: 'session-1', origin: 'agent', kind: 'native' } });
+        expect(states).toHaveLength(length);
+    });
     afterEach(() => {
         vi.useRealTimers();
     });

@@ -786,7 +786,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const agentId = normalizedAgentId;
       const operationContext = params.savedSecretOperationContext;
       const credentials = operationContext?.credentials ?? params.credentials;
-      if (!credentials) throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+      if (!credentials) throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
       const authorize = params.authorizeConnectedAccountRequest;
       const authorizeRequest = authorize ? (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
         authorize(context, request) : undefined;
@@ -795,7 +795,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const assertCurrent = async () => {
         store.assertCurrent();
         if (operationContext && !await operationContext.isCurrent()) {
-          throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+          throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
         }
         store.assertCurrent();
       };
@@ -805,7 +805,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       }));
       await assertCurrent();
       if (purposeCatalog.status !== 'ready' || purposeCatalog.record.key !== 'purposes') {
-        throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+        throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
       }
       const accountProfile = params.accountProfile !== undefined ? params.accountProfile
         : await runWithServerHttpBaseUrl(store.serverHttpBaseUrl, () => fetchAccountProfile({ token: credentials.token,

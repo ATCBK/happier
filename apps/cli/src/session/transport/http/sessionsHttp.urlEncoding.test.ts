@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import axios from 'axios';
+import fastify from 'fastify';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { SessionHistoricalTranscriptImportV3Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 
 describe('sessionControl.sessionsHttp URL encoding', () => {
   const envKeys = ['HAPPIER_SERVER_URL'] as const;
@@ -182,11 +185,62 @@ describe('sessionControl.sessionsHttp URL encoding', () => {
       items: [{ id: 'row', content, surfaceItemReference }] })).resolves.toEqual({ imported: 1, cursor: '8' });
     expect(postSpy.mock.calls.map(([url, body]) => ({ url, body }))).toEqual([
       { url: 'http://server.example.test/v3/sessions/child-session/transcript/import',
-        body: { items: [{ localId: 'row', content, surfaceItemReference }] } },
+        body: { items: [{ localId: 'row', content, surfaceItemReference: { v: 1, references: [surfaceItemReference] } }] } },
       { url: 'http://server.example.test/v2/sessions/child-session/transcript/import',
         body: { items: [{ localId: 'row', content }] } },
     ]);
   });
+
+  it.each(['current', 'older', 'later-failure', 'retry'] as const)(
+    'preserves ordered transcript.import rows through the real HTTP batch boundary on a %s Home', async (mode) => {
+      process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+      const { importHistoricalSessionTranscript } = await import('./sessionsHttp');
+      const app = fastify();
+      const accepted: Array<ReturnType<typeof SessionHistoricalTranscriptImportV3Schema.parse>['items'][number]> = [];
+      const requestPaths: string[] = [];
+      app.addHook('onRequest', async (request) => { requestPaths.push(request.url); });
+      for (const epoch of mode === 'older' ? [2] : [2, 3]) {
+        app.post(`/v${epoch}/sessions/child/transcript/import`, async (request, reply) => {
+          const body = SessionHistoricalTranscriptImportV3Schema.safeParse(request.body);
+          if (!body.success) return reply.code(400).send({ error: 'Invalid parameters' });
+          if (mode === 'later-failure' && accepted.length > 0) {
+            return reply.code(500).send({ error: 'Failed to import transcript' });
+          }
+          accepted.push(...body.data.items);
+          // The canonical stable-localId retry returns the original row sequence, not a new one.
+          return { imported: body.data.items.length, cursor: mode === 'retry' && accepted.length > 500 ? 1 : accepted.length };
+        });
+      }
+      const restoreAdapter = installAxiosFastifyAdapter({ app, origin: 'http://server.example.test' });
+      const surfaceItemReference = { v: 1 as const, references: ['first', 'second'].map(sourceItemId => ({
+        v: 1 as const, itemId: `child-${sourceItemId}`, itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+        sourceAddress: { serverId: 'origin-home', sessionId: 'parent' }, sourceItemId,
+        sourceItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' })) };
+      const items = Array.from({ length: 501 }, (_, index) => {
+        const sourceIndex = mode === 'retry' && index === 500 ? 0 : index;
+        return { id: `native-row-${sourceIndex}`,
+          content: { t: 'encrypted' as const, c: `child-sealed-raw-row-${sourceIndex}` }, surfaceItemReference };
+      });
+      try {
+        const result = importHistoricalSessionTranscript({ token: 't', sessionId: 'child', items });
+        if (mode === 'later-failure') {
+          await expect(result).rejects.toThrow('Unexpected status from /v3/sessions/child/transcript/import: 500');
+        } else {
+          await expect(result).resolves.toEqual({ imported: 501, cursor: mode === 'retry' ? '500' : '501' });
+        }
+        expect(accepted).toEqual(items.slice(0, mode === 'later-failure' ? 500 : undefined).map(({ id, ...item }) => ({
+          localId: id, content: item.content,
+          ...(mode === 'older' ? {} : { surfaceItemReference: item.surfaceItemReference }),
+        })));
+        expect(requestPaths).toEqual(mode === 'older'
+          ? ['/v3/sessions/child/transcript/import', '/v2/sessions/child/transcript/import', '/v2/sessions/child/transcript/import']
+          : ['/v3/sessions/child/transcript/import', '/v3/sessions/child/transcript/import']);
+      } finally {
+        restoreAdapter();
+        await app.close();
+      }
+    },
+  );
 
   it('keeps an empty transcript.import as a local no-op', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';

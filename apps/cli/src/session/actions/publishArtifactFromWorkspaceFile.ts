@@ -5,6 +5,7 @@ import { prepareArtifactWorkspaceFileV1 } from '@happier-dev/protocol/artifacts/
 import { ArtifactHtmlBundleV1Schema, type ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { resolveHostedWebAssetContentTypeV1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetMime';
 import type { ArtifactSavedByV1 } from '@happier-dev/protocol';
+import type { UiSurfaceCapabilityRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 import { configuration } from '@/configuration';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createTransferSessionLifecycle } from '@happier-dev/transfers/node';
@@ -60,6 +61,7 @@ export async function readArtifactWorkspaceFile(params: Readonly<{
   mime?: string;
   kind?: string;
   title?: string;
+  requestedCapabilities?: UiSurfaceCapabilityRequestV1;
   signal?: AbortSignal;
 }>) {
   params.signal?.throwIfAborted();
@@ -162,7 +164,8 @@ export async function readArtifactWorkspaceFile(params: Readonly<{
 export async function publishArtifactFromWorkspaceFile(params: Readonly<{
   store: ReturnType<typeof createAccountArtifactStore>;
   caller: ArtifactWorkspaceCaller;
-  input: Readonly<{ path: string; entrypoint?: string; title?: string; mime?: string; kind?: string }>;
+  input: Readonly<{ path: string; entrypoint?: string; title?: string; mime?: string; kind?: string;
+    requestedCapabilities?: UiSurfaceCapabilityRequestV1 }>;
   savedBy?: ArtifactSavedByV1;
   signal?: AbortSignal;
 }>) {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { openSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
 
 import { createSessionSystemRecordPayloadService } from './sessionSystemRecordPayloadService';
 
@@ -48,6 +49,19 @@ function createE2eeSession(
 }
 
 describe('sessionSystemRecordPayloadService', () => {
+  it('keeps the guard stop receipt encrypted under the fixed Session storage mode', async () => {
+    const context = { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'dataKey' as const };
+    const writes: Parameters<NonNullable<SessionClientPort['upsertSessionSystemRecord']>>[0][] = [];
+    const payload = { v: 1, at: 300_000, rule: 'memory_guard', idleMs: 7_200_000 } as const;
+    const service = createSessionSystemRecordPayloadService(createE2eeSession({
+      getStoredContentEncryptionContext: () => ({ mode: 'e2ee', ctx: context }),
+      upsertSessionSystemRecord: async record => { writes.push(record); },
+    }));
+    await service.write({ namespace: 'activity', kind: 'session_stop.v1', localId: 'activity:session_stop:v1:300000', payload });
+    expect(writes[0]?.content.t).toBe('encrypted');
+    expect(openSessionStoredContent({ mode: 'e2ee', ctx: context, content: writes[0]?.content })).toEqual(payload);
+  });
+
   it('fails closed when an E2EE Session receives a plaintext system-record envelope', async () => {
     const fetchSessionSystemRecord = vi.fn(async () => ({
       id: 'record-1',
@@ -89,7 +103,7 @@ describe('sessionSystemRecordPayloadService', () => {
         localId: 'memory:synopsis:v1:1',
         content: {
           t: 'encrypted' as const,
-          c: encryptSessionPayload({ ctx: context, payload }),
+          c: encryptSessionPayload({ ctx: context, payload: { ...payload, retiredField: true } }),
         },
         createdAt: '2026-08-12T00:00:00.000Z',
         updatedAt: '2026-08-12T00:00:00.000Z',

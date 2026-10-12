@@ -1,11 +1,10 @@
-import { BUILT_IN_ROLE_IDS_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
-import { resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import type { RoleSourceInventoryV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
-import { readSessionMcpSelectionV1FromMetadata } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import type { AccountSettings, AgentStartContextV1, BackendTargetRefV2, ResolvedRolesSnapshotV1 } from '@happier-dev/protocol';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import {
@@ -72,17 +71,11 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
   const roles: Record<string, ResolvedRolesSnapshotV1[string]> = { ...input.roles };
   if (!input.roles) {
     if (input.roleSourceInventory?.status !== 'ready' || input.accountRoleOverrides?.status !== 'ready') return null;
-    const settingsOverrides = input.accountRoleOverrides.overrides;
-    for (const roleId of new Set([...BUILT_IN_ROLE_IDS_V1, ...input.roleSourceInventory.entries.map(entry => entry.roleId), ...Object.keys(sessionRoles?.sessionRoles ?? {}), ...Object.keys(settingsOverrides)])) {
-      const resolved = resolveRoleSelectionV1({ roleId, sessionRoles,
-        roleSourceInventory: input.roleSourceInventory,
-        settingsOverrides,
-        defaultEngine: { agentTargetKey, ...(selectedModelId ? { modelId: selectedModelId } : {}) },
-        availableAgentTargetKeys: input.availableAgentTargetKeys,
-      });
-      if (resolved.ok) roles[roleId] = resolved.selection;
-      else delete roles[roleId];
-    }
+    Object.assign(roles, resolveRolesSnapshotV1({ sessionRoles, roleSourceInventory: input.roleSourceInventory,
+      settingsOverrides: input.accountRoleOverrides.overrides,
+      defaultEngine: { agentTargetKey, ...(selectedModelId ? { modelId: selectedModelId } : {}) },
+      availableAgentTargetKeys: input.availableAgentTargetKeys,
+    }));
   }
   return {
     caller: workflowRun
@@ -95,7 +88,7 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
       ...(typeof metadata.profileId === 'string' ? { profileId: metadata.profileId } : {}),
       connectedServices: input.appliedChildSelection !== undefined ? applied?.teamCredentialModel ? undefined : applied?.connectedServices
         : connectedServices.success ? connectedServices.data : undefined,
-      mcpSelection: readSessionMcpSelectionV1FromMetadata(metadata) ?? undefined,
+      capabilitySelection: readSessionCapabilitySelectionFromMetadataV1(metadata),
       ...(metadata.transcriptStorage === 'direct' || metadata.transcriptStorage === 'persisted' ? { transcriptStorage: metadata.transcriptStorage } : {}),
     } } : {}) },
     ledSubtreeSessionIds: [], roles, callerPermissionCeiling: ceiling,

@@ -1,5 +1,5 @@
 import { LegacyHostSessionSystemRecordLookupQuerySchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
-import { getSessionSystemRecordPayloadSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog';
+import { getSessionSystemRecordPayloadSchema, getSessionSystemRecordStoredPayloadSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog';
 import type { LegacyHostSessionSystemRecord, SessionSystemRecordKind, SessionSystemRecordContent } from '@happier-dev/protocol';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 
@@ -40,8 +40,12 @@ type StoredContentContext = Readonly<{
   ctx?: SessionEncryptionContext;
 }>;
 
-function parseRegisteredPayload(namespace: string, kind: string, payload: unknown): JsonValue {
-  const payloadSchema = getSessionSystemRecordPayloadSchema(namespace, kind);
+type SessionSystemRecordPayloadPort = Pick<SessionClientPort,
+  'sessionId' | 'getStoredContentEncryptionContext' | 'upsertSessionSystemRecord' | 'fetchSessionSystemRecord'>;
+
+function parseRegisteredPayload(namespace: string, kind: string, payload: unknown, stored = false): JsonValue {
+  const payloadSchema = stored ? getSessionSystemRecordStoredPayloadSchema(namespace, kind)
+    : getSessionSystemRecordPayloadSchema(namespace, kind);
   if (!payloadSchema) {
     throw new Error(`Invalid session system record namespace/kind: ${namespace}/${kind}`);
   }
@@ -52,13 +56,13 @@ function parseRegisteredPayload(namespace: string, kind: string, payload: unknow
   return parsed.data as JsonValue;
 }
 
-function requireBoundSession(session: SessionClientPort): void {
+function requireBoundSession(session: SessionSystemRecordPayloadPort): void {
   if (session.sessionId.trim().length === 0) {
     throw new Error('Session system records require a bound session id');
   }
 }
 
-function requireStoredContentContext(session: SessionClientPort): StoredContentContext {
+function requireStoredContentContext(session: SessionSystemRecordPayloadPort): StoredContentContext {
   const context = session.getStoredContentEncryptionContext?.();
   if (!context) {
     throw new Error('Session system records require a session storage encryption context');
@@ -98,7 +102,7 @@ function openPayload(context: StoredContentContext, content: unknown): unknown {
 }
 
 export function createSessionSystemRecordPayloadService(
-  session: SessionClientPort,
+  session: SessionSystemRecordPayloadPort,
 ): SessionSystemRecordsService {
   return Object.freeze({
     async write(request) {
@@ -137,6 +141,7 @@ export function createSessionSystemRecordPayloadService(
         record.namespace,
         record.kind,
         openPayload(context, record.content),
+        true,
       );
       return Object.freeze({
         namespace: record.namespace,

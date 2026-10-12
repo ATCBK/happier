@@ -13,12 +13,14 @@ import {
  */
 export function finalizeSessionChildEnvironment(params: Readonly<{
   environment: NodeJS.ProcessEnv;
+  explicitEnvironment?: Readonly<NodeJS.ProcessEnv>;
   canonicalSessionControlEnvironment?: Readonly<Record<string, string | undefined>>;
   enableCgroupSelfMigration: boolean;
   stackProcessKind: 'session' | null;
 }>): NodeJS.ProcessEnv {
   const env = stripNestedSessionDetectionEnv(
     stripDaemonServiceInstallRequestEnv(stripSessionControlEnvOverrides(params.environment)),
+    params.explicitEnvironment,
   );
   for (const [key, value] of Object.entries(params.canonicalSessionControlEnvironment ?? {})) {
     if (!isCanonicalSessionControlEnvKey(key) || isFinalChildTypedOrForcedControlEnvKey(key)) {

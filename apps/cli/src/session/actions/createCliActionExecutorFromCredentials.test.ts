@@ -128,12 +128,12 @@ describe('createCliActionExecutorFromCredentials', () => {
       serverApiUrl: '   ',
     })).toThrow('fixed_action_server_target_incomplete');
 
-    createCliActionExecutorFromCredentials({
+    await createCliActionExecutorFromCredentials({
       credentials,
       serverId: 'home-b',
       serverApiUrl: 'https://home-b.example.test/',
       resolveServerFeaturesSnapshot,
-    });
+    }).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
 
     expect(createAccountServerActionDeps).toHaveBeenLastCalledWith({
       token: 'token_test',
@@ -159,7 +159,8 @@ describe('createCliActionExecutorFromCredentials', () => {
       token: 'token_test',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
     };
-    createCliActionExecutorFromCredentials({ credentials, serverId: 'home-b', serverApiUrl: 'https://home-b.example.test' });
+    await createCliActionExecutorFromCredentials({ credentials, serverId: 'home-b', serverApiUrl: 'https://home-b.example.test' })
+      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
     expect(createSessionFollowSourceKeyPreparationAfterSet).toHaveBeenCalledWith({
       credentials,
       serverHttpBaseUrl: 'https://home-b.example.test',
@@ -377,11 +378,11 @@ describe('createCliActionExecutorFromCredentials', () => {
     });
 
     try {
-      createCliActionExecutorFromCredentials({
+      await createCliActionExecutorFromCredentials({
         credentials,
         serverId: 'home-b',
         serverApiUrl: 'https://home-b.example.test',
-      });
+      }).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
       const options = createCliActionExecutor.mock.calls.at(-1)?.[0];
       if (!options?.resolveTranscriptStore) throw new Error('Expected transcript store resolver');
 
@@ -433,10 +434,10 @@ describe('createCliActionExecutorFromCredentials', () => {
     };
     const readRegisteredPromptAssetAdapters = vi.fn(() => new Map());
 
-    createCliActionExecutorFromCredentials({
+    await createCliActionExecutorFromCredentials({
       credentials,
       readRegisteredPromptAssetAdapters,
-    });
+    }).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
 
     expect(createCliActionExecutor).toHaveBeenLastCalledWith(expect.objectContaining({
       readRegisteredPromptAssetAdapters,
@@ -451,11 +452,11 @@ describe('createCliActionExecutorFromCredentials', () => {
     const revalidatePluginActionCallerMaterialization = vi.fn(async () => true);
     const revalidatePluginActionCallerOccurrence = vi.fn(async () => true);
 
-    createCliActionExecutorFromCredentials({
+    await createCliActionExecutorFromCredentials({
       credentials,
       revalidatePluginActionCallerMaterialization,
       revalidatePluginActionCallerOccurrence,
-    });
+    }).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
 
     expect(createCliActionExecutor).toHaveBeenLastCalledWith(expect.objectContaining({
       revalidatePluginActionCallerMaterialization,
@@ -472,12 +473,14 @@ describe('createCliActionExecutorFromCredentials', () => {
       NonNullable<ActionExecutorDeps['targetActionApprovalReplay']>
     >();
 
-    createCliActionExecutorFromCredentials({ credentials });
+    await createCliActionExecutorFromCredentials({ credentials })
+      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
     expect(createCliActionExecutor).toHaveBeenLastCalledWith(
       expect.not.objectContaining({ targetActionApprovalReplay: expect.any(Function) }),
     );
 
-    createCliActionExecutorFromCredentials({ credentials, targetActionApprovalReplay });
+    await createCliActionExecutorFromCredentials({ credentials, targetActionApprovalReplay })
+      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
     expect(createCliActionExecutor).toHaveBeenLastCalledWith(expect.objectContaining({
       targetActionApprovalReplay,
     }));
@@ -496,7 +499,7 @@ describe('createCliActionExecutorFromCredentials', () => {
       start: vi.fn(),
     } as unknown as SessionSpawnDirectTargetTransport;
 
-    createCliActionExecutorFromCredentials({
+    await createCliActionExecutorFromCredentials({
       credentials,
       invokeContributedAction,
       hostExternalSessionAction,
@@ -505,7 +508,7 @@ describe('createCliActionExecutorFromCredentials', () => {
       invokeContributedAction: NonNullable<ActionExecutorDeps['invokeContributedAction']>;
       hostExternalSessionAction: NonNullable<ActionExecutorDeps['hostExternalSessionAction']>;
       sessionSpawnDirectTargetTransport: SessionSpawnDirectTargetTransport;
-    }>);
+    }>).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
 
     expect(createCliActionExecutor).toHaveBeenLastCalledWith(expect.objectContaining({
       invokeContributedAction,
@@ -525,7 +528,8 @@ describe('createCliActionExecutorFromCredentials', () => {
     ] as const;
     importHistoricalSessionTranscript.mockResolvedValueOnce({ imported: 2, cursor: '2' });
 
-    createCliActionExecutorFromCredentials({ credentials });
+    await createCliActionExecutorFromCredentials({ credentials })
+      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
     const options = createCliActionExecutor.mock.calls.at(-1)?.[0];
     if (!options?.writeTranscriptItems) {
       throw new Error('Expected the canonical CLI action executor to receive transcript persistence');
@@ -555,7 +559,8 @@ describe('createCliActionExecutorFromCredentials', () => {
       transcriptFollowLeaseRegistry,
     });
     const controller = new AbortController();
-    executor.bindInvocation(controller.signal);
+    await executor.execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
+    await executor.bindInvocation(controller.signal).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
 
     expect(createCliActionExecutor.mock.calls.slice(executorCreationsBefore)).toHaveLength(2);
     for (const [options] of createCliActionExecutor.mock.calls.slice(executorCreationsBefore)) {

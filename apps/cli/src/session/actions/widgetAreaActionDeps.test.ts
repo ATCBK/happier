@@ -43,19 +43,21 @@ it('edits the exact Source-free Project dashboard and refuses retired or foreign
     const core = { ...surface, owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } };
     const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps,
         widgetAccountScope: () => ({ serverId: 'home', accountId: 'actor' }) });
-    const coreRead = await executor.execute('widgets.area.layout.select', { surface: core }, { surface: 'cli' });
+    // Selection belongs to an answering mounted area; headless reads use the durable owner.
+    expect(await executor.execute('widgets.area.layout.select', { surface: core }, { surface: 'cli' }))
+        .toMatchObject({ ok: false, errorCode: 'widget_area_layout_owner_unavailable' });
+    const coreRead = await executor.execute('widgets.item.list', { surface: core }, { surface: 'cli' });
     expect(coreRead).toMatchObject({ ok: true, result: { state: 'missing', items: preset.items, preset: { isEdited: false } } });
     expect(rows.has(buildWidgetSurfaceArtifactIdV1(core))).toBe(false);
     await deps.widgetSurfaceActions!.corePage!.apply(core, { kind: 'rename', instanceId: 'preset', displayName: 'Mine' }, { surface: 'cli' });
     const expectedRevision = rows.get(buildWidgetSurfaceArtifactIdV1(core))!.revision;
-    expect(await executor.execute('widgets.area.layout.reset', { surface: core, expectedRevision }, { surface: 'cli' })).toMatchObject({ ok: false });
     const reset = await executor.execute('widgets.area.layout.reset', { surface: core, expectedRevision }, { surface: 'cli', authority: 'present_user',
         presentUserConfirmation: { actionId: 'widgets.area.layout.reset' } });
     expect(reset).toMatchObject({ ok: true, result: { layout: { items: preset.items }, undo: { surface: core } } });
     if (!reset.ok || !reset.result || typeof reset.result !== 'object' || !('undo' in reset.result)) throw new Error('Reset must return its acknowledged Undo capture');
     expect(await executor.execute('widgets.area.layout.undo', { capture: reset.result.undo }, { surface: 'cli', authority: 'present_user',
         presentUserConfirmation: { actionId: 'widgets.area.layout.undo' } })).toMatchObject({ ok: true });
-    expect(await executor.execute('widgets.area.layout.select', { surface: core }, { surface: 'cli' })).toMatchObject({ ok: true,
+    expect(await executor.execute('widgets.item.list', { surface: core }, { surface: 'cli' })).toMatchObject({ ok: true,
         result: { preset: { isEdited: true }, items: [{ instance: { id: 'preset', displayName: 'Mine' } }] } });
     const automated = { surface: 'cli' as const, bypassApprovals: true };
     expect(await executor.execute('widgets.area.layout.list', { surface: core }, automated)).toMatchObject({ ok: true,
@@ -63,7 +65,7 @@ it('edits the exact Source-free Project dashboard and refuses retired or foreign
     expect(await executor.execute('widgets.area.layout.create', { surface: core, layoutId: 'mine', name: 'Mine', fromSurface: core }, automated))
         .toMatchObject({ ok: true, result: { surface: { owner: { layoutId: 'mine' } }, isPreset: false } });
     const mine = { ...core, owner: { ...core.owner, layoutId: 'mine' } };
-    expect(await executor.execute('widgets.area.layout.select', { surface: mine }, automated)).toMatchObject({ ok: true,
+    expect(await executor.execute('widgets.item.list', { surface: mine }, automated)).toMatchObject({ ok: true,
         result: { items: [{ instance: { displayName: 'Mine' } }] } });
     current = false;
     expect(await port.read(surface, { surface: 'cli' })).toMatchObject({ ok: false, errorCode: 'widget_area_scope_retired' });

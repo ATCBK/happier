@@ -3,6 +3,34 @@ import { describe, expect, it } from 'vitest';
 import { finalizeSessionChildEnvironment } from './finalizeSessionChildEnvironment';
 
 describe('finalizeSessionChildEnvironment', () => {
+  it('preserves an explicit provider entrypoint while stripping inherited detection and session controls', () => {
+    const environment = {
+      CLAUDE_CODE_ENTRYPOINT: 'happier', CLAUDECODE: '1', HERDR_ENV: '1',
+      HAPPIER_SESSION_ATTACH_FILE: '/tmp/spoofed-attach',
+    };
+    const output = finalizeSessionChildEnvironment({
+      environment,
+      explicitEnvironment: environment,
+      enableCgroupSelfMigration: false,
+      stackProcessKind: null,
+    });
+    expect(output.CLAUDE_CODE_ENTRYPOINT).toBe('happier');
+    expect(output.CLAUDECODE).toBeUndefined();
+    expect(output.HERDR_ENV).toBeUndefined();
+    expect(output.HAPPIER_SESSION_ATTACH_FILE).toBeUndefined();
+    expect(environment.CLAUDECODE).toBe('1');
+    expect(finalizeSessionChildEnvironment({
+      environment,
+      enableCgroupSelfMigration: false,
+      stackProcessKind: null,
+    }).CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+  });
+
+  it('keeps host process ownership on agent and MCP children', () => {
+    const tag = 'v1.0123456789ab.session.session-1';
+    expect(finalizeSessionChildEnvironment({ environment: { HAPPIER_PROCESS_OWNER: tag },
+      enableCgroupSelfMigration: false, stackProcessKind: null }).HAPPIER_PROCESS_OWNER).toBe(tag);
+  });
   it('removes ambient session controls and restores only trusted canonical values', () => {
     const env = finalizeSessionChildEnvironment({
       environment: {

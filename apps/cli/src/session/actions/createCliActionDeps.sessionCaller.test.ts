@@ -161,7 +161,9 @@ describe('daemon Account Action Session caller context', () => {
       const current = await deps.roleActionExecute?.(request);
       if (actionId === 'roles.get') expect(current).toMatchObject({ roleId, role });
       else expect(current).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ roleId, role })]) });
-      expect(privateReads).toContain(`/v1/artifacts/${roleId}`);
+      // The canonical Role inventory opens the inline body from this listing.
+      // Retirement below must prevent even that body-carrying HTTP read.
+      expect(privateReads).toEqual(['/v1/artifacts']);
       privateReads.length = 0;
       clearActiveAccountSettingsSnapshot();
       publish(2);

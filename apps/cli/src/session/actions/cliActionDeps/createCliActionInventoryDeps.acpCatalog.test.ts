@@ -161,7 +161,7 @@ describe('ACP Action inventory row authority', () => {
         });
       ` });
       const initialRecord = { v: 1, definitions: [{ ...record.definitions[0],
-        command: process.execPath, args: [script],
+        launch: { kind: 'command', command: process.execPath, args: [script] },
       }] } satisfies AcpCatalogRecordV1;
       const { credentials, operationContext, requests, incumbent } = await createInventory('ready', { initialRecord });
       const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,

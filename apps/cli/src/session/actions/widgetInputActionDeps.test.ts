@@ -1,8 +1,58 @@
 import { describe, expect, it } from 'vitest';
 import { createCliWidgetInputActionDepsV1 } from './widgetInputActionDeps';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPortV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 
 describe('Widget Action input transport authority', () => {
+    it.each(['inline', 'artifact'] as const)('preserves native Session admission for a saved %s builtin', async kind => {
+        const native = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'changes' })!;
+        const definition: WidgetDefinitionV1 = { v: 1, id: 'native-definition', name: 'Saved changes',
+            body: { kind: 'builtin', id: 'changes' }, sizeDeclaration: native.sizeDeclaration,
+            inputs: native.inputs!, inputSchema: native.inputSchema!, sessionInputPath: native.sessionInputPath,
+            provenance: { source: { kind: 'authored' } } };
+        const artifacts = createWidgetDefinitionArtifactPortV1({
+            read: async artifactId => ({ artifactId, ownerAccountId: 'viewer', header: buildWidgetDefinitionArtifactHeaderV1(definition),
+                body: JSON.stringify(definition), revision: { headerVersion: 1, bodyVersion: 1 } }),
+            list: async () => ({ items: [] }),
+            create: async () => { throw new Error('Input resolution must not create an Artifact'); },
+            update: async () => { throw new Error('Input resolution must not update an Artifact'); },
+            delete: async () => { throw new Error('Input resolution must not delete an Artifact'); },
+        }, { accountId: 'viewer' });
+        let readable = true;
+        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'viewer',
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
+                widgetDefinitionArtifacts: artifacts }),
+            readCandidates: async () => [], validateSession: async () => readable,
+        });
+        const request = {
+            ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' } }, instanceId: 'saved-native' },
+            instance: { v: 1, id: 'saved-native', definition: kind === 'inline' ? { kind, definition }
+                : { kind, artifactId: definition.id }, bindings: { session: { kind: 'value', value: { serverId: 'home', sessionId: 'private-session' } } } },
+            context: { surface: 'cli', authority: 'present_user' },
+        } satisfies Parameters<NonNullable<typeof deps.widgetInputs>['resolve']>[0];
+        expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance,
+            bindings: { session: { kind: 'context', slot: 'session' } } }, groupBindings: request.instance.bindings }))
+            .toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'private-session' } } });
+        readable = false;
+        expect(await deps.widgetInputs!.resolve(request)).toMatchObject({ status: 'denied', fields: [{ path: 'session', reasonCode: 'widget_session_access_denied' }] });
+    });
+    it('resolves HTML copy inputs without treating its body as an installed plugin', async () => {
+        const definition: WidgetDefinitionV1 = { v: 1, id: 'html-copy', name: 'HTML copy',
+            sizeDeclaration: { sizes: ['small', 'medium', 'large'], defaultSize: 'medium' },
+            provenance: { source: { kind: 'authored' } },
+            body: { kind: 'html', source: { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGgxPkNvcHk8L2gxPg==' } } } },
+            inputs: { fields: [{ path: 'period', title: 'Period', widget: 'text', required: true }] },
+            inputSchema: { type: 'object', properties: { period: { type: 'string' } }, required: ['period'], additionalProperties: false } };
+        const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'viewer',
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) }),
+            readCandidates: async () => [], validateSession: async () => false,
+        });
+        expect(await deps.widgetInputs!.resolve({ ref: { surface, instanceId: 'copy' },
+            instance: { v: 1, id: 'copy', definition: { kind: 'inline', definition }, bindings: { period: { kind: 'value', value: 'week' } } },
+            context: { surface: 'cli' } })).toEqual({ status: 'ready', input: { period: 'week' } });
+    });
     it('refuses an unreadable declared Session target without an explicit plugin path', async () => {
         const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
         const definition = { pluginId: 'com.acme.widgets', localId: 'checks' };

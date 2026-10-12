@@ -96,6 +96,9 @@ describe('CLI Board Actions through the Artifact owner', () => {
         const authoredInputs = { fields: [{ path: 'repo', title: 'Repository', widget: 'text' }] } as const;
         for (const [artifactId, body] of [
             ['checks-definition', { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } }],
+            ['html-definition', { kind: 'html', source: { v: 1, entrypoint: 'index.html', files: {
+                'index.html': { mime: 'text/html', contentBase64: 'PGgxPkNvcHk8L2gxPg==' },
+            } } }],
             ['removed-definition', { kind: 'installed', surface: { pluginId: 'com.acme.removed', localId: 'checks' } }],
         ] as const) {
             expect(await executor.execute('widgets.definition.create', { account: { serverId: 'board-home', accountId: 'owner' }, artifactId,
@@ -108,6 +111,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
         if (!catalog.ok) throw new Error('Expected catalog');
         expect(catalog.result).toMatchObject({ entries: expect.arrayContaining([
             expect.objectContaining({ definition: { kind: 'artifact', artifactId: 'checks-definition' }, fields: authoredInputs.fields, availability: 'available' }),
+            expect.objectContaining({ definition: { kind: 'artifact', artifactId: 'html-definition' }, fields: authoredInputs.fields, availability: 'available' }),
             expect.objectContaining({ definition: { kind: 'artifact', artifactId: 'removed-definition' }, fields: authoredInputs.fields, availability: 'unavailable' }),
         ]) });
         expect(get.mock.calls.slice(beforeCatalog).some(call => ['/v1/artifacts/checks-definition', '/v1/artifacts/removed-definition'].includes(new URL(call[0]).pathname))).toBe(false);

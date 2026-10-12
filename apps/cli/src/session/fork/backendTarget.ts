@@ -44,6 +44,7 @@ export async function resolveSessionForkBackendTarget(params: Readonly<{
 }>): Promise<SessionForkBackendTargetResolution> {
   const linkedSessionResolution = resolveLinkedExternalSessionMetadataV1(
     params.parentMetadata,
+    'stored',
   );
   if (
     !linkedSessionResolution.ok

@@ -7,6 +7,32 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 describe('sessionControl.sessionSystemRecordsHttp', () => {
   let envScope = createEnvKeyScope(['HAPPIER_SERVER_URL']);
 
+  it.each(['read', 'list', 'upsert'] as const)('opens retained V1 rows on %s without relaxing the response envelope', async (operation) => {
+    const { readSessionSystemRecordV1, listSessionSystemRecordsV1, upsertSessionSystemRecordV1 } = await import('./sessionSystemRecordsHttp');
+    const address = { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note' } as const;
+    const canonical = { id: 'row', address, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+      content: { t: 'plain', v: { arbitraryPluginData: { retained: true } } },
+      createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' };
+    const record = { ...canonical, content: { ...canonical.content, retiredField: true } };
+    const body = operation === 'list' ? { records: [record], nextCursor: null, hasNext: false } : { record };
+    const invalidRecord = { ...canonical, retiredRoutingField: true };
+    vi.spyOn(axios, operation === 'upsert' ? 'put' : 'get')
+      .mockResolvedValueOnce({ status: 200, data: body })
+      .mockResolvedValueOnce({ status: 200, data: operation === 'list'
+        ? { records: [invalidRecord], nextCursor: null, hasNext: false } : { record: invalidRecord } })
+      .mockResolvedValueOnce({ status: 200, data: { ...body, retiredEnvelopeField: true } });
+    const open = async () => operation === 'read'
+      ? readSessionSystemRecordV1({ token: 'token', sessionId: 'session', address })
+      : operation === 'list'
+        ? (await listSessionSystemRecordsV1({ token: 'token', sessionId: 'session', query: { ...address, limit: 10 } })).records[0]
+        : upsertSessionSystemRecordV1({ token: 'token', sessionId: 'session', request: {
+          address, content: { t: 'plain', v: canonical.content.v }, expectedRevision: null,
+        } });
+    await expect(open()).resolves.toEqual(canonical);
+    await expect(open()).rejects.toThrow();
+    await expect(open()).rejects.toThrow();
+  });
+
   it('reads host V1 records at a captured Home without fabricating plugin authority', async () => {
     const { readSessionSystemRecordV1, listSessionSystemRecordsV1 } = await import('./sessionSystemRecordsHttp');
     const get = vi.spyOn(axios, 'get')

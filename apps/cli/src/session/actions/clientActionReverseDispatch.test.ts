@@ -9,6 +9,110 @@ function executor(client: ClientActionMachineRpc | null) {
 }
 
 describe('client Action reverse delivery', () => {
+  it('discovers and delegates keyed device Storage preferences without admitting unsupported Account keys', async () => {
+    const anchor = 'machines.storage.view';
+    const key = 'home\u0000machine';
+    const value = { shape: 'rings', sort: { by: 'size', direction: 'desc' } };
+    const delivered: unknown[] = [];
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      // Only the Machine-to-App process hop is synthetic; declaration admission and routing stay real.
+      callConnectedClientRpc: async (method, payload, options) => {
+        expect(method).toBe(RPC_METHODS.UI_ACTION_EXECUTE);
+        const request = UiActionDispatchRequestV1Schema.parse(payload);
+        expect(request.input).toEqual({ anchor, key, ...(request.actionId === 'settings.set' ? { value } : {}) });
+        delivered.push(request.input);
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { anchor, value } } } };
+      },
+    };
+    expect(await executor(null).execute('settings.list', { pageId: 'machines' }, { surface: 'agent' }))
+      .toMatchObject({ ok: true, result: { items: expect.arrayContaining([expect.objectContaining({
+        anchor, storageScope: 'local', readable: true, writable: true,
+      })]) } });
+    for (const surface of ['cli', 'agent', 'mcp'] as const) {
+      const context = { surface, authority: 'account_automation', bypassApprovals: true } as const;
+      expect(await executor(client).execute('settings.get', { anchor, key }, context)).toEqual({ ok: true, result: { anchor, value } });
+      expect(await executor(client).execute('settings.set', { anchor, key, value }, context)).toEqual({ ok: true, result: { anchor, value } });
+      expect(await executor(null).execute('settings.get', { anchor, key }, context))
+        .toMatchObject({ ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable', recovery: { kind: 'connect_client' } } });
+    }
+    expect(delivered).toHaveLength(6);
+    expect(await executor(client).execute('settings.get', { anchor: 'delegation.workDepthLimit', key: 'unsupported' }, { surface: 'agent' }))
+      .toMatchObject({ ok: false, errorCode: 'setting_key_unsupported' });
+    expect(delivered).toHaveLength(6);
+  });
+  it.each([
+    { actionId: 'ui.current_context.read', input: {}, result: {
+      navigation: { area: 'settings', screen: 'usage' }, commands: [{ id: 'current-ui:usage:period', title: 'Last 30 days' }],
+    } },
+    { actionId: 'ui.current_context.command.invoke', input: { commandId: 'current-ui:usage:period' }, result: null },
+  ] as const)('delivers Usage mounted $actionId from CLI through its canonical answering client', async request => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
+          actionId: request.actionId, input: request.input, context: { surface: 'cli', authority: 'account_automation' },
+        });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: request.result } } };
+      },
+    };
+    const context = { surface: 'cli', authority: 'account_automation', serverId: 'home' } as const;
+    expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
+    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+  });
+
+  it.each([
+    { actionId: 'session.work.get', input: { sessionId: 'lead' }, result: {
+      status: 'ready', sessionId: 'lead', summary: { outstanding: 1, needsYou: 0, stalled: 0, sessions: 1, runs: 0 },
+      items: [], managedRuns: { phase: 'loaded', refreshFailed: false },
+    }, absent: { ok: true, result: { status: 'unavailable' } } },
+    { actionId: 'inbox.get', input: {}, result: {
+      status: 'ready', groups: [], approvalIds: ['approval'], usageNoticeIds: [], friendRequestIds: [],
+      automationRunIds: [], readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false,
+    }, absent: { ok: true, result: { status: 'unavailable' } } },
+    { actionId: 'inbox.mark_all_read', input: { targets: [{ serverId: 'home', sessionId: 'lead' }] },
+      result: { results: [{ serverId: 'home', sessionId: 'lead', status: 'succeeded' }] },
+      absent: { ok: false, errorCode: 'unavailable', error: 'noClient' } },
+    { actionId: 'session.draft.append', input: { sessionId: 'lead', text: 'Follow-up', sourceSessionId: 'worker' },
+      result: { status: 'appended', sessionId: 'lead', createdAtMs: 10 },
+      absent: { ok: true, result: { status: 'unavailable' } } },
+    { actionId: 'session.draft.delete', input: { draftId: '00000000-0000-4000-8000-000000000001' },
+      result: { status: 'deleted' }, absent: { ok: true, result: { status: 'unavailable' } } },
+    { actionId: 'session.draft.directory.set', input: { ref: { kind: 'newSession', instanceId: 'new-composer' },
+      directory: { kind: 'path', path: '/checkout' } }, result: { status: 'applied' },
+      absent: { ok: true, result: { status: 'unavailable' } } },
+  ] as const)('invokes $actionId from CLI through the answering client and reports typed absence', async request => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      // Replace only the process/network hop; admission and result validation stay real.
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
+          actionId: request.actionId, input: request.input, context: { surface: 'cli', authority: 'present_user' },
+        });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: request.result } } };
+      },
+    };
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home',
+      presentUserConfirmation: { actionId: request.actionId } } as const;
+    expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
+    expect(await executor(null).execute(request.actionId, request.input, context)).toEqual(request.absent);
+  });
+
+  it.each(['session.work.get', 'inbox.get'] as const)('preserves mounted-owner absence for %s when a client is connected', async actionId => {
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _payload, options) => {
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'unavailable' } } } };
+      },
+    };
+    expect(await executor(client).execute(actionId, actionId === 'session.work.get' ? { sessionId: 'unmounted' } : {},
+      { surface: 'cli', authority: 'present_user', serverId: 'home' })).toEqual({ ok: true, result: { status: 'unavailable' } });
+  });
+
   it('opens the exact comparison through the answering client without resuming a Session headlessly', async () => {
     const input = { sessionId: 'session', serverId: 'home', destination: { kind: 'scmReview',
       comparison: { kind: 'workingTree' }, view: 'walkthrough', explain: true, comparisonId: 'a'.repeat(64) } } as const;
@@ -129,6 +233,10 @@ describe('client Action reverse delivery', () => {
   });
   it('projects live plugin caller provenance without sending process-local occurrence metadata', async () => {
     const sourceCustody = { kind: 'development', registeredRootId: 'settings-probe-root' } as const;
+    const actionCaller = {
+      kind: 'plugin', pluginId: 'example.settings-probe', contributionLocalId: 'inspect', sourceCustody,
+      occurrenceId: 'live-occurrence', initiatingCaller: { kind: 'host' },
+    } as const;
     const dispatch = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: () => true,
       callConnectedClientRpc: async (_method, payload, options) => {
@@ -136,15 +244,12 @@ describe('client Action reverse delivery', () => {
           kind: 'plugin', pluginId: 'example.settings-probe', contributionLocalId: 'inspect', sourceCustody, startedBy: 'user',
         });
         options.onIssued();
-        return { ok: true, result: { v: 1, execution: { ok: true, result: { items: [] } } } };
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { anchor: 'appearance.themeMode', value: 'dark' } } } };
       },
     }));
-    expect(await dispatch({ actionId: 'settings.list', input: {}, context: {
-      surface: 'cli', authority: 'account_automation', actionCaller: {
-        kind: 'plugin', pluginId: 'example.settings-probe', contributionLocalId: 'inspect', sourceCustody,
-        occurrenceId: 'live-occurrence', initiatingCaller: { kind: 'host' },
-      },
-    } })).toEqual({ ok: true, result: { items: [] } });
+    expect(await dispatch({ actionId: 'settings.get', input: { anchor: 'appearance.themeMode' }, context: {
+      surface: 'cli', authority: 'account_automation', actionCaller,
+    } })).toEqual({ ok: true, result: { anchor: 'appearance.themeMode', value: 'dark' } });
   });
   it('reads a device setting through the answering client and gives actionable absence', async () => {
     const result = { anchor: 'appearance.themeMode', value: 'dark' };

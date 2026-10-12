@@ -42,12 +42,16 @@ import {
   type SessionTransportEncryptionMaterial,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { requiresMachineAdmissionForSessionInput } from '@/session/services/sessionInputAdmissionIdentity';
+import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import type { PromptAssetAdapter } from '@happier-dev/plugin-sdk/resources';
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
-import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
 import { resolveActionSessionListAccessFailure } from '@happier-dev/protocol/actions/executor/sessionListAccess';
 import { SessionListResultSchema } from '@happier-dev/protocol/sessions/control/listResult';
 import type { ApprovalExecutionOriginV1, ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps, RuntimeActionExecute } from '@happier-dev/protocol';
@@ -609,6 +613,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   machineEnvironmentApply?: ActionExecutorDeps['machineEnvironmentApply'];
   hostActionApprovalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'];
   projectAction?: ActionExecutorDeps['projectAction'];
+  machineGuardAction?: ActionExecutorDeps['machineGuardAction'];
   projectWorkerAction?: ActionExecutorDeps['projectWorkerAction'];
   projectDefinitionAction?: ActionExecutorDeps['projectDefinitionAction'];
   filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
@@ -628,6 +633,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   targetActionApprovalReplay?: ActionExecutorDeps['targetActionApprovalReplay'];
   /** Current Account/Home/target proof for durable core Action replay. */
   isApprovalExecutionOriginCurrent?: ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
+  prepareApprovalExecutionAuthorization?: ActionExecutorDeps['prepareApprovalExecutionAuthorization'];
   /** Canonical daemon Automation occurrence owner for durable replay. */
   isAutomationRunCurrent?: (caller: Extract<
     ApprovalExecutionOriginV1['caller'],
@@ -710,26 +716,13 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     context: ActionExecutorContext | undefined,
     credentials: StoredCredentials,
   ): Promise<ActionExecutorContext> => {
-    let serverIdentityId = readNonEmptyString(context?.serverIdentityId)
-      ?? readNonEmptyString(params.serverIdentityId);
-    if (!serverIdentityId) {
-      const snapshot = await resolveServerFeaturesSnapshotForCredentials(credentials).catch(() => undefined);
-      if (snapshot?.status === 'ready' && snapshot.provenance === 'authenticated') {
-        serverIdentityId = normalizeServerIdentityIdCapability(
-          snapshot.features.capabilities.serverIdentity?.serverIdentityId,
-        ) ?? null;
-      }
-    }
-    let machineId = readNonEmptyString(context?.defaultSessionMachineId)
-      ?? readNonEmptyString(params.machineId);
-    if (!machineId && fixedServerId === null) {
-      machineId = readNonEmptyString((await readSettings().catch(() => null))?.machineId);
-    }
-    return {
-      ...(context ?? {}),
-      ...(serverIdentityId ? { serverIdentityId } : {}),
-      ...(machineId ? { defaultSessionMachineId: machineId } : {}),
-    };
+    return enrichCliActionApprovalContext({
+      context,
+      serverIdentityId: params.serverIdentityId,
+      machineId: params.machineId,
+      fixedServerId,
+      resolveServerFeaturesSnapshot: () => resolveServerFeaturesSnapshotForCredentials(credentials),
+    });
   };
   const bindExecutorToActionServer = (source: CliActionExecutor): CliActionExecutor => ({
     observeRecordedApprovalExecution: async args => await runWithActionServer(() => source.observeRecordedApprovalExecution(args)),
@@ -766,6 +759,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     credentials: StoredCredentials,
     transcriptFollowLeaseRegistry: ReturnType<typeof createFollowLeaseRegistry>,
     sessionMemoryEnabled?: boolean,
+    serverIdentityId = params.serverIdentityId,
   ): ReturnType<typeof createCliActionExecutor> => {
     const resolveServerFeaturesSnapshot = params.resolveServerFeaturesSnapshot
       ?? (async () => await resolveServerFeaturesSnapshotForCredentials(credentials));
@@ -800,7 +794,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     const sessionFollowActionDeps = createSessionFollowActionDeps({
       token: credentials.token,
       ...fixedHome,
-      ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+      ...(serverIdentityId ? { serverIdentityId } : {}),
       ...(params.externalActionMachineRequestPrivateKey
         ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey }
         : {}),
@@ -810,7 +804,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       prepareSourceKeyAfterSet: createSessionFollowSourceKeyPreparationAfterSet({
         credentials,
         serverHttpBaseUrl: approvalServerApiUrl,
-        ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+        ...(serverIdentityId ? { serverIdentityId } : {}),
         resolveServerFeaturesSnapshot,
         ...(params.externalActionMachineRequestPrivateKey
           ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey }
@@ -838,7 +832,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.projectDefinitionAction ? { projectDefinitionAction: params.projectDefinitionAction } : {}),
       ...(params.filesystemActionExecute ? { filesystemActionExecute: params.filesystemActionExecute } : {}),
       serverId: approvalServerId,
-      ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+      ...(serverIdentityId ? { serverIdentityId } : {}),
       serverHttpBaseUrl: approvalServerApiUrl,
       ...(params.externalActionMachineRequestPrivateKey
         ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey }
@@ -854,7 +848,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       sessionReadStateActionDeps: createSessionReadStateActionDeps({
         token: credentials.token,
         ...fixedHome,
-        ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+        ...(serverIdentityId ? { serverIdentityId } : {}),
         ...(params.externalActionMachineRequestPrivateKey
           ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey }
           : {}),
@@ -877,7 +871,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             }
           : {}),
         ...fixedHome,
-        ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+        ...(serverIdentityId ? { serverIdentityId } : {}),
         ...(params.externalActionMachineRequestPrivateKey
           ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey }
           : {}),
@@ -918,6 +912,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.runtimeActionExecute
         ? { runtimeActionExecute: params.runtimeActionExecute }
         : {}),
+      ...(params.machineGuardAction ? { machineGuardAction: params.machineGuardAction } : {}),
       ...(params.workflowAction ? { workflowAction: params.workflowAction } : {}),
       ...(params.workflowAcceptedAuthorizationCurrentness
         ? { workflowAcceptedAuthorizationCurrentness: params.workflowAcceptedAuthorizationCurrentness }
@@ -929,6 +924,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ? { targetActionApprovalReplay: params.targetActionApprovalReplay }
         : {}),
       isApprovalExecutionOriginCurrent,
+      ...(params.prepareApprovalExecutionAuthorization
+        ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
+        : {}),
       ...(params.listContributedActionDefinitions
         ? { listContributedActionDefinitions: params.listContributedActionDefinitions }
         : {}),
@@ -999,11 +997,34 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     transcriptFollowLeaseRegistry: ReturnType<typeof createFollowLeaseRegistry>,
     invocationSignal?: AbortSignal,
   ): CliActionExecutor => {
-    const fixedExecutor = params.readCredentials
+    // Default policy readers capture the Account lifetime at construction.
+    // Bind them only after the first invocation has bootstrapped that Account;
+    // an explicitly admitted runtime provider already owns its lifetime.
+    let fixedExecutor = params.readCredentials || !params.actionsSettingsProvider
       ? null
       : shouldUsePatPublicActionTransport(params.credentials, undefined)
         ? null
         : createExecutor(params.credentials, transcriptFollowLeaseRegistry);
+    let fixedExecutorServerIdentityId = params.serverIdentityId;
+    const resolveExecutor = async (credentials: StoredCredentials, sessionMemoryEnabled?: boolean) => {
+      // Resolve at the invocation boundary, not during synchronous composition.
+      // Caller context never supplies dependency Home authority.
+      const serverIdentityId = params.serverIdentityId
+        ?? (await enrichApprovalRoutingContext(undefined, credentials)).serverIdentityId;
+      if (!fixedExecutor || sessionMemoryEnabled !== undefined) {
+        const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId);
+        if (!params.readCredentials && sessionMemoryEnabled === undefined) {
+          fixedExecutor = executor;
+          fixedExecutorServerIdentityId = serverIdentityId;
+        }
+        return executor;
+      }
+      if (fixedExecutorServerIdentityId !== serverIdentityId) {
+        fixedExecutor = createExecutor(credentials, transcriptFollowLeaseRegistry, undefined, serverIdentityId);
+        fixedExecutorServerIdentityId = serverIdentityId;
+      }
+      return fixedExecutor;
+    };
     const originationPreferenceFailure = async (actionId: string, credentials: StoredCredentials,
       context: ActionExecutorContext | undefined) => {
       if (actionId !== 'machines.managed.acquire' || context?.externalActionExecutionAuthorization || context?.surface === 'rpc') return null;
@@ -1017,6 +1038,11 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     };
     const prepareOriginalCliActionInvocation = async (actionId: string, input: unknown,
       context: ActionExecutorContext, credentials: StoredCredentials) => {
+      // Qualified plugin Actions belong to the current contributed-Action
+      // discovery/daemon owner, not the host's finite ActionSpec placement map.
+      // Credential admission and approval context are already established;
+      // carry them unchanged to that owner rather than fabricating API custody.
+      if (parseQualifiedPluginActionId(actionId)) return { context };
       const mountedFilesystemCopy = params.filesystemActionExecute && actionId === 'daemon.filesystem.copy'
         && (FilesystemPreparedCopyInputSchema.safeParse(input).success || FilesystemTargetCopyInputSchema.safeParse(input).success);
       // Finite original CLI work is admitted at Home before the selected
@@ -1039,16 +1065,36 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const settingsAction = isSettingsDeclarationActionIdV1(actionId);
       const settingsInput = settingsAction ? SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input) : null;
       const admittedInput = settingsInput?.success ? settingsInput.data : input;
-      const settingsClientAction = settingsAction && settingsInput?.success
-        && resolveActionExecutionPlacementForInput(getActionSpec(actionId), admittedInput) === 'client';
-      const pairedSettingsAction = originalCliCaller && provenance?.provenance.kind === 'terminal'
-        && settingsClientAction;
-      const settingsDaemonTarget = params.externalActionClient && originalCliCaller && settingsClientAction
+      const spec = getActionSpec(ActionIdSchema.parse(actionId));
+      const clientAction = spec.cli !== undefined && (!settingsAction || settingsInput?.success)
+        && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'client';
+      const pairedTerminal = originalCliCaller && provenance?.provenance.kind === 'terminal';
+      let requiresDaemonInputAdmission = false;
+      const sessionInputTarget = actionId === 'session.message.send'
+        ? readNonEmptyString(readRecord(admittedInput)?.sessionId) : null;
+      if (sessionInputTarget && originalCliCaller && !machineAdmissionTransport
+        && hasStoredSessionCredentialProvenance(credentials)) {
+        const signal = combineInvocationSignals(invocationSignal, context.signal);
+        const transport = await resolveSessionTransportContext({
+          credentials, idOrPrefix: sessionInputTarget,
+          ...(signal ? { signal } : {}),
+        });
+        if (!transport.ok) return { context,
+          invocation: createOneShotPatInvocation(async () => actionResolutionFailure(transport)) };
+        // Protected input needs the daemon's authenticated Machine transport,
+        // not a provider process. Plain human sends retain HTTP Pending admission.
+        requiresDaemonInputAdmission = requiresMachineAdmissionForSessionInput({
+          request: buildTrustedHostSessionInputAdmissionV1(context.surface).request,
+          mode: transport.mode,
+        });
+      }
+      const usesDaemonIngress = params.externalActionClient || requiresDaemonInputAdmission;
+      const originalDaemonTarget = usesDaemonIngress && originalCliCaller
         ? await resolveLiveDaemonControlTargetForServer(fixedServerId ?? approvalServerId).catch(() => null)
         : undefined;
-      const settingsOwnDaemon = settingsClientAction && settingsDaemonTarget?.accountId
-        && settingsDaemonTarget.accountId === readAccountIdFromToken(credentials.token);
-      const originalContext = params.externalActionClient && originalCliCaller && provenance?.provenance.kind === 'terminal'
+      const ownDaemon = originalDaemonTarget?.accountId
+        && originalDaemonTarget.accountId === readAccountIdFromToken(credentials.token);
+      const originalContext = usesDaemonIngress && originalCliCaller && provenance?.provenance.kind === 'terminal'
         ? { ...context, authority: 'account_automation' as const } : context;
       const originalMachineEnvironment = actionId === 'machines.environment.apply' && originalCliCaller
         ? MachineEnvironmentApplyInputV1Schema.safeParse(input) : null;
@@ -1058,9 +1104,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const originalMachineTarget = context.externalActionTarget
         ? context.externalActionTarget.kind === 'machine' : Boolean(params.machineId);
       const originalFiniteProjectAction = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId) && originalCliCaller;
-      if (params.externalActionClient && hasStoredSessionCredentialProvenance(credentials)
-        && originalCliCaller && (!settingsAction || settingsClientAction && (settingsOwnDaemon || originalMachineTarget))
-        && (ordinary || pairedSessionCreation?.success || settingsOwnDaemon || originalMachineTarget || actionId === 'projects.service.relocate')
+      if (usesDaemonIngress && hasStoredSessionCredentialProvenance(credentials)
+        && originalCliCaller && (!settingsAction || clientAction && (ownDaemon || originalMachineTarget))
+        && (ordinary || pairedSessionCreation?.success || (pairedTerminal && ownDaemon) || originalMachineTarget || actionId === 'projects.service.relocate')
         && !mountedFilesystemCopy && !originalFiniteProjectAction) {
         const parsedActionId = SignedRootActionIdSchema.safeParse(actionId);
         if (!parsedActionId.success) return { context: originalContext,
@@ -1088,8 +1134,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           }
           target ??= { kind: 'machine', machineId: source.machineId };
         }
-        const daemonControlTarget = settingsClientAction ? settingsDaemonTarget : fixedServerId
-          ? await resolveLiveDaemonControlTargetForServer(fixedServerId).catch(() => null) : undefined;
+        const daemonControlTarget = originalDaemonTarget;
         return { context: originalContext, invocation: createOneShotPatInvocation(async () => {
           // A prepared invocation must not borrow a later credential scope.
           if (signal?.aborted) return actionFailure('cancelled');
@@ -1102,7 +1147,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             const localEndpoint = await resolveLiveDaemonExternalActionEndpoint(resolveActionServerApiUrl()).catch(() => null);
             const accountId = readAccountIdFromToken(credentials.token);
             const localPublication = daemonControlTarget ?? localEndpoint;
-            const ownLocal = (ordinary || pairedSessionCreation?.success || pairedSettingsAction) && accountId && localPublication?.machineId === target.machineId
+            const ownLocal = (ordinary || pairedTerminal) && accountId && localPublication?.machineId === target.machineId
               && localPublication.accountId === accountId;
             if (!ownLocal || requiresOriginalAccountMachineActionProof(parsedActionId.data)) {
               try {
@@ -1122,6 +1167,12 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             }
           }
           if (fixedServerId && !daemonControlTarget) return actionFailure('daemon_unavailable');
+          // Endpoint discovery may outlive the captured caller's credential scope.
+          // Keep that scope current at the local dispatch boundary as well.
+          if (signal?.aborted) return actionFailure('cancelled');
+          const dispatchCredentialsCurrent = sameStoredCredentials(credentials, await readCurrentCredentials());
+          if (signal?.aborted) return actionFailure('cancelled');
+          if (!dispatchCredentialsCurrent) return actionFailure('credential_scope_retired');
           return await requestDaemonSignedRootActionExecution({
             actionId: parsedActionId.data,
             input: admittedInput,
@@ -1130,7 +1181,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           }, {
             ...(signal ? { signal } : {}),
             ...(daemonControlTarget ? { target: daemonControlTarget } : {}),
-            ...(pairedSessionCreation?.success || pairedSettingsAction
+            ...(pairedTerminal
               ? context.authority === 'account_automation'
                 ? { authorityCeiling: 'account_automation' as const }
                 : buildTerminalAuthorityCeiling({ token: credentials.token, serverHttpBaseUrl: resolveActionServerApiUrl() })
@@ -1144,7 +1195,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       observeRecordedApprovalExecution: async args => {
         const credentials = await readCurrentCredentials();
         if (!credentials) return actionFailure('not_authenticated');
-        const executor = fixedExecutor ?? createExecutor(credentials, transcriptFollowLeaseRegistry);
+        const executor = await resolveExecutor(credentials);
         const signal = combineInvocationSignals(invocationSignal, args.signal) ?? args.signal;
         return await executor.observeRecordedApprovalExecution({ ...args, signal });
       },
@@ -1159,6 +1210,11 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           };
         }
         const [actionId, input, rawContext] = args;
+        if (params.providerPreparedSavedSecret && shouldUsePatPublicActionTransport(credentials, rawContext)) {
+          // The public relay admits serialized operands, not this invocation's
+          // private prompted material. Never turn its reference into a detached write.
+          return { kind: 'settled' as const, result: actionFailure('private_action_preparation_transport_unsupported') };
+        }
         const preferenceFailure = await originationPreferenceFailure(actionId, credentials, rawContext);
         if (preferenceFailure) return { kind: 'settled' as const, result: preferenceFailure };
         if (shouldUsePatPublicActionTransport(credentials, rawContext)) {
@@ -1189,12 +1245,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           };
         }
         let context = await enrichApprovalRoutingContext(rawContext, credentials);
-        if (isSettingsDeclarationActionIdV1(actionId)) {
-          const prepared = await prepareOriginalCliActionInvocation(actionId, input, context, credentials);
-          if (prepared.invocation) return { kind: 'ready' as const, invocation: prepared.invocation };
-          context = prepared.context;
-        }
-        const executor = fixedExecutor ?? createExecutor(credentials, transcriptFollowLeaseRegistry);
+        const prepared = await prepareOriginalCliActionInvocation(actionId, input, context, credentials);
+        if (prepared.invocation) return { kind: 'ready' as const, invocation: prepared.invocation };
+        context = prepared.context;
         // An explicitly supplied policy provider is already the admitted
         // principal's policy authority. Do not widen it by bootstrapping
         // ambient Account settings before execution.
@@ -1205,6 +1258,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ) {
           await ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl());
         }
+        const executor = await resolveExecutor(credentials);
         return await executor.prepare(actionId, input, context);
       },
       execute: async (...args) => {
@@ -1215,6 +1269,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
         }
         const [actionId, input, rawContext] = args;
+        if (params.providerPreparedSavedSecret && shouldUsePatPublicActionTransport(credentials, rawContext)) {
+          return actionFailure('private_action_preparation_transport_unsupported');
+        }
         const preferenceFailure = await originationPreferenceFailure(actionId, credentials, rawContext);
         if (preferenceFailure) return preferenceFailure;
         if (shouldUsePatPublicActionTransport(credentials, rawContext)) {
@@ -1253,9 +1310,6 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           if (!metadata) return actionFailure('target_unavailable');
           sessionMemoryEnabled = readSessionMemoryEnabledV1(metadata);
         }
-        const executor = sessionMemoryEnabled !== undefined
-          ? createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled)
-          : fixedExecutor ?? createExecutor(credentials, transcriptFollowLeaseRegistry);
         if (
           !params.actionsSettingsProvider
           && !context?.externalActionExecutionAuthorization
@@ -1263,12 +1317,13 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ) {
           await ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl());
         }
+        const executor = await resolveExecutor(credentials, sessionMemoryEnabled);
         return await executor.execute(actionId, input, signal ? { ...originalContext, signal } : originalContext);
       },
       continueConfidentialApprovalRequest: async (input, context) => {
         const credentials = await readCurrentCredentials();
         if (!credentials) return actionFailure('not_authenticated');
-        const executor = fixedExecutor ?? createExecutor(credentials, transcriptFollowLeaseRegistry);
+        const executor = await resolveExecutor(credentials);
         const signal = combineInvocationSignals(invocationSignal, context?.signal);
         const resolvedContext = await enrichApprovalRoutingContext(
           // The receiver's bound or authenticated Home identity admits a private
@@ -1283,7 +1338,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         if (!credentials) {
           return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
         }
-        const executor = fixedExecutor ?? createExecutor(credentials, transcriptFollowLeaseRegistry);
+        const executor = await resolveExecutor(credentials);
         const signal = combineInvocationSignals(invocationSignal, args.signal);
         return await executor.replayApprovedApprovalRequest({
           ...args,

@@ -87,6 +87,7 @@ describe('CLI machine Agent inventory Action transport', () => {
     }, { surface: 'cli', authority: 'account_automation' })).resolves.toEqual({ ok: true, result: {
       items: [{ agentId: 'acme/helper', title: 'Remote Helper', ...facts }],
       unavailable: [{ agentId: 'missing', reason: 'probe_failed', errorCode: 'unknown-capability' }],
+      definitionCatalog: { status: 'unavailable', reason: 'not-authenticated' },
     } });
   });
 });

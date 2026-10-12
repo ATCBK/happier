@@ -1,5 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import tweetnacl from 'tweetnacl';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, createActionExecutor, encodePlainArtifactStoredContent, ExecutionRunGetResponseSchema, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, validateWorkflowDefinition, WorkflowRunRecipientCensusResponseV1Schema, type ActionId } from '@happier-dev/protocol';
+import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
+  verifyExternalActionMachineRequestV1, type ActionExecutorContext } from '@happier-dev/protocol';
+import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationManifestPublisherHeaderV1Schema,
+  createPluginInstallationManifestPublisherSigningInputV1, stringifyPluginInstallationManifestCanonicalJsonV1 } from '@happier-dev/protocol/plugins/installations/manifests';
+import { createMachineInstallationIdentityFixture } from '../../../../../packages/tests/src/testkit/machineIdentity';
+import * as installation from '@/daemon/identity/currentMachineInstallation';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }));
 const signedRootAction = vi.hoisted(() => vi.fn());
@@ -25,6 +33,8 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
 import { createCliActionDeps } from './createCliActionDeps';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('createCliActionDeps workflow boundary', () => {
   const enabledFeatures = {
@@ -59,6 +69,120 @@ describe('createCliActionDeps workflow boundary', () => {
       } } };
       throw new Error(`unexpected_post:${String(body.operation)}`);
     });
+  });
+
+  it.each([true, false])('rejoins a Session-started Workflow only with its exact installed signer (%s)', async (hasSigner) => {
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const identity = createMachineInstallationIdentityFixture();
+    vi.spyOn(installation, 'readCurrentMachineInstallation').mockResolvedValue({ machineId: 'machine-1', identity: {
+      version: 1, installationId: identity.installationId, createdAt: 0,
+      publicKey: identity.publicKeyBase64, privateKey: identity.privateKeyBase64,
+    } });
+    const target = { kind: 'machine' as const, machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } };
+    // The Home-minted authorization is an external boundary fact; signing and
+    // verifying every actual storage request stays with the canonical owners.
+    const context: ActionExecutorContext = {
+      surface: 'agent', authority: 'account_automation', defaultSessionId: 'session-1',
+      actionCaller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 },
+      callerPermissionMode: 'default', externalActionTarget: target,
+      externalActionExecutionAuthorization: { v: 1, token: 'home-execution-proof', binding: {
+        serverIdentityId: 'home', accountId: 'account-1', custodianAccountId: 'account-1',
+        authentication: { kind: 'account', tokenEpoch: 0 }, installationId: identity.installationId,
+        machineId: 'machine-1', actionId: 'workflow.run.start', requestId: 'request-1',
+        requestEnvelopeDigest: 'd'.repeat(43), target,
+        sessionActionOrigin: { v: 1, caller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 },
+          sourceTurnId: 'turn-1', callerPermissionMode: 'default', causalPermissionAuthority: null, requestId: 'request-1' },
+        sessionActionSource: { machineId: 'machine-1', installationId: identity.installationId },
+      } },
+    };
+    const definition = validateWorkflowDefinition({ version: 1,
+      defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
+      blocks: ['work'],
+    }).normalizedDefinition!;
+    const origin = { kind: 'direct' as const, originSessionId: 'session-1' };
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId },
+      acceptedSnapshot: { definition, authoredDefinition: definition, startedBy: 'agent', workDepth: 1,
+        metadata: null, frozenChildren: {}, materializedLeaves: [], source: { kind: 'inline' }, inputs: {},
+        machineId: 'machine-1', executionTarget: { kind: 'session' }, workspaceTarget: { project: {
+          machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo',
+        } }, origin, resultDelivery: { kind: 'originating_session', originSessionId: 'session-1' },
+        authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'session', sessionId: 'session-1' } },
+      },
+    }));
+    const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId: 'account-1', encryptionMode: 'plain',
+      access: 'owner', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+      ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
+    });
+    const authenticatedReads: string[] = [];
+    const get = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string, options: { headers: Record<string, string> }) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) {
+        expect(url).toBe('https://session-home.test/v1/account/encryption/currentness');
+        const authorization = context.externalActionExecutionAuthorization!;
+        if (options.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] !== authorization.token
+          || !verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: 'workflow.run.start',
+            target, installationId: identity.installationId, requestId: authorization.binding.requestId,
+            method: 'GET', path: '/v1/account/encryption/currentness', publicKey: identity.publicKeyBase64,
+            signature: options.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER] ?? '',
+          })) throw Object.assign(new Error('restricted_account_currentness'), { response: { status: 401, data: null } });
+        expect(options.headers.Authorization).toBeUndefined();
+      }
+      return await get(url);
+    });
+    http.post.mockImplementation(async (url: string, body: Record<string, unknown>, options: { headers: Record<string, string> }) => {
+      const headers = options.headers;
+      const authorization = context.externalActionExecutionAuthorization!;
+      const path = '/v3/automations/runs/workflow-storage';
+      expect(url).toBe(`https://session-home.test${path}`);
+      // Same admission boundary as registerWorkflowRunStorageRoutes: a
+      // restricted Session token alone cannot read Account workflow storage.
+      if (headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] !== authorization.token
+        || body.publisherMachineId !== 'machine-1'
+        || !headers[PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]
+        || !verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: 'workflow.run.start',
+          target, installationId: identity.installationId, requestId: authorization.binding.requestId,
+          method: 'POST', path, body, publicKey: identity.publicKeyBase64,
+          signature: headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER] ?? '',
+        })) throw Object.assign(new Error('restricted_account_read'), { response: { status: 401, data: null } });
+      expect(headers.Authorization).toBeUndefined();
+      // Check the real Protocol proof at the HTTP boundary; the Server's
+      // integration test independently owns persisted publisher admission.
+      const { proof } = PluginInstallationManifestPublisherHeaderV1Schema.parse(JSON.parse(Buffer.from(
+        headers[PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]!, 'base64url').toString('utf8')));
+      expect(proof).toMatchObject({ machineId: 'machine-1', installationId: identity.installationId, method: 'POST', path,
+        bodySha256Base64Url: createHash('sha256').update(stringifyPluginInstallationManifestCanonicalJsonV1(body)).digest('base64url') });
+      const { signatureBase64Url, ...unsigned } = proof;
+      expect(tweetnacl.sign.detached.verify(createPluginInstallationManifestPublisherSigningInputV1({ proof: unsigned }),
+        Buffer.from(signatureBase64Url, 'base64url'), Buffer.from(identity.publicKeyBase64, 'base64url'))).toBe(true);
+      authenticatedReads.push(String(body.operation));
+      if (body.operation === 'run-key.census') return { data: keyCensus };
+      if (body.operation === 'get') return { data: { acceptedEnvelope, checkpointEnvelope: null, resultEnvelope: null, keyCensus,
+        run: { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null, id: runId, origin, state: 'queued', revision: 0,
+          machineId: 'machine-1', workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+          availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+          createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+      } };
+      throw new Error(`unexpected_effect:${String(body.operation)}`);
+    });
+    const deps = createCliActionDeps({ token: 'restricted-session-token', credentials: { token: 'restricted-session-token', encryption: null },
+      serverId: 'profile', serverIdentityId: 'home', serverHttpBaseUrl: 'https://session-home.test',
+      sessionId: 'session-1', rawSession: { path: '/repo', machineId: 'machine-1' },
+      getCurrentSessionBackendTarget: () => ({ kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }),
+      resolveServerFeaturesSnapshot: () => enabledFeatures as never, mode: 'plain', ctx: null,
+      ...(hasSigner ? { externalActionMachineRequestPrivateKey: identity.privateKeyBase64,
+        externalActionMachineInstallationId: identity.installationId } : {}),
+    });
+    const result = await deps.workflowAction!({ actionId: 'workflow.run.start', input: {
+      runId, source: { kind: 'inline', definition }, executionTarget: { kind: 'session' }, onComplete: { kind: 'originating_session' },
+    }, context });
+    if (!hasSigner) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+      expect(http.post).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result).toMatchObject({ admission: 'existing', run: { id: runId, state: 'queued' } });
+    expect(authenticatedReads).toContain('get');
   });
 
   it.each(['detached_run', 'session'] as const)('offers %s recovery from the exact current native turn and capability, never a recorded recovery choice', async (targetKind) => {

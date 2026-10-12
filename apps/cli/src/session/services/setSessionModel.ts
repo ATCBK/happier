@@ -52,6 +52,7 @@ type SetSessionModelInactiveResult = Readonly<{
   status: 'intent_updated';
   sessionId: string;
   selection: ProviderBoundModelRef;
+  applyTiming?: 'immediate' | 'next_prompt';
   updatedAt: number;
   metadata: Record<string, unknown>;
   version: number;
@@ -170,6 +171,7 @@ async function invokeActiveModelTransition(params: Readonly<{
         method:
           `${params.sessionTarget.sessionId}:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`,
         request: { v: 1, selection: params.selection,
+          ...(params.applyTiming ? { applyTiming: params.applyTiming } : {}),
           ...(params.captureBefore !== undefined ? { captureBefore: params.captureBefore } : {}),
           ...(params.expected ? { expected: params.expected } : {}) },
         ...(params.externalAction ? { externalAction: params.externalAction } : {}),
@@ -197,7 +199,9 @@ export async function setSessionModel(params: Readonly<{
   /** Captured by the existing exact-Home Action/CLI invocation, never caller input. */
   serverId?: string;
   modelId?: string;
+  applyTiming?: 'immediate' | 'next_prompt';
   captureBefore?: boolean;
+  unarm?: true;
   expected?: SessionModelMutationExpectedV1;
   providerConnectionId?: ProviderConnectionId | string | null;
   teamCredentialModel?: TeamCredentialProviderModelSelectionV1;
@@ -225,6 +229,17 @@ export async function setSessionModel(params: Readonly<{
       code: sessionTarget.code,
       ...(sessionTarget.candidates ? { candidates: sessionTarget.candidates } : {}),
     };
+  }
+
+  if (params.unarm) {
+    if (sessionTarget.rawSession.active !== true) return { ok: false, code: 'unsupported' };
+    const result = SessionModelTransitionResultV1Schema.parse(await callSessionRpc({
+      token: params.credentials.token, ...sessionTarget,
+      method: `${sessionTarget.sessionId}:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`,
+      request: { v: 1, unarm: true },
+      ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+    }));
+    return { ...result, sessionId: sessionTarget.sessionId };
   }
 
   if (params.teamCredentialModel !== undefined) {
@@ -360,6 +375,7 @@ export async function setSessionModel(params: Readonly<{
         credentials: params.credentials,
         sessionTarget,
         selection: request.selection,
+        applyTiming: params.applyTiming,
         captureBefore: params.captureBefore,
         expected: params.expected,
         callerInputConstraints: params.callerInputConstraints,
@@ -445,6 +461,7 @@ export async function setSessionModel(params: Readonly<{
         credentials: params.credentials,
         sessionTarget: refreshedTarget,
         selection: refreshedRequest.selection,
+        applyTiming: params.applyTiming,
         captureBefore: params.captureBefore,
         expected: params.expected,
         callerInputConstraints: params.callerInputConstraints,

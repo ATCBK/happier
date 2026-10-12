@@ -243,6 +243,30 @@ describe('plugin sessions inventory public service boundary', () => {
     vi.useRealTimers();
   });
 
+  it('projects attested-context presence only from opened protected Session facts', async () => {
+    const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<birth@example.test>' };
+    const ownerMetadata = (attested: boolean) => createPlainSessionOwnerMetadataEnvelopeV1(
+      SessionOwnerMetadataV1Schema.parse({
+        v: 1, workspace: { path: '/repo', host: 'host' },
+        system: attested ? { attestedContext } : {},
+      }),
+    );
+    const harness = createInventory({ pages: { first: [
+      rawSession({ id: 'attested', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), ownerMetadata: ownerMetadata(true) }),
+      rawSession({ id: 'unattested', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), ownerMetadata: ownerMetadata(false) }),
+      rawSession({ id: 'unknown', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), ownerMetadata: null }),
+    ] } });
+    const page = await harness.inventory.list();
+    expect(page.items).toEqual([
+      expect.objectContaining({ id: 'attested', hasAttestedContext: true }),
+      expect.objectContaining({ id: 'unattested', hasAttestedContext: false }),
+      expect.objectContaining({ id: 'unknown' }),
+    ]);
+    expect(page.items[2]).not.toHaveProperty('hasAttestedContext');
+    const session = await harness.inventory.get('attested');
+    expect(await session?.summary()).toMatchObject({ hasAttestedContext: true });
+  });
+
   it('represents an invocation without a bound Session as current null', () => {
     const inventory = createTestPluginSessionsInventory({
       credentials,
@@ -685,6 +709,30 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(sent).toEqual(['session-current:hi']);
   });
 
+  it('exposes Session attachment materialization through the same write access guard', async () => {
+    let current = true;
+    const bytes = new Uint8Array([0, 255]);
+    const inventory = createTestPluginSessionsInventory({
+      credentials, currentSessionId: 'session-current', isCurrent: () => current,
+      readStoragePolicy: async () => 'optional',
+      fetchPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+      fetchById: async () => rawSession({ id: 'session-current', active: true }),
+      materializeAttachment: async () => ({ path: '.happier/uploads/lead.bin', bytes }),
+    });
+    const request = { sourcePath: '/provider/lead.bin', name: 'lead.bin', messageLocalId: 'input-1' };
+    await expect(inventory.current!.materializeAttachment(request)).resolves.toEqual({ path: '.happier/uploads/lead.bin', bytes });
+    current = false;
+    await expect(inventory.current!.materializeAttachment(request)).rejects.toMatchObject({ code: 'plugin_generation_retired' });
+    const readOnly = createTestPluginSessionsInventory({
+      credentials, currentSessionId: 'session-current', isCurrent: () => true,
+      sessionScopes: [{ access: ['read'] }], readStoragePolicy: async () => 'optional',
+      fetchPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+      fetchById: async () => rawSession({ id: 'session-current', active: true }),
+      materializeAttachment: async () => ({ path: '.happier/uploads/lead.bin', bytes }),
+    });
+    await expect(readOnly.current!.materializeAttachment(request)).rejects.toMatchObject({ code: 'plugin_session_scope_unavailable' });
+  });
+
   it('aborts an admitted send transport and fences its late settlement when the retained invocation retires', async () => {
     const lifetime = new AbortController();
     let transportSignal: AbortSignal | undefined;
@@ -799,6 +847,7 @@ describe('plugin sessions inventory public service boundary', () => {
       sessionId === 'session-ordinary' ? ordinarySocket : agentSocket
     ));
     let latestSequence = 2;
+    let agentStateVersion = 1;
     let turnStatus: 'in_progress' | 'completed' = 'in_progress';
     const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const href = String(url);
@@ -810,7 +859,7 @@ describe('plugin sessions inventory public service boundary', () => {
       if (href.includes('/v2/sessions/')) {
         return {
           status: 200,
-          data: { session: rawSession({ id: sessionId, active: true,
+          data: { session: rawSession({ id: sessionId, active: true, agentStateVersion,
             latestTurnId: 'turn-1', latestTurnStatus: turnStatus }) },
         } as never;
       }
@@ -864,7 +913,7 @@ describe('plugin sessions inventory public service boundary', () => {
       isCurrent,
       readStoragePolicy: async () => 'optional',
       fetchPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
-      fetchById: async ({ sessionId }) => rawSession({ id: sessionId, active: true,
+      fetchById: async ({ sessionId }) => rawSession({ id: sessionId, active: true, agentStateVersion,
         latestTurnId: 'turn-1', latestTurnStatus: turnStatus }),
       watchPollIntervalMs: 5,
     });
@@ -953,6 +1002,16 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(agentChanges).toHaveLength(1);
     expect(agentEvents).toHaveLength(2);
 
+    // A new permission request can replace AgentState without appending a
+    // retained transcript row or changing the turn/summary snapshot.
+    agentStateVersion += 1;
+    agentSocket.emit('update', { id: 'permission-only', seq: 4, createdAt: 14,
+      body: { t: 'update-session', id: 'session-agent',
+        agentState: { value: 'private-state', version: agentStateVersion } } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(agentChanges).toHaveLength(2);
+    expect(agentEvents).toHaveLength(2);
+
     ordinarySocket.emit('disconnect', 'transport close');
     latestSequence = 4;
     // Reconnection must catch up retained evidence, not depend on replay of socket messages.
@@ -1018,10 +1077,14 @@ describe('plugin sessions inventory public service boundary', () => {
       pageReads += 1;
       transportSignal = options?.signal as AbortSignal;
       if (pageReads === 1) await new Promise<void>((resolve) => { releaseRead = resolve; });
+      if (pageReads === 3) throw new Error('temporary retained message transport failure');
       return { status: 200, data: { messages: pageReads === 1 ? [] : [{
         id: 'race-message', seq: 1, createdAt: 1, messageRole: 'agent',
         content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Committed during read' } } },
-      }], nextAfterSeq: pageReads === 1 ? 0 : 1, hasMore: false } };
+      }, ...(pageReads >= 4 ? [{
+        id: 'recovered-message', seq: 2, createdAt: 2, messageRole: 'agent',
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Recovered without another event' } } },
+      }] : [])], nextAfterSeq: pageReads >= 4 ? 2 : pageReads === 1 ? 0 : 1, hasMore: false } };
     });
     const inventory = createTestPluginSessionsInventory({
       credentials, signal: lifetime.signal, currentSessionId: sessionId, isCurrent: () => true,
@@ -1041,6 +1104,18 @@ describe('plugin sessions inventory public service boundary', () => {
     expect(listener).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       kind: 'message', sequence: 1, message: expect.objectContaining({ messageId: 'race-message' }),
     }));
+    socket.emit('update', { id: 'read-recovery', seq: 2, createdAt: 2,
+      body: { t: 'update-session', id: sessionId, latestTurnStatus: 'completed' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pageReads).toBe(3);
+    // A transport read failure must retry its retained frontier without a
+    // second socket hint, then return to healthy timer-free observation.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pageReads).toBe(4);
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'message', sequence: 2, message: expect.objectContaining({ messageId: 'recovered-message' }),
+    }));
+    expect(vi.getTimerCount()).toBe(0);
     const readsAtAbort = get.mock.calls.length;
     lifetime.abort();
     await vi.advanceTimersByTimeAsync(0);

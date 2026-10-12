@@ -69,6 +69,68 @@ describe('original terminal Settings transport', () => {
     expect(await prepared.invocation.run()).toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
     expect(requests).toEqual([]);
   });
+  it.each(['signed_out', 'account_changed', 'cancelled', 'current'] as const)(
+    'retains the captured device read scope across own-Machine endpoint discovery: %s', async scope => {
+      const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1', provenance: {
+        v: 1, kind: 'terminal', authority: 'account_automation',
+      } })).toString('base64url')}.signature`;
+      const credentials: StoredCredentials = { token, encryption: null, credentialProvenance: 'stored_session' };
+      let current: StoredCredentials | null = credentials;
+      const capturedTarget = { pid: 123, httpPort: 4321, accountId: 'account-1', machineId: 'machine-1' };
+      const controlTarget = vi.spyOn(publication, 'resolveLiveDaemonControlTargetForServer').mockResolvedValue(capturedTarget);
+      let releaseDiscovery: () => void = () => { throw new Error('Endpoint discovery was not pending'); };
+      let discoveryStarted: () => void = () => { throw new Error('Endpoint discovery was not initialized'); };
+      const started = new Promise<void>(resolve => { discoveryStarted = resolve; });
+      // These adapters cross the OS publication and daemon HTTP boundaries.
+      vi.spyOn(publication, 'resolveLiveDaemonExternalActionEndpoint').mockImplementation(async () => {
+        discoveryStarted();
+        await new Promise<void>(resolve => { releaseDiscovery = resolve; });
+        return capturedTarget;
+      });
+      const result: ActionExecuteResult = { ok: true, result: { anchor: 'appearance.themeMode', value: 'dark' } };
+      const requests: unknown[] = [];
+      vi.spyOn(control, 'requestDaemonSignedRootActionExecution').mockImplementation(async (request, options) => {
+        expect(options?.target).toEqual(capturedTarget);
+        requests.push(request);
+        return result;
+      });
+      const owner = createCliActionExecutorFromCredentials({
+        credentials, readCredentials: async () => current,
+        serverId: 'home-1', serverApiUrl: 'https://home.example.test', serverIdentityId: 'srv_home',
+        externalActionClient: true,
+        actionsSettingsProvider: { getActionsSettings: () => ActionsSettingsV1Schema.parse({ v: 1 }) },
+      });
+      const controller = new AbortController();
+      const prepared = await owner.prepare('settings.get', { anchor: 'appearance.themeMode' }, {
+        surface: 'cli', signal: controller.signal,
+        externalActionTarget: { kind: 'machine', machineId: 'machine-1' }, actionRequestId: 'device-setting-read',
+      });
+      if (prepared.kind !== 'ready') throw new Error('Device setting read did not prepare');
+      const running = prepared.invocation.run();
+      expect(await Promise.race([
+        started.then(() => 'discovery'),
+        running.then(() => 'settled_without_discovery'),
+      ])).toBe('discovery');
+      expect(requests).toEqual([]);
+      if (scope === 'signed_out') current = null;
+      if (scope === 'account_changed') current = { ...credentials,
+        token: `header.${Buffer.from(JSON.stringify({ sub: 'account-2', provenance: {
+          v: 1, kind: 'terminal', authority: 'account_automation',
+        } })).toString('base64url')}.signature` };
+      if (scope === 'cancelled') controller.abort();
+      controlTarget.mockResolvedValue({ ...capturedTarget, pid: 456, httpPort: 9876 });
+      releaseDiscovery();
+      const expected = scope === 'current' ? result : {
+        ok: false, errorCode: scope === 'cancelled' ? 'cancelled' : 'credential_scope_retired',
+      };
+      expect(await running).toMatchObject(expected);
+      expect(await prepared.invocation.run()).toMatchObject(expected);
+      expect(requests).toEqual(scope === 'current' ? [{
+        actionId: 'settings.get', input: { anchor: 'appearance.themeMode' },
+        target: { kind: 'machine', machineId: 'machine-1' }, actionRequestId: 'device-setting-read',
+      }] : []);
+    },
+  );
   it('does not issue a captured device read cancelled while its scope check is pending', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1', provenance: {
       v: 1, kind: 'terminal', authority: 'account_automation',

@@ -13,6 +13,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
 
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '@/api/encryption';
 import { configuration } from '@/configuration';
@@ -61,7 +62,13 @@ describe('credentialed CLI relation source-key preparation composition', () => {
     { name: 'explicit verified Home', fixed: true, provenance: 'public', plain: false, prepares: true },
     { name: 'unverified active Home', fixed: false, provenance: 'public', plain: false, prepares: false },
     { name: 'Plain source without Home identity', fixed: false, provenance: 'public', plain: true, prepares: false },
-  ] as const).flatMap((scenario) => (['follow', 'reports_to', 'spawn'] as const).map((relation) => ({ ...scenario, relation }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, relation }) => {
+    { name: 'persistent destination without standalone source key', fixed: true, provenance: 'public', plain: false, prepares: false,
+      persistent: true, standaloneSourceKey: false },
+    { name: 'Runner destination without standalone source key', fixed: true, provenance: 'public', plain: false, prepares: false,
+      persistent: false, standaloneSourceKey: false },
+  ] as const).flatMap((scenario) => (['follow', 'reports_to', 'spawn'] as const).map((relation) => ({
+    persistent: false, standaloneSourceKey: true, ...scenario, relation,
+  }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, relation }) => {
     const serverUrl = normalizeServerHttpBaseUrl(fixed ? 'https://fixed-follow.example.test' : configuration.apiServerUrl);
     // Follow-source mutation is a dangerous CLI Action. Keep the production
     // approval owner wired (the credentialed artifact store remains available)
@@ -97,10 +104,11 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       return { session: createSessionRecordFixture({
         id,
         encryptionMode: plain && id === sourceSessionId ? 'plain' : 'e2ee',
-        dataEncryptionKey: plain && id === sourceSessionId ? null : sealKey(sourceKey),
+        dataEncryptionKey: id === sourceSessionId && (plain || !standaloneSourceKey) ? null : sealKey(sourceKey),
         metadata: plain && id === sourceSessionId
           ? JSON.stringify({ sessionCreationCorrespondenceV1: creationCorrespondence })
-          : encodeBase64(encrypt(sourceKey, 'dataKey', { machineId, sessionCreationCorrespondenceV1: creationCorrespondence })),
+          : encodeBase64(encrypt(id === sourceSessionId && !standaloneSourceKey ? machineKey : sourceKey, 'dataKey',
+            { machineId, sessionCreationCorrespondenceV1: creationCorrespondence })),
       }) };
     });
     const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
@@ -118,7 +126,8 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       events.push('exact_machine');
       return { machine: {
         id: machineId,
-        kind: 'ephemeral_session_runner',
+        kind: persistent ? 'persistent' : 'ephemeral_session_runner',
+        storageMode: 'e2ee',
         installationId: bindingPayload.installationId,
         revokedAt: null,
         replacedByMachineId: null,
@@ -135,18 +144,21 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       } };
     });
     const preparedRequests: unknown[] = [];
+    const runnerContent: SocketRpcContent = { mode: 'e2ee', cipher: {
+      encryptRaw: async value => encodeBase64(encrypt(runnerKey, 'dataKey', value)),
+      decryptRaw: async ciphertext => decrypt(runnerKey, 'dataKey', decodeBase64(ciphertext)),
+    } };
     const socket = createApiSessionSocketStub({ emitWithAck: async (event, rawCall) => {
       expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
       // This is the untyped socket network boundary, narrowed before use.
       const call = rawCall as { method: string; params: string; authorization: unknown };
       expect(call.method).toBe(`${machineId}:${RPC_METHODS.DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE}`);
-      const request = SessionFollowSourceKeyPrepareRequestV1Schema.parse(
-        decrypt(runnerKey, 'dataKey', decodeBase64(call.params)),
-      );
+      const decoded = await socketRpcCodec.decodeRequestParams(runnerContent, call.params, call.method);
+      const request = SessionFollowSourceKeyPrepareRequestV1Schema.parse(decoded.params);
       preparedRequests.push(request);
       expect(call.authorization).toEqual({ kind: 'session.follow.sourceKey.prepare', sourceSessionId, destinationSessionId });
       return {
-        ok: true, result: encodeBase64(encrypt(runnerKey, 'dataKey', { v: 1, outcome: 'installed' })),
+        ok: true, result: await socketRpcCodec.encodeResponse(runnerContent, { v: 1, outcome: 'installed' }, decoded.callId),
       };
     } });
     io.mockReturnValue(socket);
@@ -191,14 +203,20 @@ describe('credentialed CLI relation source-key preparation composition', () => {
             directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
             connectedServices: { v: 2, bindingsByServiceId: {} }, reportsTo: { sessionId: destinationSessionId },
           }, { surface: 'cli' });
-      if (prepares || plain) {
+      if (relation === 'spawn') {
+        expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: {
+          type: 'success', sessionId: sourceSessionId,
+          sourceKeyPreparation: prepares ? { kind: 'prepared' } : plain || persistent ? { kind: 'not_needed' }
+            : { kind: 'waiting', reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' },
+        } });
+      } else if (prepares || plain || persistent) {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: relation === 'follow' ? { changed: true, source }
           : relation === 'reports_to' ? reportsTo : { type: 'success', sessionId: sourceSessionId } });
       } else {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: false, errorCode: 'session_follow_source_key_preparation_waiting',
-          details: { edgeCommitted: true, reason: 'runner_unreachable' } });
+          details: { edgeCommitted: true, reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' } });
       }
-      expect(events).toEqual(prepares ? ['edge_committed', 'exact_machine'] : ['edge_committed']);
+      expect(events).toEqual(prepares || !standaloneSourceKey ? ['edge_committed', 'exact_machine'] : ['edge_committed']);
       expect(preparedRequests).toEqual(prepares ? [{
         v: 1, sourceSessionId, destinationSessionId, sourceDataEncryptionKeyBase64: encodeBase64(sourceKey),
       }] : []);

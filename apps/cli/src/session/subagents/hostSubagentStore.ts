@@ -62,6 +62,8 @@ export type HostSubagentWatchEvent = Readonly<{
 }>;
 
 export type HostSubagentStore = Readonly<{
+    readLiveWork(parentSessionId: string): Readonly<{ state: 'active' | 'settled'; activeCount: number }>;
+    subscribeLiveWork(parentSessionId: string, listener: () => void): () => void;
     list(params?: HostSubagentListParams): Promise<readonly SubagentRefV1[]>;
     get(params: HostSubagentGetParams): Promise<SubagentRefV1 | null>;
     watch(
@@ -180,6 +182,8 @@ export function createHostSubagentStore(options: HostSubagentStoreOptions = {}):
     const refsByKey = new Map<string, SubagentRefV1>();
     const ownersByKey = new Map<string, SubagentOwner>();
     const watchers = new Set<Watcher>();
+    // Host-lifetime observation is not a capped/expiring presentation watch.
+    const liveWorkListeners = new Map<string, Set<() => void>>();
     const pendingChangedByKey = new Map<string, SubagentRefV1>();
     let changeFlushScheduled = false;
 
@@ -227,6 +231,9 @@ export function createHostSubagentStore(options: HostSubagentStoreOptions = {}):
     };
 
     const notifyChanged = (ref: SubagentRefV1): void => {
+        for (const listener of liveWorkListeners.get(ref.parentSessionId) ?? []) {
+            try { listener(); } catch { /* Observation cannot interrupt canonical subagent write custody. */ }
+        }
         pendingChangedByKey.set(subagentKey(ref), ref);
         if (changeFlushScheduled) {
             return;
@@ -257,6 +264,19 @@ export function createHostSubagentStore(options: HostSubagentStoreOptions = {}):
     };
 
     return Object.freeze({
+        readLiveWork(parentSessionId) {
+            let activeCount = 0;
+            for (const ref of refsByKey.values()) {
+                if (ref.parentSessionId === parentSessionId && (ref.status === 'pending' || ref.status === 'running')) activeCount++;
+            }
+            return { state: activeCount > 0 ? 'active' : 'settled', activeCount };
+        },
+        subscribeLiveWork(parentSessionId, listener) {
+            const listeners = liveWorkListeners.get(parentSessionId) ?? new Set<() => void>();
+            liveWorkListeners.set(parentSessionId, listeners);
+            listeners.add(listener);
+            return () => { listeners.delete(listener); if (!listeners.size) liveWorkListeners.delete(parentSessionId); };
+        },
         list,
         async get(params) {
             const parentSessionId = normalizeOptionalString(params.parentSessionId);

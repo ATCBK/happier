@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import {
-  API_TOKEN_FULL_GRANT_V1,
   EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
   EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
   EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
-  SessionDiscussionAgentPostResponseV1Schema,
-  verifyExternalActionMachineRequestV1,
   type ExternalActionExecutionAuthorizationV1,
+} from '@happier-dev/protocol/actions/externalActionApi';
+import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import {
+  SessionDiscussionAgentPostResponseV1Schema,
   type SessionDiscussionAgentPostRequestV1,
   type SessionDiscussionAgentPostResponseV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/sessions/discussions/api';
 
 const { axiosRequest, fetchSessionById, resolveFeatureDecision } = vi.hoisted(() => ({
   axiosRequest: vi.fn(),
@@ -65,10 +67,10 @@ function wireSummary(crypto: SessionStoredContentCryptoContext = discussionCrypt
     id: 'discussion-1',
     sessionId: 'session-1',
     creationLocalId: 'creation-1',
-    titleContent: sealSessionStoredContent({
+    titleContent: { ...sealSessionStoredContent({
       ...crypto,
-      payload: { v: 1, title: 'Title' },
-    }),
+      payload: { v: 1, title: 'Title', retiredField: true },
+    }), retiredEnvelopeField: true },
     latestMessage: {
       id: 'message-1',
       localId: 'message-1',
@@ -97,10 +99,10 @@ function wireMessage(crypto: SessionStoredContentCryptoContext = discussionCrypt
     authorAccountId: 'account-1',
     accountActor: { v: 1, accountId: 'account-1', profile: null },
     producerV1: null,
-    content: sealSessionStoredContent({
+    content: { ...sealSessionStoredContent({
       ...crypto,
-      payload: { v: 1, parts: [{ t: 'text', text: 'Hello' }] },
-    }),
+      payload: { v: 1, retiredField: true, parts: [{ t: 'text', text: 'Hello', retiredField: true }] },
+    }), retiredEnvelopeField: true },
     mentionedAccountIds: [],
     createdAt: 1,
   };
@@ -370,11 +372,11 @@ describe('createSessionDiscussionActionDeps', () => {
       data: {
         discussion: {
           ...wireSummary(),
-          titleContent: { t: 'plain', v: { v: 1, title: 'Title' } },
+          titleContent: { t: 'plain', v: { v: 1, title: 'Title', retiredField: true }, retiredEnvelopeField: true },
         },
         firstMessage: {
           ...wireMessage(),
-          content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Hello' }] } },
+          content: { t: 'plain', v: { v: 1, retiredField: true, parts: [{ t: 'text', text: 'Hello', retiredField: true }] }, retiredEnvelopeField: true },
         },
       },
     });
@@ -411,7 +413,11 @@ describe('createSessionDiscussionActionDeps', () => {
     });
     expect(body).not.toHaveProperty('creationEqualityEvidenceV1');
     expect(body.firstMessage).not.toHaveProperty('requestEqualityEvidenceV1');
-    expect(result).toMatchObject({ discussion: { title: 'Title' } });
+    expect(result).toMatchObject({ discussion: { title: 'Title' }, firstMessage: {
+      content: { v: 1, parts: [{ t: 'text', text: 'Hello' }] },
+    } });
+    expect(result).not.toHaveProperty('firstMessage.content.retiredField');
+    expect(result).not.toHaveProperty('firstMessage.content.parts.0.retiredField');
   });
 
   it('rejects exact Session material that disagrees with the persisted mode before a discussion write', async () => {

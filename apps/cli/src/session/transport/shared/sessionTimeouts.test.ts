@@ -77,6 +77,13 @@ describe('sessionControlTimeouts', () => {
     expect(resolveSessionControlSocketAckTimeoutMs()).toBe(2345);
   });
 
+  it('honors socket budgets longer than one minute', () => {
+    process.env.HAPPIER_SESSION_SOCKET_CONNECT_TIMEOUT_MS = '180000';
+    process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS = '180000';
+    expect(resolveSessionControlSocketConnectTimeoutMs()).toBe(180_000);
+    expect(resolveSessionControlSocketAckTimeoutMs()).toBe(180_000);
+  });
+
   it('reads session wait idle confirmation window from env', () => {
     process.env.HAPPIER_SESSION_WAIT_IDLE_CONFIRM_MS = '345';
     expect(resolveSessionControlWaitIdleConfirmMs()).toBe(345);

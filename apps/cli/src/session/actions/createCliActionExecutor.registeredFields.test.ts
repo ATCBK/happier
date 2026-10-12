@@ -76,7 +76,7 @@ describe('headless registered Session field Actions', () => {
     const input = { sessionId, permissionMode: 'read-only' };
     const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home' };
     expect(await owner.execute('session.permission_mode.set', { ...input, applyTiming: 'next_prompt' }, context))
-      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters', error: expect.stringContaining('session.message.send') });
     expect(boundary.reads).toBe(0);
     expect(boundary.patches).toEqual([]);
     expect(await owner.execute('session.permission_mode.set', { ...input, applyTiming: 'immediate' }, context))

@@ -17,11 +17,13 @@ import {
 import tweetnacl from 'tweetnacl';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { decodeBase64, decrypt } from '@/api/encryption';
 import { createSessionBoardActionDeps } from './sessionBoardActionDeps';
 import { validateSessionSystemRecordOpenedContent } from '@/session/systemRecords/sessionSystemRecordCodec';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { createWidgetActionInputResolverV1 } from '@happier-dev/protocol/widgets/widgetActionInputResolverV1';
 import {
   CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD,
   CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY,
@@ -34,6 +36,24 @@ import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createCurrentSessionPresentationService } from '@/session/presentation/currentSessionPresentationService';
+import { listBuiltInHappierTools } from '@/agent/tools/happierTools/listBuiltInHappierTools';
+import { resolveTranscriptSessionBoardItemReferenceV1 } from '@happier-dev/protocol/sessions/board/transcriptReference';
+import { buildHappierToolsPromptAppendix } from '@/agent/tools/happierTools/runtime/buildHappierToolsPromptAppendix';
+import { parseTrustedHappierToolsShellBridgeCommand } from '@/agent/tools/happierTools/runtime/buildHappierToolsShellBridgeCommand';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import type { ApprovalRequest } from '@happier-dev/protocol';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
+import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createCliWidgetDefinitionActionDepsV1 } from '@/session/actions/widgetDefinitionActionDeps';
+import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
+import type { WidgetDefinitionArtifactV1 } from '@happier-dev/protocol/widgets';
 
 const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
 const item = { v: 1, destination: 'board', title: 'Note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
@@ -78,6 +98,458 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it.each([200, 500] as const)('preserves the HTTP %s visual outcome through the real Account-backed Session MCP factory', async status => {
+    app.get('/v2/sessions/runtime-session', async () => ({ session: { ...rawSession, id: 'runtime-session' } }));
+    app.get('/v2/sessions/runtime-session/system-records/record', async () => ({ record: null }));
+    const writes: unknown[] = [];
+    app.put('/v2/sessions/runtime-session/board', async (request, reply) => {
+      if (status === 500) return reply.code(status).send({ error: 'Internal Server Error',
+        message: 'could not serialize access due to concurrent update' });
+      writes.push(request.body);
+      return { operation: 'upsert_item', itemId: 'visual', outcome: 'created', itemRevision: revision };
+    });
+    const runtime = createHappierMcpServer({
+      sessionId: 'runtime-session',
+      getServerBinding: () => ({ serverId: 'home-a', serverUrl: 'http://board.test' }),
+      getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
+        features: { sessions: { enabled: true, board: { enabled: true } }, sharing: { session: { enabled: true } } },
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_board_runtime' } },
+      }) }),
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'runtime-session', encryptionMode: 'plain' }),
+      updateMetadata() {}, getMetadataSnapshot: () => createTestMetadata(),
+      getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+      getActiveTurnPermissionWitness: () => ({ turnId: 'turn', causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+      } }),
+      getStoredContentEncryptionContext: () => ({ mode: 'plain' }),
+    }, { authorityScope: 'account', credentials: { token: `fixture.${Buffer.from(JSON.stringify({
+      sub: 'account', provenance: { v: 1, kind: 'account', authority: 'present_user' },
+    })).toString('base64url')}.signature`, encryption: null } });
+    const client = new Client({ name: 'runtime-agent', version: '1' });
+    const [agentTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(hostTransport);
+      await client.connect(agentTransport);
+      await client.listTools();
+      const result = await client.callTool({ name: 'session_board_item_upsert', arguments: {
+        itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item: { ...item, destination: 'transcript' },
+      } }, CallToolResultSchema);
+      if (status === 500) {
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([{ type: 'text', text: JSON.stringify({ errorCode: 'server_error', error: 'server_error' }) }]);
+        expect(writes).toEqual([]);
+        return;
+      }
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ serverId: 'srv_board_runtime', sessionId: 'runtime-session', result: { itemId: 'visual', outcome: 'created' } });
+      expect(writes).toEqual([expect.objectContaining({ itemId: 'visual', destination: 'transcript' })]);
+    } finally { await client.close(); await runtime.mcp.close(); }
+  });
+  it('returns a truthful pending MCP result, then replays the approved visual into the same Session record', async () => {
+    let committed: Record<string, unknown> | null = null;
+    let approval: ApprovalRequest | null = null;
+    app.get('/v2/sessions/session-one/system-records/record', async request => ({
+      record: committed && (request.query as { kind?: string }).kind === 'item.v1' ? {
+        id: 'visual-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visual' },
+        content: committed.itemContent, revision, creator: { kind: 'session', sessionId: 'session-one' },
+        createdAt: '2026-10-12T00:00:00.000Z', updatedAt: '2026-10-12T00:00:00.000Z',
+      } : null,
+    }));
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body as Record<string, unknown>;
+      return { operation: 'upsert_item', itemId: 'visual', outcome: 'created', itemRevision: revision };
+    });
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {
+      'session.board.item.upsert': { approvalRequiredSurfaces: ['agent'] },
+    } });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+        serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }),
+      // Artifact persistence and authenticated origin currentness are boundaries.
+      approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'approval' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = request; return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const tools = createActionToolExecutorBridge({ surface: 'agent', executor: {
+      execute: (id, value, context) => executor.execute(id, value, { ...context, serverId: 'home-a',
+        runtimeAccountId: 'account', actionsSettings, defaultSessionMachineId: 'machine-one',
+        actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } }),
+    } });
+    const server = new McpServer({ name: 'visual-regression', version: '1' });
+    const client = new Client({ name: 'visual-agent', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    registerHappierMcpBuiltInTools({ registerTool: (name, meta, handler) => {
+      // Preserve the SDK's real input/output validation at the transport boundary.
+      server.registerTool(name, meta as { inputSchema: z.ZodType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
+    } }, { sessionId: 'session-one', surface: 'agent', actionsSettings,
+      deps: { changeTitle: async () => ({ success: true }), executeActionByToolName: tools.executeActionByToolName } });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const refused = CallToolResultSchema.parse(await client.callTool({ name: 'session_board_item_upsert', arguments: {
+        itemId: 'invalid-html', expectedItemRevision: null, destination: 'transcript',
+        item: { ...item, destination: 'transcript', source: { kind: 'hostedHtml', requestedCapabilities: {}, source: {
+          v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html',
+            contentBase64: Buffer.from('<script src="missing.js"></script>').toString('base64') } },
+        } } },
+      } }));
+      expect(refused.isError).toBe(true);
+      const refusalContent = refused.content[0];
+      if (refusalContent?.type !== 'text') throw new Error('Expected typed Action refusal');
+      expect(JSON.parse(refusalContent.text)).toMatchObject({ errorCode: 'invalid_parameters',
+        details: { reason: 'source_invalid', field: 'item.source' } });
+      expect(approval).toBeNull();
+      expect(committed).toBeNull();
+      const input = { itemId: 'visual', expectedItemRevision: null, destination: 'transcript',
+        item: { ...item, destination: 'transcript' } };
+      const pending = await client.callTool({ name: 'session_board_item_upsert', arguments: input });
+      expect(pending).toMatchObject({ isError: false, structuredContent: {
+        kind: 'approval_request_created', artifactId: 'approval', actionId: 'session.board.item.upsert',
+      } });
+      expect(committed).toBeNull();
+      expect(resolveTranscriptSessionBoardItemReferenceV1({ toolName: 'session_board_item_upsert',
+        state: 'completed', input, result: pending, address: { serverId: 'home-a', sessionId: 'session-one' } })).toBeNull();
+      const decision = await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' },
+        { surface: 'ui', authority: 'present_user', serverId: 'home-a' });
+      expect(decision).toMatchObject({ ok: true });
+      expect(approval).toMatchObject({ status: 'executed', execution: { ok: true, result: {
+        sessionId: 'session-one', result: { itemId: 'visual', outcome: 'created', itemRevision: revision },
+      } } });
+      expect(committed).toMatchObject({ itemId: 'visual', itemContent: { t: 'plain', v: {
+        destination: 'transcript', source: item.source,
+      } } });
+      const readback = await client.callTool({ name: 'session_board_get', arguments: { itemIds: ['visual'] } });
+      expect(readback).toMatchObject({ isError: false, structuredContent: { sessionId: 'session-one',
+        items: [{ itemId: 'visual', revision, item: { destination: 'transcript', source: item.source } }] } });
+    } finally { await client.close(); await server.close(); }
+  });
+  it('executes the projected visual example as an agent and emits a placement-free transcript reference', async () => {
+    const tool = listBuiltInHappierTools({ surface: 'agent', actionsSettings: null, isActionEnabled: () => true })
+      .find(candidate => candidate.actionId === 'session.board.item.upsert');
+    const example = tool?.examples as { mcp?: { argsExample?: string } } | undefined;
+    expect(example?.mcp?.argsExample).toBeTypeOf('string');
+    const prompt = buildHappierToolsPromptAppendix({ sessionId: 'session-one', directory: '/workspace' });
+    const command = [...prompt.matchAll(/`([^`\n]+)`/g)]
+      .map(match => parseTrustedHappierToolsShellBridgeCommand(match[1]!))
+      .find(value => value?.kind === 'call' && value.tool === tool!.name);
+    expect(command).toMatchObject({ kind: 'call', tool: tool!.name, sessionId: 'session-one' });
+    if (command?.kind !== 'call' || !command.argsJson) throw new Error('Missing executable visual command');
+    const input = JSON.parse(command.argsJson);
+    expect(input).toEqual({ ...JSON.parse(example!.mcp!.argsExample!), sessionId: 'session-one' });
+    expect(input.item.source.document.root).toMatchObject({ kind: 'chart', style: 'bar',
+      x: { path: ['day'], type: 'string' }, series: { path: ['channel'], type: 'string' }, value: { path: ['orders'], type: 'number' } });
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    let committed: unknown;
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body;
+      return { operation: 'upsert_item', itemId: input.itemId, outcome: 'created', itemRevision: revision };
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+        serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }) });
+    const tools = createActionToolExecutorBridge({ surface: 'agent', executor: {
+      execute: (id, value, context) => executor.execute(id, value, { ...context, serverId: 'home-a',
+        actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } }),
+    } });
+    const result = await tools.executeActionByToolName(tool!.name, input, 'session-one');
+    expect(result).toMatchObject({ ok: true });
+    expect(committed).toMatchObject({ itemContent: { t: 'plain', v: {
+      destination: 'transcript', source: input.item.source,
+    } } });
+    expect(committed).not.toHaveProperty('placement');
+    expect(resolveTranscriptSessionBoardItemReferenceV1({ toolName: tool!.name, state: 'completed', input,
+      result, address: { serverId: 'home-a', sessionId: 'session-one' } })).toMatchObject({
+      itemId: input.itemId, itemRevision: revision, itemDestination: 'transcript',
+    });
+  });
+  it('shows the guided Daily usage widget through the projected agent tool and saves its native definition', async () => {
+    const tool = listBuiltInHappierTools({ surface: 'agent', actionsSettings: null, isActionEnabled: () => true })
+      .find(candidate => candidate.actionId === 'session.board.item.upsert');
+    expect(tool).toBeDefined();
+    const prompt = buildHappierToolsPromptAppendix({ sessionId: 'session-one', directory: '/workspace' });
+    const command = [...prompt.matchAll(/`([^`\n]+)`/g)]
+      .map(match => parseTrustedHappierToolsShellBridgeCommand(match[1]!))
+      .find(value => value?.kind === 'call' && value.tool === tool!.name
+        && value.argsJson && JSON.parse(value.argsJson).itemId === 'daily-usage');
+    expect(command).toMatchObject({ kind: 'call', tool: tool!.name, sessionId: 'session-one' });
+    if (command?.kind !== 'call' || !command.argsJson) throw new Error('Missing Daily usage command');
+    const input = JSON.parse(command.argsJson);
+    const projected = tool!.inputSchema as z.ZodType;
+    expect(projected.safeParse(input).success).toBe(true);
+    let committed: unknown;
+    app.get('/v2/sessions/session-one/system-records/record', async request => {
+      const mutation = committed ? SessionBoardMutationV1Schema.parse(committed) : null;
+      return { record: (request.query as Record<string, string>).kind !== 'item.v1' || mutation?.operation !== 'upsert_item' ? null : {
+        id: 'daily-usage-record', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'daily-usage' },
+        revision, content: mutation.itemContent, createdAt: '2026-10-12T00:00:00.000Z', updatedAt: '2026-10-12T00:00:00.000Z',
+      } };
+    });
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body;
+      return { operation: 'upsert_item', itemId: input.itemId, outcome: 'created', itemRevision: revision };
+    });
+    // Exercise the real Account-backed factory, including widget scope/input
+    // admission. A Board-only executor cannot admit configured widget inputs.
+    const runtime = createHappierMcpServer({ sessionId: 'session-one',
+      getServerBinding: () => ({ serverId: 'home-a', serverUrl: 'http://board.test' }),
+      getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
+        features: { sessions: { enabled: true, board: { enabled: true } }, sharing: { session: { enabled: true } } }, capabilities: {},
+      }) }),
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'session-one', encryptionMode: 'plain' }),
+      updateMetadata() {}, getMetadataSnapshot: () => createTestMetadata(), getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+      getActiveTurnPermissionWitness: () => ({ turnId: 'turn', causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+      } }), getStoredContentEncryptionContext: () => ({ mode: 'plain' }),
+    }, { authorityScope: 'account', credentials: { token: `fixture.${Buffer.from(JSON.stringify({
+      sub: 'account', provenance: { v: 1, kind: 'account', authority: 'present_user' },
+    })).toString('base64url')}.signature`, encryption: null } });
+    const client = new Client({ name: 'usage-agent', version: '1' });
+    const [agentTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    let result;
+    try {
+      await runtime.mcp.connect(hostTransport); await client.connect(agentTransport); await client.listTools();
+      result = await client.callTool({ name: tool!.name, arguments: input }, CallToolResultSchema);
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    } finally { await client.close(); await runtime.mcp.close(); }
+    expect(committed).toMatchObject({ itemId: 'daily-usage', itemContent: { t: 'plain', v: {
+      destination: 'transcript', source: { kind: 'widget', instance: {
+        id: 'daily-usage', definition: { kind: 'builtin', id: 'usage_daily' },
+      } },
+    } } });
+    expect(committed).not.toHaveProperty('placement');
+    expect(resolveTranscriptSessionBoardItemReferenceV1({ toolName: tool!.name, state: 'completed', input,
+      result, address: { serverId: 'home-a', sessionId: 'session-one' } })).toMatchObject({
+      itemId: 'daily-usage', itemRevision: revision, itemDestination: 'transcript',
+    });
+    // Model Artifact persistence only; source acquisition, native promotion,
+    // codecs, Action execution and the projected tool dispatcher remain real.
+    const artifacts = new Map<string, WidgetDefinitionArtifactV1>();
+    const deps: ActionExecutorDeps = { ...createUnavailableActionTransportDeps(),
+      ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+        serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }),
+      widgetAccountScope: () => ({ serverId: 'home-a', accountId: 'account' }),
+    };
+    Object.assign(deps, createCliWidgetDefinitionActionDepsV1({ accountId: 'account', getDeps: () => deps,
+      readCandidates: async () => [], transport: {
+        read: async id => artifacts.get(id) ?? null,
+        list: async () => ({ items: [] }),
+        create: async args => {
+          const row = { artifactId: args.artifactId, ownerAccountId: 'account', header: args.header, body: args.body,
+            revision: { headerVersion: 1, bodyVersion: 1 } };
+          artifacts.set(args.artifactId, row);
+          return { artifactId: args.artifactId, revision: row.revision };
+        },
+        update: async () => { throw new Error('Save must create an independent definition'); },
+        delete: async () => { throw new Error('Save must retain the Session visual'); },
+      } }));
+    const executor = createActionExecutor(deps);
+    // This content test executes an already-admitted Save. The approval owner
+    // has separate agent Save admission coverage.
+    const saveTools = createActionToolExecutorBridge({ surface: 'agent', executor: {
+      execute: (id, value, context) => executor.execute(id, value, { ...context, serverId: 'home-a',
+        authority: 'present_user', bypassApprovals: true }),
+    } });
+    const saved = await saveTools.executeActionByToolName('action_execute', {
+      actionId: 'widgets.definition.saveFromSession', input: { account: { serverId: 'home-a', accountId: 'account' },
+        session: { serverId: 'home-a', sessionId: 'session-one' }, itemId: 'daily-usage', artifactId: 'saved-daily-usage' },
+    }, 'session-one');
+    expect(saved, JSON.stringify(saved)).toMatchObject({ ok: true, result: { definition: { id: 'saved-daily-usage',
+      body: { kind: 'builtin', id: 'usage_daily' } }, suggestedBindings: input.item.source.instance.bindings } });
+    expect(artifacts.get('saved-daily-usage')?.body).toBeDefined();
+  });
+  it('refuses a copy source outside the external credential Session grant before reading it', async () => {
+    let sourceReads = 0;
+    let writes = 0;
+    const requests: string[] = [];
+    app.addHook('onRequest', async request => { requests.push(request.url); });
+    app.get('/v2/sessions/source-session', async () => { sourceReads++; return { session: { ...rawSession, id: 'source-session' } }; });
+    app.get('/v2/sessions/source-session/system-records/record', async request => ({ record: (request.query as Record<string, string>).kind === 'layout.v1' ? null : {
+      id: 'source-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'source-visual' },
+      revision, content: { t: 'plain', v: item }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    } }));
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    app.put('/v2/sessions/session-one/board', async () => { writes++; return { operation: 'upsert_item', itemId: 'copied-visual', outcome: 'created', itemRevision: revision }; });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }) });
+    const result = await executor.execute('session.board.item.upsert', { sessionId: 'session-one', itemId: 'copied-visual',
+      expectedItemRevision: null, copySource: { serverId: 'home-a', sessionId: 'source-session', itemId: 'source-visual', expectedItemRevision: revision } },
+    { surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one',
+      presentUserConfirmation: { actionId: 'session.board.item.upsert' }, externalActionCredential: {
+        accountId: 'account', principalId: 'token', credentialId: 'token',
+        grant: { ...API_TOKEN_FULL_GRANT_V1, targets: { sessions: ['session-one'], machines: [] } },
+      } });
+    expect(sourceReads).toBe(0);
+    expect(writes).toBe(0);
+    expect(result, JSON.stringify({ requests, result })).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+  });
+  it('copies an exact other-Session visual through the canonical Action without retaining source ownership or widening network', async () => {
+    const sourceItem = { ...item, source: { kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: {
+      'index.html': { mime: 'text/html', contentBase64: Buffer.from('<main>Source snapshot</main>').toString('base64') },
+    } }, requestedCapabilities: { network: 'open', networkOrigins: [] } } };
+    app.get('/v2/sessions/source-session', async () => ({ session: { ...rawSession, id: 'source-session' } }));
+    app.get('/v2/sessions/source-session/system-records/record', async request => ({ record: (request.query as Record<string, string>).kind === 'layout.v1' ? null : {
+      id: 'source-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'source-visual' },
+      revision, content: { t: 'plain', v: sourceItem }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    } }));
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    let committed: unknown;
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body;
+      return { operation: 'upsert_item', itemId: 'copied-visual', outcome: 'created', itemRevision: revision };
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }), readAgentHtmlNetworkPolicy: async () => 'off' });
+    const result = await executor.execute('session.board.item.upsert', { sessionId: 'session-one', itemId: 'copied-visual',
+      expectedItemRevision: null, destination: 'transcript', copySource: {
+        serverId: 'home-a', sessionId: 'source-session', itemId: 'source-visual', expectedItemRevision: revision,
+      } }, { surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one',
+      presentUserConfirmation: { actionId: 'session.board.item.upsert' } });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result).toMatchObject({ ok: true, result: { itemDestination: 'transcript', result: { outcome: 'created', itemId: 'copied-visual' },
+      effectiveNetwork: { network: 'open', networkOrigins: [] } } });
+    expect(committed).toMatchObject({ itemId: 'copied-visual', destination: 'transcript', itemContent: { t: 'plain', v: {
+      ...sourceItem, destination: 'transcript',
+    } } });
+    expect(sourceItem.destination).toBe('board');
+  });
+  it('refuses stale, same-Session and foreign-Home copy sources before a destination write', async () => {
+    let sourceReadable = true;
+    app.get('/v2/sessions/source-session', async (_request, reply) => sourceReadable
+      ? { session: { ...rawSession, id: 'source-session' } }
+      : reply.code(403).send({ error: 'session_forbidden' }));
+    app.get('/v2/sessions/source-session/system-records/record', async request => ({ record: (request.query as Record<string, string>).kind === 'layout.v1' ? null : {
+      id: 'source-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'source-visual' },
+      revision, content: { t: 'plain', v: item }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    } }));
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }) });
+    const ctx = { surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one',
+      presentUserConfirmation: { actionId: 'session.board.item.upsert' as const } } as const;
+    const input = { sessionId: 'session-one', itemId: 'copied-visual', expectedItemRevision: null, copySource: {
+      serverId: 'home-a', sessionId: 'source-session', itemId: 'source-visual', expectedItemRevision: revision,
+    } };
+    expect(await executor.execute('session.board.item.upsert', { ...input, copySource: {
+      ...input.copySource, expectedItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAg',
+    } }, ctx)).toMatchObject({ ok: false, errorCode: 'session_board_revision_conflict' });
+    expect(await executor.execute('session.board.item.upsert', { ...input, copySource: {
+      ...input.copySource, sessionId: 'session-one',
+    } }, ctx)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await executor.execute('session.board.item.upsert', { ...input, copySource: {
+      ...input.copySource, serverId: 'other-home',
+    } }, ctx)).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    sourceReadable = false;
+    expect(await executor.execute('session.board.item.upsert', input, ctx)).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+  });
+  it('rekeys an inline widget and its definition while preserving independent destination bindings', async () => {
+    const sourceItem = { ...item, source: { kind: 'widget', instance: { v: 1, id: 'source-visual',
+      definition: { kind: 'inline', definition: { v: 1, id: 'source-definition', name: 'Source widget',
+        body: { kind: 'declarative', document: item.source.document }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        provenance: { source: { kind: 'authored' } } } }, bindings: {} } } };
+    app.get('/v2/sessions/source-session', async () => ({ session: { ...rawSession, id: 'source-session' } }));
+    app.get('/v2/sessions/source-session/system-records/record', async request => ({ record: (request.query as Record<string, string>).kind === 'layout.v1' ? null : {
+      id: 'source-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'source-visual' },
+      revision, content: { t: 'plain', v: sourceItem }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    } }));
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    let committed: unknown;
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body;
+      return { operation: 'upsert_item', itemId: 'copied-widget', outcome: 'created', itemRevision: revision };
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }), widgetAccountScope: () => ({ serverId: 'home-a', accountId: 'account' }),
+      widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async request => request.instance.definition.kind === 'inline'
+        ? request.instance.definition.definition : null, readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+        validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [] }),
+    });
+    const result = await executor.execute('session.board.item.upsert', { sessionId: 'session-one', itemId: 'copied-widget',
+      expectedItemRevision: null, copySource: { serverId: 'home-a', sessionId: 'source-session', itemId: 'source-visual', expectedItemRevision: revision } },
+      { surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one', presentUserConfirmation: { actionId: 'session.board.item.upsert' } });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(committed).toMatchObject({ itemContent: { t: 'plain', v: { destination: 'transcript', source: { kind: 'widget', instance: {
+      id: 'copied-widget', definition: { kind: 'inline', definition: { id: 'copied-widget', body: sourceItem.source.instance.definition.definition.body } }, bindings: {},
+    } } } } });
+    expect(sourceItem.source.instance.id).toBe('source-visual');
+    expect(sourceItem.source.instance.definition.definition.id).toBe('source-definition');
+  });
+  it('freezes a reviewed copy across source removal and refuses an authored copy-proof spoof', async () => {
+    const sourceItem = { ...item, source: { kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: {
+      'index.html': { mime: 'text/html', contentBase64: Buffer.from('<main>Reviewed source</main>').toString('base64') },
+    } }, requestedCapabilities: { network: 'open', networkOrigins: [] } } };
+    let removed = false;
+    app.get('/v2/sessions/source-session', async () => ({ session: { ...rawSession, id: 'source-session' } }));
+    app.get('/v2/sessions/source-session/system-records/record', async request => ({ record: removed || (request.query as Record<string, string>).kind === 'layout.v1' ? null : {
+      id: 'source-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'source-visual' },
+      revision, content: { t: 'plain', v: sourceItem }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    } }));
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    let committed: unknown;
+    app.put('/v2/sessions/session-one/board', async request => {
+      committed = request.body;
+      return { operation: 'upsert_item', itemId: 'copied-visual', outcome: 'created', itemRevision: revision };
+    });
+    // Only the approval Artifact persistence/HTTP boundary is replaced. Its
+    // schema, approval decisions, origin binding and replay remain real.
+    let approval: unknown;
+    app.post('/test/approval', async request => { approval = request.body; return { artifactId: 'copy-approval' }; });
+    app.get('/test/approval', async () => approval);
+    app.put('/test/approval', async request => { approval = request.body; return { ok: true }; });
+    const deps: ActionExecutorDeps = { ...createUnavailableActionTransportDeps(), ...createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' }), readAgentHtmlNetworkPolicy: async () => 'off',
+      approvalsCreate: async ({ request }) => (await axios.post<{ artifactId: string }>('http://board.test/test/approval', request)).data,
+      approvalsGet: async () => (await axios.get<Awaited<ReturnType<NonNullable<ActionExecutorDeps['approvalsGet']>>>>('http://board.test/test/approval')).data,
+      approvalsUpdate: async ({ request }) => (await axios.put<{ ok: true }>('http://board.test/test/approval', request)).data,
+      isApprovalExecutionOriginCurrent: async () => true,
+    };
+    const executor = createActionExecutor(deps);
+    const input = { sessionId: 'session-one', itemId: 'copied-visual', expectedItemRevision: null, copySource: {
+      serverId: 'home-a', sessionId: 'source-session', itemId: 'source-visual', expectedItemRevision: revision,
+    } };
+    const ctx = { surface: 'agent', authority: 'account_automation', serverId: 'home-a', defaultSessionId: 'session-one',
+      runtimeAccountId: 'account', actionRequestId: 'copy-request', defaultSessionMachineId: 'machine-one',
+      actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } } as const;
+    expect(await executor.execute('session.board.item.upsert', input, ctx)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(committed).toBeUndefined();
+    removed = true;
+    const decided = await executor.execute('approval.request.decide', { artifactId: 'copy-approval', decision: 'approve' },
+      { surface: 'ui', authority: 'present_user', serverId: 'home-a' });
+    expect(decided).toMatchObject({ ok: true });
+    expect(committed, JSON.stringify(decided)).toBeDefined();
+    expect(committed).toMatchObject({ itemContent: { t: 'plain', v: { source: sourceItem.source, destination: 'transcript' } } });
+    const reviewedVisual = { networkSetting: null, recordRevision: null, creator: { kind: 'unknown' },
+      previousCapabilitiesDigest: null, previousExecutableFingerprint: null, copySource: input.copySource };
+    expect(await executor.execute('session.board.item.upsert', { sessionId: 'session-one', itemId: 'forged',
+      expectedItemRevision: null, item: sourceItem, reviewedVisual }, ctx)).toMatchObject({ ok: false, errorCode: 'approval_stale' });
+  });
+  it('acquires workspace HTML before approval preparation and keeps the acquired bytes for the later mutation', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'happier-visual-preparation-'));
+    try {
+      const path = join(workspaceRoot, 'index.html');
+      await writeFile(path, '<main>Reviewed</main>');
+      const deps = createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+        serverId: 'home-a', serverHttpBaseUrl: 'http://board.test',
+        resolvePublishCaller: async () => ({ sessionId: 'session-one', machineId: 'machine-one', directory: workspaceRoot }),
+      });
+      const prepared = await deps.sessionBoardPrepareItem!({ context: { defaultSessionId: 'session-one' }, input: {
+        itemId: 'page', expectedItemRevision: null, destination: 'transcript', item: { ...item,
+          source: { kind: 'hostedHtml', publicationSource: { path: 'index.html' } } },
+      } });
+      expect(prepared).toMatchObject({ item: { source: { kind: 'hostedHtml', source: { entrypoint: 'index.html' } } } });
+      await writeFile(path, '<main>Changed after review</main>');
+      app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+      let committed: unknown;
+      app.put('/v2/sessions/session-one/board', async request => {
+        committed = request.body;
+        return { operation: 'upsert_item', itemId: 'page', outcome: 'created', itemRevision: revision };
+      });
+      await expect(deps.sessionBoardAction!({ actionId: 'session.board.item.upsert', context: { defaultSessionId: 'session-one' }, input: prepared }))
+        .resolves.toMatchObject({ result: { outcome: 'created' } });
+      expect(JSON.stringify(committed)).toContain(Buffer.from('<main>Reviewed</main>').toString('base64'));
+      expect(JSON.stringify(committed)).not.toContain(Buffer.from('<main>Changed after review</main>').toString('base64'));
+    } finally { await rm(workspaceRoot, { recursive: true, force: true }); }
+  });
   it('reads explicit transcript items when Board is disabled without reading layout', async () => {
     app.get('/v2/sessions/session-one/system-records/record', async request => {
       expect((request.query as Record<string, string>).kind).toBe('item.v1');
@@ -132,7 +604,7 @@ describe('CLI Board Action family', () => {
         serverId: 'home-a', serverHttpBaseUrl: 'http://board.test', resolvePublishCaller: async () => ({
           sessionId: 'session-one', machineId: 'machine', directory,
         }) });
-      const executor = createActionExecutor(deps);
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps });
       const result = await executor.execute('session.board.item.upsert', { sessionId: 'session-one', itemId: 'result',
         expectedItemRevision: null, destination: 'transcript', item: { ...item, source: { kind: 'hostedHtml',
           publicationSource: { path: 'site', entrypoint: 'index.html' } } } }, {
@@ -144,7 +616,7 @@ describe('CLI Board Action family', () => {
         ...item, destination: 'transcript', source: { kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: {
           'index.html': { mime: 'text/html', contentBase64: Buffer.from('<script src="main.js"></script>').toString('base64') },
           'main.js': { mime: 'text/javascript', contentBase64: Buffer.from('document.body.dataset.loaded="yes"').toString('base64') },
-        } } },
+        } }, requestedCapabilities: { network: 'none', networkOrigins: [] } },
       } } })]);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
@@ -563,7 +1035,7 @@ describe('CLI Board Action family', () => {
     });
   });
   it('returns bounded inventory and exact requested bodies through the same host reader', async () => {
-    const record = { id: 'item-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note' }, content: { t: 'plain', v: item }, revision,
+    const record = { id: 'item-row', address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note' }, creator: { kind: 'session', sessionId: 'session-one' }, content: { t: 'plain', v: item }, revision,
       createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' };
     app.get('/v2/sessions/session-one/system-records/record', async (request) => ({ record: (request.query as { kind?: string }).kind === 'layout.v1' ? null : record }));
     app.get('/v2/sessions/session-one/system-records', async () => ({ records: [record, record], nextCursor: 'page-two', hasNext: true }));
@@ -572,7 +1044,7 @@ describe('CLI Board Action family', () => {
       layout: null, items: [{ itemId: 'note', title: 'Note', sourceKind: 'declarative', revision }], incomplete: true, page: { cursor: 'page-two', hasNext: true },
     });
     await expect(deps.sessionBoardAction!({ actionId: 'session.board.get', context: {}, input: { sessionId: 'session-one', itemIds: ['note', 'note'] } })).resolves.toMatchObject({
-      items: [{ itemId: 'note', item }], incomplete: false,
+      items: [{ itemId: 'note', creator: { kind: 'session', sessionId: 'session-one' }, item }], incomplete: false,
     });
   });
   it.each(['session.board.layout.update', 'session.board.item.remove'] as const)('uses complete layout operands for %s without inventory replacement', async (actionId) => {
@@ -615,11 +1087,11 @@ describe('CLI Board Action family', () => {
     });
     const deps = createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null }, serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' });
     // Through the real Action executor: its strict result correspondence is the deciding consumer.
-    const executor = createActionExecutor({ ...deps, isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps });
     const input = { sessionId: 'session-one', itemId: 'note', expectedItemRevision: revision, item,
       placement: { tabId: 'second', width: 'wide' as const } };
     const result = await executor.execute('session.board.item.upsert', input, {
-      surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one',
+      surface: 'cli', authority: 'present_user', serverId: 'home-a', defaultSessionId: 'session-one', bypassApprovals: true,
     });
     expect(result).toMatchObject({ ok: true, result: { destination: { tabId: 'second', width: 'wide' } } });
     expect(writes[0]?.placement?.layoutContent.v).toMatchObject({ tabs: [
@@ -746,10 +1218,7 @@ describe('CLI Board Action family', () => {
       return request(config);
     });
     const deps = createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null }, serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' });
-    const executor = createActionExecutor({
-      ...deps,
-      isActionApprovalRequired: () => false,
-    } as unknown as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps });
     const input = {
       sessionId: 'session-one',
       itemId: 'note',
@@ -763,6 +1232,7 @@ describe('CLI Board Action family', () => {
       authority: 'present_user',
       serverId: 'home-a',
       defaultSessionId: 'session-one',
+      bypassApprovals: true,
     });
     // An ambiguous post-dispatch loss is reported, never re-dispatched: the same
     // sealed bytes stay available as recovery evidence for a deliberate reread.
@@ -779,7 +1249,10 @@ describe('CLI Board Action family', () => {
           sessionId: 'session-one',
           requestBody: writes[0],
           mutationRequest: JSON.parse(writes[0]!),
-          intent: input,
+          intent: { ...input, destination: 'board', reviewedVisual: {
+            recordRevision: null, creator: { kind: 'unknown' }, previousExecutableFingerprint: null,
+            previousCapabilitiesDigest: null, networkSetting: null,
+          } },
         },
       },
     });
@@ -826,8 +1299,8 @@ describe('CLI Board Action family', () => {
     responseKind = 'malformed_failure';
     await expect(deps.sessionBoardAction!(args)).resolves.toEqual({
       ok: false,
-      errorCode: 'invalid_response',
-      error: 'invalid_response',
+      errorCode: 'server_error',
+      error: 'server_error',
     });
     responseKind = 'feature_disabled';
     await expect(deps.sessionBoardAction!(args)).resolves.toEqual({
@@ -896,7 +1369,7 @@ describe('CLI Board Action family', () => {
     await expect(deps.sessionBoardAction!({ actionId: 'session.board.item.upsert', context: { defaultSessionId: 'session-one' }, input: {
       itemId: 'note', item, expectedItemRevision: null, placement: { tabId: 'overview', tabTitle: 'Overview' },
     } })).resolves.toMatchObject({ serverId: 'home-a', sessionId: 'session-one', result: { outcome: 'created' } });
-    expect(requests).toEqual([{ operation: 'upsert_item', itemId: 'note', expectedItemRevision: null, itemContent: { t: 'plain', v: item },
+    expect(requests).toEqual([{ operation: 'upsert_item', itemId: 'note', expectedItemRevision: null, destination: 'board', itemContent: { t: 'plain', v: item },
       placement: { expectedLayoutRevision: null, layoutContent: { t: 'plain', v: { v: 1, tabs: [{ id: 'overview', title: 'Overview', items: [{ itemId: 'note', width: 'medium' }] }] } } },
     }]);
   });
@@ -905,6 +1378,7 @@ describe('CLI Board Action family', () => {
     type StoredRecordFixture = Readonly<{
       id: string;
       address: Readonly<{ owner: 'host'; namespace: 'surface'; kind: 'item.v1' | 'layout.v1'; localId: string }>;
+      creator?: Readonly<{ kind: 'session'; sessionId: string }>;
       content: unknown;
       revision: string;
       createdAt: string;
@@ -918,6 +1392,7 @@ describe('CLI Board Action family', () => {
     ): StoredRecordFixture => ({
       id: `${kind}:${localId}`,
       address: { owner: 'host', namespace: 'surface', kind, localId },
+      ...(kind === 'item.v1' ? { creator: { kind: 'session' as const, sessionId: 'session-one' } } : {}),
       content,
       revision,
       createdAt: timestamp,
@@ -947,7 +1422,11 @@ describe('CLI Board Action family', () => {
       mutations.push(mutation);
       if (mutation.operation === 'upsert_item' && mutation.itemId && mutation.itemContent) {
         const outcome = itemRecords.has(mutation.itemId) ? 'updated' : 'created';
-        itemRecords.set(mutation.itemId, makeRecord('item.v1', mutation.itemId, mutation.itemContent));
+        const previous = itemRecords.get(mutation.itemId);
+        itemRecords.set(mutation.itemId, {
+          ...makeRecord('item.v1', mutation.itemId, mutation.itemContent),
+          ...(previous?.creator ? { creator: previous.creator } : {}),
+        });
         if (mutation.placement) layoutRecord = makeRecord('layout.v1', 'layout', mutation.placement.layoutContent);
         return { operation: 'upsert_item', itemId: mutation.itemId, outcome, itemRevision: revision, ...(mutation.placement ? { layoutRevision: revision } : {}) };
       }
@@ -974,10 +1453,10 @@ describe('CLI Board Action family', () => {
       return await boardDeps.sessionBoardAction!(args);
     };
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       ...boardDeps,
       sessionBoardAction,
-      isActionApprovalRequired: () => false,
-    } as unknown as ActionExecutorDeps);
+    });
     // Production Action executors are fixed to the selected Home by
     // `createCliActionExecutorHarness`; preserve that host-stamped context in
     // this lower-level composition fixture as well.
@@ -987,6 +1466,11 @@ describe('CLI Board Action family', () => {
         execute: (actionId, input, context) => executor.execute(actionId, input, {
           ...context,
           serverId: 'home-a',
+          actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 },
+          // Organization/removal are already-confirmed host invocations here;
+          // upserts still exercise the Session own-created admission exception.
+          ...(actionId === 'session.board.layout.update' || actionId === 'session.board.item.remove'
+            ? { bypassApprovals: true } : {}),
         }),
       },
     });
@@ -1053,7 +1537,6 @@ describe('CLI Board Action family', () => {
         incomplete: true,
       },
     });
-    expect(admittedContexts).toHaveLength(8);
     expect(admittedContexts).toEqual(admittedContexts.map((context) => expect.objectContaining({
       surface: 'agent',
       authority: 'account_automation',

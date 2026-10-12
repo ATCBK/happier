@@ -2,6 +2,7 @@ import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createActionExecutor,
+  createRoleSourceReaderV1,
   admitAgentStartV1,
   SessionAgentSpawnPolicyV1StrictSchema,
   createProviderErrorV1,
@@ -35,6 +36,10 @@ import type { RpcHandler, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/r
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
+import type { DirectSpawnedSessionTransport } from '@/session/services/createSpawnedSession';
+import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 const {
   createSpawnedSession,
@@ -716,6 +721,55 @@ type MediatedPermissionResponse = Awaited<ReturnType<
 const actionContext: ActionExecutorContext = {};
 
 describe('createCliActionDeps hook dispatch', () => {
+  it('keeps non-Undo guard Actions on exact Machine transport when a target-local Undo port is installed', async () => {
+    const credentials = { token: 'token', encryption: null };
+    const realApprovals = await vi.importActual<typeof import('@/session/actions/approvals/artifactStore')>('@/session/actions/approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockReturnValue(realApprovals.createCliApprovalsArtifactStore({ credentials }));
+    const deps = createCliActionDeps({ token: 'token', credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      // Receiving daemon process is the boundary; non-Undo Actions must not enter its private Undo port.
+      machineGuardAction: async () => { throw new Error('Only Undo may enter the target-local restoration port'); } });
+    const executor = createActionExecutor(deps);
+    callExactMachineRpc.mockResolvedValue({ status: 'not_pending' });
+    expect(await executor.execute('machines.guard.idleStop.keepRunning', { machineId: 'machine-1', sessionId: 'session-1' },
+      { surface: 'cli', serverId: 'home-a' })).toEqual({ ok: true, result: { status: 'not_pending' } });
+    expect(callExactMachineRpc).toHaveBeenLastCalledWith(expect.objectContaining({ credentials, machineId: 'machine-1',
+      method: 'machines.guard.idleStop.keepRunning', request: { serverId: 'home-a', machineId: 'machine-1', sessionId: 'session-1' } }));
+    const activity = { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1 };
+    callExactMachineRpc.mockResolvedValue(activity);
+    expect(await executor.execute('machines.guard.activity.list', { machineId: 'machine-1', range: 'today' },
+      { surface: 'cli', serverId: 'home-a' })).toEqual({ ok: true, result: activity });
+    callExactMachineRpc.mockResolvedValue({ status: 'kept', secret: 'private' });
+    expect(await executor.execute('machines.guard.idleStop.keepRunning', { machineId: 'machine-1', sessionId: 'session-1' },
+      { surface: 'cli', serverId: 'home-a' })).toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+    expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
+  it('returns resource reads from the exact Machine in the captured Home without a Session', async () => {
+    const credentials = { token: 'token', encryption: null };
+    const realApprovals = await vi.importActual<typeof import('@/session/actions/approvals/artifactStore')>('@/session/actions/approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockReturnValue(realApprovals.createCliApprovalsArtifactStore({ credentials }));
+    const deps = createCliActionDeps({ token: 'token', credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test' });
+    const executor = createActionExecutor(deps);
+    const snapshot = { state: 'reporting', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+    const history = { range: '7d', bucketMs: 1_800_000, points: [], today: { rxBytes: 0, txBytes: 0 } };
+    callExactMachineRpc.mockImplementation(async ({ method }) => {
+      expect(resolveServerHttpBaseUrl()).toBe('https://home-a.example.test');
+      return method === RPC_METHODS.MACHINES_VITALS_GET ? snapshot : history;
+    });
+    for (const [actionId, input, result] of [
+      ['machines.vitals.get', { machineId: 'machine-1', view: 'overview' }, snapshot],
+      ['machines.vitals.history.get', { machineId: 'machine-1', range: '7d' }, history],
+    ] as const) {
+      expect(await executor.execute(actionId, input, { surface: 'cli', serverId: 'home-a' })).toEqual({ ok: true, result });
+      expect(callExactMachineRpc).toHaveBeenLastCalledWith(expect.objectContaining({
+        credentials, machineId: 'machine-1', method: actionId, request: { ...input, serverId: 'home-a' },
+      }));
+    }
+    expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
   it('answers detached requests on the exact machine and preserves stale-request refusal', async () => {
     const credentials = { token: 'token', encryption: null };
     const deps = createCliActionDeps({ token: 'token', credentials,
@@ -839,6 +893,60 @@ describe('createCliActionDeps hook dispatch', () => {
     hostSubagentStore.upsert.mockReset();
     hostSubagentStore.updateStatus.mockReset();
     hostSubagentStore.complete.mockReset();
+  });
+
+  it.each(['orchestrator', 'payments-reviewer'])('preserves root spawn role %s through real native creation dispatch', async roleId => {
+    const credentials = { token: 'token', encryption: null } as const;
+    const accountSettings = AccountSettingsSchema.parse({});
+    resetActiveAccountSettingsSnapshotForTests();
+    setActiveAccountSettingsSnapshot({ scopeKey: resolveAccountSettingsScopeKey(credentials), source: 'network',
+      settings: accountSettings, rawSettings: {}, settingsVersion: 1, settingsSecretsReadKeys: [], loadedAtMs: 1,
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    const realApprovals = await vi.importActual<typeof import('@/session/actions/approvals/artifactStore')>('@/session/actions/approvals/artifactStore');
+    createCliApprovalsArtifactStore.mockImplementation(realApprovals.createCliApprovalsArtifactStore);
+    const realCatalog = await vi.importActual<typeof import('@/agent/catalog/snapshot')>('@/agent/catalog/snapshot');
+    readAgentCatalogSnapshot.mockImplementation(realCatalog.readAgentCatalogSnapshot);
+    const realCreation = await vi.importActual<typeof import('@/session/services/createSpawnedSession')>('@/session/services/createSpawnedSession');
+    createSpawnedSession.mockImplementation(realCreation.createSpawnedSession);
+    lookupSessionsByTags.mockResolvedValue({ state: 'available', tags: [], sessions: [] });
+    validateStoredAuthTokenAgainstActiveServer.mockResolvedValue({ state: 'valid', httpStatus: 200 });
+    const userRole = { ...BUILT_IN_ROLES_V1.reviewer, name: 'Payments reviewer', instructions: 'Review payment retry safety.' };
+    const stored = { artifactId: 'payments-reviewer', header: { kind: 'role.v1' }, body: JSON.stringify(userRole),
+      revision: { headerVersion: 1, bodyVersion: 1 }, ownerAccountId: 'account', access: 'owner' as const };
+    // Artifact storage and native process launch are system boundaries. Source
+    // classification, role resolution, Action and creation settlement stay real.
+    const readRoleSources = createRoleSourceReaderV1({ accountId: 'account', artifactStore: {
+      list: async () => ({ items: [{ ...stored, headerVersion: 1, updatedAt: 1 }] }),
+      read: async id => id === stored.artifactId ? stored : null,
+    } });
+    const spawn = vi.fn<DirectSpawnedSessionTransport['spawn']>(async () => ({ type: 'error' as const, errorCode: 'agent_cli_missing', errorMessage: 'Agent setup required.', agentId: 'codex' }));
+    const settingsProvider = createActionSettingsProvider({ accountSettings });
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: '', mode: 'plain', ctx: null, readRoleSources,
+      actionsSettingsProvider: { ...settingsProvider, getAccountRoleOverrides: () => ({ status: 'ready', overrides: {
+        [roleId]: { roleId, instructionsOverride: 'Account-specific instructions.' },
+      } }) },
+      sessionSpawnDirectTargetTransport: { machineId: 'machine-1',
+        prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
+        spawnedSession: { spawn, resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }) },
+      },
+    });
+    const executor = createActionExecutor(deps);
+    const result = await executor.execute('session.spawn_new', {
+      creationKey: `root-${roleId}`, executionTarget: { serverId: configuration.activeServerId, machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/repo' }, organizationPlacement: { folderId: null, tagIds: [] },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      connectedServices: { v: 2, bindingsByServiceId: {} }, roleId,
+    }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'error', code: 'agent_cli_missing' } });
+    expect(spawn.mock.calls[0]?.[0]).toMatchObject({ initialSessionRolesV1: {
+      roleId, overrides: {}, notes: '', sessionRoles: {
+        [roleId]: { roleId, instructions: 'Account-specific instructions.' },
+        builder: { roleId: 'builder' }, 'payments-reviewer': { roleId: 'payments-reviewer', name: 'Payments reviewer' },
+      },
+    } });
+    expect(spawn.mock.calls[0]?.[0].initialSessionRolesV1).not.toHaveProperty('inheritedFrom');
+    resetActiveAccountSettingsSnapshotForTests();
   });
 
   it.each(['agent_cli_missing', 'agent_signed_out', 'SPAWN_VALIDATION_FAILED'] as const)(
@@ -5800,6 +5908,7 @@ describe('createCliActionDeps session lifecycle bindings', () => {
         machineId: 'machine-source',
         method: RPC_METHODS.SESSION_FORK,
         request: {
+          v: 1,
           parentSessionId: 'session-1',
           forkPoint: { type: 'seq', upToSeqInclusive: 7 },
           strategy: 'replay',

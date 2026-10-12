@@ -10,7 +10,8 @@ describe('CLI widget existing viewer purpose selection', () => {
             sizeDeclaration: { sizes: [sessionId === 'B' ? 'tall' : 'full'], defaultSize: sessionId === 'B' ? 'tall' : 'full' } satisfies import('@happier-dev/protocol/widgets').WidgetSizeDeclarationV1,
             inputs: { fields: [{ path: 'session', title: 'Session', widget: 'json' as const }] },
             inputSchema: { type: 'object' as const, properties: { session: { type: 'object' as const } }, additionalProperties: false } });
-        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'account', getDeps: createUnavailableActionTransportDeps,
+        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'account',
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'account' }) }),
             readCandidates: async (_signal, session) => session ? [descriptor(session.sessionId)] : [], validateSession: async () => true });
         const request = { ref: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'sessionBoard' as const, sessionId: 'B' } }, instanceId: 'copy' },
             instance: { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: identity },
@@ -27,7 +28,8 @@ describe('CLI widget existing viewer purpose selection', () => {
             sizeDeclaration: { sizes: ['tall'], defaultSize: 'tall' } satisfies import('@happier-dev/protocol/widgets').WidgetSizeDeclarationV1,
             inputs: { fields: [{ path, title: 'Session', widget: 'select' as const }] },
             inputSchema: { type: 'object' as const, properties: { [path]: { type: 'object' as const } }, required: [path], additionalProperties: false } });
-        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'account', getDeps: createUnavailableActionTransportDeps,
+        const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'account',
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'account' }) }),
             readCandidates: async (_signal, session) => session?.sessionId === 'B' ? [descriptor('session')]
                 : session?.sessionId === 'C' ? [descriptor('other')] : [], validateSession: async session => ['B', 'C'].includes(session.sessionId) });
         const request = { ref: { surface, instanceId: 'copy' }, instance: { v: 1 as const, id: 'copy',

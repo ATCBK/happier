@@ -34,6 +34,7 @@ export type SpawnConnectedServicesDefaultDisposition =
       kind: 'unavailable';
       reason:
         | 'connected_services_default_settings_invalid'
+        | 'connected_account_purpose_catalog_unavailable'
         | 'connected_services_team_default_requires_current_resource';
     }>;
 
@@ -108,6 +109,7 @@ export class ConnectedServicesDefaultUnavailableError extends Error {
 
   constructor(readonly reason:
     | 'connected_services_default_settings_invalid'
+    | 'connected_account_purpose_catalog_unavailable'
     | 'connected_services_team_default_requires_current_resource') {
     super(reason);
   }
@@ -162,16 +164,16 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
         && (await readStoredCredentials())?.token === params.credentials.token,
     });
     if (params.operationContext && !await operationContext.replaceAccountSettings(accountSettingsContext)) {
-      throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+      throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
     const purposeCatalog = await refreshActiveConnectedAccountCatalog({ credentials: params.credentials,
       key: 'purposes', operationContext });
     if (purposeCatalog.status !== 'ready' || purposeCatalog.record.key !== 'purposes') {
-      throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+      throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
     const admittedSnapshot = operationContext.readSnapshot();
     if (!admittedSnapshot || !await operationContext.isCurrent()) {
-      throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+      throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
     const accountSettings = admittedSnapshot.settings;
     const teamIds = readTeamResourceDefaultTeamIds({
@@ -212,7 +214,7 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
       teamCredentialResourceCatalog,
     });
     if (!await operationContext.isCurrent()) {
-      throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
+      throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
     return {
       connectedServices: disposition.bindings,
@@ -438,7 +440,7 @@ export function resolveSpawnConnectedServicesDefaultDisposition(params: Readonly
   if (params.purposeCatalog && (params.purposeCatalog.status !== 'ready' || params.purposeCatalog.record.key !== 'purposes')) {
     return {
       kind: 'unavailable',
-      reason: 'connected_services_default_settings_invalid',
+      reason: 'connected_account_purpose_catalog_unavailable',
     };
   }
 

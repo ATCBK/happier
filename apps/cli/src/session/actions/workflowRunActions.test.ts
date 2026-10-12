@@ -862,6 +862,51 @@ describe('workflow Run Actions', () => {
     expect(execute.mock.calls.every(([operation]) => operation.operation === 'get')).toBe(true);
   });
 
+  it.each(['review.start', 'subagents.plan.start'] as const)('refuses a known forbidden %s fan-out member before storing a Run with a future target', async (actionId) => {
+    const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
+      if (operation.operation === 'get') throw Object.assign(new Error('not found'), { response: { status: 404 } });
+      return { kind: 'created', run: { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
+        id: '22222222-2222-4222-8222-222222222222', origin: { kind: 'direct' }, state: 'queued', revision: 0,
+        machineId: 'machine-1', workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+        availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      } };
+    });
+    const owner = createWorkflowRunActionOwner({
+      resolveAccountId: async () => 'account-1', storage: { execute }, definitions: { get: vi.fn() },
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true,
+        // The Machine's Action schema is an external catalog boundary; binding and admission stay real.
+        readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) } }),
+      resolveAgentStartContext: async () => ({
+        caller: { kind: 'session', sessionId: 'calling-session', starterDepth: 0, turnDepth: 0 },
+        baseline: { machineId: 'machine-1', directory: '/repo', configuration: {
+          agentTarget: definition.defaults.agentTarget, permissionMode: 'default',
+        } },
+        workDepthLimit: 8, callerPermissionCeiling: 'safe-yolo', roles: {}, ledSubtreeSessionIds: [],
+        allowLists: { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: ['agent:happier.agent.test/test'] },
+      }),
+    });
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: {
+      runId: '22222222-2222-4222-8222-222222222222', source: { kind: 'inline', definition: {
+        version: 1, defaults: definition.defaults, blocks: [
+          { kind: 'step', id: 'choose', document: { text: 'Choose the next engine', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+          { kind: 'action', id: 'fanout', actionId, input: {
+            instructions: { kind: 'literal', value: 'Examine the change' },
+            [actionId === 'review.start' ? 'engineIds' : 'backendTargetKeys']: { kind: 'list', items: [
+              { kind: 'literal', value: 'agent:forbidden.agent/agent' },
+              { kind: 'result', producer: { blockId: 'choose', scope: { kind: 'current' } }, path: [] },
+            ] },
+          } },
+        ],
+      } },
+    }, context: { surface: 'agent', callerPermissionMode: 'default',
+      externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } },
+    } })).rejects.toMatchObject({ code: 'policy_denied_field', details: { field: 'agentTarget', blockId: 'fanout' } });
+    expect(execute.mock.calls.some(([operation]) => operation.operation === 'admit')).toBe(false);
+  });
+
   it('semantically validates saved definitions before preparing a run', async () => {
     const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
       if (operation.operation === 'get') throw Object.assign(new Error('not found'), { response: { status: 404 } });

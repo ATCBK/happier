@@ -9,11 +9,16 @@ import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 
 /** Catalog and Machine operations retain the exact CLI invocation's Home and Account. */
 export function createCliMcpServerActionExecuteV1(params: Readonly<{
   credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string;
   operationContext?: SavedSecretOperationContextV1;
+  connectedServiceAction?: ActionExecutorDeps['connectedServiceAction'];
+  preferredMachineId?: string | null;
   callMachineAction(input: Readonly<{
     machineId: string; serverId?: string; method: string; request: unknown; signal?: AbortSignal;
     authority?: ActionExecutorContext['authority']; authorization?: ActionExecutorContext['rpcSessionAuthorization'];
@@ -50,6 +55,24 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
         return snapshot;
       };
       return await createMcpServerActionExecuteV1({
+        connectedServiceAction: params.connectedServiceAction,
+        resolveAdministrationMachine: async () => {
+          await assertCurrent();
+          const machineId = await resolveCurrentAccountAdministrationMachine({ token: params.credentials.token,
+            authorization: context.rpcSessionAuthorization, effectActionId: request.actionId,
+            serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal, preferredMachineId: params.preferredMachineId });
+          await assertCurrent();
+          return machineId;
+        },
+        describeConnectedService: async machineId => {
+          await assertCurrent();
+          return params.callMachineAction({ machineId, serverId: params.serverId,
+            method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
+            request: ConnectedAccountControlCommandRequestSchema.parse({ v: 1, machineId,
+              command: { operation: 'describeService', service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } }),
+            context, signal: context.signal, authority: context.authority,
+            authorization: context.rpcSessionAuthorization, effectActionId: request.actionId, exactMachine: true });
+        },
         readCatalog,
         mutate: async (change, expectedRevision) => store.mutate(change, expectedRevision, await readCatalog()),
         machine: async ({ actionId, input, machineId }) => {

@@ -223,6 +223,30 @@ describe('current-turn cancellation through the CLI Action owner', () => {
     configureNextSocket = null;
   });
 
+  it.each(['plain', 'e2ee'] as const)('projects an acknowledged void %s abort as a requested cancellation result', async mode => {
+    // The host abort callback has no return value; only its Socket.IO ACK is substituted.
+    const secret = new Uint8Array(32).fill(4);
+    const encryptedCredentials = { token: credentials.token, encryption: { type: 'legacy' as const, secret } };
+    const http = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected Home HTTP boundary'));
+    http.mockResolvedValueOnce({ status: 200, data: { ...currentness, mode } })
+      .mockResolvedValueOnce({ status: 200, data: { session: mode === 'plain' ? session : {
+        ...session, encryptionMode: 'e2ee', metadata: encodeBase64(encrypt(secret, 'legacy', {})),
+      } } });
+    nextRpcAck = async (request: { method: string; params: unknown }) => {
+      const content: SocketRpcContent = mode === 'plain' ? { mode } : { mode, cipher: {
+        encryptRaw: async value => encodeBase64(encrypt(secret, 'legacy', value)),
+        decryptRaw: async value => decrypt(secret, 'legacy', decodeBase64(value)),
+      } };
+      const decoded = await socketRpcCodec.decodeRequestParams(content, request.params, request.method);
+      return { ok: true, result: await socketRpcCodec.encodeResponse(content, undefined, decoded.callId) };
+    };
+    const owner = createCliActionExecutorHarness({ token: credentials.token,
+      credentials: mode === 'plain' ? credentials : encryptedCredentials, sessionId, ...home });
+    expect(await owner.executor.execute('session.turn.cancel', { sessionId }, {
+      authority: 'present_user', surface: 'cli',
+    })).toEqual({ ok: true, result: { requested: true } });
+  });
+
   it.each([
     { authority: 'account_automation', surface: 'agent' },
     { authority: 'present_user', surface: 'cli' },

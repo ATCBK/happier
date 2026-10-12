@@ -65,11 +65,11 @@ describe('createSpawnNewSessionLifecycleActionHandler dev adaptation', () => {
       environmentVariables: { FEATURE_FLAG: 'enabled' },
       connectedServices,
       connectedServicesUpdatedAt: 1710000000004,
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: true,
         ...mcpSelection,
-      },
+      } },
       transcriptStorage: 'persisted',
       runtimeDescriptorV1: legacyRuntimeDescriptorV1,
       terminal: { mode: 'tmux' },
@@ -108,11 +108,11 @@ describe('createSpawnNewSessionLifecycleActionHandler dev adaptation', () => {
       environmentVariables: { FEATURE_FLAG: 'enabled' },
       connectedServices,
       connectedServicesUpdatedAt: 1710000000004,
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: true,
         ...mcpSelection,
-      },
+      } },
       transcriptStorage: 'persisted',
       runtimeDescriptorV1: {
         v: 1,

@@ -1,6 +1,8 @@
 import { ACTION_IDS } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult, ActionExecutorContext, ActionId, ActionCaller, ActionExecutorDeps, WorkflowRunStartedByV1 } from '@happier-dev/protocol';
 import { resolveWorkflowRunStartedByForActionCallerV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import { requestDaemonPluginActionExecution } from '@/daemon/controlClient';
 import type { PluginActionExecutionAttempt } from '@/plugins/runtime/invocation/actions/executeContributedAction';
@@ -110,9 +112,17 @@ export function createPluginActionExecutor(params: Readonly<{
     },
     execute: async (actionId, input, context) => {
       const normalizedActionId = String(actionId);
+      const contributedIdentity = parseQualifiedPluginActionId(normalizedActionId);
       if (!BUILT_IN_ACTION_IDS.has(normalizedActionId)
         || DAEMON_OWNED_PLUGIN_META_ACTION_IDS.has(normalizedActionId)) {
-        const attempt = await requestContributed(normalizedActionId, input, context);
+        // Public discovery/Tool metadata use Action-qualified IDs. Only this
+        // adapter crosses to the daemon's internal contribution registry key.
+        if (!BUILT_IN_ACTION_IDS.has(normalizedActionId) && !contributedIdentity) {
+          return await params.base.execute(actionId, input, context);
+        }
+        const attempt = await requestContributed(contributedIdentity
+          ? buildQualifiedPluginContributionKey(contributedIdentity)
+          : normalizedActionId, input, context);
         if (attempt.matched) {
           return attempt.result;
         }

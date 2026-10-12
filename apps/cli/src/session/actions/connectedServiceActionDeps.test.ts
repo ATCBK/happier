@@ -7,6 +7,8 @@ import { API_TOKEN_FULL_GRANT_V1, AccountSettingsV2UpdateRequestSchema, accountS
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD, ConnectedAccountAuthenticationCommandRequestSchema, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowMutationV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import type { ConnectedPresentationRecordV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
@@ -51,6 +53,7 @@ describe('native connected-service Action adapter', () => {
       async callMachineAction(request) {
         expect(request.method).toBe(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD);
         expect(request.serverId).toBe('home-work');
+        expect(request).toMatchObject({ authority: 'present_user', effectActionId: 'connectedServices.authentication.resumeDevice', exactMachine: true });
         expect(ConnectedAccountAuthenticationCommandRequestSchema.parse(request.request)).toEqual({ v: 1, machineId: 'controller',
           command: { operation: 'resumeDevice', attemptId: 'attempt-work' } });
         issued = request;
@@ -459,7 +462,7 @@ describe('native connected-service Action adapter', () => {
       async callMachineAction(request) {
         machineRequests.push(request);
         return { status: 'described', service,
-          descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] } },
+          descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://provider.example/oauth/callback', pkce: 'required', outcomeReconciliation: 'none' }] } },
           occurrenceId: 'occurrence-1', sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
           accounts: [], operationTransport: { kind: 'v4' },
         };
@@ -467,7 +470,8 @@ describe('native connected-service Action adapter', () => {
     });
     const args = { actionId: 'connectedServices.quota.refresh' as const, input: { account, machineId: 'work-machine' }, context: { surface: 'cli' as const, authority: 'account_automation' as const, actionCaller: { kind: 'host' as const } } };
     expect(await action(args)).toEqual({ applied: true });
-    expect(machineRequests).toEqual([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
+    expect(machineRequests).toMatchObject([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
+      authority: 'account_automation', effectActionId: 'connectedServices.quota.refresh', exactMachine: true,
       request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'quota_refresh' } } }]);
     expect(http).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://work.invalid/v4/connect/qualified/quotas/refresh', method: 'POST', data: { ref: account } }));
     http.mockResolvedValue({ status: 404, data: { error: 'quota_refresh_unavailable' } });
@@ -541,13 +545,22 @@ describe('native connected-service Action adapter', () => {
     const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: 'https://resource-home.test',
       snapshot: { source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
         loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) }, isCurrent: async () => current });
+    // Validate boundary fixtures before admission so malformed setup cannot be mistaken for owner refusal.
+    const profile = AccountProfileSchema.parse({ id: 'account', connectedAccountsV4: [{ ref: target.account, status: 'connected',
+      authenticationModeId: 'manual', revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      configurationReady: true, configurationRevision: null, scopes: [] }], connectedAccountGroupsV4: [] });
+    const described = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1,
+      projection: { v: 2, generation: 1, familiesById: {},
+        installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled: true,
+          source: { kind: 'builtin', locator: 'example.resource' } } },
+        resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
+          connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+      } });
     // HTTP and machine RPC are the only substituted boundaries; declaration, profile and catalog admission are real.
     vi.spyOn(axios, 'request').mockImplementation(async request => {
       expect(request.url).toBe('https://resource-home.test/v1/account/profile');
       expect(request.headers).toMatchObject({ Authorization: 'Bearer resource-purpose' });
-      return { status: 200, data: { id: 'account', connectedAccountsV4: [{ ref: target.account, status: 'connected',
-        authenticationModeId: 'manual', revisionSemantics: 'legacy_unfenced', credentialRevision: null,
-        configurationReady: true, configurationRevision: null, scopes: [] }], connectedAccountGroupsV4: [] } };
+      return { status: 200, data: profile };
     });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
@@ -571,13 +584,12 @@ describe('native connected-service Action adapter', () => {
       resolveHeaders: () => ({ Authorization: 'Bearer resource-purpose' }),
       callMachineAction: async request => {
         expect(request).toMatchObject({ machineId: 'resource-machine', serverId: 'resource-home',
-          method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE });
-        return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {},
-          installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled,
-            source: { kind: 'builtin', locator: 'example.resource' } } },
-          resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
-            connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
-        } };
+          method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+          authority: 'present_user', effectActionId: 'connectedServices.purposes.default.set', exactMachine: true });
+        expect(request.request).toEqual({ machineId: 'resource-machine' });
+        return { ...described, projection: { ...described.projection, installedPackagesById: {
+          'example.resource': { ...described.projection.installedPackagesById['example.resource']!, enabled },
+        } } };
       },
     });
     const execute = () => action({ actionId: ActionIdSchema.parse('connectedServices.purposes.default.set'),
@@ -704,7 +716,7 @@ describe('native connected-service Action adapter', () => {
           return { status: 'revoked', account, remoteStatus: 'remoteUnsupported' };
         }
         return { status: 'described', service,
-          descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] } },
+          descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://provider.example/oauth/callback', pkce: 'required', outcomeReconciliation: 'none' }] } },
           occurrenceId: 'occurrence-1', sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
           accounts: [{ ref: account, status: 'connected', authenticationModeId: 'oauth', configurationReady: true,
             configurationRevision: null, scopes: [], revisionSemantics: 'revisioned', credentialRevision: currentRevision }],
@@ -732,7 +744,8 @@ describe('native connected-service Action adapter', () => {
       kind: 'approval_request_created', artifactId: 'credential-revoke-review', actionId: 'connectedServices.accounts.revoke',
     } });
     expect(reviewedInput).toEqual({ ...input, expectedCredentialRevision: presentedRevision });
-    expect(requests).toEqual([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
+    expect(requests).toMatchObject([{ machineId: 'work-machine', serverId: 'work-home', method: 'daemon.connectedAccounts.control.command',
+      authority: 'present_user', effectActionId: 'connectedServices.accounts.revoke', exactMachine: true,
       request: { v: 1, machineId: 'work-machine', command: { operation: 'describeService', service, requiredOperation: 'credential_delete' } } }]);
     expect(nativeEffectIssued).toBe(false);
     currentRevision = 'csr_zyxwvutsrqponmlkjihgfe';

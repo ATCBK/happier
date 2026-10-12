@@ -66,7 +66,7 @@ describe('attemptNativeForkOpen', () => {
             execution: { machineId: 'a', directory: { kind: 'managed' } }, organization: { folderId: null, tagIds: [] },
             agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.grok', localId: 'grok' } },
             modelSelection: null, profileId: null, requestedPermissionMode: null, agentModeId: null,
-            configuration: null, connectedServices: null, mcpSelection: null, transcriptStorage: null,
+            configuration: null, connectedServices: null, capabilitySelection: null, transcriptStorage: null,
             terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
         } });
         const spawnSession = vi.fn<ForkSpawnSession>(async () => ({ type: 'error', errorCode: 'INVALID_REQUEST', errorMessage: 'Boundary rejection' }));

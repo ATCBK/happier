@@ -80,11 +80,14 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
         const authored = reference.kind === 'inline' ? reference.definition
             : reference.kind === 'artifact' ? await input.getDeps().widgetDefinitionArtifacts?.get(reference.artifactId, context.signal) : null;
         if ((reference.kind === 'inline' || reference.kind === 'artifact') && !authored) return unavailable;
-        const definition = authored?.body.kind === 'installed' ? authored.body : reference;
+        const definition = authored?.body.kind === 'installed' || authored?.body.kind === 'builtin' ? authored.body : reference;
         const candidate = (await input.readCandidates(context.signal, consumer.selectedSession)).find(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
-        const resources = authored?.body.kind === 'declarative' ? await input.readResources?.(context.signal, consumer.selectedSession) : null;
-        const descriptor: Descriptor | undefined = authored?.body.kind === 'declarative'
+        const native = definition.kind === 'builtin' ? readBuiltinWidgetDescriptorV1(definition) : null;
+        const resources = authored && authored.body.kind !== 'installed' && authored.body.kind !== 'builtin' ? await input.readResources?.(context.signal, consumer.selectedSession) : null;
+        const descriptor: Descriptor | undefined = authored?.body.kind === 'builtin'
+            ? native ? { ...native, ...authored } : undefined
+            : authored && authored.body.kind !== 'installed'
             ? { ...authored, resources: readWidgetDefinitionResourcesV1(authored), resourceDeclarations: resources?.resources ?? [] }
             : candidate && (authored ? { ...candidate, sizeDeclaration: authored.sizeDeclaration, inputs: authored.inputs, inputSchema: authored.inputSchema,
                 connectedAccountPurposeBindings: authored.connectedAccountPurposeBindings } : candidate);
@@ -107,7 +110,15 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const authored = reference.kind === 'artifact' ? await input.getDeps().widgetDefinitionArtifacts?.get(reference.artifactId, request.signal)
                 : reference.kind === 'inline' ? reference.definition : null;
             if ((reference.kind === 'artifact' || reference.kind === 'inline') && !authored) return null;
-            if (authored?.body.kind === 'declarative') {
+            if (authored?.body.kind === 'builtin') {
+                const native = readBuiltinWidgetDescriptorV1(authored.body);
+                if (!native) return null;
+                const descriptor: Descriptor = { ...native, ...authored };
+                if (readWidgetInputTargetV1(descriptor).kind === 'invalid') return null;
+                descriptors.set(request, descriptor);
+                return descriptor;
+            }
+            if (authored && authored.body.kind !== 'installed') {
                 const projection = await input.readResources?.(request.signal);
                 let descriptor: Descriptor = { sizeDeclaration: authored.sizeDeclaration, inputs: authored.inputs, inputSchema: authored.inputSchema, sessionInputPath: authored.sessionInputPath,
                     connectedAccountPurposeBindings: authored.connectedAccountPurposeBindings, resources: readWidgetDefinitionResourcesV1(authored),
@@ -126,7 +137,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                 descriptors.set(request, descriptor);
                 return descriptor;
             }
-            const definition = authored?.body ?? reference;
+            const definition = authored?.body.kind === 'installed' ? authored.body : reference;
             const matches = (candidate: Candidate) => candidate.availability === 'available'
                 && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition);
             const owner = request.ref.surface.owner;

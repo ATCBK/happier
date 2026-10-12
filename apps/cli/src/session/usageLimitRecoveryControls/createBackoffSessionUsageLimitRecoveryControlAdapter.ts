@@ -30,10 +30,10 @@ function stableError(errorCode: string): Readonly<{ ok: false; errorCode: string
 
 function readNonNegativeIntegerFromEnv(
   env: NodeJS.ProcessEnv,
-  key: string,
+  key: string | undefined,
   defaultValue: number,
 ): number {
-  const raw = typeof env[key] === 'string' ? env[key]?.trim() : '';
+  const raw = key && typeof env[key] === 'string' ? env[key]?.trim() : '';
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : defaultValue;
 }

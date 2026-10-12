@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createActionExecutor, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER, ArtifactBlobWriteV1Schema, readLegacyRolesV1, type ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
+import { createActionExecutor, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER, ArtifactBlobWriteV1Schema, ApprovalRequestV2Schema, FeaturesResponseSchema, readLegacyRolesV1, type ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
-import { BUILTIN_WIDGET_DESCRIPTORS_V1, buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1, buildWidgetDefinitionArtifactHeaderV1, WidgetInstanceActionOutputSchemasV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
 import * as persistence from '@/persistence';
 import { configuration } from '@/configuration';
 import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -14,6 +14,13 @@ import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testkit';
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutor } from './createCliActionExecutor';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { cmdSessionActionsExecute } from '@/cli/commands/session/actions/execute';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import type { ActionId, ActionExecuteResult } from '@happier-dev/protocol';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -22,7 +29,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { ARTIFACT_HTML_BUNDLE_MIME_V1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 
-const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }));
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
 vi.mock('axios', () => ({ default: http }));
 
 describe('Account Artifact Actions through the real CLI host composition', () => {
@@ -31,12 +38,12 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'cli-artifact-actions-'));
     await mkdir(join(root, 'workspace'));
-    http.get.mockReset(); http.post.mockReset(); http.delete.mockReset();
+    http.get.mockReset(); http.post.mockReset(); http.delete.mockReset(); http.request.mockReset();
     // Machine identity is persistent machine-local configuration, a system boundary.
     await persistence.writeSettings({ schemaVersion: persistence.SUPPORTED_SCHEMA_VERSION,
       onboardingCompleted: true, machineIdByServerId: { [configuration.activeServerId]: 'local-machine' } });
   });
-  afterEach(async () => { clearActiveAccountSettingsSnapshot(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
+  afterEach(async () => { clearActiveAccountSettingsSnapshot(); vi.restoreAllMocks(); vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }); });
   function deps(onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void) {
     return createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
       onPublicLinkIssued,
@@ -150,13 +157,14 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     expect(await executor.execute('artifact.delete', { artifactId, expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, context))
       .toMatchObject({ ok: true, result: { artifactId, deleted: true } });
   });
-  it('projects authored Home size from current scoped definition headers without rewriting stale saved intent', async () => {
+  it.each(['declarative', 'builtin'] as const)('projects authored %s Home size and catalog availability without rewriting stale saved intent', async bodyKind => {
     const accountId = 'authored-home-account';
     const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
     const homeArtifactId = buildHomeHubArtifactIdV1(accountId);
     const definition: WidgetDefinitionV1 = { v: 1, id: artifactId, name: 'Authored',
       sizeDeclaration: { sizes: ['wide'], defaultSize: 'wide' },
-      body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Hello' } } },
+      body: bodyKind === 'builtin' ? { kind: 'builtin', id: 'usage_daily' }
+        : { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Hello' } } },
       inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
       provenance: { source: { kind: 'authored' } } };
     const instance = { v: 1 as const, id: 'authored-copy', definition: { kind: 'artifact' as const, artifactId }, bindings: {} };
@@ -180,6 +188,13 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       .toMatchObject({ ok: true, result: { layout, sections: expect.arrayContaining([
         expect.objectContaining({ id: instance.id, size: 'wide', frameStyle: 'plain' }),
       ]) } });
+    const catalog = await executor.execute('widgets.catalog.list', { surface: { serverId: 'authored-home', accountId, owner: { kind: 'home' } } },
+      { surface: 'cli', bypassApprovals: true });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) throw new Error(catalog.errorCode);
+    const entries = WidgetInstanceActionOutputSchemasV1['widgets.catalog.list'].parse(catalog.result).entries;
+    expect(entries.find(entry => entry.definition.kind === 'artifact' && entry.definition.artifactId === artifactId))
+      .toMatchObject({ definition: { kind: 'artifact', artifactId }, availability: 'available', instanceCount: 1 });
     expect(http.post).not.toHaveBeenCalled();
   });
   it.each(['widget-area-layout.v1', 'home-hub-layout.v1'])('refuses approved agent public publication of %s before transport', async kind => {
@@ -189,7 +204,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } }));
     const publicShare = { id: 'share-1', subject: { kind: 'artifact', id: artifactId }, expiresAt: null, maxUses: null,
       useCount: 0, isConsentRequired: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' };
-    http.post.mockResolvedValue({ status: 200, data: { publicShare, isolatedOrigin: 'https://public.example.test' } });
+    http.post.mockResolvedValue({ status: 200, data: { publicShare, viewerOrigin: 'https://public.example.test' } });
     const executor = createActionExecutor(deps());
     expect(await executor.execute('artifact.public_link.create', { artifactId }, { surface: 'cli',
       // The host resumes an approved invocation with this canonical execution context.
@@ -326,12 +341,13 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     });
     const executor = createActionExecutor({ ...deps(), isActionApprovalRequired: () => false });
     const context = { surface: 'cli', actionCaller: { kind: 'session', sessionId: 'session', starterDepth: 0, turnDepth: 0 },
-      defaultSessionId: 'session', presentUserConfirmation: { actionId: 'artifact.publish_from_file' } } as const;
+      defaultSessionId: 'session', runtimeAccountId: 'owner', presentUserConfirmation: { actionId: 'artifact.publish_from_file' } } as const;
     const result = await executor.execute('artifact.publish_from_file', { path: 'site', entrypoint: 'pages/index.html', title: 'Experiment' }, context);
     expect(result).toEqual({ ok: true, result: { artifactId: publication.id, revision: { headerVersion: 1, bodyVersion: 1 } } });
     expect(decodePlainArtifactStoredContent(String(publication.header))).toMatchObject({ title: 'Experiment', kind: 'html', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 });
     const blob = ArtifactBlobWriteV1Schema.parse(publication.blob);
-    expect(blob.content.t === 'plain' && JSON.parse(Buffer.from(blob.content.v, 'base64').toString('utf8'))).toEqual(bundle);
+    if (!blob.content || blob.content.t !== 'plain') throw new Error('Expected plaintext publication blob');
+    expect(JSON.parse(Buffer.from(blob.content.v, 'base64').toString('utf8'))).toEqual(bundle);
     expect(decodePlainArtifactStoredContent(String(publication.provenance))).toMatchObject({ provenance: { source: {
       sessionId: 'session', machineId: 'local-machine', path: 'site',
     } } });
@@ -351,7 +367,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         body: encodePlainArtifactStoredContent({ body: 'note' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
         headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } }));
     http.delete.mockResolvedValue({ status: 200, data: { success: true } });
-    http.post.mockResolvedValue({ status: 200, data: { publicShare, isolatedOrigin: 'https://public.example.test' } });
+    http.post.mockResolvedValue({ status: 200, data: { publicShare, viewerOrigin: 'https://public.example.test' } });
     const executor = createActionExecutor(deps());
     const context = { surface: 'cli' as const, authority: 'present_user' as const };
     await expect(executor.execute('artifact.public_link.list', { artifactId },
@@ -361,6 +377,156 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     await expect(executor.execute('artifact.public_link.create', { artifactId },
       { ...context, presentUserConfirmation: { actionId: 'artifact.public_link.create' } })).resolves.toMatchObject({ ok: true, result: { publicShare, url: expect.stringMatching(/^https:\/\/public.example.test\/s\/[^#]+#k=.+$/) } });
   });
+  it.each([
+    { actionId: 'artifact.public_link.create', entry: 'host' },
+    { actionId: 'session.public_link.create', entry: 'host' },
+    { actionId: 'artifact.public_link.create', entry: 'command' },
+    { actionId: 'session.public_link.create', entry: 'command' },
+  ] as const)(
+    '$entry retains $actionId in approval custody when the CLI has not confirmed the public consequence', async ({ actionId, entry }) => {
+      const accountId = 'cli-public-link-account';
+      const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+      const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+      const serverId = configuration.activeServerId;
+      const serverHttpBaseUrl = 'https://cli-public-link.test';
+      const sessionId = 'c000000000000000000000001';
+      const features = FeaturesResponseSchema.parse({ features: {}, capabilities: {
+        serverIdentity: { serverIdentityId: 'srv_cli-public-link' },
+      } });
+      vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        throw new Error(`unexpected_fetch:${path}`);
+      }));
+      const rows = new Map<string, Record<string, unknown>>();
+      rows.set(artifactId, { id: artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent({ kind: 'html', title: 'Shared visual', requestedCapabilities: { network: 'open' } }),
+        body: encodePlainArtifactStoredContent({ body: '<p>Shared visual</p>', mime: 'text/html' }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+      const publicWrites: unknown[] = [];
+      http.request.mockImplementation(async ({ method, url, data }: { method: string; url: string; data?: unknown }) => {
+        if (method === 'POST') return http.post(url, data);
+        if (method === 'GET') return http.get(url);
+        throw new Error(`unexpected_request:${method}`);
+      });
+      http.get.mockImplementation(async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: AccountEncryptionCurrentnessResponseSchema.parse({
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        }) };
+        if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+        if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: V2SessionByIdResponseSchema.parse({ session: createSessionRecordFixture({
+          id: sessionId, encryptionMode: 'plain', dataEncryptionKey: null,
+          metadata: JSON.stringify({ machineId: 'local-machine', path: join(root, 'workspace') }),
+        }) }) };
+        const id = path.split('/').at(-1)!;
+        if (path.startsWith('/v1/artifacts/')) return { status: rows.has(id) ? 200 : 404, data: rows.get(id) };
+        throw new Error(`unexpected_get:${path}`);
+      });
+      // Replace HTTP persistence only: the CLI's credential-derived authority,
+      // Action approval policy, carrier codecs and versioned CAS remain real.
+      http.post.mockImplementation(async (url: string, wire: unknown) => {
+        const path = new URL(url).pathname;
+        if (path === '/v1/auth/api-tokens/list') return { status: 200, data: { tokens: [] } };
+        if (path === '/v1/artifacts') {
+          const mutation = readCarrierMutation(wire);
+          const id = String(mutation.id);
+          rows.set(id, { ...mutation, id, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+          return { status: 200, data: { id, headerVersion: 1, bodyVersion: 1 } };
+        }
+        if (path.startsWith('/v1/artifacts/')) {
+          const id = path.split('/').at(-1)!;
+          const current = rows.get(id)!;
+          const mutation = readCarrierMutation(wire);
+          if (mutation.expectedHeaderVersion !== current.headerVersion || mutation.expectedBodyVersion !== current.bodyVersion) {
+            return { status: 200, data: { success: false, error: 'version-mismatch' } };
+          }
+          const next = { ...current, ...mutation, headerVersion: Number(current.headerVersion) + 1,
+            bodyVersion: Number(current.bodyVersion) + 1 };
+          rows.set(id, next);
+          return { status: 200, data: { success: true, headerVersion: next.headerVersion, bodyVersion: next.bodyVersion } };
+        }
+        publicWrites.push(wire);
+        return { status: 200, data: { publicShare: { id: 'share-1', subject: {
+          kind: actionId === 'artifact.public_link.create' ? 'artifact' : 'session',
+          id: actionId === 'artifact.public_link.create' ? artifactId : sessionId,
+        }, expiresAt: null, maxUses: null, useCount: 0, isConsentRequired: false, networkOff: false,
+        createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' }, viewerOrigin: 'https://public.example.test' } };
+      });
+      const executor = createCliActionExecutor({ token, credentials, serverId, serverHttpBaseUrl,
+        serverIdentityId: 'srv_cli-public-link', sessionId, mode: 'plain', ctx: null,
+        rawSession: { machineId: 'local-machine', path: join(root, 'workspace'),
+          metadata: JSON.stringify({ machineId: 'local-machine', path: join(root, 'workspace') }) },
+        pluginActionExecutionOwner: 'current_process',
+        accountServerActionDeps: createAccountServerActionDeps({ token, credentials, serverId, serverHttpBaseUrl }),
+        isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
+          credentials, machineId: 'local-machine', serverId, serverApiUrl: serverHttpBaseUrl,
+        }),
+      });
+      const input = actionId === 'artifact.public_link.create' ? { artifactId } : { sessionId };
+      // The credential-backed host supplies the exact execution origin. No
+      // human stamp or confirmation is supplied: terminal access is not disclosure.
+      const context = { surface: 'cli' as const, defaultSessionId: sessionId, serverId,
+        serverIdentityId: 'srv_cli-public-link', defaultSessionMachineId: 'local-machine', actionRequestId: 'public-link-request' };
+      const invokeCommand = async (requestedActionId: ActionId, requestedInput: unknown): Promise<ActionExecuteResult> => {
+        const output = captureConsoleJsonOutput();
+        try {
+          await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => cmdSessionActionsExecute([
+            'actions', 'execute', sessionId, requestedActionId, '--input-json', JSON.stringify(requestedInput), '--json',
+          ], { readCredentialsFn: async () => credentials }));
+          const envelope = output.json<
+            Readonly<{ ok: true; data: { result: unknown } }>
+            | Readonly<{ ok: false; error: { code: string; message?: string } }>
+          >();
+          return envelope.ok ? { ok: true, result: envelope.data.result }
+            : { ok: false, errorCode: envelope.error.code, error: envelope.error.message ?? envelope.error.code };
+        } finally { output.restore(); }
+      };
+      const created = entry === 'command' ? await invokeCommand(actionId, input) : await executor.execute(actionId, input, context);
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: expect.any(String) } });
+      if (!created.ok || typeof created.result !== 'object' || created.result === null || !('artifactId' in created.result)) {
+        throw new Error('Expected durable public-link approval');
+      }
+      const approvalId = String(created.result.artifactId);
+      const readApproval = () => {
+        const body = decodePlainArtifactStoredContent(String(rows.get(approvalId)?.body));
+        if (!body || typeof body !== 'object' || !('body' in body)) throw new Error('Expected plain approval body');
+        return ApprovalRequestV2Schema.parse(JSON.parse(String(body.body)));
+      };
+      const pending = readApproval();
+      expect(pending).toMatchObject({ status: 'open', actionId, actionArgs: input,
+        approval: { flow: 'deferred' } });
+      expect(publicWrites).toEqual([]);
+      const decideInput = { artifactId: approvalId, decision: 'approve' };
+      const decided = entry === 'command' ? await invokeCommand('approval.request.decide', decideInput)
+        : await executor.execute('approval.request.decide', decideInput, context);
+      expect(publicWrites).toEqual([]);
+      expect(decided, JSON.stringify(decided)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(readApproval()).toEqual(pending);
+      expect(publicWrites).toEqual([]);
+      if (entry === 'host') {
+        // This is the executor's trusted host boundary, not a CLI input. A
+        // confirmation for the decision Action itself does not disclose sharing.
+        expect(await executor.execute('approval.request.decide', decideInput, {
+          ...context, presentUserConfirmation: { actionId: 'approval.request.decide' },
+        })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+        expect(readApproval()).toEqual(pending);
+        expect(publicWrites).toEqual([]);
+        expect(await executor.execute('approval.request.decide', decideInput, {
+          ...context, presentUserConfirmation: { actionId },
+        })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(readApproval().status).toBe('executed');
+        expect(publicWrites).toHaveLength(1);
+      } else {
+        expect(await invokeCommand('approval.request.decide', { artifactId: approvalId, decision: 'reject' }))
+          .toMatchObject({ ok: true, result: { status: 'rejected' } });
+        expect(readApproval().status).toBe('rejected');
+        expect(publicWrites).toEqual([]);
+      }
+    },
+  );
   it('returns an approved Artifact fragment link and also notifies an optional mounted host', async () => {
     const issued: ArtifactPublicLinkIssuedV1[] = [];
     const publicShare = { id: 'share-1', subject: { kind: 'artifact', id: artifactId }, expiresAt: null, maxUses: null,
@@ -369,10 +535,10 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       : { id: artifactId, header: encodePlainArtifactStoredContent({ title: 'Note' }),
       body: encodePlainArtifactStoredContent({ body: 'note' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
       ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } }));
-    http.post.mockResolvedValue({ status: 200, data: { publicShare, isolatedOrigin: 'https://public.example.test' } });
+    http.post.mockResolvedValue({ status: 200, data: { publicShare, viewerOrigin: 'https://public.example.test' } });
     const executor = createActionExecutor({ ...deps(link => { issued.push(link); }), isActionApprovalRequired: () => false });
     const result = await executor.execute('artifact.public_link.create', { artifactId },
-      { surface: 'cli', presentUserConfirmation: { actionId: 'artifact.public_link.create' } });
+      { surface: 'cli', authority: 'present_user', presentUserConfirmation: { actionId: 'artifact.public_link.create' } });
     expect(result).toEqual({ ok: true, result: { publicShare: { ...publicShare, networkOff: false }, url: issued[0]?.url } });
     expect(issued).toHaveLength(1);
     expect(issued[0]?.url).toBe(`https://public.example.test/s/${issued[0]?.lookupId}#k=${issued[0]?.secret}`);

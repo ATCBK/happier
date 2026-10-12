@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, rm } from 'node:fs/promises';
+import { lstat, rename, rm } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
 import { z } from 'zod';
 import type { StopSessionResult } from '@happier-dev/protocol';
@@ -19,6 +19,7 @@ import { realpathWithAbsentSuffix } from '@/utils/path/physicalAncestorPath';
 import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 import { isTerminalHostPhysicallyRetiredStopResult } from '@/daemon/sessions/stopSessionContract';
 import { SessionCreationCorrespondenceConflictError } from '@/api/session/sessionCreationCorrespondenceConflictError';
+import { renameStoragePathNoReplace } from '@/storage/trash/renameStoragePath';
 
 const RecordSchema = z.object({
   v: z.literal(1),
@@ -28,6 +29,7 @@ const RecordSchema = z.object({
   sessionId: z.string().min(1).nullable(),
   committed: z.boolean().optional(),
   pendingRemoval: z.boolean().optional(),
+  inTrash: z.object({ payloadPath: z.string().min(1) }).strict().optional(),
 }).strict().superRefine((record, ctx) => {
   if (record.origin === 'creation'
     ? record.sessionCreationTag === null || record.operationId !== null || record.committed !== undefined
@@ -51,6 +53,12 @@ function conflict(): Error {
   return new SessionCreationCorrespondenceConflictError();
 }
 const missing = (): ManagedSessionDirectoryResolution => ({ ok: false, errorCode: 'SESSION_DIRECTORY_MISSING' });
+export class ManagedSessionDirectoryTrashError extends Error {
+  constructor(readonly code: 'owner_unavailable' | 'restore_path_unsupported' | 'restore_occupied') {
+    super(code);
+    this.name = 'ManagedSessionDirectoryTrashError';
+  }
+}
 
 /** The daemon record, never a metadata marker or path prefix, authorizes filesystem effects. */
 export function createManagedSessionDirectories(input: Readonly<{
@@ -107,7 +115,7 @@ export function createManagedSessionDirectories(input: Readonly<{
       await ensureProtectedLocalStateDirectory(directory, { ...protection, createIfMissing: false });
     }
   };
-  const listRecords = async (): Promise<readonly ManagedSessionDirectoryEntry[]> => {
+  const listRecords = async (options: Readonly<{ includeTrashed?: boolean }> = {}): Promise<readonly ManagedSessionDirectoryEntry[]> => {
     let names: readonly string[];
     try {
       await protectExistingOwnerDirectories();
@@ -119,7 +127,7 @@ export function createManagedSessionDirectories(input: Readonly<{
       const allocationId = name.slice(0, -5);
       try {
         const record = await readRecord(allocationId);
-        if (record) result.push({ ...record, allocationId, directory: paths.join(root, allocationId) });
+        if (record && (options.includeTrashed || !record.inTrash)) result.push({ ...record, allocationId, directory: paths.join(root, allocationId) });
       } catch (error) {
         logger.warn('[MANAGED SESSION DIRECTORY] Ownership record unavailable', { allocationId, error });
       }
@@ -148,7 +156,7 @@ export function createManagedSessionDirectories(input: Readonly<{
       v: 1, origin: 'creation', sessionCreationTag: request.sessionCreationTag, operationId: null, sessionId: null,
     });
     const record = await readRecord(target.allocationId);
-    if (!record || record.origin !== 'creation' || record.sessionCreationTag !== request.sessionCreationTag || record.sessionId !== null || record.pendingRemoval) throw conflict();
+    if (!record || record.origin !== 'creation' || record.sessionCreationTag !== request.sessionCreationTag || record.sessionId !== null || record.pendingRemoval || record.inTrash) throw conflict();
     await assertContained(target);
     await ensureProtectedLocalStateDirectory(target.directory, protection);
     return { ...target, created };
@@ -156,7 +164,7 @@ export function createManagedSessionDirectories(input: Readonly<{
   const bind = async ({ allocationId, sessionId }: Readonly<{ allocationId: string; sessionId: string }>) => {
     if (!sessionId.trim()) throw conflict();
     const record = await readRecord(allocationId);
-    if (!record || record.pendingRemoval || (record.sessionId !== null && record.sessionId !== sessionId)) throw conflict();
+    if (!record || record.pendingRemoval || record.inTrash || (record.sessionId !== null && record.sessionId !== sessionId)) throw conflict();
     if (record.sessionId === sessionId) return;
     await writeRecord(allocationId, { ...record, sessionId });
   };
@@ -176,7 +184,7 @@ export function createManagedSessionDirectories(input: Readonly<{
       if (/^[a-f0-9]{64}$/u.test(allocationId) && canonicalAbsolutePathsEqual(directory, request.path)) {
         await protectExistingOwnerDirectories();
         const candidate = await readRecord(allocationId);
-        if (candidate && !candidate.pendingRemoval
+        if (candidate && !candidate.pendingRemoval && !candidate.inTrash
           && (candidate.sessionId === request.sessionId || (candidate.sessionId === null && candidate.origin === 'creation'
             && candidate.sessionCreationTag === request.sessionCreationTag))) {
           record = { ...candidate, allocationId, directory };
@@ -212,7 +220,7 @@ export function createManagedSessionDirectories(input: Readonly<{
     const sessionCreationTag = `resume:${request.sessionId}:${request.resumeRequestId}`;
     const target = prepareForCreation({ sessionCreationTag });
     const existing = await readRecord(target.allocationId);
-    if (existing && (existing.pendingRemoval || (existing.sessionId !== null && existing.sessionId !== request.sessionId))) return missing();
+    if (existing && (existing.pendingRemoval || existing.inTrash || (existing.sessionId !== null && existing.sessionId !== request.sessionId))) return missing();
     const created = !existing
       ? (await materializeForFreshSpawn({ sessionCreationTag })).created
       : false;
@@ -239,16 +247,28 @@ export function createManagedSessionDirectories(input: Readonly<{
       logger.warn('[MANAGED SESSION DIRECTORY] Could not persist pending removal', { allocationId, error: recordError });
     }
   };
-  const removeAllocation = async (allocationId: string): Promise<void> => {
+  const removeAllocation = async (allocationId: string, options: Readonly<{
+    beforeEffect?: () => Promise<void>; throwOnFailure?: boolean; removeDirectory?: () => Promise<void>;
+  }> = {}): Promise<void> => {
     try {
       const record = await readRecord(allocationId);
       if (!record) return;
       const target = { allocationId, directory: paths.join(root, allocationId) };
-      await assertContained(target);
+      if (record.inTrash) {
+        const info = await lstat(record.inTrash.payloadPath);
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Managed allocation must be a directory, never a symlink');
+      } else await assertContained(target);
       // Node owns transient filesystem retries; prolonged locks remain durable pending removals.
-      await rm(target.directory, { recursive: true, force: true, maxRetries: 1 });
+      await options.beforeEffect?.();
+      if (options.removeDirectory) await options.removeDirectory();
+      else await rm(record.inTrash?.payloadPath ?? target.directory, { recursive: true, force: true, maxRetries: 1 });
       await removeProtectedLocalStateFile(recordPath(allocationId), protection);
-    } catch (error) { await markPendingRemoval(allocationId, error); }
+    } catch (error) {
+      // Storage has its own per-item receipt/re-check path; a rejected approval
+      // re-check must not turn an untouched allocation into a pending removal.
+      if (options.throwOnFailure) throw error;
+      await markPendingRemoval(allocationId, error);
+    }
   };
   const removeSessionRecords = async (sessionId: string, records: readonly ManagedSessionDirectoryEntry[], stopSession: StopSession) => {
     if (!records.length) return;
@@ -265,7 +285,7 @@ export function createManagedSessionDirectories(input: Readonly<{
   };
   const removeForSession = async ({ sessionId, stopSession }: Readonly<{ sessionId: string; stopSession: StopSession }>) => {
     let records: readonly ManagedSessionDirectoryEntry[];
-    try { records = (await listRecords()).filter(record => record.sessionId === sessionId); }
+    try { records = (await listRecords({ includeTrashed: true })).filter(record => record.sessionId === sessionId); }
     catch (error) { logger.warn('[MANAGED SESSION DIRECTORY] Removal inventory unavailable', { sessionId, error }); return; }
     await removeSessionRecords(sessionId, records, stopSession);
   };
@@ -274,7 +294,7 @@ export function createManagedSessionDirectories(input: Readonly<{
     if (record?.origin === 'creation' && record.sessionId === null) await removeAllocation(allocationId);
   };
   const retryPendingRemovals = async ({ stopSession }: Readonly<{ stopSession: StopSession }>) => {
-    const records = (await listRecords()).filter(record => record.pendingRemoval === true);
+    const records = (await listRecords({ includeTrashed: true })).filter(record => record.pendingRemoval === true);
     for (const sessionId of new Set(records.flatMap(record => record.sessionId ? [record.sessionId] : []))) {
       await removeSessionRecords(sessionId, records.filter(record => record.sessionId === sessionId), stopSession);
     }
@@ -286,7 +306,7 @@ export function createManagedSessionDirectories(input: Readonly<{
       v: 1, origin: 'handoff', sessionCreationTag: null, operationId: request.operationId, sessionId: request.sessionId,
     });
     const record = await readRecord(target.allocationId);
-    if (!record || record.origin !== 'handoff' || record.sessionId !== request.sessionId || record.pendingRemoval) throw conflict();
+    if (!record || record.origin !== 'handoff' || record.sessionId !== request.sessionId || record.pendingRemoval || record.inTrash) throw conflict();
     await assertContained(target);
     await ensureProtectedLocalStateDirectory(target.directory, protection);
     return { ...target, created };
@@ -294,7 +314,7 @@ export function createManagedSessionDirectories(input: Readonly<{
   const commitHandoff = async (request: Readonly<{ operationId: string; sessionId: string }>) => {
     const target = prepareForHandoff(request);
     const record = await readRecord(target.allocationId);
-    if (!record || record.origin !== 'handoff' || record.sessionId !== request.sessionId || record.pendingRemoval) throw conflict();
+    if (!record || record.origin !== 'handoff' || record.sessionId !== request.sessionId || record.pendingRemoval || record.inTrash) throw conflict();
     await writeRecord(target.allocationId, { ...record, committed: true });
   };
   const abortHandoff = async (request: Readonly<{ operationId: string; sessionId: string }>) => {
@@ -332,7 +352,86 @@ export function createManagedSessionDirectories(input: Readonly<{
       resumeRequestId: request.resumeRequestId,
     });
   };
-  return { prepareForCreation, materializeForFreshSpawn, bind, listRecords, resolveForSession, removeForSession,
+  const requireAbsent = async (path: string) => {
+    try { await lstat(path); }
+    catch (error) { if (absent(error)) return; throw error; }
+    throw new ManagedSessionDirectoryTrashError('restore_occupied');
+  };
+  const retireToTrash = async ({ allocationId, payloadPath, beforeEffect }: Readonly<{
+    allocationId: string; payloadPath: string; beforeEffect?: () => Promise<void>;
+  }>) => {
+    const record = await readRecord(allocationId);
+    if (!record || record.pendingRemoval || (record.inTrash && !canonicalAbsolutePathsEqual(record.inTrash.payloadPath, payloadPath))) {
+      throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+    }
+    const target = { allocationId, directory: paths.join(root, allocationId) };
+    await assertContained(target);
+    const sourceInfo = await lstat(target.directory).catch(error => { if (absent(error)) return null; throw error; });
+    if (!sourceInfo) {
+      const retainedInfo = await lstat(payloadPath);
+      if (!retainedInfo.isDirectory() || retainedInfo.isSymbolicLink()) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+      // The Trash owner has proved the retained payload identity before a
+      // move-before-owner-commit recovery re-enters this operation.
+      await beforeEffect?.();
+      if (!record.inTrash) await writeRecord(allocationId, { ...record, inTrash: { payloadPath } });
+      return;
+    }
+    if (record.inTrash) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+    await requireAbsent(payloadPath);
+    await beforeEffect?.();
+    await rename(target.directory, payloadPath);
+    try { await writeRecord(allocationId, { ...record, inTrash: { payloadPath } }); }
+    catch (error) { await rename(payloadPath, target.directory); throw error; }
+  };
+  const reinstateFromTrash = async ({ allocationId, payloadPath, restorePath, beforeEffect }: Readonly<{
+    allocationId: string; payloadPath: string; restorePath: string; beforeEffect?: () => Promise<void>;
+  }>) => {
+    const record = await readRecord(allocationId);
+    if (!record || record.pendingRemoval || (record.inTrash && !canonicalAbsolutePathsEqual(record.inTrash.payloadPath, payloadPath))) {
+      throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+    }
+    const target = { allocationId, directory: paths.join(root, allocationId) };
+    if (!canonicalAbsolutePathsEqual(restorePath, target.directory)) throw new ManagedSessionDirectoryTrashError('restore_path_unsupported');
+    await assertContained(target);
+    let payloadPresent = true;
+    try {
+      const info = await lstat(payloadPath);
+      if (!record.inTrash || !info.isDirectory() || info.isSymbolicLink()) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+    } catch (error) { if (absent(error)) payloadPresent = false; else throw error; }
+    const { inTrash: _inTrash, ...activeRecord } = record;
+    if (!payloadPresent) {
+      const info = await lstat(target.directory);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+      // Trash proves the target's original filesystem identity before invoking
+      // this same owner operation after a move-before-record-commit crash.
+      await beforeEffect?.();
+      if (record.inTrash) await writeRecord(allocationId, activeRecord);
+      return;
+    }
+    await requireAbsent(target.directory);
+    await beforeEffect?.();
+    await renameStoragePathNoReplace(payloadPath, target.directory);
+    try { await writeRecord(allocationId, activeRecord); }
+    catch (error) { await rename(target.directory, payloadPath); throw error; }
+  };
+  const discardFromTrash = async ({ allocationId, payloadPath, removePayload, beforeEffect }: Readonly<{
+    allocationId: string; payloadPath: string; removePayload: () => Promise<void>; beforeEffect?: () => Promise<void>;
+  }>) => {
+    const record = await readRecord(allocationId);
+    if (record && (!record.inTrash || !canonicalAbsolutePathsEqual(record.inTrash.payloadPath, payloadPath))) {
+      throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+    }
+    const info = await lstat(payloadPath).catch(error => { if (absent(error)) return null; throw error; });
+    if (info) {
+      if (!record || !info.isDirectory() || info.isSymbolicLink()) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
+      await removePayload();
+    }
+    await requireAbsent(payloadPath);
+    await beforeEffect?.();
+    if (record) await removeProtectedLocalStateFile(recordPath(allocationId), protection);
+  };
+  return { prepareForCreation, materializeForFreshSpawn, bind, listRecords, resolveForSession, removeForSession, removeAllocation,
+    retireToTrash, reinstateFromTrash, discardFromTrash,
     removeUnboundCreation, retryPendingRemovals, allocateForHandoff, commitHandoff, abortHandoff, rollbackFreshSpawn, prepareForSpawn };
 }
 export type ManagedSessionDirectories = ReturnType<typeof createManagedSessionDirectories>;

@@ -19,7 +19,7 @@ import { SessionCreationCorrespondenceV1Schema, sessionCreationCorrespondenceMat
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionInitialAccessDraftV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SpawnSessionExecutionAuthorizationSchema } from '@happier-dev/protocol/spawnSession';
 import { findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
 import type { SpawnConfigOptionValue } from '@happier-dev/protocol';
@@ -90,7 +90,7 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             windowsRemoteSessionLaunchMode,
             windowsRemoteSessionConsole,
             windowsTerminalWindowName,
-            mcpSelection,
+            capabilitySelection,
             agentSessionStartupInstructionsV1,
             sessionCreationTag,
             sessionCreationCorrespondence,
@@ -222,7 +222,11 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             { ...normalizedSessionCreationCorrespondence, recipe: {
                 ...normalizedSessionCreationCorrespondence.recipe,
                 ...(parsedIdentity.data !== undefined ? { identity: parsedIdentity.data } : {}),
-                ...(parsedMemoryEnabled.data !== undefined ? { memoryEnabled: parsedMemoryEnabled.data } : {}),
+                // An omitted caller choice leaves fresh-birth memory defaulting
+                // to the creator (including lead inheritance). Only an authored
+                // choice can conflict with its immutable correspondence.
+                ...(normalizedSessionCreationCorrespondence.recipe.memoryEnabled !== undefined
+                    && parsedMemoryEnabled.data !== undefined ? { memoryEnabled: parsedMemoryEnabled.data } : {}),
             } },
         )) {
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
@@ -334,11 +338,10 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             || attachMetadataIdentityPolicy === 'replace_with_runtime_identity'
                 ? attachMetadataIdentityPolicy
                 : undefined;
-        const normalizedMcpSelection = (() => {
-            if (mcpSelection === undefined) return undefined;
-            const parsed = SessionMcpSelectionV1Schema.safeParse(mcpSelection);
-            return parsed.success ? parsed.data : undefined;
-        })();
+        const normalizedCapabilitySelection = readCapabilitySelectionCarrierV1(rawParams) ?? undefined;
+        if (capabilitySelection !== undefined && !SessionCapabilitySelectionAuthoringV1Schema.safeParse(capabilitySelection).success) {
+            return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST, errorMessage: 'Invalid capability selection' };
+        }
         const parsedSessionConfigOptionOverrides = sessionConfigOptionOverrides === undefined
             ? null
             : AcpConfigOptionOverridesV1Schema.safeParse(sessionConfigOptionOverrides);
@@ -383,6 +386,17 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             };
         }
         const admittedSpawnOptions = pickDefinedSpawnSessionOptions(parsedTransportRequest.data);
+        if (normalizedSessionCreationCorrespondence && !sessionCreationCorrespondenceMatchesV1(
+            normalizedSessionCreationCorrespondence,
+            { ...normalizedSessionCreationCorrespondence, recipe: {
+                ...normalizedSessionCreationCorrespondence.recipe,
+                ...(admittedSpawnOptions.allowedTools !== undefined ? { allowedTools: admittedSpawnOptions.allowedTools } : {}),
+                ...(admittedSpawnOptions.unlistedTools !== undefined ? { unlistedTools: admittedSpawnOptions.unlistedTools } : {}),
+            } },
+        )) {
+            return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+                errorMessage: 'Tool policy conflicts with Session creation correspondence' };
+        }
         const requesterMachineId = requesterBootstrap?.attribution.machineId ?? requesterAdmission?.machineId;
         if (requesterMachineId && typeof machineId === 'string' && machineId !== requesterMachineId) {
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
@@ -397,15 +411,18 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             if (!current) return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Machine admission unavailable' };
         }
+        const requesterWorkAttribution = requesterBootstrap
+            ? RequesterWorkAttributionV1Schema.parse(requesterBootstrap.attribution)
+            : requesterAdmission ? RequesterWorkAttributionV1Schema.parse({
+                serverId: params.serverId, accountId: requesterAdmission.actorAccountId,
+                machineId: requesterAdmission.machineId, installationId: requesterAdmission.installationId,
+            }) : undefined;
         const buildBaseSpawnOptions = (resolvedDirectory: string): SpawnSessionOptions => ({
             ...admittedSpawnOptions,
             ...(context?.requesterSessionBootstrap ? { requesterSessionBootstrap: context.requesterSessionBootstrap } : {}),
             ...(context?.beforeSessionRunnerLaunch ? { beforeSessionRunnerLaunch: context.beforeSessionRunnerLaunch } : {}),
-            ...(requesterBootstrap || requesterAdmission ? {
-                requesterWorkAttributionV1: RequesterWorkAttributionV1Schema.parse(requesterBootstrap?.attribution ?? {
-                    serverId: params.serverId, accountId: requesterAdmission.actorAccountId,
-                    machineId: requesterAdmission.machineId, installationId: requesterAdmission.installationId,
-                }),
+            ...(requesterWorkAttribution ? {
+                requesterWorkAttributionV1: requesterWorkAttribution,
                 verifyRequesterMachineAdmissionCurrent: requesterBootstrap
                     ? () => requesterBootstrap.isCurrent() : context!.verifyMachineAdmissionCurrent,
             } : {}),
@@ -437,7 +454,7 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             windowsRemoteSessionLaunchMode: windowsRemoteSessionLaunchMode as SpawnSessionOptions['windowsRemoteSessionLaunchMode'],
             windowsRemoteSessionConsole: windowsRemoteSessionConsole as SpawnSessionOptions['windowsRemoteSessionConsole'],
             windowsTerminalWindowName: typeof windowsTerminalWindowName === 'string' ? windowsTerminalWindowName : undefined,
-            mcpSelection: normalizedMcpSelection,
+            capabilitySelection: normalizedCapabilitySelection,
             ...(normalizedSessionCreationTag
                 ? { sessionCreationTag: normalizedSessionCreationTag }
                 : {}),
@@ -446,6 +463,10 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
                 : {}),
             ...(normalizedInitialTitle ? { initialTitle: normalizedInitialTitle } : {}),
             ...(!isResumeSessionRequest && !parsedTransportRequest.data.existingSessionId ? {
+                ...(normalizedSessionCreationCorrespondence?.recipe.allowedTools !== undefined
+                    ? { allowedTools: normalizedSessionCreationCorrespondence.recipe.allowedTools } : {}),
+                ...(normalizedSessionCreationCorrespondence?.recipe.unlistedTools !== undefined
+                    ? { unlistedTools: normalizedSessionCreationCorrespondence.recipe.unlistedTools } : {}),
                 ...(normalizedSessionCreationCorrespondence?.recipe.identity !== undefined
                     ? { identity: normalizedSessionCreationCorrespondence.recipe.identity }
                     : parsedIdentity.data !== undefined ? { identity: parsedIdentity.data } : {}),
@@ -482,7 +503,9 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
 
             const baseSpawnOptions = buildBaseSpawnOptions(directory);
             if (context?.signal?.aborted) return cancelled();
-            const result = await params.spawnSession({
+            // Resume callers need the daemon's actual custody: an existing
+            // Session identity, an accepted launch nonce, or a refusal.
+            return await params.spawnSession({
                 ...(context?.creationAuthorization ? { creationAuthorization: context.creationAuthorization } : {}),
                 ...(context?.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
                 ...baseSpawnOptions,
@@ -491,12 +514,6 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
                     ? approvedNewDirectoryCreation
                     : undefined,
             });
-
-            if (result.type === 'error') {
-                return result;
-            }
-
-            return { type: 'success' };
         }
 
         if (typeof directory !== 'string' || directory.length === 0) {

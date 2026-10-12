@@ -58,6 +58,7 @@ describe('CLI declared Account settings', () => {
   function executor(token = 'settings-parity-test') {
     return createCliActionExecutorHarness({
       token, sessionId: 'settings-parity', mode: 'plain', ctx: null, serverId: 'settings-home',
+      serverHttpBaseUrl: 'https://settings-home.test',
       credentials: { token, encryption: null },
     }).executor;
   }
@@ -89,6 +90,31 @@ describe('CLI declared Account settings', () => {
     expect(content).toEqual({ t: 'plain', v: { favoriteMachines: ['neighbor'], tabBarGitBadgeMode: 'off' } });
   });
 
+  it('rebases a keyed terminal-host change over another Machine without replacing Account settings', async () => {
+    concurrentContent = { t: 'plain', v: {
+      favoriteMachines: ['concurrent'], futureSetting: 'preserved',
+      sessionTmuxByMachineId: { neighbor: { useTmux: true, sessionName: 'neighbor-work', isolated: true, tmpDir: null } },
+      sessionTerminalHostByMachineId: { neighbor: 'zellij' },
+    } };
+    conflict = true;
+    const owner = executor();
+    const anchor = 'machines.terminal.host';
+    const key = 'machine-a';
+    const value = { host: 'herdr', tmux: { sessionName: 'my-work' } } as const;
+    expect(await owner.execute('settings.set', { anchor, key, value }, user))
+      .toMatchObject({ ok: true, result: { anchor, value } });
+    expect(await owner.execute('settings.get', { anchor, key }, user))
+      .toMatchObject({ ok: true, result: { anchor, value: { host: 'herdr', tmux: { sessionName: 'my-work' } } } });
+    expect(content).toMatchObject({ t: 'plain', v: {
+      favoriteMachines: ['concurrent'], futureSetting: 'preserved',
+      sessionTmuxByMachineId: {
+        neighbor: { useTmux: true, sessionName: 'neighbor-work', isolated: true, tmpDir: null },
+        'machine-a': { useTmux: false, sessionName: 'my-work' },
+      },
+      sessionTerminalHostByMachineId: { neighbor: 'zellij', 'machine-a': 'herdr' },
+    } });
+  });
+
   it('isolates provider state through the consent owner without requiring catalog evidence or replacing configuration', async () => {
     const sharing = accountSettingsParse({}).connectedServicesProviderStateSharingSettingsV1;
     content = { t: 'plain', v: { favoriteMachines: ['neighbor'], connectedServicesProviderStateSharingSettingsV1: {
@@ -104,6 +130,28 @@ describe('CLI declared Account settings', () => {
     } });
     expect(await executor().execute('settings.set', { anchor, value: 'false' }, user))
       .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+  });
+
+  it.each([
+    ['connectedServicesAgentSignIn.sharingState', true],
+    ['connectedServicesAgentSignIn.sharingPerAgent', { agentId: 'codex', stateMode: 'shared' }],
+  ] as const)('honors an Agent Action waiver when sharing state through %s', async (anchor, value) => {
+    const policy = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] } });
+    content = { t: 'plain', v: { actionsSettingsV1: policy, favoriteMachines: ['neighbor'],
+      connectedServicesProviderStateSharingSettingsV1: { v: 1,
+        defaults: { configMode: 'copied', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+      },
+    } };
+    expect(await executor().execute('settings.set', { anchor, value }, {
+      surface: 'agent', authority: 'account_automation', actionsSettings: policy,
+    })).toMatchObject({ ok: true, result: { anchor, value } });
+    expect(content).toMatchObject({ t: 'plain', v: { favoriteMachines: ['neighbor'],
+      connectedServicesProviderStateSharingSettingsV1: {
+        defaults: { configMode: 'copied', stateMode: anchor.endsWith('sharingState') ? 'shared' : 'isolated' },
+        acknowledgedRisksByAgentId: { codex: { sharedStatePrivacy: true } },
+        ...(anchor.endsWith('sharingPerAgent') ? { byAgentId: { codex: { stateMode: 'shared' } } } : {}),
+      },
+    } });
   });
 
   it('writes Voice choices through their canonical persistence projection without replacing neighboring settings', async () => {
@@ -302,6 +350,12 @@ describe('CLI declared Account settings', () => {
     vi.mocked(axios.get).mockRejectedValue(new Error('Account unavailable'));
     expect(await executor().execute('settings.get', { anchor: 'delegation.workDepthLimit' }, user))
       .toMatchObject({ ok: false, errorCode: 'account_settings_content_unavailable' });
+  });
+
+  it('reads defaults from an observed empty Account document', async () => {
+    content = { t: 'plain', v: {} };
+    expect(await executor().execute('settings.get', { anchor: 'delegation.workDepthLimit' }, user))
+      .toMatchObject({ ok: true, result: { value: 4 } });
   });
 
   it('lets agents read Account defaults but refuses an unbound configuration approval without writing', async () => {

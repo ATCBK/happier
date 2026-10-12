@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import nacl from 'tweetnacl';
 import { deriveAccountMachineKeyFromRecoverySecret, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import { encodeBase64, encrypt } from '@/api/encryption';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -199,7 +200,12 @@ describe('hydrateVoiceReplayDialogFromTranscript (integration)', () => {
       if (req.method === 'GET' && url.pathname === `/v1/sessions/${params.sessionId}/messages`) {
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: rows }));
+        res.end(JSON.stringify(SessionMessagesPageV1Schema.parse({
+          messages: rows.map(row => ({ id: `voice-message-${row.seq}`, ...row })),
+          hasMore: false,
+          nextBeforeSeq: null,
+          nextAfterSeq: null,
+        })));
         return;
       }
 

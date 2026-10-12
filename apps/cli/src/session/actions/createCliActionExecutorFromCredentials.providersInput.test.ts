@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import '@happier-dev/protocol/actions/actionSpecs';
 import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
 
 describe('PAT Provider Action input admission', () => {

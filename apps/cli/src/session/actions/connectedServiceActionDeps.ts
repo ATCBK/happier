@@ -189,12 +189,14 @@ export function createCliConnectedServiceAction(params: Readonly<{
       },
       admitResourcePurposeTarget: async input => {
         await assertReadCurrent();
+        const request = DaemonContributionRegistryProjectionDescribeRequestSchema.parse({ machineId: input.machineId });
         let rawProjection: unknown;
         try {
           rawProjection = await params.callMachineAction({ machineId: input.machineId,
             ...(params.serverId ? { serverId: params.serverId } : {}),
             method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
-            request: DaemonContributionRegistryProjectionDescribeRequestSchema.parse({}), ...(signal ? { signal } : {}),
+            request, ...(signal ? { signal } : {}),
+            authority: context.authority, authorization: context.rpcSessionAuthorization, context, effectActionId: actionId, exactMachine: true,
           });
         } catch {
           await assertReadCurrent();

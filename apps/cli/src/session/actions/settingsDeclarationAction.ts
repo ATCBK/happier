@@ -1,7 +1,7 @@
 import { accountSettingsParse, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, readPortableDomainSettingBindingV1,
   parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1, buildBuiltInAccountSettingMutationV1,
-  hasBuiltInAccountSettingBindingV1,
+  hasBuiltInAccountSettingBindingV1, resolveBuiltInAccountSettingResetValueV1,
 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationValueV1Schema,
@@ -27,6 +27,8 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { createCliAutomationSettingsDeclarationAction } from './automationSettingsAction';
 import { readPortableAccountSettingBindingV1 } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { MachineTerminalHostSettingKeySchema, MachineTerminalHostSettingChangeSchema,
+  readMachineTerminalHostSetting, buildMachineTerminalHostSettingMutation } from '@happier-dev/protocol/actions/settings/machineTerminalHostSetting';
 
 const refuse = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
 class RejectedSettingMutation extends Error {
@@ -58,7 +60,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
             writable: readable && item.storage?.access === 'read_write'
               && !(context.surface === 'agent' && item.surfaces?.agent === false || context.surface === 'mcp' && item.surfaces?.mcp === false),
             ...(item.storage?.scope === 'account' || item.storage?.scope === 'local' ? { storageScope: item.storage.scope } : {}),
-            ...(item.targetKinds.length ? { targetKinds: [...item.targetKinds], targetRequired: item.storage?.scope === 'team' } : {}),
+            ...(item.targetKinds.length ? { targetKinds: [...item.targetKinds], targetRequired: item.storage?.scope === 'team' || item.storage?.scope === 'project' } : {}),
             ...(item.storage?.allowedValues ? { allowedValues: [...item.storage.allowedValues] } : {}),
             ...(sensitive ? { unavailableReason: 'sensitive' as const } : !item.storage ? { unavailableReason: 'not_bound' as const }
               : item.storage.access === 'read_only' ? { unavailableReason: 'read_only' as const } : {}),
@@ -72,7 +74,44 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     const parsed = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
     const declaration = readBuiltInSettingDeclarationV1(parsed.anchor);
     if (!declaration) return refuse('setting_not_found');
-    if (actionId === 'settings.invoke' || declaration.storage?.scope === 'local') return clientActionUnavailable(actionId);
+    if (parsed.anchor === 'machines.terminal.host') {
+      if (actionId !== 'settings.get' && actionId !== 'settings.set') return refuse('setting_reset_unsupported');
+      const key = MachineTerminalHostSettingKeySchema.safeParse('key' in parsed ? parsed.key : undefined);
+      if (!key.success) return refuse('setting_key_required');
+      if (context.externalActionCredential || context.externalActionExecutionAuthorization) return refuse('requester_account_material_unavailable');
+      if (!params.credentials) return refuse('not_authenticated');
+      if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
+      if (actionId === 'settings.get') {
+        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force' });
+        if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
+        return { anchor: parsed.anchor, value: readMachineTerminalHostSetting(accountSettingsParse(current.rawSettings), key.data) };
+      }
+      const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
+      if (requested.reversal || requested.expectedSettingsVersion !== undefined) return refuse('setting_conditional_mutation_unsupported');
+      const change = MachineTerminalHostSettingChangeSchema.safeParse(requested.value);
+      if (!change.success) return refuse('invalid_setting_value');
+      try {
+        const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials, signal: context.signal,
+          prepareMutation: async raw => {
+            context.signal?.throwIfAborted();
+            if (params.isCredentialCurrent && !await params.isCredentialCurrent()) throw new RejectedSettingMutation('credential_scope_retired');
+            const patch = buildMachineTerminalHostSettingMutation(accountSettingsParse(raw), key.data, change.data);
+            if (!patch) throw new RejectedSettingMutation();
+            return AccountSettingMutationV1Schema.parse({ operations: Object.entries(patch).map(([key, value]) => ({ op: 'set', key, value })) });
+          },
+        });
+        if (result.status !== 'applied' && result.status !== 'unchanged' && result.status !== 'satisfied') return refuse(`account_settings_${result.status}`);
+        return { anchor: parsed.anchor, value: change.data };
+      } catch (error) {
+        if (error instanceof RejectedSettingMutation) return refuse(error.errorCode);
+        throw error;
+      }
+    }
+    // Device preference keys belong to the answering App's declared owner, including on recovery.
+    if (declaration.storage?.scope === 'local') return clientActionUnavailable(actionId);
+    if ('key' in parsed && parsed.key !== undefined) return refuse('setting_key_unsupported');
+    if (actionId === 'settings.invoke'
+      || declaration.storage?.scope === 'project' || declaration.storage?.prerequisite === 'ui_picture_catalog') return clientActionUnavailable(actionId);
     const storage = declaration.storage;
     if (!storage) return refuse('setting_not_bound');
     const target = 'target' in parsed ? parsed.target : undefined;
@@ -84,12 +123,13 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     if ((actionId === 'settings.set' || actionId === 'settings.reset') && storage.access === 'read_only') return refuse('setting_read_only');
     if (storage.prerequisite === 'ui_platform') return { ...refuse('setting_value_unavailable'), details: { prerequisite: storage.prerequisite } };
     const resetValue = actionId === 'settings.reset'
-      ? readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({}))
+      ? resolveBuiltInAccountSettingResetValueV1(declaration)
       : undefined;
-    if (actionId === 'settings.reset' && resetValue === undefined) return refuse('setting_reset_unsupported');
+    if (resetValue && !resetValue.success) return refuse('setting_reset_unsupported');
     const requested = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input)
-      : actionId === 'settings.reset' ? { ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue! }
+      : actionId === 'settings.reset' && resetValue?.success ? { ...SettingsDeclarationActionInputSchemasV1[actionId].parse(input), value: resetValue.value }
       : undefined;
+    const ownerActionId = actionId === 'settings.reset' ? 'settings.set' : actionId;
     if (storage.scope === 'home' || storage.scope === 'team') {
       if (requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
       const binding = readPortableDomainSettingBindingV1(declaration);
@@ -100,9 +140,9 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
         return executeOwnerAction(request);
       };
-      const request = { actionId, anchor: declaration.anchor, value: requested?.value, execute: executeScopedOwner, context, isCurrent };
+      const request = { actionId: ownerActionId, anchor: declaration.anchor, value: requested?.value, execute: executeScopedOwner, context, isCurrent };
       if (binding.scope === 'team') {
-        if (!target || target.kind === 'home') return refuse('setting_target_mismatch');
+        if (!target || target.kind === 'home' || target.kind === 'project') return refuse('setting_target_mismatch');
         return await executeTeamSettingDeclaration({ ...request, binding, target });
       }
       if (binding.kind === 'sessionAutoFollowPreferences') return await executeSessionAutoFollowSetting({ ...request, field: binding.field });
@@ -119,7 +159,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (storage.field !== 'maxActiveRunsPerMachine' && storage.field !== 'runRetention') return refuse('setting_not_bound');
       return await createCliAutomationSettingsDeclarationAction({ credentials, serverId: params.serverId,
         serverHttpBaseUrl: params.serverHttpBaseUrl, isCredentialCurrent: params.isCredentialCurrent })({
-        actionId, anchor: declaration.anchor, field: storage.field, value: requested?.value, signal: context.signal,
+        actionId: ownerActionId, anchor: declaration.anchor, field: storage.field, value: requested?.value, signal: context.signal,
       });
     }
     const ordinaryBinding = hasBuiltInAccountSettingBindingV1(declaration);
@@ -147,7 +187,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
       const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' }) : undefined;
-      if (initial && !initial.rawSettings) return refuse('account_settings_content_unavailable');
+      if (initial && (initial.source === 'none' || !initial.rawSettings)) return refuse('account_settings_content_unavailable');
       const catalogServices = createCliSettingsCatalogServices({ credentials, signal: context.signal, serverId: params.serverId,
         expectedAccountId: readAccountIdFromToken(credentials.token) ?? undefined, voiceOwner: voiceContext?.owner,
         ...(readMachineAgentProjection ? { readMachineAgentProjection: (machineId, signal) =>
@@ -159,7 +199,12 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
           { signal: context.signal, isCurrent: isCatalogCurrent }) : undefined;
       if (catalogBinding?.prepare && !preparedCatalogMutation) return refuse('setting_value_unavailable');
       const preparedAccount = preparedBinding && initial?.rawSettings
-        ? await preparedBinding.prepare(projectAccount(initial.rawSettings), value.value, catalogServices,
+        ? await preparedBinding.prepare(projectAccount(initial.rawSettings), value.value, {
+          ...catalogServices,
+          // The executor admitted this Settings Action before dispatch, including
+          // a waiver. Transport acknowledgements must not add another approval floor.
+          confirmProviderStateSharingRiskAgents: async () => true,
+        },
           { signal: context.signal, isCurrent: isCatalogCurrent }) : undefined;
       if (preparedAccount && preparedAccount.status !== 'prepared') {
         if (preparedAccount.status === 'confirmation_required') return { ...refuse('provider_state_sharing_confirmation_required'),
@@ -206,7 +251,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
     if (!isCatalogCurrent()) return refuse('setting_value_unavailable');
     const raw = 'raw' in current ? current.raw : current.rawSettings;
-    if (!raw) return refuse('account_settings_content_unavailable');
+    if (('source' in current && current.source === 'none') || !raw) return refuse('account_settings_content_unavailable');
     const value = readValue(raw);
     if (value === PORTABLE_SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
     return { anchor: declaration.anchor, ...(value === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(value) }),

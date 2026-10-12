@@ -20,7 +20,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type { StoredCredentials } from '@/persistence';
-import { tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { tryDecryptSessionOwnerMetadata, tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import {
   fetchSessionById,
   fetchSessionsPage,
@@ -125,6 +125,11 @@ export type PluginSessionsInventoryParams = Readonly<{
     request: SessionSendRequest;
     signal: AbortSignal;
   }>) => Promise<import('@happier-dev/protocol').SessionInputAdmissionResultV1>;
+  materializeAttachment?: (params: Readonly<{
+    sessionId: string;
+    request: Parameters<SessionHandle['materializeAttachment']>[0];
+    signal: AbortSignal;
+  }>) => ReturnType<SessionHandle['materializeAttachment']>;
   readAccountEncryptionCurrentness?: (
     credentials: StoredCredentials,
   ) => Promise<AccountEncryptionCurrentnessResponse>;
@@ -232,6 +237,11 @@ function projectSessionSummary(params: Readonly<{
     rawSession: params.raw,
     accountEncryptionMode: params.accountEncryptionMode,
   });
+  const ownerMetadata = tryDecryptSessionOwnerMetadata({
+    credentials: params.credentials,
+    rawSession: params.raw,
+    accountEncryptionMode: params.accountEncryptionMode,
+  });
   const { machineId, projectId } = projectPluginSessionAccessIdentity(params.raw, metadata);
   const state = sessionState(params.raw);
   const title = readTitle(metadata);
@@ -242,6 +252,7 @@ function projectSessionSummary(params: Readonly<{
     ...(machineId ? { machineId } : {}),
     ...(projectId ? { projectId } : {}),
     ...(agentId ? { agentId } : {}),
+    ...(ownerMetadata ? { hasAttestedContext: ownerMetadata.system?.attestedContext !== undefined } : {}),
     state,
     runtimeAvailability: runtimeAvailability(state),
     storagePolicy: params.storagePolicy,
@@ -590,6 +601,20 @@ export function createPluginSessionsInventory(
     });
     const handle = Object.freeze({
       summary: readSummary,
+      async materializeAttachment(request: Parameters<SessionHandle['materializeAttachment']>[0], options?: { signal?: AbortSignal }) {
+        const operationSignal = combineAbortSignals(params.signal, options?.signal);
+        assertNotAborted(operationSignal);
+        await assertSessionAccess(sessionId, 'write', operationSignal);
+        assertGenerationCurrent();
+        if (!params.materializeAttachment) throw new PluginError({
+          code: 'plugin_session_attachment_unavailable',
+          message: 'The hosted Session attachment transfer owner is unavailable',
+        });
+        const result = await params.materializeAttachment({ sessionId, request, signal: operationSignal });
+        assertNotAborted(operationSignal);
+        assertGenerationCurrent();
+        return result;
+      },
       async send(request: SessionSendRequest, options?: { signal?: AbortSignal }) {
         const operationSignal = combineAbortSignals(params.signal, options?.signal);
         assertNotAborted(options?.signal);
@@ -637,6 +662,7 @@ export function createPluginSessionsInventory(
             source = openSessionEventSource({ token: credentials.token, sessionId });
             while (isWatching()) {
               const revision = source.currentRevision();
+              let retryAt: number | null = null;
               try {
                 const session = await readAuthorizedSession(sessionId, 'read', signal);
                 if (!isWatching()) return;
@@ -644,8 +670,9 @@ export function createPluginSessionsInventory(
                 const snapshot = JSON.stringify([
                   session.summary, session.raw.latestTurnId, session.raw.latestTurnStatus,
                   session.raw.latestTurnStatusObservedAt, session.raw.latestReadyEventSeq,
+                  session.raw.agentStateVersion,
                 ]);
-                // Turn settlement can unblock publication without a new transcript row.
+                // Turn settlement and permission changes need not append transcript rows.
                 if (previousSnapshot !== undefined && previousSnapshot !== snapshot) {
                   emit({ kind: 'changed', sequence: session.raw.seq, summary: session.summary });
                 }
@@ -691,9 +718,14 @@ export function createPluginSessionsInventory(
                 } while (hasMore && isWatching());
               } catch (error) {
                 if (isPluginError(error) && !error.retryable) return;
-                // Keep the frontier on read failure; the next event/reconnect retries it.
+                if (readAuthenticationStatus(error) !== null) return;
+                // Keep the frontier and reuse this observation owner's recovery
+                // cadence only after a failed read. Healthy watches stay parked.
+                retryAt = Date.now() + pollIntervalMs;
               }
-              if (!isWatching() || !await source.waitForChange(revision, { deadlineMs: null, signal })) return;
+              if (!isWatching()) return;
+              const changed = await source.waitForChange(revision, { deadlineMs: retryAt, signal });
+              if (!changed && retryAt === null) return;
             }
           } finally {
             signal.removeEventListener('abort', close);

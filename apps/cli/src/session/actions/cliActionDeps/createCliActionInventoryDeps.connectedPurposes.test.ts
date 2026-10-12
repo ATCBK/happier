@@ -9,7 +9,6 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { createCliActionInventoryDeps } from './createCliActionInventoryDeps';
 import { createCliActionDeps } from '../createCliActionDeps';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -17,6 +16,47 @@ import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemo
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
 describe('direct CLI and Action inventory purpose authority', () => {
+  it('reobserves unavailable purpose authority on the next inventory demand after the Home recovers', async () => {
+    const credentials = { token: 'recovering-purpose-consumer', encryption: null };
+    const home = 'https://recovering-purpose-consumer.example.test';
+    const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'codex',
+      contributions: readCurrentContributionRegistry() })?.authorizedPurposes.find(scope => scope.serviceRefs[0]?.localId === 'openai-codex');
+    if (!declaration?.serviceRefs[0]) throw new Error('Missing current declared Codex purpose');
+    const service = declaration.serviceRefs[0];
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: Date.now(), settingsSecretsReadKeys: [] });
+    let reachable = false;
+    // Only Home HTTP is replaced; Account publication, recovery, catalog parsing,
+    // default interpretation and Action failure normalization remain real.
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/profile') return { status: 200, data: AccountProfileSchema.parse({ id: 'recovering-purpose-account' }) };
+      if (path.endsWith('/connected-accounts/purposes')) return reachable
+        ? { status: 200, data: { status: 'present', revision: 4, content: { t: 'plain', v: {
+          key: 'purposes', value: { v: 1, bindings: [{ purpose: declaration.purpose,
+            target: { kind: 'group', service, groupId: 'recovered-group' } }] },
+        } } } } : { status: 503, data: { error: 'unreachable' } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+      throw new Error(`Unexpected Home request: ${path}`);
+    });
+    await runWithServerHttpBaseUrl(home, async () => {
+      const deps = createCliActionDeps({ token: credentials.token, credentials,
+        sessionId: 'recovering-purpose-session', mode: 'plain', ctx: null });
+      const executor = createActionExecutor(deps);
+      expect(await executor.execute('sessions.spawn.connected_services.list', { agentId: 'codex' }, { surface: 'cli' }))
+        .toMatchObject({ ok: false, errorCode: 'connected_services_default_unavailable',
+          error: 'connected_account_purpose_catalog_unavailable' });
+      expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
+      reachable = true;
+      expect(await executor.execute('sessions.spawn.connected_services.list', { agentId: 'codex' }, { surface: 'cli' }))
+        .toMatchObject({ ok: true, result: { defaultBindings: { v: 2, bindingsByServiceId: {
+          [`${service.pluginId}/${service.localId}`]: { source: 'connected', selection: 'group', groupId: 'recovered-group' },
+        } } } });
+    });
+  });
+
   it('reads purpose inventory with the original named Action token, authority ceiling and captured Home', async () => {
     const accountId = 'named-purpose-inventory';
     const home = 'https://named-purpose-inventory.example.test';
@@ -88,6 +128,7 @@ describe('direct CLI and Action inventory purpose authority', () => {
       expect(url.origin).toBe(home);
       if (url.pathname.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.pathname === '/v1/account/profile') return { status: 200, data: AccountProfileSchema.parse({ id: 'purpose-inventory-account' }) };
       if (url.pathname.endsWith('/connected-accounts/purposes')) return { status: 200, data: {
         status: 'present', revision: 4, content: outcome === 'ready'
           ? { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } }
@@ -100,18 +141,18 @@ describe('direct CLI and Action inventory purpose authority', () => {
         const operation = resolveDirectCliConnectedServiceBindings({ agentId: 'codex', credentials,
           accountSettings: snapshot.settings, authRaw: 'default', authJsonRaw: undefined });
         if (outcome === 'ready') await expect(operation).resolves.toBeNull();
-        else await expect(operation).rejects.toThrow('connected_services_default_unavailable');
+        else await expect(operation).rejects.toMatchObject({ code: 'connected_services_default_unavailable' });
         expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject(outcome === 'ready'
           ? { status: 'ready', revision: 4 } : { status: 'unavailable', reason: 'account-mode-mismatch' });
       } else {
         const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: home,
           snapshot, isCurrent: async () => true });
-        const deps = createCliActionInventoryDeps({ token: credentials.token, credentials,
-          savedSecretOperationContext: operationContext, sessionId: 'purpose-inventory-session', mode: 'plain', ctx: null,
-          accountProfile: AccountProfileSchema.parse({ id: 'purpose-inventory-account' }) });
-        const operation = deps.spawnConnectedServicesList!({ agentId: 'codex', includeUnavailable: false });
-        if (outcome === 'ready') expect(await operation).not.toHaveProperty('defaultBindings');
-        else await expect(operation).rejects.toMatchObject({ code: 'connected_services_default_unavailable' });
+        const deps = createCliActionDeps({ token: credentials.token, credentials,
+          savedSecretOperationContext: operationContext, sessionId: 'purpose-inventory-session', mode: 'plain', ctx: null });
+        const operation = createActionExecutor(deps).execute('sessions.spawn.connected_services.list',
+          { agentId: 'codex', includeUnavailable: false }, { surface: 'cli' });
+        if (outcome === 'ready') expect(await operation).toMatchObject({ ok: true });
+        else expect(await operation).toMatchObject({ ok: false, errorCode: 'connected_services_default_unavailable' });
         expect(operationContext.readSnapshot()?.connectedPurposeCatalog).toMatchObject(outcome === 'ready'
           ? { status: 'ready', revision: 4 } : { status: 'unavailable', reason: 'account-mode-mismatch' });
         expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);

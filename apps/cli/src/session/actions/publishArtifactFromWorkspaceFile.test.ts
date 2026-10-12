@@ -88,12 +88,13 @@ describe('explicit Artifact publication from the caller workspace', () => {
     http.get.mockImplementation(async (url: string) => ({ status: 200,
       data: { url: `https://isolated.example/a/${url.split('/').at(-2)}` } }));
     const result = await publishArtifactFromWorkspaceFile({ store: store(), caller,
-      input: { path: 'site', entrypoint: 'pages/index.html', title: 'Experiment' } });
+      input: { path: 'site', entrypoint: 'pages/index.html', title: 'Experiment', requestedCapabilities: { network: 'none' } } });
     expect(result).toEqual({ artifactId: expect.any(String), revision: { headerVersion: 1, bodyVersion: 1 } });
     const payload = readCarrierMutation(http.post.mock.calls[0]?.[1]);
     expect(decodePlainArtifactStoredContent(String(payload.header))).toMatchObject({ title: 'Experiment', kind: 'html', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 });
     const blob = ArtifactBlobWriteV1Schema.parse(payload.blob);
-    expect(blob.content.t === 'plain' && ArtifactHtmlBundleV1Schema.parse(JSON.parse(Buffer.from(blob.content.v, 'base64').toString('utf8')))).toEqual(expected);
+    if (!blob.content || blob.content.t !== 'plain') throw new Error('Expected plaintext publication blob');
+    expect(ArtifactHtmlBundleV1Schema.parse(JSON.parse(Buffer.from(blob.content.v, 'base64').toString('utf8')))).toEqual({ ...expected, requestedCapabilities: { network: 'none' } });
   });
 
   it('returns the canonical one-file bundle when acquiring HTML without creating an Artifact', async () => {

@@ -6,7 +6,7 @@ import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/
 import { agentEventLocalIdAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { SessionMessageAttentionImpact, SessionStoredMessageContent, V2SessionByIdResponse, V2SessionListResponse, SessionLookupByTagsResponseV2, SessionMetadataInactiveModelIntentExpectationV1, SessionMetadataInactiveModelIntentOwnerPatchV1, SessionMetadataInactiveModelIntentPatchV1, SessionMetadataTuplePatchV1, SessionOrganizationPlacementV1, SessionTurnsProjectionV1, AccountEncryptionCurrentnessResponse, SessionListQueryV1, SessionListQueryResponseV1, SessionListUnavailableQueryV1, SessionInitialAccessDraftV1, SessionAttentionSetResultV1, SessionReportsToSetActionInputV1, SessionReportsToSetResultV1, SessionReportsToV1 } from '@happier-dev/protocol';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
-import { SessionTranscriptSurfaceItemReferenceV1Schema, type SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionTranscriptSurfaceItemReferenceInputV1Schema, type SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema, V2SessionByIdResponseSchema, V2SessionListResponseSchema, V2SessionMessageResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelIntentPatchSuccessV1Schema, SessionMetadataInactiveModelIntentVersionConflictV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -1392,8 +1392,9 @@ const V2HistoricalTranscriptImportResponseSchema = z.object({
 }).strict();
 
 /**
- * Single HTTP adapter for transcript.import. It validates the complete batch before issuing one
- * request so the server's historical transaction, rather than a client loop, owns atomicity.
+ * Single HTTP adapter for transcript.import. Validate all rows before writing, then preserve their
+ * order within the server's existing per-request batch boundary. Each server batch is atomic;
+ * a later failure leaves earlier admitted rows intact for the canonical stable-localId retry.
  */
 export async function importHistoricalSessionTranscript(params: Readonly<{
   token: string;
@@ -1401,7 +1402,7 @@ export async function importHistoricalSessionTranscript(params: Readonly<{
   items: readonly Readonly<{
     id: string;
     content?: unknown;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
   }>[];
 }>): Promise<{ imported: number; cursor: string | null }> {
   const items = params.items.map((item) => {
@@ -1411,7 +1412,7 @@ export async function importHistoricalSessionTranscript(params: Readonly<{
       throw new Error('Invalid transcript import item');
     }
     const surfaceItemReference = item.surfaceItemReference === undefined ? undefined
-      : SessionTranscriptSurfaceItemReferenceV1Schema.parse(item.surfaceItemReference);
+      : SessionTranscriptSurfaceItemReferenceInputV1Schema.parse(item.surfaceItemReference);
     return { localId, content: content.data, ...(surfaceItemReference ? { surfaceItemReference } : {}) };
   });
   if (items.length === 0) {
@@ -1430,47 +1431,54 @@ export async function importHistoricalSessionTranscript(params: Readonly<{
     timeout: 20_000,
     validateStatus: () => true,
   };
-  let response = await axios.post(`${serverUrl}${path}`, {
-    items,
-  }, config);
-  if (path.startsWith('/v3/') && response.status === 404
-    && !(response.data && typeof response.data === 'object' && response.data.error === 'Session not found')) {
-    // Supported older Homes preserve the transcript, never a false association.
-    path = `/v2/sessions/${encodedSessionId}/transcript/import`;
-    response = await axios.post(`${serverUrl}${path}`, {
-      items: items.map(({ surfaceItemReference: _reference, ...item }) => item),
+  let imported = 0;
+  let cursor: number | null = null;
+  for (let offset = 0; offset < items.length; offset += SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS) {
+    const batch = items.slice(offset, offset + SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS);
+    const withoutReferences = () => batch.map(({ surfaceItemReference: _reference, ...item }) => item);
+    let response = await axios.post(`${serverUrl}${path}`, {
+      items: path.startsWith('/v3/') ? batch : withoutReferences(),
     }, config);
-  }
-
-  if (isAuthenticationStatus(response.status)) {
-    throwAuthenticationStatusError(response.status);
-  }
-  if (response.status === 404) {
-    const currentServerSessionMiss = response.data !== null
-      && typeof response.data === 'object'
-      && !Array.isArray(response.data)
-      && (response.data as { error?: unknown }).error === 'Session not found';
-    if (currentServerSessionMiss) {
-      throw createHttpStatusError(404, 'Session not found', 'session_not_found');
+    if (path.startsWith('/v3/') && response.status === 404
+      && !(response.data && typeof response.data === 'object' && response.data.error === 'Session not found')) {
+      // Supported older Homes preserve the transcript, never a false association. Keep the
+      // negotiated fallback for the remaining batches in this one import operation.
+      path = `/v2/sessions/${encodedSessionId}/transcript/import`;
+      response = await axios.post(`${serverUrl}${path}`, { items: withoutReferences() }, config);
     }
-    throw createHttpStatusError(
-      404,
-      'Server upgrade required before transcript import.',
-      'upgrade_required',
-    );
-  }
-  if (response.status !== 200) {
-    throw new Error(`Unexpected status from ${path}: ${response.status}`);
-  }
 
-  const parsed = parseOrThrow(
-    V2HistoricalTranscriptImportResponseSchema,
-    response.data,
-    `Unexpected ${path} response shape`,
-  );
+    if (isAuthenticationStatus(response.status)) {
+      throwAuthenticationStatusError(response.status);
+    }
+    if (response.status === 404) {
+      const currentServerSessionMiss = response.data !== null
+        && typeof response.data === 'object'
+        && !Array.isArray(response.data)
+        && (response.data as { error?: unknown }).error === 'Session not found';
+      if (currentServerSessionMiss) {
+        throw createHttpStatusError(404, 'Session not found', 'session_not_found');
+      }
+      throw createHttpStatusError(
+        404,
+        'Server upgrade required before transcript import.',
+        'upgrade_required',
+      );
+    }
+    if (response.status !== 200) {
+      throw new Error(`Unexpected status from ${path}: ${response.status}`);
+    }
+
+    const parsed = parseOrThrow(
+      V2HistoricalTranscriptImportResponseSchema,
+      response.data,
+      `Unexpected ${path} response shape`,
+    );
+    imported += parsed.imported;
+    if (parsed.cursor !== null) cursor = Math.max(cursor ?? 0, parsed.cursor);
+  }
   return {
-    imported: parsed.imported,
-    cursor: parsed.cursor === null ? null : String(parsed.cursor),
+    imported,
+    cursor: cursor === null ? null : String(cursor),
   };
 }
 

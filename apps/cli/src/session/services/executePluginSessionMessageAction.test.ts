@@ -1,4 +1,13 @@
-import { derivePluginSessionInputLocalIdV1 } from '@happier-dev/protocol';
+import axios from 'axios';
+import {
+  AccountEncryptionCurrentnessResponseSchema,
+  SessionOwnerMetadataV1Schema,
+  V2SessionByIdResponseSchema,
+  derivePluginSessionInputLocalIdV1,
+  type SessionPendingEnqueueByMachineRequestV1,
+  type SessionPendingExecutionRunEnqueueByMachineRequestV2,
+} from '@happier-dev/protocol';
+import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { executePluginSessionMessageAction } from './executePluginSessionMessageAction';
@@ -10,6 +19,77 @@ const DEVELOPMENT_SOURCE_CUSTODY = Object.freeze({
 });
 
 describe('executePluginSessionMessageAction', () => {
+  it('admits a semantic teammate shutdown through the real CLI Action and protected machine input owner', async () => {
+    const command = { kind: 'agent_team_member_delete' as const, teamId: 'reviewers', memberId: 'worker-1', memberLabel: 'Reviewer' };
+    const text = 'Shutdown teammate Reviewer · reviewers';
+    const sessionId = 'session-command-current';
+    const pluginId = 'acme.agent';
+    const contributionLocalId = 'manage-teammates';
+    const idempotencyKey = `shutdown-${command.kind}`;
+    const materialization = { pluginId, machineId: 'machine-1', materializationId: 'materialization-current' };
+    const localId = derivePluginSessionInputLocalIdV1({ caller: { pluginId, contributionLocalId }, sessionId, idempotencyKey });
+    const admitted: Array<SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2> = [];
+    const currentness = AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    const session = V2SessionByIdResponseSchema.parse({ session: {
+      id: sessionId, seq: 0, createdAt: 1, updatedAt: 2, active: true, activeAt: 2,
+      encryptionMode: 'plain', metadata: JSON.stringify({ v: 1 }), metadataVersion: 1, metadataLayoutVersion: 1,
+      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
+        v: 1, workspace: { path: '/repo/current', host: 'nl1', machineId: 'machine-1' },
+      })),
+      dataEncryptionKey: null, share: null, agentState: null, agentStateVersion: 1,
+    } });
+    // Only HTTP and authenticated daemon transport are mocked. CLI admission,
+    // target resolution, sealing and receipt projection remain real.
+    const http = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) {
+        return { status: 200, data: currentness };
+      }
+      if (String(url).includes(`/v2/sessions/${sessionId}`)) {
+        return { status: 200, data: session };
+      }
+      throw new Error(`Unexpected HTTP read: ${String(url)}`);
+    });
+    const { executor } = createCliActionExecutorHarness({
+      token: 'token', credentials: { token: 'token', encryption: null }, sessionId, mode: 'plain', ctx: null,
+      machineAdmissionTransport: async (input) => {
+        admitted.push(input);
+        return { status: 'accepted' as const, localId };
+      },
+    });
+    const signal = new AbortController().signal;
+
+    try {
+      const receipt = await executePluginSessionMessageAction({
+        execute: executor.execute,
+        pluginId,
+        contributionLocalId,
+        occurrenceId: 'occurrence-current',
+        sourceCustody: DEVELOPMENT_SOURCE_CUSTODY,
+        resolveCallerMaterialization: () => materialization,
+        sessionId,
+        request: { kind: 'sessionSubagentCommand', command, idempotencyKey },
+        signal,
+      });
+      expect(receipt).toEqual({ status: 'accepted', localId });
+      expect(admitted).toEqual([expect.objectContaining({
+        sessionId,
+        targetMachineId: 'machine-1',
+        localId,
+        requestedAction: { v: 1, kind: 'send_now' },
+        content: { t: 'plain', v: expect.objectContaining({
+          role: 'user', content: { type: 'text', text },
+          meta: expect.objectContaining({
+            happier: { kind: 'subagent_command.v1', payload: command }, displayText: text,
+            happierProvenanceV1: { v: 1, kind: 'pluginSession', pluginId, contributionLocalId, surface: 'unspecified' },
+            happierInputRequestV1: { v: 1, producer: 'pluginSession', caller: { kind: 'plugin', pluginId, contributionLocalId }, permission: {} },
+          }),
+        }) },
+      })]);
+    } finally {
+      http.mockRestore();
+    }
+  });
+
   it('forwards the semantic subagent launch without accepting private transport fields', async () => {
     const execute = vi.fn(async () => ({
       ok: true as const,

@@ -66,15 +66,22 @@ export async function executePluginSessionMessageAction(params: Readonly<{
             launch: request.data.launch,
             idempotencyKey: request.data.idempotencyKey,
           }
-        : {
-            sessionId: params.sessionId,
-            message: request.data.text,
-            idempotencyKey: request.data.idempotencyKey,
-            ...(request.data.recipient ? { recipient: request.data.recipient } : {}),
-            ...(request.data.source ? { source: request.data.source } : {}),
-            ...(request.data.attachments ? { attachments: request.data.attachments } : {}),
-            ...(request.data.toolAnswerDelivery ? { toolAnswerDelivery: request.data.toolAnswerDelivery } : {}),
-          },
+        : request.data.kind === 'sessionSubagentCommand'
+          ? {
+              sessionId: params.sessionId,
+              kind: request.data.kind,
+              command: request.data.command,
+              idempotencyKey: request.data.idempotencyKey,
+            }
+          : {
+              sessionId: params.sessionId,
+              message: request.data.text,
+              idempotencyKey: request.data.idempotencyKey,
+              ...(request.data.recipient ? { recipient: request.data.recipient } : {}),
+              ...(request.data.source ? { source: request.data.source } : {}),
+              ...(request.data.attachments ? { attachments: request.data.attachments } : {}),
+              ...(request.data.toolAnswerDelivery ? { toolAnswerDelivery: request.data.toolAnswerDelivery } : {}),
+            },
       {
         surface: 'plugin',
         authority: 'account_automation',

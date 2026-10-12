@@ -18,6 +18,8 @@ export async function updateSessionMetadataForTarget(params: Readonly<{
     method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown;
   }>) => Readonly<Record<string, string>> | null;
   idOrPrefix: string;
+  /** Qualified callers require this exact identity, never a prefix/tag fallback. */
+  expectedSessionId?: string;
   updater: Parameters<typeof updateSessionMetadataWithRetry>[0]['updater'];
   expectedMetadataRevision?: number;
   currentness?: SessionMetadataMutationCurrentness;
@@ -41,6 +43,13 @@ export async function updateSessionMetadataForTarget(params: Readonly<{
       code: sessionTarget.code,
       ...(sessionTarget.candidates ? { candidates: sessionTarget.candidates } : {}),
     };
+  }
+
+  if (params.expectedSessionId !== undefined && (
+    sessionTarget.sessionId !== params.expectedSessionId
+    || sessionTarget.rawSession.id !== params.expectedSessionId
+  )) {
+    return { ok: false, code: 'session_not_found' };
   }
 
   const result = await updateSessionMetadataWithRetry({

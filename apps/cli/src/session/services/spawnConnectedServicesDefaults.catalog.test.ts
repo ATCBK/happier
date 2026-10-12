@@ -37,7 +37,7 @@ describe('spawn defaults from the current purpose catalog', () => {
         'openai-codex': { source: 'connected', selection: 'profile', profileId: 'legacy-account' },
       } } } },
     }, ...{ purposeCatalog: { status: 'unavailable' as const, reason: 'account-mode-mismatch' as const } },
-    })).toEqual({ kind: 'unavailable', reason: 'connected_services_default_settings_invalid' });
+    })).toEqual({ kind: 'unavailable', reason: 'connected_account_purpose_catalog_unavailable' });
   });
 
   it.each(['connectedServicesDefaultAuthByAgentIdV1', 'connectedServicesAdditionalDefaultAuthByAgentIdV1'] as const)(

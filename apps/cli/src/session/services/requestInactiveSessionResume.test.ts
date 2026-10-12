@@ -91,7 +91,7 @@ function metadataWithLaunchCorrespondence() {
       agentModeId: null,
       configuration: null,
       connectedServices: null,
-      mcpSelection: null,
+      capabilitySelection: null,
       transcriptStorage: null,
       terminal: null,
       agentSessionStartupInstructionsMarkerV1: null,
@@ -135,14 +135,14 @@ describe('requestInactiveSessionResume', () => {
         windowsRemoteSessionLaunchMode: 'windows_terminal' as const, windowsTerminalWindowName: 'Incoming window',
         agentModeId: 'incoming-mode', transcriptStorage: 'persisted' as const,
         connectedServices: { v: 2 as const, bindingsByServiceId: {} },
-        mcpSelection: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        capabilitySelection: { mcp: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
       } };
     await expect(requestInactiveSessionResume(request)).resolves.toEqual({ ok: true });
     expect(callMachineRpc.mock.calls[0]?.[0]?.request).toMatchObject({ type: 'resume-session', sessionId: 'session-1', directory: '/repo',
       profileId: 'incoming-profile', terminal: { mode: 'plain' }, windowsRemoteSessionLaunchMode: 'windows_terminal',
       windowsTerminalWindowName: 'Incoming window', agentModeId: 'incoming-mode', transcriptStorage: 'persisted',
       connectedServices: { v: 2, bindingsByServiceId: {} },
-      mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
     });
   });
 
@@ -287,6 +287,14 @@ describe('requestInactiveSessionResume', () => {
     });
 
     expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
+  it('accepts an already-running runner without waiting for an unadmitted resume nonce', async () => {
+    callMachineRpc.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.SPAWN_HAPPY_SESSION
+      ? { type: 'success', sessionId: 'session-1' }
+      : { status: 'not_found' });
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
+      rawSession: rawSession(), metadata, waitForReady: true })).resolves.toEqual({ ok: true });
   });
 
   it('waits for a 1231ms accepted resume to become ready without submitting the resume twice', async () => {

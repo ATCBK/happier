@@ -4,9 +4,10 @@ import { SessionIdSchema, TurnIdSchema } from '@happier-dev/protocol/sessions/id
 import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema, isSessionCreationTerminalSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
 import { SessionTurnProviderCheckpointV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
-import type { AcpConfigOptionOverridesV1, AgentExecutionTargetV1, AgentSessionStartupInstructionsV1, BackendTargetRefV2, CallerInputConstraintsV1, MachinePoolSelectionOriginV1, ConnectedServiceMaterializationIdentityV1, RuntimeDescriptorV1, SessionAttachMetadataIdentityPolicy, SessionMcpSelectionV1, SessionInitialAccessDraftV1, SessionReportsToV1, SessionRolesV1, SessionInitialGoalRequestV1, SessionCreateOriginFieldsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1, SessionProviderBindingSecurityChangeConfirmationV1, SecretReferenceOverlayV1, SpawnSessionExecutionAuthorization, SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
+import type { AcpConfigOptionOverridesV1, AgentExecutionTargetV1, AgentSessionStartupInstructionsV1, BackendTargetRefV2, CallerInputConstraintsV1, MachinePoolSelectionOriginV1, ConnectedServiceMaterializationIdentityV1, RuntimeDescriptorV1, SessionAttachMetadataIdentityPolicy, SessionCapabilitySelectionV1, SessionInitialAccessDraftV1, SessionReportsToV1, SessionRolesV1, SessionInitialGoalRequestV1, SessionCreateOriginFieldsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1, SessionProviderBindingSecurityChangeConfirmationV1, SecretReferenceOverlayV1, SpawnSessionExecutionAuthorization, SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
 
 import type { PermissionMode, SessionCreationOutcome } from '@/api/types';
+import { SpawnFailureSpawnErrorDetailSchema } from '@happier-dev/protocol/spawnSession';
 import type {
   HostPrivatePersistedTakeoverAdmission,
 } from '@/daemon/spawn/persistedTakeoverAdmission';
@@ -96,6 +97,8 @@ export function deserializeNativeForkSourceV1(value: string): NativeForkSource {
  * depends on the high-level handler graph merely to describe a spawn request or response.
  */
 export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
+  allowedTools?: readonly string[];
+  unlistedTools?: 'ask' | 'deny';
   /** Invocation-only verified credential/policy owner; excluded from durable spawn state. */
   requesterSessionBootstrap?: AdmittedRequesterSessionBootstrap;
   /** Existing invocation runtime passed by recovery; adopted by the ordinary tracked Session only. */
@@ -229,7 +232,7 @@ export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
   connectedServices?: unknown;
   connectedServicesUpdatedAt?: number;
   connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1;
-  mcpSelection?: SessionMcpSelectionV1;
+  capabilitySelection?: SessionCapabilitySelectionV1;
   transcriptStorage?: 'persisted' | 'direct';
 }
 
@@ -249,6 +252,8 @@ export type SpawnSessionResult =
     errorMessage: string;
     agentId?: string;
     errorDetail?: SpawnSessionErrorDetail;
+    /** Host-private probe fact; public spawn transport continues to project its established error shape. */
+    runtimeFailureReason?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationFailureDetailsV1['runtimeReason'];
   };
 
 export const SessionCreationOutcomeSchema = z.object({
@@ -262,7 +267,7 @@ export const SpawnSessionControlBadRequestSchema = z.object({
   error: z.string(),
   errorCode: z.string().optional(),
   agentId: z.string().optional(),
-  errorDetail: SessionCreationTerminalSpawnErrorDetailSchema.optional(),
+  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema]).optional(),
 });
 
 export const SpawnSessionControlErrorResponseSchema = z.object({
@@ -270,7 +275,7 @@ export const SpawnSessionControlErrorResponseSchema = z.object({
   error: z.string().optional(),
   errorCode: z.string().optional(),
   agentId: z.string().optional(),
-  errorDetail: SessionCreationTerminalSpawnErrorDetailSchema.optional(),
+  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema]).optional(),
 });
 
 export const SpawnSessionNonceControlResponseSchema = z.object({
@@ -292,7 +297,7 @@ export function projectSpawnSessionControlErrorResponse(
     error: error.errorMessage,
     errorCode: error.errorCode,
     ...(error.agentId !== undefined ? { agentId: error.agentId } : {}),
-    ...(isSessionCreationTerminalSpawnErrorDetail(error.errorDetail)
+    ...(isSessionCreationTerminalSpawnErrorDetail(error.errorDetail) || SpawnFailureSpawnErrorDetailSchema.safeParse(error.errorDetail).success
       ? { errorDetail: error.errorDetail }
       : {}),
   };

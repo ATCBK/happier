@@ -16,6 +16,26 @@ describe('CLI admitted Artifact attribution', () => {
       data: { id: input.id, headerVersion: 1, bodyVersion: 1 } }));
   });
 
+  it('creates an ordinary bundle with binary supporting entries through the authenticated library owner', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bundle-account' })).toString('base64url')}.signature`;
+    const deps = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: 'bound-session', mode: 'plain', ctx: null,
+      serverId: 'home', serverHttpBaseUrl: 'https://home.example.test' });
+    const result = await deps.promptBundleCreate!({ title: 'Portable skill', bundleSchemaId: 'skills.skill_md_v1', entries: [
+      { path: 'SKILL.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' },
+      { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary', unixMode: 0o600 },
+    ] });
+    expect(result).toMatchObject({ ok: true, artifactId: expect.any(String) });
+    const write = http.post.mock.calls.find(([url]) => url.endsWith('/v1/artifacts'))?.[1];
+    expect(decodePlainArtifactStoredContent(write.header)).toMatchObject({ kind: 'prompt_bundle.v2', title: 'Portable skill', origin: 'user' });
+    const body = decodePlainArtifactStoredContent(write.body);
+    expect(body).toMatchObject({ body: expect.any(String) });
+    if (!body || typeof body !== 'object' || !('body' in body) || typeof body.body !== 'string') throw new Error('Missing bundle body');
+    expect(JSON.parse(body.body).entries).toEqual([
+      { path: 'SKILL.md', contentBase64: 'U2tpbGw=', contentKind: 'utf8' },
+      { path: 'support.bin', contentBase64: 'AAE=', contentKind: 'binary', unixMode: 0o600 },
+    ]);
+  });
+
   it('keeps an admitted Launch publisher session outside public content through the real CLI dependency owner', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'launch-account' })).toString('base64url')}.signature`;
     let settings: { content: { t: 'plain'; v: Record<string, unknown> }; version: number } = { content: { t: 'plain', v: { profiles: [{ v: 2, id: 'work', name: 'Work',

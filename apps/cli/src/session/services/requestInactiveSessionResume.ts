@@ -78,7 +78,7 @@ export function buildMachineResumeRequest(
     ...(options.sessionConfigOptionOverrides
       ? { sessionConfigOptionOverrides: options.sessionConfigOptionOverrides }
       : {}),
-    ...(options.mcpSelection ? { mcpSelection: options.mcpSelection } : {}),
+    ...(options.capabilitySelection ? { capabilitySelection: options.capabilitySelection } : {}),
     ...(options.windowsRemoteSessionLaunchMode
       ? { windowsRemoteSessionLaunchMode: options.windowsRemoteSessionLaunchMode }
       : {}),
@@ -238,7 +238,11 @@ export async function requestInactiveSessionResume(params: Readonly<{
         ? SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING : 'resume_failed';
       return { ok: false, code, message };
     }
-    if (!readinessSpawnNonce) {
+    // The daemon reuses an existing runner without admitting this request's
+    // launch nonce. Only a nonce-bearing accepted launch needs the existing
+    // readiness observation; bare success is not a pending nonce receipt.
+    if (!readinessSpawnNonce || (responseSessionId === params.sessionId
+      && readNonEmptyString(Reflect.get(response, 'spawnNonce')) === null)) {
       return { ok: true };
     }
 

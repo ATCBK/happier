@@ -206,7 +206,7 @@ describe('Source Actions through the CLI Account front door', () => {
     expect(headers).not.toHaveProperty('Authorization');
     expect(verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: 'projects.sources.read',
       target, installationId: 'source-installation', requestId: authorization.binding.requestId, method: 'GET',
-      path: '/v1/projects/sources/source%2Fa?serverId=source-home',
+      path: '/v1/projects/sources/source%2Fa?serverId=source-home-identity',
       signature: String(headers?.[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER] ?? ''), publicKey: keys.publicKey })).toBe(true);
     request.mockClear();
     expect(await owner.projectSourcesRead!(input, { externalActionCredential: {

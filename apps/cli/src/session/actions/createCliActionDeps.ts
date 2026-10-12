@@ -1,11 +1,20 @@
 import { homedir } from 'node:os';
+import { executeCapturedMachineAction } from '@/api/machine/capturedMachineAction';
+import { setModelFavoriteV1 } from '@happier-dev/protocol/providers/modelFavoritesV1';
+import { updateAccountSettingsV2OnceAgainstLatest } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectCurrentSessionPresentationActionResult } from '@/session/presentation/currentSessionPresentationService';
 import { flattenWidgetLayoutWidgetsV1 } from '@happier-dev/protocol/widgets';
 import axios from 'axios';
+import { MachineCapabilityInstallInputSchema, MachineCapabilityInstallOutputSchema, MachineReplacementSetInputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { readManagedMachine } from '@/machines/managed/readManagedMachine';
 import { readMachineReferenceCensusV1, type MachineReferenceCensusV1 } from '@happier-dev/protocol/machines/machineReferenceCensusV1';
+import { MACHINE_VITALS_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineVitals';
+import { MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineResources';
+import { MACHINE_STORAGE_ACTION_IDS, MACHINE_STORAGE_ACTION_INPUT_SCHEMAS, MACHINE_STORAGE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/storage';
+import { MACHINE_PROCESSES_ACTION_IDS, MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS, MACHINE_PROCESSES_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineProcesses';
+import { listMachineVitalsSummariesV1, readMachineVitalsResourcesProjectionV1 } from '@happier-dev/protocol/machines/vitals/listMachineVitalsSummariesV1';
 import { ManagedGetInputV1Schema, ManagedGetOutputV1Schema, ManagedDeleteInputV1Schema,
   managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { MachinePoolListOutputV1Schema } from '@happier-dev/protocol/machines/pools/v1';
@@ -18,6 +27,9 @@ import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol
 import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { withdrawPendingQueueV2Message, updatePendingQueueV2RequestedAction } from '@/api/session/pendingQueueV2Transport';
+import { readProviderAccountUsageHistoryWitnessV4, readProviderAccountUsageQuotaV4 } from '@/daemon/connectedServices/accountUsage/readQuota';
+import { evaluatePendingResetStartAdmissionV1, PendingResetStartWaitingReasonV1Schema } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
+import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { createServerUrlComparableKey } from '@happier-dev/protocol/server/urls/serverUrlComparableKey';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -114,7 +126,7 @@ import { SESSION_PERMISSION_MODES } from '@happier-dev/protocol/sessions/metadat
 import { isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { ConnectedAccountAttemptResponseSchema, CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { startMachineAgentSignIn, cancelMachineAgentSignIn, restartMachineAgentSignIn } from '@happier-dev/protocol/daemon/startAgentSignIn';
-import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryDescriptors, projectMachineAgentsDetectResponse, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
+import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryDescriptors, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { DaemonTerminalEnsureResponseSchema, DaemonTerminalListResponseV1Schema, DaemonTerminalCloseResponseSchema } from '@happier-dev/protocol/daemon/terminal';
@@ -125,8 +137,8 @@ import type { SessionFollowSourceKeyPreparationResultV1, ResolvedRolesSnapshotV1
 import { AcpConfigOptionOverridesV1Schema, buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { BackendTargetRefV2Schema, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { derivePluginSessionInputLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import { isMemoryDocumentSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { buildTrustedHostSessionInputAdmissionV1, derivePluginSessionInputLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { isMemorySessionSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySettings';
 import { MemoryWindowV1Schema } from '@happier-dev/protocol/memory/memoryWindow';
@@ -141,11 +153,10 @@ import { WorkflowMachineCommandOutputV1Schema } from '@happier-dev/protocol/work
 import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import type { PromptExternalLinksV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
-import { exportPromptLibraryArtifact, installPromptRegistryItemInLibrary, updatePromptBundleInLibrary, updatePromptDocInLibrary, readPromptDocInLibrary, createPromptDocInLibrary, setPromptDocFavorite, listPromptLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { exportPromptLibraryArtifact, installPromptRegistryItemInLibrary, createPromptBundleInLibrary, updatePromptBundleInLibrary, updatePromptDocInLibrary, readPromptDocInLibrary, createPromptDocInLibrary, setPromptDocFavorite, listPromptLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { resolvePromptDocCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { listPromptInvocationsInLibrary, resolvePromptInvocationInLibrary } from '@happier-dev/protocol/prompts/library/promptInvocationActionOperations';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { SessionCreationCorrespondenceV1Schema, normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
@@ -257,6 +268,7 @@ import { createSessionBoardActionDeps } from '@/session/board/sessionBoardAction
 import { createSessionDiscussionActionDeps } from '@/session/discussions/sessionDiscussionActionDeps';
 import { createSessionListActionDependency } from './sessionListActionDependency';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
+import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { createCliBoundSessionMetadataReader, resolveCliActionCallerSession } from './resolveCliActionCallerSession';
 import {
   dispatchOriginalAccountAction,
@@ -364,6 +376,9 @@ import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessio
 import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
 import { fetchSessionById, fetchSessionByIdCompat, fetchSessionTurnsProjection, fetchSessionsQueryPage, setSessionAttentionStanding, setSessionOrganizationPin, setSessionReportsTo, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
+import { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import { revokeMachineWithProviderCleanup } from '@happier-dev/protocol/machines/account/revokeWithProviderCleanup';
 import { callSessionRpc, resolveSessionRpcContent } from '@/session/transport/rpc/sessionRpc';
 import { readRuntimeAuthUsageLimitRecoveryAttemptId } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 import {
@@ -441,7 +456,7 @@ import { hydrateNotificationChannelCatalogForActiveAccount } from '@/settings/no
 import { createSavedSecretMaterializerFromSnapshotV1, SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { prepareActiveAccountRoleOverrides, refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts/hydratePromptLibraryCatalog';
@@ -779,6 +794,8 @@ export function createCliActionDeps(params: Readonly<{
   providerPreparedSavedSecret?: Parameters<typeof createCliProviderActionExecuteV1>[0]['preparedSavedSecret'];
   /** Installed exact-target Project producer; absent hosts retain Trust-only behavior. */
   projectAction?: ActionExecutorDeps['projectAction'];
+  /** Receiving daemon's target-local Activity Undo owner; clients retain exact Machine transport. */
+  machineGuardAction?: ActionExecutorDeps['machineGuardAction'];
   /** Machine-owned policy intersects the selected Session's confined SCM root. */
   scmFilesystemAccessPolicy?: FilesystemAccessPolicy;
   /** The daemon binds its canonical local file owner; clients use exact Machine transport. */
@@ -914,13 +931,21 @@ export function createCliActionDeps(params: Readonly<{
     throw error;
   };
   const roleSettingsProvider = params.actionsSettingsProvider ?? createActionSettingsProvider({ scopeKey: roleAccountScopeKey });
-  const readAccountRoleOverrides = () => roleSettingsProvider.getAccountRoleOverrides?.()
-    ?? { status: 'unavailable' as const, reason: 'source-unavailable' };
+  const readAccountRoleOverrides = () => {
+    if (params.savedSecretOperationContext) {
+      const snapshot = params.savedSecretOperationContext.readSnapshot();
+      return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+        : { status: 'unavailable' as const, reason: 'scope-retired' as const };
+    }
+    return roleSettingsProvider.getAccountRoleOverrides?.()
+      ?? { status: 'unavailable' as const, reason: 'source-unavailable' };
+  };
   const prepareAccountRoleOverrides = async (signal?: AbortSignal): Promise<void> => {
     const credentials = params.credentials;
     if (!credentials) return;
     const prepare = () => prepareActiveAccountRoleOverrides({ credentials,
-      scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken, signal });
+      scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken, signal,
+      operationContext: params.savedSecretOperationContext });
     const prepared = await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, prepare) : prepare());
     if (prepared.status === 'unavailable' && prepared.reason === 'scope-retired') {
       throw Object.assign(new Error('account_role_overrides_unavailable'), {
@@ -937,16 +962,16 @@ export function createCliActionDeps(params: Readonly<{
   const readServerFeaturesSnapshot = async (): Promise<CliServerFeaturesSnapshot | undefined> =>
     await params.resolveServerFeaturesSnapshot?.();
   const projectHomeId = params.serverId ?? configuration.activeServerId;
-  const projectHomeAdmission = (serverId?: string, context?: ActionExecutorContext) => {
-    if ((serverId !== undefined && serverId.trim() !== projectHomeId)
-      || (context?.serverId && context.serverId !== projectHomeId)
+  const projectHomeAdmission = async (serverId?: string, context?: ActionExecutorContext) => {
+    if ((serverId !== undefined && !await isServerProfileHomeIdentity(projectHomeId, serverId.trim()))
+      || (context?.serverId && !await isServerProfileHomeIdentity(projectHomeId, context.serverId))
       || (params.serverId === undefined && configuration.activeServerId !== projectHomeId)) {
       return executionRunActionFailure('server_scope_mismatch');
     }
     return null;
   };
-  const projectAccountAdmission = (serverId?: string, context?: ActionExecutorContext) => {
-    const homeDenied = projectHomeAdmission(serverId, context);
+  const projectAccountAdmission = async (serverId?: string, context?: ActionExecutorContext) => {
+    const homeDenied = await projectHomeAdmission(serverId, context);
     if (homeDenied) return homeDenied;
     const authorization = context?.externalActionExecutionAuthorization;
     if (authorization) {
@@ -987,7 +1012,7 @@ export function createCliActionDeps(params: Readonly<{
   const assertProjectRequesterCurrent = async (context?: ActionExecutorContext) => {
     const authorization = context?.externalActionExecutionAuthorization;
     if (!authorization) return;
-    if (projectAccountAdmission(projectHomeId, context)
+    if (await projectAccountAdmission(projectHomeId, context)
       || !await authorization.requesterAccountProjection!.isCurrent() || !await authorization.requesterHttpProjection!.isCurrent()) {
       throw Object.assign(new Error('project_requester_authority_unavailable'), { code: 'project_requester_authority_unavailable' });
     }
@@ -1001,7 +1026,6 @@ export function createCliActionDeps(params: Readonly<{
     const authorization = context.externalActionExecutionAuthorization;
     if (!authorization) return null;
     await assertProjectRequesterCurrent(context);
-    if (ref.serverId !== authorization.requesterAccountProjection!.serverId) return null;
     const artifact = await authorization.requesterAccountProjection!.readArtifact(ref, options);
     await assertProjectRequesterCurrent(context);
     return artifact?.artifactId === ref.artifactId ? artifact : null;
@@ -1084,7 +1108,7 @@ export function createCliActionDeps(params: Readonly<{
     const unavailable = (reason: MachineReferenceCensusV1['unavailable'][number]): MachineReferenceCensusV1 => ({
       homeId: input.homeId, machineId: null, coverage: 'partial', references: [], unavailable: [reason],
     });
-    if (projectAccountAdmission(projectHomeId, context) || !params.credentials || !roleArtifactStore || !readRawRoleSettings) {
+    if (await projectAccountAdmission(projectHomeId, context) || !params.credentials || !roleArtifactStore || !readRawRoleSettings) {
       return unavailable('requester_authority');
     }
     return await runWithServerHttpBaseUrl(machineReferenceServerUrl, async () => {
@@ -1464,7 +1488,12 @@ export function createCliActionDeps(params: Readonly<{
       || !input.effectActionId || !input.context?.externalActionExecutionAuthorization || !input.context.externalActionTarget)) {
       throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
     }
-    if (direct?.machineId === input.machineId && !externalRequest && input.method !== RPC_METHODS.MACHINES_WORK_SUMMARY_GET) {
+    const authenticatedMachineIngressMethods: readonly string[] = [RPC_METHODS.MACHINES_WORK_SUMMARY_GET,
+      ...[...MACHINE_STORAGE_ACTION_IDS, ...MACHINE_PROCESSES_ACTION_IDS].flatMap(actionId => {
+        const method = getActionSpec(actionId).bindings?.rpcMethod;
+        return method ? [method] : [];
+      }), RPC_METHODS.DAEMON_STORAGE_WATCH, RPC_METHODS.DAEMON_PROCESSES_WATCH];
+    if (direct?.machineId === input.machineId && !externalRequest && !authenticatedMachineIngressMethods.includes(input.method)) {
       const localActionContext: RpcLocalActionContext = {
         ...(input.authority ? { authority: input.authority } : {}),
         ...(input.context?.actionRequestId ? { actionRequestId: input.context.actionRequestId } : {}),
@@ -1601,9 +1630,15 @@ export function createCliActionDeps(params: Readonly<{
       throw Object.assign(new Error('Workspace sync read requires an authenticated Account'), { code: 'not_authenticated' });
     }
     const current = await readProjectRows(signal);
-    const currentServerId = params.serverId ?? configuration.activeServerId;
     const workspaceRefs = current.workspaceRefs;
     const relationships = current.relationships;
+    const relationship = input.relationshipId ? relationships.find(entry => entry.relationshipId === input.relationshipId) : undefined;
+    const selectedRefId = input.workspaceRefId ?? relationship?.alphaWorkspaceRefId;
+    const selectedRef = selectedRefId ? resolveWorkspaceRefById(workspaceRefs, selectedRefId, params.serverIdentityId ?? projectHomeId)
+      ?? resolveWorkspaceRefById(workspaceRefs, selectedRefId) : null;
+    const currentServerId = selectedRef?.serverId ?? params.serverIdentityId ?? projectHomeId;
+    const denied = await projectHomeAdmission(currentServerId);
+    if (denied) throw Object.assign(new Error(denied.errorCode), { code: denied.errorCode });
     let resolvedController: string | undefined;
     if (input.workspaceRefId) {
       const topology = deriveWorkspaceSyncTopology({ workspaceRefs, relationships, serverId: currentServerId });
@@ -1678,20 +1713,24 @@ export function createCliActionDeps(params: Readonly<{
   };
 
   const workflowRunServerHttpBaseUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
-  const workflowRunStorage: WorkflowAccountRunActionDeps['storage'] = {
+  const createWorkflowRunStorage = (caller?: Parameters<NonNullable<ActionExecutorDeps['workflowAction']>>[0]): WorkflowAccountRunActionDeps['storage'] => ({
     observeChanges: (runId, onChange, onError) => createWorkflowRunStorageClient({
       token: params.token,
       serverHttpBaseUrl: workflowRunServerHttpBaseUrl,
     }).observeChanges(runId, onChange, onError),
     execute: async (operation, options) => {
       let machineId: string | undefined;
-      if (isWorkflowRunExecutorStorageOperationV1(operation.operation)) {
+      const authorizationMachineId = caller?.context.externalActionExecutionAuthorization?.binding.machineId;
+      if (isWorkflowRunExecutorStorageOperationV1(operation.operation) || authorizationMachineId) {
         const publisherMachineId = normalizeStringValue(options?.publisherMachineId);
         const operationMachineId = publisherMachineId ?? (typeof operation.machineId === 'string' && operation.machineId.trim()
           ? operation.machineId.trim()
           : null);
-        const settingsMachineId = operationMachineId ? null : normalizeStringValue((await readSettings()).machineId);
-        const resolvedMachineId = operationMachineId ?? settingsMachineId ?? await resolveCurrentSessionValue('machineId');
+        if (authorizationMachineId && operationMachineId && authorizationMachineId !== operationMachineId) {
+          throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
+        }
+        const settingsMachineId = operationMachineId || authorizationMachineId ? null : normalizeStringValue((await readSettings()).machineId);
+        const resolvedMachineId = operationMachineId ?? authorizationMachineId ?? settingsMachineId ?? await resolveCurrentSessionValue('machineId');
         if (!resolvedMachineId) throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
         machineId = resolvedMachineId;
       }
@@ -1699,17 +1738,29 @@ export function createCliActionDeps(params: Readonly<{
         token: params.token,
         ...(machineId ? { machineId } : {}),
         serverHttpBaseUrl: workflowRunServerHttpBaseUrl,
+        ...(caller ? { resolveAuthorizationHeaders: (request) => resolveServerRequestHeaders(caller.context, caller.actionId, request) } : {}),
       }).execute(
         operation as Parameters<ReturnType<typeof createWorkflowRunStorageClient>['execute']>[0],
-        options?.signal ? { signal: options.signal } : {},
+        { ...(options?.signal ? { signal: options.signal } : {}),
+          ...(authorizationMachineId ? { publisherMachineId: machineId } : {}) },
       );
     },
-  };
-  const resolveWorkflowRunEncryption: WorkflowAccountRunActionDeps['resolveEncryption'] = async (signal) => {
+  });
+  const workflowRunStorage = createWorkflowRunStorage();
+  const resolveWorkflowRunEncryption = async (
+    caller: Parameters<NonNullable<ActionExecutorDeps['workflowAction']>>[0],
+    signal?: AbortSignal,
+  ) => {
+    const authorizationHeaders = resolveServerRequestHeaders(caller.context, caller.actionId, {
+      method: 'GET', path: '/v1/account/encryption/currentness',
+    });
+    if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
     const resolved = await resolveValidatedAutomationAccountEncryptionV1({
       signal: signal ?? new AbortController().signal,
       resolveAccountEncryptionCurrentness: async (currentnessSignal) => await fetchAccountEncryptionCurrentness({
         token: params.token,
+        serverBaseUrl: workflowRunServerHttpBaseUrl,
+        authorizationHeaders,
         ...(currentnessSignal ? { signal: currentnessSignal } : {}),
       }),
       resolveAccountEncryptionMaterial: async () => createAutomationAccountEncryptionMaterialSnapshotV1(params.credentials!),
@@ -1718,8 +1769,12 @@ export function createCliActionDeps(params: Readonly<{
     return resolved;
   };
 
-  const workflowAction = params.workflowAction ?? (workflowDefinitions && params.credentials
-    ? createWorkflowActionExecutor({
+  const workflowAction: ActionExecutorDeps['workflowAction'] = params.workflowAction ?? (workflowDefinitions && params.credentials
+    ? async (args) => {
+      // Each invocation retains its original proof; concurrent Session calls
+      // must never spend another caller's authority through a shared closure.
+      const workflowRunStorage = createWorkflowRunStorage(args);
+      const execute = createWorkflowActionExecutor({
         isWorkflowFeatureEnabled: async () => {
           try {
             return isWorkflowRuntimeEnabled(process.env, await readServerFeaturesSnapshot());
@@ -1772,14 +1827,16 @@ export function createCliActionDeps(params: Readonly<{
             });
           },
           doesImmediateEligibleStepTargetSession: doesWorkflowImmediateEligibleStepTargetSession,
-          resolveAccountId: async (signal) => await fetchChangesAccountId({
+          resolveAccountId: async (signal) => args.context.externalActionExecutionAuthorization?.binding.accountId
+            ?? await fetchChangesAccountId({
             token: params.token,
+            serverHttpBaseUrl: workflowRunServerHttpBaseUrl,
             ...(signal ? { signal } : {}),
           }),
           storage: workflowRunStorage,
           definitions: workflowDefinitions,
           readPluginWorkflows: workflowDefinitions.readPluginWorkflows,
-          resolveEncryption: resolveWorkflowRunEncryption,
+          resolveEncryption: (signal) => resolveWorkflowRunEncryption(args, signal),
           observeRecovery: async ({ run, progress, signal }) => await observeWorkflowInvocationRecoveryEvidence({
             credentials: params.credentials!, machineId: run.machineId, progress,
             getOperation: async (operation) => await callMachineAction({ serverId: operation.serverId,
@@ -1793,7 +1850,7 @@ export function createCliActionDeps(params: Readonly<{
             const census = WorkflowRunRecipientCensusResponseV1Schema.parse(await workflowRunStorage.execute({
               operation: 'run-key.census', runId: run.id,
             }, signal ? { signal } : {}));
-            const resolved = resolveWorkflowRunDataKeyV1({ encryption: await resolveWorkflowRunEncryption(signal), census });
+            const resolved = resolveWorkflowRunDataKeyV1({ encryption: await resolveWorkflowRunEncryption(args, signal), census });
             if (resolved.kind !== 'available') throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
             const writer = createWorkflowInvocationRecoveryFactWriter({ accountId: census.ownerAccountId, run, expectedRevision: run.revision,
               encryption: resolved.encryption,
@@ -1864,7 +1921,9 @@ export function createCliActionDeps(params: Readonly<{
             ? { isAcceptedAuthorizationCurrent: params.workflowAcceptedAuthorizationCurrentness }
             : {}),
         }),
-      })
+      });
+      return await execute(args);
+    }
     : null);
 
   let currentMachineControlIdentityPromise: Promise<CurrentMachineControlIdentity> | null = null;
@@ -2648,7 +2707,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!targetKey) return resolveBackendTargetFromSessionMetadata(metadata);
       try {
         const target = parseBackendTargetKeyV2(targetKey);
-        if (target.kind === 'backend') return target;
+        if (target.kind === 'backend' || target.definitionId) return readBackendTargetRefV2(target);
         const catalog = readAgentCatalogSnapshot();
         const agentId = readAgentRoutingIdForContributionIdentity(
           indexAgentRoutingIdsByContributionIdentity([...catalog.agentDefinitionsById.values()]), target.identity);
@@ -3021,6 +3080,11 @@ export function createCliActionDeps(params: Readonly<{
     ...(params.externalActionMachineRequestPrivateKey ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey } : {}),
     ...(params.externalActionMachineInstallationId ? { externalActionMachineInstallationId: params.externalActionMachineInstallationId } : {}),
   }) : null;
+  const connectedServiceAction = params.credentials ? createCliConnectedServiceAction({
+    credentials: params.credentials, ...exactHome, resolveHeaders: resolveServerRequestHeaders, callMachineAction,
+    ...(params.savedSecretOperationContext ? { operationContext: params.savedSecretOperationContext } : {}),
+    ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
+  }) : undefined;
   const actionDeps: ActionExecutorDeps = {
     homeRuntimeTaskRpc: async ({ machineId, method, request, context }) => {
       try {
@@ -3057,7 +3121,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!parsed?.success) return executionRunActionFailure('invalid_parameters');
       const request = parsed.data;
       const machineId = 'target' in request ? request.target.machineId : request.machineId;
-      const denied = projectHomeAdmission('workspace' in request ? request.workspace?.serverId : undefined, args.context);
+      const denied = await projectHomeAdmission('workspace' in request ? request.workspace?.serverId : undefined, args.context);
       if (denied) return denied;
       const method = spec.bindings?.rpcMethod;
       if (!method) return executionRunActionFailure('runtime_action_disabled');
@@ -3115,14 +3179,14 @@ export function createCliActionDeps(params: Readonly<{
       },
       readScopeContext: async (target, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
-        if (target.scope === 'project' && projectAccountAdmission(target.projectRef.serverId, context)) {
+        if (target.scope === 'project' && await projectAccountAdmission(target.projectRef.serverId, context)) {
           throw Object.assign(new Error('project_context_access_denied'), { code: 'project_context_access_denied' });
         }
         if (!actionDeps.projectsContextUpdate || !actionDeps.projectSourcesRead || !actionDeps.projectSourcesUpdate) {
           throw Object.assign(new Error('project_context_unavailable'), { code: 'project_context_unavailable' });
         }
         const read = () => readCliMemoryScopeContext({ credentials: params.credentials!,
-          serverId: todoHomeServerId, target, context,
+          serverId: target.scope === 'project' ? target.projectRef.serverId : todoHomeServerId, target, context,
           readProjectRows: () => readProjectRows(context.signal, context, 'memory.remember'),
           projectsContextUpdate: actionDeps.projectsContextUpdate!, projectSourcesRead: actionDeps.projectSourcesRead!,
           projectSourcesUpdate: actionDeps.projectSourcesUpdate!,
@@ -3145,7 +3209,7 @@ export function createCliActionDeps(params: Readonly<{
     } } : {}),
     projectsWorkspaceUpdate: async ({ serverId, workspaceId, label, pinned }: ProjectWorkspaceUpdateInputV1,
       context?: ActionExecutorContext): Promise<ProjectWorkspaceUpdateOutputV1> => {
-      const refused = projectAccountAdmission(serverId, context);
+      const refused = await projectAccountAdmission(serverId, context);
       if (refused) return refused;
       const operationSignal = context?.signal;
       try {
@@ -3191,7 +3255,7 @@ export function createCliActionDeps(params: Readonly<{
     },
     projectsWorkspaceForget: async ({ serverId, workspaceId }: ProjectWorkspaceForgetInputV1,
       context?: ActionExecutorContext): Promise<ProjectWorkspaceForgetOutputV1> => {
-      const refused = projectAccountAdmission(serverId, context);
+      const refused = await projectAccountAdmission(serverId, context);
       if (refused) return refused;
       try {
         const result = await withProjectHome(() => createProjectAccountSnapshotMutation(projectRowsAuthority(context, 'projects.workspace.forget', context?.signal))(snapshot => {
@@ -3213,7 +3277,7 @@ export function createCliActionDeps(params: Readonly<{
     ...createCliProjectSourceActionDeps({
       serverHttpBaseUrl: todoHomeBaseUrl,
       admitAccount: async (serverId, context) => {
-        const denied = projectHomeAdmission(serverId, context);
+        const denied = await projectHomeAdmission(serverId, context);
         if (denied) return denied;
         // Shared Source metadata uses the admitted requester HTTP authority;
         // the canonical header owner validates its Home/target/signing context.
@@ -3224,7 +3288,7 @@ export function createCliActionDeps(params: Readonly<{
             || !await http.isCurrent())) return executionRunActionFailure('project_requester_authority_unavailable');
           return null;
         }
-        const accountDenied = projectAccountAdmission(serverId, context);
+        const accountDenied = await projectAccountAdmission(serverId, context);
         if (accountDenied) return accountDenied;
         if (params.token !== params.credentials?.token) return executionRunActionFailure('not_authenticated');
         if (!params.serverId && configuration.activeServerId !== projectHomeId) return executionRunActionFailure('server_scope_mismatch');
@@ -3237,8 +3301,8 @@ export function createCliActionDeps(params: Readonly<{
       },
       readArtifact: async (ref, options, context) => {
         if (context.externalActionExecutionAuthorization) return readProjectRequesterArtifact(ref, options, context);
-        if (projectAccountAdmission(projectHomeId, context) || !roleArtifactStore) return null;
-        if (ref.serverId === projectHomeId) {
+        if (await projectAccountAdmission(projectHomeId, context) || !roleArtifactStore) return null;
+        if (await isServerProfileHomeIdentity(projectHomeId, ref.serverId)) {
           return runWithServerHttpBaseUrl(todoHomeBaseUrl, () => roleArtifactStore.read(ref.artifactId, options));
         }
         // Signed Source HTTP authority carries no foreign Home Artifact reader;
@@ -3319,7 +3383,7 @@ export function createCliActionDeps(params: Readonly<{
         const reference = { kind: 'artifact' as const, artifactId: summary.artifactId };
         entries.push({ definition: reference, title: summary.name, fields: [...summary.inputs.fields],
           sizeDeclaration: summary.sizeDeclaration,
-          availability: summary.bodyKind === 'declarative' || summary.sourceDefinition && candidates.some(candidate => candidate.availability === 'available'
+          availability: summary.bodyKind === 'declarative' || summary.bodyKind === 'html' || summary.bodyKind === 'builtin' || summary.sourceDefinition && candidates.some(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), summary.sourceDefinition!)) ? 'available' : 'unavailable',
           instanceCount: countWidgetInstancesV1(instances, reference) });
       }
@@ -3359,11 +3423,7 @@ export function createCliActionDeps(params: Readonly<{
       return params.serverHttpBaseUrl
         ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => artifactAccessAction(args)) : artifactAccessAction(args);
     },
-    connectedServiceAction: params.credentials ? createCliConnectedServiceAction({
-      credentials: params.credentials, ...exactHome, resolveHeaders: resolveServerRequestHeaders, callMachineAction,
-      ...(params.savedSecretOperationContext ? { operationContext: params.savedSecretOperationContext } : {}),
-      ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
-    }) : undefined,
+    connectedServiceAction,
     profileActionExecute: params.credentials ? createCliProfileActionExecuteV1({
       credentials: params.credentials, serverId: projectHomeId,
       serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
@@ -3375,6 +3435,7 @@ export function createCliActionDeps(params: Readonly<{
       serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
       ...(params.savedSecretOperationContext ? { operationContext: params.savedSecretOperationContext } : {}),
       callMachineAction,
+      connectedServiceAction, preferredMachineId: params.machineId,
     }) : undefined,
     providerActionExecute: params.credentials ? createCliProviderActionExecuteV1({
       credentials: params.credentials, serverId: projectHomeId,
@@ -3392,7 +3453,7 @@ export function createCliActionDeps(params: Readonly<{
     launchProfilePublish: async (input, context) => {
       const credentials = params.credentials;
       if (!roleArtifactStore || !credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
-      const denied = projectAccountAdmission(undefined, context?.context);
+      const denied = await projectAccountAdmission(undefined, context?.context);
       if (denied) throw Object.assign(new Error(denied.errorCode), { code: denied.errorCode });
       return await runWithServerHttpBaseUrl(launchProfilePublicationServerUrl, async () => {
         context?.signal?.throwIfAborted();
@@ -3599,7 +3660,8 @@ export function createCliActionDeps(params: Readonly<{
         }
         const result = await execute(request);
         if (params.credentials && (request.actionId === 'roles.list' || request.actionId === 'roles.get')
-          && !isActiveAccountSettingsSnapshotLifetimeCurrent({ scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken })) {
+          && !(params.savedSecretOperationContext ? await params.savedSecretOperationContext.isCurrent()
+            : isActiveAccountSettingsSnapshotLifetimeCurrent({ scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken }))) {
           throw Object.assign(new Error('account_role_overrides_unavailable'), {
             code: 'account_role_overrides_unavailable', reason: 'scope-retired',
           });
@@ -3670,7 +3732,8 @@ export function createCliActionDeps(params: Readonly<{
         },
         readRawAccountSettings: readRawRoleSettings,
         mutateAccountRoleOverrides: async (mutation, context) => {
-          await createCliPromptLibraryStore({ credentials: params.credentials!, signal: context.signal }).mutateRoleOverride(mutation);
+          await createCliPromptLibraryStore({ credentials: params.credentials!, signal: context.signal,
+            operationContext: params.savedSecretOperationContext }).mutateRoleOverride(mutation);
         },
       } : {}),
     })),
@@ -4102,7 +4165,7 @@ export function createCliActionDeps(params: Readonly<{
 
       const visibleThroughSeqBySessionId = new Map<string, number>();
       await Promise.all([...new Set(result.hits.flatMap((hit) =>
-        isMemoryDocumentSearchHitV1(hit) ? [] : [hit.sessionId],
+        isMemorySessionSearchHitV1(hit) ? [hit.sessionId] : [],
       ))].map(async (sessionId) => {
         try {
           const session = await fetchSessionById({
@@ -4124,9 +4187,9 @@ export function createCliActionDeps(params: Readonly<{
       return {
         ...result,
         hits: result.hits.filter((hit) => {
-          // The daemon Artifact owner authorizes qualified document hits; this
-          // Session read applies only to retained transcript ranges.
-          if (isMemoryDocumentSearchHitV1(hit)) return true;
+          // The daemon admits Artifact and native transcript sources. Only
+          // Happier Session ranges need this caller-visible sequence check.
+          if (!isMemorySessionSearchHitV1(hit)) return true;
           const visibleThroughSeq = visibleThroughSeqBySessionId.get(hit.sessionId);
           return visibleThroughSeq !== undefined
             && hit.seqFrom <= visibleThroughSeq
@@ -4287,21 +4350,21 @@ export function createCliActionDeps(params: Readonly<{
       });
     },
     projectsContextUpdate: async (input, context) => {
-      if (projectAccountAdmission(input.target.serverId, context)) {
+      if (await projectAccountAdmission(input.target.serverId, context)) {
         return { ok: false, errorCode: 'project_context_access_denied' };
       }
       const accountId = context?.externalActionExecutionAuthorization?.binding.accountId ?? homeAccountId;
       if (!accountId) return { ok: false, errorCode: 'project_context_access_denied' };
       const run = () => updatePersonalProjectContextV1({
-        accountScope: () => params.serverId === undefined && configuration.activeServerId !== todoHomeServerId
-          ? null : { serverId: todoHomeServerId, accountId },
+        accountScope: () => params.serverId === undefined && configuration.activeServerId !== projectHomeId
+          ? null : { serverId: input.target.serverId, accountId },
         readArtifact: async (ref, options) => {
           if (context?.externalActionExecutionAuthorization) {
-            const artifact = await readProjectRequesterArtifact({ ...ref, serverId: ref.serverId ?? todoHomeServerId }, options, context);
+            const artifact = await readProjectRequesterArtifact({ ...ref, serverId: ref.serverId ?? input.target.serverId }, options, context);
             return artifact?.promptLibraryArtifact ?? null;
           }
           if (!approvalsStore) return null;
-          if (!ref.serverId || ref.serverId === todoHomeServerId) return approvalsStore.promptLibraryStore.read(ref.artifactId, options);
+          if (!ref.serverId || await isServerProfileHomeIdentity(projectHomeId, ref.serverId)) return approvalsStore.promptLibraryStore.read(ref.artifactId, options);
           // Delegated provenance cannot borrow the user's saved foreign Home.
           if (context?.externalActionCredential || context?.externalActionExecutionAuthorization) return null;
           // The reader captures that Home's actual saved credential. Do not pass
@@ -4434,6 +4497,10 @@ export function createCliActionDeps(params: Readonly<{
         request,
         ...(signal ? { signal } : {}),
       });
+    },
+    promptBundleCreate: async ({ signal, ...request }) => {
+      if (!approvalsStore) return notSupported();
+      return await createPromptBundleInLibrary({ store: approvalsStore.promptLibraryStore, request, ...(signal ? { signal } : {}) });
     },
     promptBundleUpdate: async ({ signal, ...request }) => {
       if (!approvalsStore) return notSupported();
@@ -4612,6 +4679,7 @@ export function createCliActionDeps(params: Readonly<{
         machineId,
         method: RPC_METHODS.SESSION_FORK,
         request: {
+          v: 1,
           parentSessionId: transport.sessionId,
           forkPoint,
           ...(strategy ? { strategy } : {}),
@@ -4715,15 +4783,18 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return notSupported();
       // Linking runs on the machine that hosts the selected source Workspace.
       // Its address comes from current Account rows, never from the caller.
-      const currentServerId = normalizeStringValue(serverId) ?? params.serverId ?? configuration.activeServerId;
-      if (currentServerId !== (params.serverId ?? configuration.activeServerId)) {
-        return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
-      }
+      const currentServerId = normalizeStringValue(serverId) ?? params.serverIdentityId ?? projectHomeId;
+      const denied = await projectHomeAdmission(currentServerId);
+      if (denied) return denied;
       const rows = await readProjectRows(signal);
-      const source = resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId, currentServerId);
+      const source = resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId, currentServerId)
+        ?? (serverId === undefined && params.serverIdentityId === undefined
+          ? resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId) : null);
       if (!source) {
         return { ok: false, errorCode: 'workspace_ref_not_ready', error: 'workspace_ref_not_ready' };
       }
+      const sourceDenied = await projectHomeAdmission(source.serverId);
+      if (sourceDenied) return sourceDenied;
       return await callMachineAction({
         machineId: source.machineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE,
@@ -4898,6 +4969,7 @@ export function createCliActionDeps(params: Readonly<{
       initialAccess,
       initialTriggers,
       initialSessionRolesV1,
+      roleId,
       reportsTo,
       primaryTeamId,
       teamCredentialBindings,
@@ -4908,15 +4980,18 @@ export function createCliActionDeps(params: Readonly<{
       profileId,
       secretReferenceOverlay,
       permissionMode,
+      allowedTools,
+      unlistedTools,
       agentModeId,
       configuration: configurationSnapshot,
       connectedServices,
-      mcpSelection,
+      capabilitySelection,
       transcriptStorage,
       terminal,
       checkoutCreationDraft,
       title,
       identity,
+      attestedContext,
       memoryEnabled,
       promptStack,
       managedCreation,
@@ -4937,6 +5012,8 @@ export function createCliActionDeps(params: Readonly<{
       originRunId,
       signal,
     }) => {
+      const sessionAllowedTools = allowedTools ?? configurationSnapshot?.allowedTools;
+      const sessionUnlistedTools = unlistedTools ?? configurationSnapshot?.unlistedTools;
       if (!params.credentials) {
         return { type: 'error', code: 'permission_denied', retryable: false };
       }
@@ -5106,6 +5183,21 @@ export function createCliActionDeps(params: Readonly<{
         return { type: 'error', code: 'target_unavailable', retryable: false };
       }
       const { backendTarget } = resolvedAgentTarget;
+      // Root starts have no lead snapshot. Bind the selected Account role at
+      // the native spawn owner before the launch contract drops Action roleId.
+      if (roleId && initialSessionRolesV1 === undefined) {
+        await prepareAccountRoleOverrides(signal);
+        const inventory = await readRoleSources(signal);
+        const overrides = readAccountRoleOverrides();
+        if (overrides.status !== 'ready') return { ok: false, errorCode: 'account_role_overrides_unavailable', error: 'account_role_overrides_unavailable' };
+        if (inventory.status !== 'ready') return { ok: false, errorCode: 'role_source_incomplete', error: 'role_source_incomplete' };
+        const roles = resolveRolesSnapshotV1({ roleSourceInventory: inventory, settingsOverrides: overrides.overrides,
+          defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(agentTarget),
+            ...(modelSelection?.ref.modelId ? { modelId: modelSelection.ref.modelId } : {}) },
+        });
+        if (!roles[roleId]) return { ok: false, errorCode: 'role_target_unavailable', error: 'role_target_unavailable' };
+        initialSessionRolesV1 = { roleId, overrides: {}, sessionRoles: roles, notes: '' };
+      }
       const connectedServicesDefaults = connectedServices === undefined
         ? await resolveSpawnConnectedServicesDefaultPayload({
             credentials: params.credentials,
@@ -5277,10 +5369,12 @@ export function createCliActionDeps(params: Readonly<{
           ...(managedCreation ? { managedCreation } : {}),
           ...(secretReferenceOverlay ? { secretReferenceOverlay } : {}),
           requestedPermissionMode: resolvedPermissionMode ?? null,
+          ...(sessionAllowedTools !== undefined ? { allowedTools: sessionAllowedTools } : {}),
+          ...(sessionUnlistedTools !== undefined ? { unlistedTools: sessionUnlistedTools } : {}),
           agentModeId: resolvedAgentModeId ?? null,
           configuration: configurationSnapshot ?? null,
           connectedServices: resolvedConnectedServices ?? null,
-          mcpSelection: mcpSelection ?? null,
+          capabilitySelection: capabilitySelection ?? null,
           transcriptStorage: transcriptStorage ?? null,
           terminal: normalizedTerminal?.data ?? null,
           agentSessionStartupInstructionsMarkerV1: startupInstructionsMarker,
@@ -5366,6 +5460,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(creationAuthorization ? { creationAuthorization } : {}),
           ...(callerInputConstraints ? { callerInputConstraints } : {}),
           credentials: params.credentials,
+          serverId: executionTarget.serverId,
           ...(params.actionsSettingsProvider?.getAccountSettings
             ? { accountSettings: params.actionsSettingsProvider.getAccountSettings() ?? undefined } : {}),
           ...(workDepth !== undefined ? { workDepth, originKind, originSessionId, originRunId } : {}),
@@ -5403,6 +5498,8 @@ export function createCliActionDeps(params: Readonly<{
           // direct-to-daemon spawn.
           ...(environmentVariables ? { environmentVariables } : {}),
           ...(resolvedPermissionMode ? { permissionMode: resolvedPermissionMode } : {}),
+          ...(sessionAllowedTools !== undefined ? { allowedTools: sessionAllowedTools } : {}),
+          ...(sessionUnlistedTools !== undefined ? { unlistedTools: sessionUnlistedTools } : {}),
           ...(resolvedAgentModeId ? { agentModeId: resolvedAgentModeId } : {}),
           ...(normalizedConfigurationOverrides
             ? { sessionConfigOptionOverrides: normalizedConfigurationOverrides }
@@ -5411,7 +5508,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(resolvedConnectedServicesUpdatedAt !== undefined
             ? { connectedServicesUpdatedAt: resolvedConnectedServicesUpdatedAt }
             : {}),
-          ...(mcpSelection ? { mcpSelection } : {}),
+          ...(capabilitySelection ? { capabilitySelection } : {}),
           ...(transcriptStorage ? { transcriptStorage } : {}),
           ...(spawnTerminal?.data ? { terminal: spawnTerminal.data } : {}),
           ...(windowsTerminal?.launchMode
@@ -5431,6 +5528,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
           ...(promptStack !== undefined ? { promptStack } : {}),
           ...(initialInput ? { initialInput } : {}),
+          ...(attestedContext !== undefined ? { attestedContext } : {}),
           ...(initialInput
             ? {
                 buildInitialInputHandoff: (localId: string) => {
@@ -5493,14 +5591,17 @@ export function createCliActionDeps(params: Readonly<{
           executionTarget,
           organizationPlacement: created.organizationPlacement,
           initialInput: created.initialInput,
+          ...(created.attestedContext ? { attestedContext: created.attestedContext } : {}),
           ...(created.filesNotCopied ? { filesNotCopied: created.filesNotCopied } : {}),
         };
         if (!reportsTo) return committed;
         const preparation = await prepareSourceKeyAfterCommit({ effectActionId: 'session.spawn_new',
           sourceSessionId: created.sessionId, destinationSessionId: reportsTo.sessionId,
           ...(context ? { context } : {}), ...(signal ? { signal } : {}) });
-        const projected = projectSessionFollowSourceKeyPreparationAfterSetV1({ source: committed }, preparation);
-        return 'ok' in projected ? projected : committed;
+        // The Session and reportsTo edge are already committed. Keep the
+        // independent preparation outcome visible without turning creation
+        // into an error that invites another spawn.
+        return { ...committed, sourceKeyPreparation: preparation };
       } catch (error) {
         // A proven pre-persistence failure creates no Session, but does not
         // establish that the checkout still has no other consumer.
@@ -5607,35 +5708,31 @@ export function createCliActionDeps(params: Readonly<{
     ...(approvalsStore ?? {}),
     ...inventoryDeps,
     projectsVisibilitySet: async (input, context) => {
-      if (projectAccountAdmission(input.target.serverId, context)) {
+      if (await projectAccountAdmission(input.target.serverId, context)) {
         return { ok: false, errorCode: 'project_visibility_access_denied' };
       }
       const accountId = context?.externalActionExecutionAuthorization?.binding.accountId ?? homeAccountId;
       if (!accountId) return { ok: false, errorCode: 'project_visibility_access_denied' };
       return runWithServerHttpBaseUrl(todoHomeBaseUrl, () => setProjectVisibilityV1({
-        accountScope: () => params.serverId === undefined && configuration.activeServerId !== todoHomeServerId
-          ? null : { serverId: todoHomeServerId, accountId },
+        accountScope: () => params.serverId === undefined && configuration.activeServerId !== projectHomeId
+          ? null : { serverId: input.target.serverId, accountId },
         mutateOrganization: mutation => mutateProjectAccountOrganization({ ...mutation,
           ...projectRowsAuthority(context, 'projects.visibility.set', mutation.signal), serverId: mutation.serverId }),
       }, input, context));
     },
     projectsList: async (args, context) => {
-      const refused = projectAccountAdmission(args.serverId, context);
+      const serverId = args.serverId ?? context?.serverId ?? params.serverIdentityId ?? projectHomeId;
+      const refused = await projectAccountAdmission(serverId, context);
       if (refused) return refused;
-      if ((args.serverId !== undefined && args.serverId !== todoHomeServerId)
-        || (context?.serverId && context.serverId !== todoHomeServerId)
-        || (params.serverId === undefined && configuration.activeServerId !== todoHomeServerId)) {
-        return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
-      }
       return runWithServerHttpBaseUrl(todoHomeBaseUrl, async () => {
-        const authority = projectRowsAuthority(context, 'projects.list', context?.signal);
+        const authority = { ...projectRowsAuthority(context, 'projects.list', context?.signal), serverId };
         const snapshot = await readProjectAccountRows(authority);
         const recency = await readProjectLastOpenedMemoryMap(authority);
         const workspaceRefs = snapshot.workspaceRefs.map(ref => {
           const lastOpenedAtMs = recency.get(buildProjectLastOpenedMemoryKeyV1({ serverId: ref.serverId, projectKey: ref.projectKey ?? ref.id }));
           return lastOpenedAtMs === undefined ? ref : { ...ref, lastOpenedAtMs };
         });
-        const projected = projectProjectListV1({ ...args, serverId: todoHomeServerId,
+        const projected = projectProjectListV1({ ...args, serverId,
           workspaceRefs, organizations: snapshot.organizations, coverage: 'complete' });
         let machines: Awaited<ReturnType<typeof listCurrentAccountMachines>> | null;
         try { machines = await listCurrentAccountMachines({ ...(authority.authorization
@@ -5643,6 +5740,8 @@ export function createCliActionDeps(params: Readonly<{
           : { token: authority.credentials.token }), serverHttpBaseUrl: todoHomeBaseUrl, signal: context?.signal }); }
         catch { context?.signal?.throwIfAborted(); machines = null; }
         await assertProjectRequesterCurrent(context);
+        const changed = await projectAccountAdmission(serverId, context);
+        if (changed) return changed;
         const items = projected.items.map(({ ref, ...item }) => {
           const machine = machines?.find(candidate => candidate.id === ref.machineId);
           return { ...item, serverId: ref.serverId, machineId: ref.machineId, rootPath: ref.rootPath,
@@ -5730,25 +5829,207 @@ export function createCliActionDeps(params: Readonly<{
         context, effectActionId: 'machines.work.summary.get', exactMachine: true, ...(signal ? { signal } : {}) });
       return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : read());
     },
-    usageSourceAction: createUsageSourceActionPort({
-      serverId: projectHomeId,
-      assertCurrent: async context => {
-        context.signal?.throwIfAborted();
-        if (context.serverId && context.serverId !== projectHomeId) throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
-        if (params.isCredentialCurrent && !await params.isCredentialCurrent()
-          || params.savedSecretOperationContext && !await params.savedSecretOperationContext.isCurrent()) {
+    machineStorageAction: async ({ actionId, input, context, signal }) => {
+      const parsed = MACHINE_STORAGE_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
+      if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+      const serverId = parsed.data.serverId ?? context.serverId ?? projectHomeId;
+      const denied = await projectAccountAdmission(serverId, context);
+      if (denied) return denied;
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        const scopeDenied = await projectAccountAdmission(serverId, context);
+        if (scopeDenied) throw Object.assign(new Error(scopeDenied.errorCode), { code: scopeDenied.errorCode });
+        await assertProjectRequesterCurrent(context);
+        if (params.isCredentialCurrent && !await params.isCredentialCurrent()) {
           throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
         }
-        context.signal?.throwIfAborted();
-      },
-      rpc: async (request, context) => {
-        if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-        const call = () => callMachineAction({ machineId: request.input.machineId, serverId: request.input.serverId,
-          method: request.actionId, request: request.input, authority: context.authority, authorization: context.rpcSessionAuthorization,
-          context, effectActionId: request.actionId, exactMachine: true, ...(context.signal ? { signal: context.signal } : {}) });
-        return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, call) : call());
-      },
-    }),
+        signal?.throwIfAborted();
+      };
+      return withProjectHome(async () => {
+        const spec = getActionSpec(actionId);
+        const raw = await executeCapturedMachineAction({ actionId, assertCurrent,
+          invoke: options => callMachineAction({ machineId: parsed.data.machineId, serverId,
+            method: spec.bindings!.rpcMethod!, request: { ...parsed.data, serverId },
+            authority: context.authority, context, effectActionId: actionId, exactMachine: true, timeoutMs: null,
+            ...(signal ? { signal } : {}), ...options }) });
+        // Machine RPC serializes thrown refusals as { error, errorCode },
+        // while an Action failure additionally carries ok:false. Preserve that
+        // boundary rejection before validating the successful Storage output.
+        const record = readRecord(raw);
+        const failure = ActionExecuteFailureSchema.safeParse(record && !('ok' in record) && typeof record.error === 'string'
+          ? { ...record, ok: false } : raw);
+        if (failure.success) return failure.data;
+        const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(raw);
+        if (deferred.success && deferred.data.actionId === actionId) return deferred.data;
+        const output = MACHINE_STORAGE_ACTION_OUTPUT_SCHEMAS[actionId].safeParse(raw);
+        return output.success ? output.data : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      });
+    },
+    machineProcessesAction: async ({ actionId, input, context, signal }) => {
+      const parsed = MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
+      if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+      const serverId = parsed.data.serverId ?? context.serverId ?? projectHomeId;
+      const denied = await projectAccountAdmission(serverId, context);
+      if (denied) return denied;
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        const scopeDenied = await projectAccountAdmission(serverId, context);
+        if (scopeDenied) throw Object.assign(new Error(scopeDenied.errorCode), { code: scopeDenied.errorCode });
+        await assertProjectRequesterCurrent(context);
+        if (params.isCredentialCurrent && !await params.isCredentialCurrent()) {
+          throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+        }
+        signal?.throwIfAborted();
+      };
+      return withProjectHome(async () => {
+        const raw = await executeCapturedMachineAction({ actionId, assertCurrent,
+          invoke: options => callMachineAction({ machineId: parsed.data.machineId, serverId,
+            method: getActionSpec(actionId).bindings!.rpcMethod!, request: { ...parsed.data, serverId },
+            authority: context.authority, context, effectActionId: actionId, exactMachine: true, timeoutMs: null,
+            ...(signal ? { signal } : {}), ...options }) });
+        const failure = ActionExecuteFailureSchema.safeParse(raw);
+        if (failure.success) return failure.data;
+        const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(raw);
+        if (deferred.success && deferred.data.actionId === actionId) return deferred.data;
+        const output = MACHINE_PROCESSES_ACTION_OUTPUT_SCHEMAS[actionId].safeParse(raw);
+        return output.success ? output.data : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      });
+    },
+    machineVitalsAction: async ({ actionId, input, context, signal }) => {
+      const serverId = input.serverId ?? context.serverId ?? projectHomeId;
+      const denied = await projectAccountAdmission(serverId, context);
+      if (denied) return denied;
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        await assertProjectRequesterCurrent(context);
+        if (params.isCredentialCurrent && !await params.isCredentialCurrent()) {
+          throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+        }
+      };
+      const read = async (machineId: string, method: string, request: unknown) => {
+        await assertCurrent();
+        const result = await callMachineAction({ machineId, serverId, method, request, authority: context.authority,
+          context, effectActionId: actionId, exactMachine: true, ...(signal ? { signal } : {}) });
+        await assertCurrent();
+        return result;
+      };
+      const execute = async () => {
+        if (actionId !== 'machines.vitals.summaries.list') {
+          const target = actionId === 'machines.vitals.get'
+            ? MACHINE_VITALS_ACTION_INPUT_SCHEMAS['machines.vitals.get'].parse(input)
+            : MACHINE_VITALS_ACTION_INPUT_SCHEMAS['machines.vitals.history.get'].parse(input);
+          return await read(target.machineId, getActionSpec(actionId).bindings!.rpcMethod!, { ...target, serverId });
+        }
+        const { listCurrentAccountMachines } = await import('@/api/machine/resolveCurrentAccountMachineTarget');
+        const { ApiClient } = await import('@/api/api');
+        const authorization = context.externalActionExecutionAuthorization;
+        await assertCurrent();
+        const inventory = await listCurrentAccountMachines({ token: params.token, ...(authorization ? { authorization } : {}),
+          effectActionId: actionId, ...(signal ? { signal } : {}) });
+        const api = params.credentials ? await ApiClient.create(params.credentials) : null;
+        const machines = await Promise.all(inventory.filter(row => row.revokedAt === null && row.replacedByMachineId === null).map(async row => {
+          try {
+            const opened = authorization
+              ? await ApiClient.getRequesterMachine(row.id, { authorization, effectActionId: actionId, ...(signal ? { signal } : {}) })
+              : await api!.getMachine(row.id, { ...(signal ? { signal } : {}) });
+            await assertCurrent();
+            return { machineId: row.id, name: opened?.metadata?.displayName ?? opened?.metadata?.host ?? row.label,
+              online: row.active, resources: readMachineVitalsResourcesProjectionV1(opened?.daemonState), unavailable: !opened };
+          } catch {
+            await assertCurrent();
+            return { machineId: row.id, name: row.label, online: row.active, unavailable: true };
+          }
+        }));
+        const result = await listMachineVitalsSummariesV1({ machines, readSummary: machineId => read(machineId,
+          RPC_METHODS.MACHINES_VITALS_GET, { serverId, machineId, view: 'summary' }), ...(signal ? { signal } : {}) });
+        await assertCurrent();
+        return result;
+      };
+      return await withProjectHome(execute);
+    },
+    machineResourcesPolicyAction: async ({ actionId, input, context, signal }) => {
+      const serverId = input.serverId ?? context.serverId ?? projectHomeId;
+      const denied = await projectAccountAdmission(serverId, context);
+      if (denied) return denied;
+      const current = async () => {
+        if (signal?.aborted || params.isCredentialCurrent && !await params.isCredentialCurrent()) return false;
+        await assertProjectRequesterCurrent(context);
+        return true;
+      };
+      const execute = async () => {
+        if (!await current()) return { status: 'unavailable' };
+        if (actionId === 'machines.resources.policy.set') {
+          const request = MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS[actionId].parse(input);
+          return executeCapturedMachineAction({ actionId, assertCurrent: async () => {
+            signal?.throwIfAborted();
+            if (!await current()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+            signal?.throwIfAborted();
+          }, invoke: options => callMachineAction({ machineId: request.machineId, serverId, method: RPC_METHODS.MACHINES_RESOURCES_POLICY_SET,
+            request: { ...request, serverId }, authority: context.authority, context, effectActionId: actionId, exactMachine: true,
+            ...(signal ? { signal } : {}), ...options }) });
+        }
+        const request = MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS[actionId].parse(input);
+        const { readMachineResourcesPolicySnapshot } = await import('@/api/machine/machineResourcesPolicy');
+        const { ApiClient } = await import('@/api/api');
+        const authorization = context.externalActionExecutionAuthorization;
+        return readMachineResourcesPolicySnapshot({ machineId: request.machineId, isCurrent: current, readMachine: async () => {
+          if (authorization) return ApiClient.getRequesterMachine(request.machineId, { authorization, effectActionId: actionId, ...(signal ? { signal } : {}) });
+          if (!params.credentials) return null;
+          const api = await ApiClient.create(params.credentials);
+          return api.getMachine(request.machineId, { ...(signal ? { signal } : {}) });
+        } });
+      };
+      return withProjectHome(execute);
+    },
+    machineGuardAction: async args => {
+      const { actionId, input, context, signal } = args;
+      const serverId = input.serverId ?? context.serverId ?? projectHomeId;
+      const denied = await projectAccountAdmission(serverId, context);
+      if (denied) return denied;
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        const denied = await projectAccountAdmission(serverId, context);
+        if (denied) throw Object.assign(new Error(denied.errorCode), { code: denied.errorCode });
+        await assertProjectRequesterCurrent(context);
+        if (params.isCredentialCurrent && !await params.isCredentialCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+        signal?.throwIfAborted();
+      };
+      const targetLocalAction = params.machineGuardAction;
+      if (actionId === 'machines.guard.activity.undo' && targetLocalAction) return withProjectHome(() =>
+        executeCapturedMachineAction({ actionId, assertCurrent, invoke: () => targetLocalAction(args) }));
+      const { executeMachineGuardAction } = await import('@/api/machine/machineGuard');
+      return withProjectHome(() => executeMachineGuardAction({ actionId, input, serverId,
+        assertCurrent,
+        call: request => callMachineAction({ machineId: request.machineId, serverId, method: request.method,
+          request: request.input, authority: context.authority, context, effectActionId: actionId, exactMachine: true,
+          ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+          ...(signal ? { signal } : {}) }),
+      }));
+    },
+    usageSourceAction: async (request, context) => {
+      const denied = await projectHomeAdmission(request.input.serverId, context);
+      if (denied) return executionRunActionFailure('server_target_mismatch');
+      return createUsageSourceActionPort({
+        serverId: request.input.serverId,
+        assertCurrent: async context => {
+          context.signal?.throwIfAborted();
+          const denied = await projectHomeAdmission(request.input.serverId, context);
+          if (denied) throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
+          if (params.isCredentialCurrent && !await params.isCredentialCurrent()
+            || params.savedSecretOperationContext && !await params.savedSecretOperationContext.isCurrent()) {
+            throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+          }
+          context.signal?.throwIfAborted();
+        },
+        rpc: async (request, context) => {
+          if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+          const call = () => callMachineAction({ machineId: request.input.machineId, serverId: request.input.serverId,
+            method: request.actionId, request: request.input, authority: context.authority, authorization: context.rpcSessionAuthorization,
+            context, effectActionId: request.actionId, exactMachine: true, ...(context.signal ? { signal: context.signal } : {}) });
+          return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, call) : call());
+        },
+      })(request, { ...context, serverId: request.input.serverId });
+    },
     projectsOpen: async (input, context) => {
       const { OpenProjectResultV1Schema } = await import('@happier-dev/protocol/projects/openProjectV1');
       const open = async () => OpenProjectResultV1Schema.parse(await callMachineAction({
@@ -5860,15 +6141,22 @@ export function createCliActionDeps(params: Readonly<{
           if (!roster.success) throw new MachineAgentInventoryUnavailableError(args.agentId ?? 'unknown');
           const agents = buildMachineAgentInventoryDescriptors(roster.data.projection)
             .filter(({ agentId }) => !args.agentId || args.agentId === agentId);
-          if (agents.length === 0) return { items: [] };
+          const observedDefinitions: ReturnType<typeof projectAcpCatalogForMachineInventory> = !args.agentId || args.definitionId
+            ? projectAcpCatalogForMachineInventory(await inventoryDeps.readAccountAcpCatalog({ signal: context.signal })) : {};
+          const definitionInventory = args.definitionId && 'definitions' in observedDefinitions
+            ? { ...observedDefinitions, definitions: observedDefinitions.definitions?.filter(definition => definition.definitionId === args.definitionId) }
+            : observedDefinitions;
+          const request = buildMachineAgentsDetectRequest({ agents, ...definitionInventory, refresh: args.refresh });
+          if (request.requests?.length === 0) return { items: [],
+            ...('definitionCatalog' in definitionInventory && definitionInventory.definitionCatalog ? { definitionCatalog: definitionInventory.definitionCatalog } : {}) };
           const response = await callMachineAction({
             machineId: args.machineId,
             serverId: args.serverId,
             method: RPC_METHODS.CAPABILITIES_DETECT,
-            request: buildMachineAgentsDetectRequest({ agents, refresh: args.refresh }),
+            request,
             ...(context.signal ? { signal: context.signal } : {}),
           });
-          return projectMachineAgentsDetectResponse({ agents, response });
+          return projectMachineAgentsDetectResponse({ agents, response, ...definitionInventory });
         };
         return await (params.serverHttpBaseUrl
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, readInventory)
@@ -5922,6 +6210,113 @@ export function createCliActionDeps(params: Readonly<{
         });
       },
     }),
+    machinePageAction: async ({ actionId, input, context }) => {
+      if (actionId === 'machines.capabilities.install') {
+        const { machineId, serverId, capabilityId, method } = MachineCapabilityInstallInputSchema.parse(input);
+        if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {
+          return { ok: false, errorCode: 'daemon_transport_unavailable', error: 'An authenticated machine transport is required.' };
+        }
+        try {
+          const raw = await callMachineAction({ machineId, serverId, method: RPC_METHODS.CAPABILITIES_INVOKE,
+            request: { id: capabilityId, method }, context, effectActionId: actionId, authority: context.authority,
+            exactMachine: true, timeoutMs: 5 * 60_000, ...(context.signal ? { signal: context.signal } : {}),
+          });
+          if (isRpcMethodNotFoundResult(raw)) return { supported: false, reason: 'not-supported' };
+          const parsed = MachineCapabilityInstallOutputSchema.safeParse({ supported: true, response: raw });
+          return parsed.success ? parsed.data : { supported: false, reason: 'error' };
+        } catch (error) {
+          context.signal?.throwIfAborted();
+          if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) return { supported: false, reason: 'not-supported' };
+          const requestDisposition = readRpcRequestDisposition(error);
+          return { supported: false, reason: 'error', ...(requestDisposition ? { requestDisposition } : {}) };
+        }
+      }
+      if (actionId === 'machines.replacement.set' || actionId === 'machines.replacement.clear') {
+        if (!await isMachineActionServerScopeCurrent(input.serverId ?? context.serverId)) {
+          return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+        }
+        const credentials = params.savedSecretOperationContext?.credentials ?? params.credentials;
+        if (!credentials || !params.savedSecretOperationContext && params.token !== credentials.token
+          || context.runtimeAccountId && context.runtimeAccountId !== readAccountIdFromToken(credentials.token)) {
+          return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        }
+        if (await params.isCredentialCurrent?.() === false) {
+          return { ok: false, errorCode: 'credential_scope_changed', error: 'credential_scope_changed' };
+        }
+        const spec = getActionSpec(actionId);
+        const transport = spec.serverTransport!;
+        const home = params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+        const request = actionId === 'machines.replacement.set' ? MachineReplacementSetInputSchema.parse(input) : null;
+        const body = request ? { replacementMachineId: request.replacementMachineId,
+          ...(request.confirmActiveOldMachine === undefined ? {} : { confirmActiveOldMachine: request.confirmActiveOldMachine }) } : undefined;
+        const response = await axios.request<unknown>({ url: `${home.replace(/\/+$/, '')}${transport.path.replace(':machineId', encodeURIComponent(input.machineId))}`,
+          method: transport.method, data: body,
+          headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
+          validateStatus: () => true, ...(context.signal ? { signal: context.signal } : {}),
+        });
+        if (response.status >= 200 && response.status < 300) return { ok: true };
+        const raw = response.data;
+        const error = raw && typeof raw === 'object' && 'error' in raw && typeof raw.error === 'string'
+          ? raw.error : `http_${response.status}`;
+        return { ok: false, status: response.status, error };
+      }
+      if (actionId === 'machines.remove') {
+        const credentials = params.savedSecretOperationContext?.credentials ?? params.credentials;
+        if (!credentials || !params.savedSecretOperationContext && params.token !== credentials.token
+          || context.runtimeAccountId && context.runtimeAccountId !== readAccountIdFromToken(credentials.token)) {
+          return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        }
+        if (!await isMachineActionServerScopeCurrent(input.serverId ?? context.serverId)) {
+          return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+        }
+        const home = params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+        return runWithServerHttpBaseUrl(home, async () => {
+          const store = params.savedSecretOperationContext
+            ? createCliProviderConnectionsStoreForOperation({ operationContext: params.savedSecretOperationContext, signal: context.signal })
+            : createCliProviderConnectionsStore({ credentials, signal: context.signal,
+              isCredentialCurrent: params.isCredentialCurrent });
+          const outcome = await revokeMachineWithProviderCleanup(input.machineId, {
+            revoke: async () => {
+              try {
+                await store.verifyCurrent();
+                const response = await axios.post(`${home.replace(/\/+$/, '')}/v1/machines/${encodeURIComponent(input.machineId)}/revoke`, {}, {
+                  headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
+                  validateStatus: () => true, ...(context.signal ? { signal: context.signal } : {}),
+                });
+                if (response.status >= 200 && response.status < 300) return { ok: true } as const;
+                const rawError: unknown = response.data;
+                const error = rawError && typeof rawError === 'object' && 'error' in rawError && typeof rawError.error === 'string'
+                  ? rawError.error : `http_${response.status}`;
+                return { ok: false, status: response.status, error } as const;
+              } catch {
+                return { ok: false, status: 503, error: 'revoke_outcome_unknown' } as const;
+              }
+            },
+            readCatalog: () => store.readCatalog(),
+            writeCatalog: value => store.mutateCatalog(value),
+          });
+          if (outcome.ok && outcome.providerCleanup === 'complete') {
+            try {
+              await refreshActiveProviderConnectionsCatalog({ credentials,
+                operationContext: params.savedSecretOperationContext, signal: context.signal,
+                isCredentialCurrent: params.isCredentialCurrent }, { afterChange: true });
+            } catch { /* Projection failure cannot erase the durable Provider row receipt. */ }
+          }
+          return outcome;
+        });
+      }
+      if (actionId !== 'machines.daemon.stop') {
+        return { ok: false, errorCode: 'unavailable', error: 'noClient' };
+      }
+      const { machineId, serverId } = input;
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {
+        return { ok: false, errorCode: 'daemon_transport_unavailable', error: 'An authenticated machine transport is required.' };
+      }
+      return await callMachineAction({ machineId, serverId, method: RPC_METHODS.STOP_DAEMON,
+        request: {}, context, effectActionId: actionId, authority: context.authority, exactMachine: true,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+    },
     machineTerminalAction: async ({ actionId, input, context, signal }) => {
       const { machineId, serverId, ...request } = input;
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {
@@ -6310,6 +6705,7 @@ export function createCliActionDeps(params: Readonly<{
         ? (typeof localId === 'string' && localId.trim().length > 0 ? localId : randomUUID())
         : undefined;
       const result = await sendSessionMessage({
+        ...(context?.externalActionExecutionAuthorization ? { callerInputAuthorization: context.externalActionExecutionAuthorization } : {}),
         credentials: params.credentials,
         idOrPrefix: sessionId,
         message: String(message ?? ''),
@@ -6318,6 +6714,11 @@ export function createCliActionDeps(params: Readonly<{
           messageMeta: { ...(messageMeta ?? {}), ...(displayText ? { displayText } : {}) },
         } : {}),
         requestedAction,
+        // Ordinary CLI input is a trusted host producer, not an unadmitted
+        // transcript echo. Session/plugin callers retain their causal proofs above.
+        ...(callerSurface === 'cli' && (!actionCaller || actionCaller.kind === 'host')
+          ? { inputAdmission: buildTrustedHostSessionInputAdmissionV1(callerSurface) }
+          : {}),
         wait: normalizedWait,
         timeoutMs: normalizedTimeoutSeconds * 1000,
         // A caller-retained localId makes an ambiguous send retryable: the
@@ -6331,6 +6732,9 @@ export function createCliActionDeps(params: Readonly<{
         ...(normalizedPermissionModeOverride ? { permissionModeOverride: normalizedPermissionModeOverride } : {}),
         ...sendModelSelection,
         ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
+        ...(params.machineAdmissionTransport
+          ? { machineAdmissionTransport: params.machineAdmissionTransport }
+          : {}),
         ...(params.machineActionDirectTargetTransport
           ? { machineResumeTransport: params.machineActionDirectTargetTransport.invoke }
           : {}),
@@ -6395,7 +6799,7 @@ export function createCliActionDeps(params: Readonly<{
             ...(transport.candidates ? { candidates: transport.candidates } : {}) };
         }
         try {
-          return await callSessionRpc({
+          const result = await callSessionRpc({
             ...transport, token: credentials.token, sessionId: transport.sessionId,
             method: `${transport.sessionId}:abort`,
             request: { reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.` },
@@ -6408,6 +6812,9 @@ export function createCliActionDeps(params: Readonly<{
               } } : {}),
             ...(signal ? { signal } : {}),
           });
+          // The host's abort callback acknowledges delivery without a result.
+          // Project that receipt at the Action boundary, including encrypted RPC.
+          return result ?? { requested: true };
         } catch (error) {
           const errorCode = readRpcErrorCode(error) ?? 'session_rpc_failed';
           return { ok: false, errorCode, error: errorCode,
@@ -6582,12 +6989,7 @@ export function createCliActionDeps(params: Readonly<{
         : fieldId === 'intent.context' ? { work: res.metadata.work } : { showToolCalls: value }), version: res.version };
     },
 
-    sessionPermissionModeSet: async ({ context, callerInputConstraints, sessionId, permissionMode, applyTiming }) => {
-      // Next-prompt intent belongs to the invoking client's next input. This
-      // headless metadata owner cannot apply it without changing that timing.
-      if (applyTiming === 'next_prompt') {
-        return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-      }
+    sessionPermissionModeSet: async ({ context, callerInputConstraints, sessionId, permissionMode }) => {
       const credentials = params.credentials;
       if (!credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
@@ -6618,7 +7020,35 @@ export function createCliActionDeps(params: Readonly<{
       return { ok: true, sessionId: res.sessionId, permissionMode: parsed, updatedAt };
     },
 
-    sessionModelSet: async ({ context, callerInputConstraints, sessionId, modelId, providerConnectionId, teamCredentialModel, teamVisibilityGrantConsent, captureBefore, expected }) => {
+    modelFavoriteSet: async (input, context) => {
+      const credentials = params.credentials;
+      if (!credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+      const mutate = () => updateAccountSettingsV2OnceAgainstLatest({ credentials,
+        signal: context.signal, mutate: raw => setModelFavoriteV1(raw, input) });
+      return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, mutate) : mutate();
+    },
+    sessionModelUnarm: async ({ sessionId, context }) => {
+      if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const externalRequest = Boolean(context.externalActionCredential || context.externalActionExecutionAuthorization);
+      const resolveAuthorizationHeaders = (request: Readonly<{ method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown }>) =>
+        resolveServerRequestHeaders(context, 'session.model.unarm', request);
+      if (externalRequest && (!params.externalActionMachineInstallationId || !params.externalActionMachineRequestPrivateKey
+        || !resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }))) {
+        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      }
+      const mutate = () => setSessionModel({ credentials: params.credentials!, idOrPrefix: sessionId, serverId: projectHomeId, unarm: true,
+        ...(externalRequest ? { resolveAuthorizationHeaders } : {}),
+        ...(externalRequest && params.externalActionMachineInstallationId && params.externalActionMachineRequestPrivateKey ? {
+          externalAction: { context, effectActionId: 'session.model.unarm', installationId: params.externalActionMachineInstallationId,
+            privateKey: params.externalActionMachineRequestPrivateKey },
+        } : {}),
+      });
+      const result = await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, mutate) : mutate());
+      if ('code' in result) return { ok: false, errorCode: result.code, error: result.code };
+      const { sessionId: _sessionId, ...transition } = result;
+      return SessionModelTransitionResultV1Schema.parse(transition);
+    },
+    sessionModelSet: async ({ context, callerInputConstraints, sessionId, modelId, providerConnectionId, teamCredentialModel, teamVisibilityGrantConsent, captureBefore, expected, applyTiming }) => {
       const credentials = params.credentials;
       if (!credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
@@ -6638,6 +7068,7 @@ export function createCliActionDeps(params: Readonly<{
         credentials,
         idOrPrefix: sessionId,
         serverId: projectHomeId,
+        ...(applyTiming ? { applyTiming } : {}),
         ...(captureBefore !== undefined ? { captureBefore } : {}),
         ...(expected ? { expected } : {}),
         ...(normalizedModelId ? { modelId: normalizedModelId } : {}),
@@ -6722,23 +7153,70 @@ export function createCliActionDeps(params: Readonly<{
       });
     },
     sessionPendingWithdraw: async ({ sessionId, localId, serverId, targetExecutionRunId, context }) => {
-      const denied = projectHomeAdmission(serverId, context);
+      const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
       return withProjectHome(() => withdrawPendingQueueV2Message({ token: params.token, sessionId, localId,
         ...(targetExecutionRunId ? { targetExecutionRunId } : {}), ...(context.signal ? { signal: context.signal } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.withdraw', request),
       }));
     },
-    sessionPendingResetStartSet: async ({ sessionId, localId, serverId, reset, context }) => {
-      const denied = projectHomeAdmission(serverId, context);
+    sessionPendingResetStartSet: async ({ sessionId, localId, serverId, reset, initialInput, context }) => {
+      const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
-      return withProjectHome(() => updatePendingQueueV2RequestedAction({ token: params.token, sessionId, localId,
-        requestedAction: { v: 1, kind: 'reset_start', reset }, ...(context.signal ? { signal: context.signal } : {}),
-        resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.resetStart.set', request),
-      }));
+      const credentials = params.credentials;
+      if (!credentials) return executionRunActionFailure('not_authenticated');
+      const assertCurrent = async () => {
+        context.signal?.throwIfAborted();
+        if (await projectHomeAdmission(serverId, context)) throw Object.assign(new Error('server_scope_mismatch'), { code: 'server_scope_mismatch' });
+        await assertProjectRequesterCurrent(context);
+      };
+      const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) => {
+        const headers = resolveServerRequestHeaders(context, 'session.pending.resetStart.set', request);
+        if (!headers) throw Object.assign(new Error('reset_start_unavailable'), { code: 'reset_start_unavailable', reason: 'authority_unavailable' });
+        return headers;
+      };
+      try {
+        return await withProjectHome(async () => {
+          await assertCurrent();
+          const snapshot = await readServerFeaturesSnapshot();
+          await assertCurrent();
+          if (snapshot?.status === 'ready' && (snapshot.features.capabilities.session.pendingInput?.protocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V4) {
+            throw Object.assign(new Error('reset_start_unsupported'), { code: 'reset_start_unsupported' });
+          }
+          const headers = authorizeRequest({ method: 'GET', path: '/v1/account/encryption/currentness' });
+          const authority = await fetchAccountEncryptionCurrentness({ token: credentials.token, authorizationHeaders: headers,
+            ...(context.signal ? { signal: context.signal } : {}) });
+          await assertCurrent();
+          const options = { credentials, accountMode: authority.mode, assertCurrent, authorizeRequest,
+            includePendingWork: false, ...(context.signal ? { signal: context.signal } : {}) };
+          const [quota, witness] = await Promise.all([
+            readProviderAccountUsageQuotaV4({ source: reset.source }, options),
+            readProviderAccountUsageHistoryWitnessV4({ recordId: reset.recordId, witness: reset.witness }, options),
+          ]);
+          await assertCurrent();
+          const admission = evaluatePendingResetStartAdmissionV1({ reset, witness, current: quota.current, nowMs: Date.now(), authorityCurrent: true });
+          if (admission.status === 'unavailable') throw Object.assign(new Error('reset_start_unavailable'), {
+            code: 'reset_start_unavailable', reason: admission.reason,
+          });
+          return updatePendingQueueV2RequestedAction({ token: params.token, sessionId, localId,
+            requestedAction: { v: 1, kind: 'reset_start', reset }, ...(initialInput ? { initialInput } : {}),
+            ...(context.signal ? { signal: context.signal } : {}), resolveAuthorizationHeaders: authorizeRequest,
+          });
+        });
+      } catch (error) {
+        if (error instanceof Error && 'code' in error) {
+          if (error.code === 'reset_start_unsupported') return executionRunActionFailure('reset_start_unsupported');
+          if (error.code === 'reset_start_unavailable' && 'reason' in error) {
+            const reason = PendingResetStartWaitingReasonV1Schema.safeParse(error.reason);
+            if (reason.success) return ActionExecuteFailureSchema.parse({ ok: false, errorCode: 'reset_start_unavailable',
+              error: 'reset_start_unavailable', details: { reason: reason.data } });
+          }
+        }
+        throw error;
+      }
     },
     sessionPendingResetStartCancel: async ({ sessionId, localId, serverId, context }) => {
-      const denied = projectHomeAdmission(serverId, context);
+      const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
       return withProjectHome(() => withdrawPendingQueueV2Message({ token: params.token, sessionId, localId,
         ...(context.signal ? { signal: context.signal } : {}),
@@ -7364,6 +7842,8 @@ export function createCliActionDeps(params: Readonly<{
     },
     sessionBoardAction: widgetBoardDeps?.sessionBoardAction
       ?? (async () => ({ ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' })),
+    ...(widgetBoardDeps?.sessionBoardPrepareItem ? { sessionBoardPrepareItem: widgetBoardDeps.sessionBoardPrepareItem } : {}),
+    readAgentHtmlNetworkPolicy: async () => params.actionsSettingsProvider?.getAccountSettings?.()?.agentHtmlNetworkPolicy ?? 'ask',
 
     currentSessionPresentationApply: async ({ input, context, signal }) => {
       const sessionId = normalizeStringValue(context.defaultSessionId);
@@ -7606,7 +8086,7 @@ export function createCliActionDeps(params: Readonly<{
       context,
     }),
 
-    pluginSettingsAdministrationAction: async ({ actionId, input, context }) => (
+    pluginSettingsAdministrationAction: Object.assign(async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => (
       await executePluginSettingsAdministrationAction({
         actionId,
         input,
@@ -7614,7 +8094,17 @@ export function createCliActionDeps(params: Readonly<{
         ...(context.actionCaller ? { actionCaller: context.actionCaller } : {}),
         ...(context.signal ? { signal: context.signal } : {}),
       })
-    ),
+    ), {
+      admitInput: async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => (
+        await executePluginSettingsAdministrationAction.admitInput({
+          actionId,
+          input,
+          happyHomeDir: params.happyHomeDir,
+          ...(context.actionCaller ? { actionCaller: context.actionCaller } : {}),
+          ...(context.signal ? { signal: context.signal } : {}),
+        })
+      ),
+    }),
 
     pluginPermissionGrantAction: async (args) => pluginPermissionGrantAction
       ? await pluginPermissionGrantAction(args)

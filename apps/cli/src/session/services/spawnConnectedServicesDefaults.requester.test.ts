@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import { ConnectedAccountCatalogRowReadResponseV1Schema, CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import * as persistence from '@/persistence';
@@ -12,9 +12,48 @@ import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountS
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveSessionSpawnConnectedServicesDefaultsPayload } from './spawnConnectedServicesDefaults';
 
-it('resolves fresh requester defaults without replacing the custodian Account snapshot', async () => {
-  const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
     runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+});
+afterAll(async () => { await runtime.dispose(); });
+
+it.each(['profile', 'group'] as const)('resolves the Account Claude %s default before lazy Agent activation', async (selection) => {
+  resetInMemoryAccountSettingsContextForTests();
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'workflow-account' })).toString('base64url')}.signature`, encryption: null } as const;
+  const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  const scope = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'claude',
+    contributions: runtime.registry.contributes })?.authorizedPurposes.find(entry => entry.serviceRefs[0]?.localId === 'claude-subscription');
+  if (!scope?.serviceRefs[0]) throw new Error('Real Claude purpose unavailable');
+  // Only Home HTTP and credential storage are substituted. The cold Agent
+  // projection, settings reader, purpose catalog and default resolver stay real.
+  const get = vi.spyOn(axios, 'get').mockImplementation(async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v2/account/settings') return { status: 200,
+      data: { content: { t: 'plain', v: {} }, version: 9 } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ settingsVersion: 9 }) };
+    if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200,
+      data: ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 3,
+        content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [{ purpose: scope.purpose,
+          target: selection === 'profile'
+            ? { kind: 'account', account: { service: scope.serviceRefs[0], accountId: 'connected-claude' } }
+            : { kind: 'group', service: scope.serviceRefs[0], groupId: 'connected-claude' } }] } } } }) };
+    return { status: 404, data: { error: 'unsupported' } };
+  });
+  try {
+    const defaults = await runWithServerHttpBaseUrl('https://workflow-home.example', () => resolveSessionSpawnConnectedServicesDefaultsPayload({
+      agentId: 'claude', credentials,
+    }));
+    expect(defaults?.connectedServices).toMatchObject({ v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection,
+        ...(selection === 'profile' ? { profileId: 'connected-claude' } : { groupId: 'connected-claude' }) },
+    } });
+  } finally { get.mockRestore(); stored.mockRestore(); resetInMemoryAccountSettingsContextForTests(); }
+});
+
+it('resolves fresh requester defaults without replacing the custodian Account snapshot', async () => {
   resetInMemoryAccountSettingsContextForTests();
   const alice = { source: 'network' as const, settings: accountSettingsParse({}), settingsVersion: 2,
     loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'alice' };
@@ -48,5 +87,5 @@ it('resolves fresh requester defaults without replacing the custodian Account sn
     } });
     expect(get.mock.calls.some(call => call[0] === 'https://bob-home.example/v2/account/settings')).toBe(true);
     expect(getActiveAccountSettingsSnapshot()).toBe(alice);
-  } finally { get.mockRestore(); stored.mockRestore(); await runtime.dispose(); resetInMemoryAccountSettingsContextForTests(); }
+  } finally { get.mockRestore(); stored.mockRestore(); resetInMemoryAccountSettingsContextForTests(); }
 });

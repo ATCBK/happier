@@ -695,8 +695,7 @@ describe('createCliActionExecutor', () => {
               id: 'review-bot',
               name: 'review-bot',
               title: 'Review Bot',
-              command: 'review-bot',
-              args: [],
+              launch: { kind: 'command' as const, command: 'review-bot', args: [] },
               env: {},
               transportProfile: 'generic',
               capabilities: {
@@ -713,8 +712,7 @@ describe('createCliActionExecutor', () => {
               id: 'disabled-bot',
               name: 'disabled-bot',
               title: 'Disabled Bot',
-              command: 'disabled-bot',
-              args: [],
+              launch: { kind: 'command' as const, command: 'disabled-bot', args: [] },
               env: {},
               transportProfile: 'generic',
               capabilities: {
@@ -1126,8 +1124,7 @@ describe('createCliActionExecutor', () => {
               name: 'review-bot',
               title: 'Review Bot',
               description: 'Primary review backend',
-              command: 'review-bot',
-              args: [],
+              launch: { kind: 'command' as const, command: 'review-bot', args: [] },
               env: {},
               transportProfile: 'generic',
               capabilities: {
@@ -1145,8 +1142,7 @@ describe('createCliActionExecutor', () => {
               name: 'disabled-bot',
               title: 'Disabled Bot',
               description: 'Disabled review backend',
-              command: 'disabled-bot',
-              args: [],
+              launch: { kind: 'command' as const, command: 'disabled-bot', args: [] },
               env: {},
               transportProfile: 'generic',
               capabilities: {
@@ -1252,7 +1248,7 @@ describe('createCliActionExecutor', () => {
       settings: {
         schemaVersion: 2,
         acpCatalogSettingsV1: { v: 2, backends: [{
-          id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
+          id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
           createdAt: 1, updatedAt: 1,
         }] },
       },
@@ -2091,7 +2087,7 @@ describe('createCliActionExecutor', () => {
       managedServersEnabled: true,
       forceIncludeServerIds: ['server-a'],
       forceExcludeServerIds: ['server-b'],
-    } satisfies NonNullable<SessionSpawnNewInputV2['mcpSelection']>;
+    } satisfies NonNullable<NonNullable<SessionSpawnNewInputV2['capabilitySelection']>['mcp']>;
     const connectedServices = {
       v: 2,
       bindingsByServiceId: {
@@ -2127,7 +2123,7 @@ describe('createCliActionExecutor', () => {
         },
         profileId: 'codex-profile',
         connectedServices,
-        mcpSelection,
+        capabilitySelection: { mcp: mcpSelection },
         transcriptStorage: 'persisted',
         terminal: { mode: 'tmux' },
         title: 'Happier Test',
@@ -2164,7 +2160,7 @@ describe('createCliActionExecutor', () => {
       },
       profileId: 'codex-profile',
       connectedServices,
-      mcpSelection,
+      capabilitySelection: { mcp: mcpSelection },
       transcriptStorage: 'persisted',
       terminal: { mode: 'tmux' },
       initialTitle: 'Happier Test',
