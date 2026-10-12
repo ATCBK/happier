@@ -25,6 +25,8 @@ installSettingsViewCommonModuleMocks({
 });
 
 const { SettingsCollectionLayout } = await import('./SettingsCollectionLayout');
+const { SettingsFloatingControlsHost } = await import('./SettingsModalFloatingControls');
+const { PageHeader } = await import('@/components/ui/layout/PageHeader');
 const { useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
 
 const modeSeen: Array<string | null> = [];
@@ -189,5 +191,26 @@ describe('SettingsCollectionLayout', () => {
         expect(hostByTestID(screen, 'machines-rail')).toBeNull();
         await layoutAt(screen, 1128);
         expect(hostByTestID(screen, 'machines-rail')).not.toBeNull();
+    });
+
+    it('keeps the collection header free of a back control: the collection is the page, its list sits beside the detail', async () => {
+        const screen = await renderScreen(
+            <SettingsFloatingControlsHost enabled>
+                <SettingsCollectionLayout
+                    navigator="machines"
+                    rootPathname="/settings/machines"
+                    resolveChildRoute={() => '[id]'}
+                    rail={<View testID="machines-rail" />}
+                    railWidthPx={272}
+                    detailMinWidthPx={480}
+                    testID="settings-machines"
+                    collectionHeader={<PageHeader testID="collection-header" title="Machines" />}
+                />
+            </SettingsFloatingControlsHost>,
+        );
+        await layoutAt(screen, 1200);
+        const header = screen.root.findAll((node) => node.props?.testID === 'collection-header')[0];
+        expect(header).toBeDefined();
+        expect(header!.findAll((node) => node.props?.testID === 'settings-modal-back')).toHaveLength(0);
     });
 });

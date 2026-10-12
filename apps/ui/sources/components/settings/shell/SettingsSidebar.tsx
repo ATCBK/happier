@@ -16,7 +16,6 @@ import { SettingsSearchResults, useSettingsSearch } from '@/components/settings/
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
-import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 
 /** The indent of each disclosed level. */
 const RAIL_INDENT_STEP_PX = 12;
@@ -30,7 +29,7 @@ const stylesheet = StyleSheet.create(() => ({
     },
     /**
      * The scrolling region's own host. Both edge overlays are absolutely positioned against
-     * their nearest positioned ancestor, so without this the top gradient and caret would
+     * their nearest positioned ancestor, so without this the top gradient would
      * anchor to the rail root and paint over the search field.
      */
     listHost: {
@@ -274,8 +273,9 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
                     onChangeText: search.setQuery,
                 }}
                 scrollContent={(
-                    // The rail scrolls, so it carries the app's canonical edge affordances: a fade into
-                    // the plane's colour plus a caret at whichever end still has content behind it.
+                    // The rail scrolls, so it fades into the plane's colour at whichever end still has
+                    // content behind it. No caret: centred over a row of a navigation list it read as that
+                    // row's second disclosure ("Prompts & Skills ⌄ ›", fidelity 2026-10-11).
                     <View style={styles.listHost}>
                         <ItemList presentation="grouped"
                             style={styles.listSurface}
@@ -301,12 +301,6 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
                             color={theme.colors.surface.inset}
                             size={18}
                             edges={scrollFades.visibility}
-                        />
-                        <ScrollEdgeIndicators
-                            edges={scrollFades.visibility}
-                            color={theme.colors.text.secondary}
-                            size={ICON_SIZE.xs}
-                            opacity={0.35}
                         />
                     </View>
                 )}

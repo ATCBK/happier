@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -102,4 +103,27 @@ it('in a detail beside its list, gives back only to pages below the list item, o
     await renderAt('/settings/providers/connection-1/models');
     expect(backControls()).toHaveLength(1);
     expect(headerHoldsBack('detail-header')).toBe(true);
+});
+
+it('gives a collection-root detail no back at all: no line above its title, no gutter slot, at any pane width', async () => {
+    routeState.pathname = '/settings/providers/connection-1';
+    screen = await renderScreen(
+        <SettingsFloatingControlsHost enabled>
+            <SettingsFloatingControlsHost enabled collectionRootPathname="/settings/providers">
+                <PageHeader testID="detail-header" title="Detail" />
+            </SettingsFloatingControlsHost>
+        </SettingsFloatingControlsHost>,
+    );
+    const empty = () => {
+        expect(backControls()).toHaveLength(0);
+        expect(screen?.findByTestId('detail-header-back-line')).toBeNull();
+        expect(screen?.findByTestId('detail-header-back-gutter')).toBeNull();
+    };
+    empty();
+    // A narrow detail pane (the column fills it), where a shown back would take its own line.
+    const header = screen.root.find((node) => typeof node.type === 'string' && node.props.testID === 'detail-header');
+    await act(async () => {
+        header.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 420, height: 80 } } });
+    });
+    empty();
 });

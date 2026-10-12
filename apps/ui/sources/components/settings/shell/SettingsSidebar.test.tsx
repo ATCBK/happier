@@ -188,7 +188,7 @@ describe('SettingsSidebar', () => {
         expect(flattenStyle(scroller.props.style).backgroundColor).toBe('transparent');
     });
 
-    it('reveals the canonical scroll-edge affordances once the rail overflows', async () => {
+    it('fades the rail into its plane once it overflows, with no caret over its last row', async () => {
         const { SettingsSidebar } = await import('./SettingsSidebar');
         const screen = await renderScreen(React.createElement(SettingsSidebar));
 
@@ -207,7 +207,8 @@ describe('SettingsSidebar', () => {
         const fade: any = screen.findAllByType('LinearGradient')[0];
         expect(fade).toBeTruthy();
         expect(fade.props.colors).toContain(lightTheme.colors.surface.inset);
-        expect(collectIconNames(screen)).toContain('caret-down');
+        // A caret centred over a navigation list's last row reads as that row's disclosure.
+        expect(collectIconNames(screen)).not.toContain('caret-down');
     });
 
     it('marks the active row with a raised chip and a weight change, not colour alone', async () => {

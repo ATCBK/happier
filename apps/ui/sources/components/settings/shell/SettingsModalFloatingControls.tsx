@@ -105,7 +105,18 @@ const SettingsInlineBackControl = React.memo(function SettingsInlineBackControl(
         return () => setClaimed(false);
     }, [setClaimed, shown]);
     if (!shown) return null;
-    return <SettingsBackButton onPress={back.handleBack} iconSize={ICON_SIZE.md} style={[styles.inlineBackButton, props.style]} />;
+    return <NavigationInlineBackButton onPress={back.handleBack} style={props.style} />;
+});
+
+/**
+ * The back glyph on a page header's title line, for any navigation chrome that gives the header its
+ * back (`NavigationBackChromeProvider`): Settings pages, and the rail door's machine sub-pages.
+ */
+export const NavigationInlineBackButton = React.memo(function NavigationInlineBackButton(props: Readonly<{
+    onPress: () => void;
+    style: StyleProp<ViewStyle>;
+}>) {
+    return <SettingsBackButton onPress={props.onPress} iconSize={ICON_SIZE.md} style={[styles.inlineBackButton, props.style]} />;
 });
 
 const styles = StyleSheet.create(() => ({
@@ -170,9 +181,12 @@ export function SettingsFloatingControlsHost(props: Readonly<{
         return () => parentSetClaimed(false);
     }, [active, parentSetClaimed]);
     const host = active ? own : parent;
+    // A header is handed a back control only when the one visibility rule shows it: a detail whose
+    // parent is the collection's root (the list beside it) gets none, so its header keeps no room for one.
+    const hostBack = useSettingsBackControl(host?.collectionRootPathname);
     return (
         <SettingsFloatingControlsHostContext.Provider value={host}>
-            <NavigationBackChromeProvider control={host ? SettingsInlineBackControl : null}>
+            <NavigationBackChromeProvider control={host && hostBack.visible ? SettingsInlineBackControl : null}>
                 {props.children}
             </NavigationBackChromeProvider>
             {active && claims === 0 ? <SettingsModalFloatingControls collectionRootPathname={props.collectionRootPathname} /> : null}

@@ -9,6 +9,7 @@ import {
     type SettingsNestedNavigator,
 } from '@/components/settings/navigation/settingsRouteRegistry';
 import { SettingsFloatingControlsHost } from '@/components/settings/shell/SettingsModalFloatingControls';
+import { NavigationBackChromeProvider } from '@/components/ui/layout/NavigationBackChrome';
 import { getPreferredLanguage, t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
@@ -60,7 +61,10 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
         {/* One phone header stays above both panes and follows the active child route. */}
         <Stack.Screen options={routes.find((route) => route.name === currentRoute)?.options} />
         <View style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base }}>
-            {isModalPresentation ? props.collectionHeader : null}
+            {/* The collection header names the collection itself; back belongs to the detail pane below it. */}
+            {isModalPresentation && props.collectionHeader
+                ? <NavigationBackChromeProvider control={null}>{props.collectionHeader}</NavigationBackChromeProvider>
+                : null}
             <HappierListDetailLayout
                 testID={`${props.testID}-layout`}
                 listTestID={`${props.testID}-list-pane`}
