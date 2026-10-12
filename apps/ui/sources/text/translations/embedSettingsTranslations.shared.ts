@@ -69,10 +69,10 @@ export const english = {
         },
         sessions: {
             title: "Sessions",
-            description: "Sessions this key creates, from your server or the chat, run on this computer with this agent, and land in the folder and tags above.",
+            description: "Sessions this key creates, from your server or the chat, run on this machine with this agent, and land in the folder and tags above.",
             allow: "Allow this key to create sessions",
             offConsequence: "This key can’t create sessions. Your app can only show chats that already exist.",
-            computer: "Computer",
+            computer: "Machine",
             agent: "Agent",
             newChat: "Start new chats in the embed",
             appSetting: "For your app",
@@ -129,7 +129,9 @@ export const english = {
         snippets: {
             title: "Snippets",
             description: "Paste these into your app. They already use this embed’s settings.",
-            steps: "1 Store the key as HAPPIER_EMBED_KEY · 2 Write canOpenSession: who may open which chat · 3 Render the chat",
+            step1: "Store the key as HAPPIER_EMBED_KEY",
+            step2: "Write canOpenSession: who may open which chat",
+            step3: "Render the chat",
             backend: "Backend",
             react: "React",
         },
@@ -157,6 +159,9 @@ export const english = {
         },
         reveal: {
             copyEnv: "Copy as .env line",
+            title: ({ label }: { label: string }) => `${label} is ready`,
+            shownOnce: "Copy this key now. For your security, Happier can’t show it again.",
+            copy: "Copy key",
         },
     },
 };

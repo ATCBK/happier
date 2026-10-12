@@ -9,6 +9,9 @@ export type EmbedPreviewParams = Readonly<{
     newChat: boolean;
     /** Shows what open chats show while an enforced access edit makes them reconnect (lab D2). */
     reconnecting: boolean;
+    /** The draft's access: without Send the chat is view-only, without Approve requests are not answerable. */
+    send: boolean;
+    approve: boolean;
 }>;
 
 export function buildEmbedPreviewSearch(params: EmbedPreviewParams): string {
@@ -16,6 +19,8 @@ export function buildEmbedPreviewSearch(params: EmbedPreviewParams): string {
     if (params.reduceMotion) search.set('reduceMotion', '1');
     if (params.newChat) search.set('newChat', '1');
     if (params.reconnecting) search.set('reconnecting', '1');
+    if (!params.send) search.set('send', '0');
+    if (!params.approve) search.set('approve', '0');
     return search.toString();
 }
 
@@ -29,5 +34,7 @@ export function readEmbedPreviewParams(search: string): EmbedPreviewParams | nul
         reduceMotion: params.get('reduceMotion') === '1',
         newChat: params.get('newChat') === '1',
         reconnecting: params.get('reconnecting') === '1',
+        send: params.get('send') !== '0',
+        approve: params.get('approve') !== '0',
     };
 }

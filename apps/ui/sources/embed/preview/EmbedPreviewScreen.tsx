@@ -156,14 +156,15 @@ export function EmbedPreviewScreen(): React.ReactElement | null {
         [presentation],
     );
     const newChat = params?.newChat === true;
+    const access = React.useMemo(() => ({ send: params?.send !== false, approve: params?.approve !== false }), [params]);
     // The composer keeps its own draft, so typing in the preview re-renders only the composer.
     const composer = React.useMemo(() => {
-        return newChat ? <EmbedPreviewComposer controls={controls} inputLock={inputLock} /> : (
+        return newChat ? <EmbedPreviewComposer controls={controls} inputLock={inputLock} access={access} /> : (
             <SessionTranscriptSourceProvider source={source}>
-                <EmbedPreviewConversationComposer controls={controls} inputLock={inputLock} />
+                <EmbedPreviewConversationComposer controls={controls} inputLock={inputLock} access={access} />
             </SessionTranscriptSourceProvider>
         );
-    }, [controls, inputLock, newChat, source]);
+    }, [access, controls, inputLock, newChat, source]);
     const transcript = React.useMemo(() => (newChat ? null : (
         <SessionTranscriptSourceProvider source={source}>
             <TranscriptList datasetKey="embed-preview" metadata={PREVIEW_METADATA} messages={messages} />
@@ -196,6 +197,8 @@ export function EmbedPreviewScreen(): React.ReactElement | null {
 type EmbedPreviewComposerProps = Readonly<{
     controls: NonNullable<ReturnType<typeof resolveEmbeddedComposerControls>>;
     inputLock: ReturnType<typeof narrowEmbeddedComposerInputLock>;
+    /** The draft's access, applied as an embed frame applies its grant: view-only without Send. */
+    access: Readonly<{ send: boolean; approve: boolean }>;
 }>;
 
 function EmbedPreviewConversationComposer(props: EmbedPreviewComposerProps) {
@@ -215,13 +218,15 @@ function EmbedPreviewComposer(props: EmbedPreviewComposerProps & Readonly<{
         <AgentInput
             value={draft}
             onChangeText={setDraft}
-            placeholder={t('session.inputPlaceholder')}
+            placeholder={props.access.send ? t('session.inputPlaceholder') : t('session.sharing.viewOnlyMode')}
+            disabled={!props.access.send}
+            isSendDisabled={!props.access.send}
             onSend={noop}
             metadata={props.metadata ?? undefined}
             permissionRequests={props.attention?.pending.permissionRequests}
             approvalRequests={props.attention?.pending.approvalRequests}
-            canApprovePermissions={props.attention?.interaction.canApprovePermissions}
-            permissionDisabledReason={props.attention?.interaction.permissionDisabledReason}
+            canApprovePermissions={props.access.approve && props.attention?.interaction.canApprovePermissions}
+            permissionDisabledReason={props.access.approve ? props.attention?.interaction.permissionDisabledReason : 'readOnly'}
             contentPaddingHorizontal={COMPOSER_CONTENT_HORIZONTAL_INSET}
             agentType={DEFAULT_AGENT_ID}
             modelMode="default"
