@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConnectedAccountRuntime as PluginConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 
@@ -41,7 +45,7 @@ function activateConnectedAccountRuntime(): PluginConnectedAccountRuntime {
 }
 
 function readContext(
-  modeId: 'setup-token' | 'oauth',
+  modeId: 'setup-token' | 'oauth' | 'native-import',
   values: Map<string, string>,
 ): Parameters<PluginConnectedAccountRuntime['materialize']>[1] {
   const credentials = credentialStore(values);
@@ -64,7 +68,7 @@ function readContext(
       async getSecret() { return null; },
     },
     signal: new AbortController().signal,
-    services: {},
+    services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } } },
     credentials: credentials.store,
   } as Parameters<PluginConnectedAccountRuntime['materialize']>[1];
 }
@@ -82,7 +86,7 @@ describe('Claude Subscription Connected Account', () => {
     try {
       await expect(runtime.quota?.({
         ...readContext('oauth', new Map([['accessToken', 'claude-access']])),
-        services: { http: { async request() {
+        services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { async request() {
           return { status, finalUrl: 'https://api.anthropic.com/api/oauth/usage', headers, body: new TextEncoder().encode('{}') };
         } } },
       } as Parameters<NonNullable<PluginConnectedAccountRuntime['quota']>>[0])).rejects.toMatchObject({
@@ -93,10 +97,10 @@ describe('Claude Subscription Connected Account', () => {
     }
   });
 
-  it('retains existing plan facts through a successful credential refresh', async () => {
+  it.each(['oauth', 'native-import'] as const)('retains existing plan facts through a successful %s credential refresh', async (authenticationModeId) => {
     const runtime = activateConnectedAccountRuntime();
     const staged = credentialStore();
-    const context = readContext('oauth', new Map([
+    const context = readContext(authenticationModeId, new Map([
       ['accessToken', 'current-access'], ['refreshToken', 'current-refresh'],
       ['subscriptionType', 'max'], ['rateLimitTier', 'max_20x'],
     ]));
@@ -104,7 +108,7 @@ describe('Claude Subscription Connected Account', () => {
       ...context,
       operation: { operationId: 'refresh-plan', configurationRevision: 'configuration-1' },
       stagedCredentials: staged.store,
-      services: { http: { async request() {
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { async request() {
         return { status: 200, finalUrl: 'https://platform.claude.com/v1/oauth/token', headers: {},
           body: new TextEncoder().encode(JSON.stringify({ access_token: 'new-access', refresh_token: 'new-refresh' })) };
       } } },
@@ -127,7 +131,7 @@ describe('Claude Subscription Connected Account', () => {
       operation: { operationId: 'refresh-1', configurationRevision: 'configuration-1' },
       credentials: credentials.store,
       stagedCredentials: staged.store,
-      services: { http: { async request() {
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { async request() {
         return { status, finalUrl: 'https://platform.claude.com/v1/oauth/token', headers: {}, body: new Uint8Array() };
       } } },
     } as Parameters<typeof runtime.refresh>[0];
@@ -138,7 +142,91 @@ describe('Claude Subscription Connected Account', () => {
     await expect(runtime.status(context)).resolves.toMatchObject({ status: 'connected' });
   });
 
-  it('registers exactly the two authentication modes declared by the descriptor', () => {
+  describe('chosen-machine native credential import', () => {
+    let configDir: string;
+    const scopes = ['user:inference', 'user:profile', 'user:sessions:claude_code'];
+    beforeEach(async () => {
+      configDir = await mkdtemp(join(tmpdir(), 'happier-claude-qualified-import-'));
+      vi.stubEnv('CLAUDE_CONFIG_DIR', configDir);
+    });
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      await rm(configDir, { recursive: true, force: true });
+    });
+    function mode() {
+      const native = activateConnectedAccountRuntime().authentication.modes['native-import'];
+      if (!native || native.kind !== 'manual') throw new Error('Claude native-import mode is unavailable');
+      return native;
+    }
+    function context(attempted: ReturnType<typeof credentialStore>) {
+      return { attempt: { kind: 'connect', attemptId: 'claude-native' },
+        signal: new AbortController().signal, services: { http: { request: vi.fn(() => { throw new Error('Unexpected OAuth request'); }) } },
+        attemptCredentials: attempted.store } as Parameters<ReturnType<typeof mode>['complete']>[1];
+    }
+    it('stages the real configured native grant and metadata without refresh, identity inference or native writes', async () => {
+      const credentialPath = join(configDir, '.credentials.json');
+      const payload = JSON.stringify({ claudeAiOauth: { accessToken: 'native-access', refreshToken: 'native-refresh',
+        expiresAt: Date.now() + 3_600_000, scopes, subscriptionType: 'max', rateLimitTier: 'max_20x' } });
+      await writeFile(credentialPath, payload);
+      await writeFile(join(configDir, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'stale-account', emailAddress: 'stale@example.test' } }));
+      const attempted = credentialStore();
+      const callContext = context(attempted);
+      const result = await mode().complete({ fields: { source: 'native' } }, callContext);
+      expect(result).toMatchObject({ status: 'connected', scopes });
+      expect(result).not.toHaveProperty('providerIdentity');
+      expect(attempted.values.get('accessToken')).toBe('native-access');
+      expect(attempted.values.get('refreshToken')).toBe('native-refresh');
+      expect(attempted.values.get('subscriptionType')).toBe('max');
+      expect(attempted.values.get('rateLimitTier')).toBe('max_20x');
+      expect(attempted.values.has('providerAccountId')).toBe(false);
+      expect(await readFile(credentialPath, 'utf8')).toBe(payload);
+      expect(callContext.services.http.request).not.toHaveBeenCalled();
+    });
+    it('reports a missing native login without staging credentials', async () => {
+      const attempted = credentialStore();
+      await expect(mode().complete({ fields: { source: 'native' } }, context(attempted))).resolves.toMatchObject({
+        status: 'unavailable', diagnostic: { code: 'claude_subscription_native_credentials_unavailable' },
+      });
+      expect(attempted.values.size).toBe(0);
+    });
+    it('rejects undeclared sources before staging credentials', async () => {
+      const attempted = credentialStore();
+      await expect(mode().complete({ fields: { source: 'other' } }, context(attempted))).resolves.toMatchObject({
+        status: 'rejected', diagnostic: { code: 'claude_subscription_native_source_unsupported' },
+      });
+      expect(attempted.values.size).toBe(0);
+    });
+    it.each([
+      { refreshToken: undefined }, { expiresAt: 1 }, { expiresAt: undefined }, { scopes: ['user:inference'] },
+    ])('rejects an unusable native grant before staging credentials (%j)', async (overrides) => {
+      await writeFile(join(configDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: {
+        accessToken: 'native-access', refreshToken: 'native-refresh', expiresAt: Date.now() + 3_600_000, scopes, ...overrides,
+      } }));
+      const attempted = credentialStore();
+      await expect(mode().complete({ fields: { source: 'native' } }, context(attempted))).resolves.toMatchObject({
+        status: 'rejected', diagnostic: { code: 'claude_subscription_native_reauthorization_required' },
+      });
+      expect(attempted.values.size).toBe(0);
+    });
+  });
+
+  it('uses the existing OAuth lifecycle and access-only materialization for imported credentials', async () => {
+    const runtime = activateConnectedAccountRuntime();
+    const context = readContext('native-import', new Map([
+      ['accessToken', 'native-access'], ['refreshToken', 'native-refresh'],
+      ['expiresAtMs', String(Date.now() + 3_600_000)],
+      ['scopes', JSON.stringify(['user:inference', 'user:profile', 'user:sessions:claude_code'])],
+      ['subscriptionType', 'max'], ['rateLimitTier', 'max_20x'],
+    ]));
+    await expect(runtime.status(context)).resolves.toMatchObject({ status: 'connected' });
+    const materialized = await runtime.materialize({ kind: 'files', fileIds: ['.credentials.json'] }, context);
+    if (materialized.kind !== 'files') throw new Error('Expected native credential materialization');
+    const payload = JSON.parse(new TextDecoder().decode(materialized.files['.credentials.json']));
+    expect(payload.claudeAiOauth).toMatchObject({ accessToken: 'native-access', subscriptionType: 'max', rateLimitTier: 'max_20x' });
+    expect(payload.claudeAiOauth).not.toHaveProperty('refreshToken');
+  });
+
+  it('registers the authentication modes declared by the descriptor', () => {
     const descriptor = PLUGIN_MANIFEST.contributes.connectedAccountDescriptors.find(
       ({ id }) => id === 'claude-subscription',
     );
@@ -150,6 +238,7 @@ describe('Claude Subscription Connected Account', () => {
         callbackUrl: 'https://platform.claude.com/oauth/code/callback',
         outcomeReconciliation: 'none',
       }),
+      expect.objectContaining({ id: 'native-import', kind: 'manual', outcomeReconciliation: 'none' }),
     ]);
     expect(Object.keys(activateConnectedAccountRuntime().authentication.modes).sort()).toEqual(
       descriptor?.authentication.modes.map(({ id }) => id).sort(),
@@ -168,7 +257,7 @@ describe('Claude Subscription Connected Account', () => {
     const connected = await mode.complete({ fields: { token: ' sk-ant-oat01-token ' } }, {
       attempt: { kind: 'connect', attemptId: 'claude-setup-token' },
       signal: new AbortController().signal,
-      services: {},
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } } },
       attemptCredentials: attempted.store,
     } as Parameters<typeof mode.complete>[1]);
     expect(connected).toMatchObject({
@@ -206,7 +295,7 @@ describe('Claude Subscription Connected Account', () => {
     const context = {
       attempt: { kind: 'connect', attemptId: 'claude-oauth-attempt' },
       signal,
-      services: { http: { request } },
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { request } },
       attemptCredentials: attempted.store,
     } as Parameters<typeof mode.complete>[1];
 
@@ -293,7 +382,7 @@ describe('Claude Subscription Connected Account', () => {
           async getSecret() { return null; },
         },
         signal: new AbortController().signal,
-        services: {},
+        services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } } },
         credentials: credentials.store,
       } as Parameters<typeof runtime.materialize>[1],
     );
@@ -388,7 +477,7 @@ describe('Claude Subscription Connected Account', () => {
     });
   });
 
-  it('loads OAuth account quota through the activated runtime and its declared fixed provider origin', async () => {
+  it.each(['oauth', 'native-import'] as const)('loads %s account quota through the activated runtime and its declared fixed provider origin', async (authenticationModeId) => {
     const runtime = activateConnectedAccountRuntime();
     const request = vi.fn(async () => ({
       status: 200,
@@ -413,7 +502,7 @@ describe('Claude Subscription Connected Account', () => {
       })),
     }));
     const signal = new AbortController().signal;
-    const context = readContext('oauth', new Map([
+    const context = readContext(authenticationModeId, new Map([
       ['accessToken', 'claude-access'],
       ['subscriptionType', 'max'],
       ['rateLimitTier', 'max_20x'],
@@ -423,7 +512,7 @@ describe('Claude Subscription Connected Account', () => {
     await expect(runtime.quota?.({
       ...context,
       signal,
-      services: { http: { request } },
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { request } },
     })).resolves.toMatchObject({
       observedAtMs: expect.any(Number),
       planLabel: 'max',
@@ -467,6 +556,7 @@ describe('Claude Subscription Connected Account', () => {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': expect.stringMatching(/^claude-cli\//),
       },
       redirect: 'error',
     }, { signal });
@@ -505,7 +595,7 @@ describe('Claude Subscription Connected Account', () => {
     await expect(runtime.quota?.({
       ...context,
       signal,
-      services: { http: { request } },
+      services: { exec: { agentCli: { async checkReadiness() { return { launchable: [{ agentId: 'claude', version: '2.1.296' }] }; } } }, http: { request } },
     })).resolves.toEqual({ observedAtMs: expect.any(Number), limits: [] });
     expect(request).not.toHaveBeenCalled();
   });

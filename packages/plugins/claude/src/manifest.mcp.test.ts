@@ -8,6 +8,7 @@ describe('PLUGIN_MANIFEST MCP contribution', () => {
             expect.objectContaining({
                 id: 'config',
                 title: 'Claude MCP configuration',
+                loadedInHappierSessions: true,
                 metadata: { agentId: 'claude' },
             }),
         ]);

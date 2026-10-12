@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     query,
+    type ClaudeSdkQueryContext,
     type ClaudeSdkExecClientHandle,
     type ClaudeSdkJsonStreamClient,
 } from './query.js';
@@ -76,7 +77,7 @@ function createJsonStreamHandle() {
 }
 
 function createContextFixture(stream = createJsonStreamHandle()) {
-    const spawnClient = vi.fn(async () => stream.handle);
+    const spawnClient = vi.fn<ClaudeSdkQueryContext['spawnClient']>(async () => stream.handle);
     const ctx = {
         agentRuntime: {
             exec: {
@@ -95,6 +96,27 @@ async function* prompt() {
 }
 
 describe('Claude plugin SDK query', () => {
+    it('removes every built-in tool for an empty confined list despite broader native options', async () => {
+        const { ctx, spawnClient } = createContextFixture();
+        const running = query(ctx, {
+            prompt: prompt(),
+            options: {
+                allowedTools: [], unlistedTools: 'deny', tools: ['default'],
+                allowDangerouslySkipPermissions: true, permissionMode: 'bypassPermissions',
+                extraArgs: ['--allowed-tools', 'Read', '--permission-mode=bypassPermissions'],
+            },
+        });
+        const args = spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+        expect(args.filter(arg => arg === '--tools')).toHaveLength(1);
+        expect(args[args.indexOf('--tools') + 1]).toBe('');
+        expect(args.filter(arg => arg === '--permission-mode')).toHaveLength(1);
+        expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+        expect(args).not.toContain('--allow-dangerously-skip-permissions');
+        expect(args).not.toContain('--allowed-tools');
+        expect(args).not.toContain('--permission-mode=bypassPermissions');
+        await running.dispose();
+    });
+
     it('uses a private prompt file for a supported native plan, preserving text beyond Windows argv limits and cleaning it after disposal', async () => {
         const { ctx, spawnClient } = createContextFixture();
         const text = `ROLE\n${'雪 " $ \\'.repeat(8_000)}`;

@@ -47,6 +47,7 @@ import { CLAUDE_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.j
 import { anthropicConnectedAccountRuntime, ANTHROPIC_API_KEY_INPUT_SCHEMA } from './connectedAccounts/anthropicRuntime.js';
 import {
   claudeSubscriptionConnectedAccountRuntime,
+  CLAUDE_NATIVE_IMPORT_MODE_ID,
 } from './connectedAccounts/claudeSubscriptionRuntime.js';
 import { CLAUDE_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { ANTHROPIC_PROVIDER_CONTRIBUTION } from './provider/contribution.js';
@@ -152,6 +153,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           ...CLAUDE_PROVIDER_HELPER_ENV_KEYS,
           'CLAUDE_CONFIG_DIR',
           'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
+          'CLAUDE_CODE_ENTRYPOINT',
           'CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH',
           HAPPIER_CLAUDE_CONFIG_DIR_ENV,
           HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV,
@@ -196,6 +198,12 @@ export const CLAUDE_PLUGIN = definePlugin({
         },
       },
       {
+        id: 'claude-subscription-reset',
+        capability: 'network',
+        reason: 'Use a selected provider reset for the exact Claude Subscription Connected Account.',
+        scope: { targets: [{ kind: 'fixedOrigin', origin: 'https://api.anthropic.com' }], methods: ['POST'] },
+      },
+      {
         id: 'anthropic-key-verification',
         capability: 'network',
         reason: 'Verify an Anthropic API key before connecting the account.',
@@ -221,6 +229,7 @@ export const CLAUDE_PLUGIN = definePlugin({
         title: 'Claude',
         // Claude Pro/Max web billing, not the separate Anthropic API account.
         billingUrl: 'https://claude.ai/settings/billing',
+        recoveryCredits: { supported: true },
         authentication: {
           defaultModeId: CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1
             .setupToken.authenticationModeId,
@@ -242,6 +251,17 @@ export const CLAUDE_PLUGIN = definePlugin({
             scopes: [...CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES],
             pkce: 'required',
             outcomeReconciliation: 'none',
+          }, {
+            id: CLAUDE_NATIVE_IMPORT_MODE_ID,
+            kind: 'manual',
+            title: 'Import native login',
+            outcomeReconciliation: 'none',
+            fields: [{
+              id: 'source', title: 'Native login source',
+              description: 'Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it.',
+              schema: { type: 'string', enum: ['native'] }, secret: false, default: 'native',
+              presentation: { control: 'select', options: [{ value: 'native', title: 'Claude Code login' }] },
+            }],
           }],
         },
       },
@@ -359,6 +379,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
@@ -414,6 +435,7 @@ export const CLAUDE_PLUGIN = definePlugin({
           sources: [{
             sourceKind: 'claudeConfig',
             contentSearch: true,
+            terminalFollow: { userRowClassification: 'explicitV1' },
             schema: { fields: [
               { name: 'kind', kind: 'literal', value: 'claudeConfig' },
               { name: 'configDir', kind: 'string', min: 1, max: 10_000, nullish: true },
@@ -551,6 +573,7 @@ export const CLAUDE_PLUGIN = definePlugin({
       config: {
         declaration: {
           title: 'Claude MCP configuration',
+          loadedInHappierSessions: true,
           metadata: { agentId: 'claude' },
         },
         discover: async (input) => {

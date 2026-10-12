@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../../..",
+    "incremental": false,
+    "noEmit": true,
+    "paths": { "@/*": ["../../../apps/cli/src/*"] }
+  },
+  "include": [
+    "src/agent/sdk/query.test.ts",
+    "src/agent/runtime/nativeRuntime.test.ts",
+    "src/agent/runtime/remote/sdk/session.test.ts",
+    "src/agent/runtime/terminal/unified/turnOperations.test.ts"
+  ],
+  "exclude": []
+}

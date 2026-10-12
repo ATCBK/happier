@@ -86,6 +86,7 @@ describe('activate', () => {
             providerBinding: {
                 v: 1,
                 adapterVersion: CLAUDE_PROVIDER_BINDING_ADAPTER_V1.adapterVersion,
+                supportsClaudeHelperModels: true,
                 prepare: expect.any(Function),
                 materialize: expect.any(Function),
             },

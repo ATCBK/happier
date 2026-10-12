@@ -10,7 +10,7 @@ import type {
     SDKUserMessage,
 } from './types.js';
 import { materializeClaudeMcpConfigArgsForSpawn } from '../mcp/materializeConfigArgs.js';
-import { buildClaudeSettingSourcesArgs } from '../runtime/launchSettings.js';
+import { buildClaudeSettingSourcesArgs, resolveClaudeNativeToolPolicyArgs } from '../runtime/launchSettings.js';
 import { materializeClaudeStartupInstructions } from '../runtime/startupInstructions.js';
 
 export type ClaudeSdkExecResult = Readonly<{
@@ -217,12 +217,16 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
     if (options.debug === true) args.push('--debug');
     if (options.debugFile) args.push('--debug-file', options.debugFile);
     args.push(...(options.extraArgs ?? []));
+    const toolPolicyArgs = [...resolveClaudeNativeToolPolicyArgs(args, {
+        allowedTools: options.allowedTools,
+        unlistedTools: options.unlistedTools,
+    })];
     if (typeof prompt === 'string') {
-        args.push('--print', prompt.trim());
+        toolPolicyArgs.push('--print', prompt.trim());
     } else {
-        args.push('--input-format', 'stream-json');
+        toolPolicyArgs.push('--input-format', 'stream-json');
     }
-    return args;
+    return toolPolicyArgs;
 }
 
 const STDERR_PREVIEW_MAX_LENGTH = 800;

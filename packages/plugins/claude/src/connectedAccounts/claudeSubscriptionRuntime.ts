@@ -4,18 +4,58 @@ import {
   type ConnectedAccountHealthResult as PluginConnectedAccountHealthResult,
   type ConnectedAccountRuntime as PluginConnectedAccountRuntime,
 } from '@happier-dev/plugin-sdk/connected-accounts';
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
+import { resolveClaudeCodeUsageUserAgent } from '../agent/auth/services/quota/userAgent.js';
 import {
-  CLAUDE_DEFAULT_SUBSCRIPTION_USAGE_URL,
-  createClaudeSubscriptionQuotaFetchError,
+  createClaudeSubscriptionHttpClient,
   parseClaudeSubscriptionConnectedAccountQuotaLimits,
   resolveClaudeSubscriptionPlanLabelFromMetadata,
 } from '../agent/auth/services/quota/subscriptionFetcher.js';
 import {
   CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES,
   CLAUDE_CODE_SETUP_TOKEN_SCOPES,
+  findMissingClaudeCodeCredentialScopes,
 } from '../agent/auth/services/native/scopes.js';
+import { readClaudeCodeNativeCredential } from '../agent/auth/services/native/readCredential.js';
 import { CLAUDE_SUBSCRIPTION_OAUTH_PROFILE } from './claudeSubscriptionProfile.js';
+
+type QuotaContext = Parameters<NonNullable<PluginConnectedAccountRuntime['quota']>>[0];
+async function createRuntimeQuotaClient(context: QuotaContext, signal: AbortSignal) {
+  let installedVersion: string | undefined;
+  try {
+    const readiness = await context.services.exec.agentCli.checkReadiness({
+      candidates: ['claude'], requirement: 'any', includeVersion: true, signal,
+    });
+    installedVersion = readiness.launchable.find(candidate => candidate.agentId === 'claude')?.version;
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!isPluginError(error)) throw error;
+    const versionUnavailable = [
+      'plugin_exec_agent_cli_version_unavailable',
+      'plugin_exec_agent_cli_version_failed',
+      'plugin_exec_system_tool_denied',
+      'plugin_exec_system_tool_unavailable',
+      'plugin_exec_argument_denied',
+    ].includes(error.code);
+    const execUnavailable = [
+      'plugin_host_access_resource_not_selected',
+      'plugin_service_unavailable',
+      'plugin_host_access_declaration_missing',
+    ].includes(error.code) && isRecord(error.details) && error.details.serviceId === 'exec';
+    if (!versionUnavailable && !execUnavailable) throw error;
+    context.services.logger.warn('Claude CLI version is unavailable; ordinary usage remains available.', { code: error.code });
+  }
+  return createClaudeSubscriptionHttpClient({ userAgent: resolveClaudeCodeUsageUserAgent({ installedVersion }), runtimeFetch: async ({ url, method, headers, body, signal }) => {
+    const response = await context.services.http.request({ url, method: method ?? 'GET', headers,
+      ...(body === undefined ? {} : { body: new TextEncoder().encode(JSON.stringify(body)) }), redirect: 'error' }, { signal });
+    const text = new TextDecoder().decode(response.body);
+    return { ok: response.status >= 200 && response.status < 300, status: response.status,
+      headers: response.headers, text: async () => text, json: async () => JSON.parse(text) as unknown,
+      arrayBuffer: async () => Uint8Array.from(response.body).buffer };
+  } });
+}
+
+export const CLAUDE_NATIVE_IMPORT_MODE_ID = 'native-import';
 
 const CLAUDE_CREDENTIAL_FILE_ID = '.credentials.json';
 const SETUP_TOKEN_KEY = 'setupToken';
@@ -246,6 +286,12 @@ function modeId(context: Parameters<PluginConnectedAccountRuntime['status']>[0])
   return context.configuration.target.modeId;
 }
 
+function usesClaudeOAuthCredentials(authenticationModeId: string): boolean {
+  // Acquisition provenance differs; both modes stage the same OAuth credential shape.
+  return authenticationModeId === CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.oauth.authenticationModeId
+    || authenticationModeId === CLAUDE_NATIVE_IMPORT_MODE_ID;
+}
+
 async function readHealth(
   authenticationModeId: string,
   credentials: ConnectedAccountCredentialReader,
@@ -265,10 +311,7 @@ async function readHealth(
           ),
         };
   }
-  if (
-    authenticationModeId
-    !== CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.oauth.authenticationModeId
-  ) {
+  if (!usesClaudeOAuthCredentials(authenticationModeId)) {
     return {
       status: 'unavailable',
       diagnostic: diagnostic(
@@ -311,6 +354,44 @@ async function readHealth(
 const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
   authentication: {
     modes: {
+      [CLAUDE_NATIVE_IMPORT_MODE_ID]: {
+        kind: 'manual',
+        async complete(input, context, options) {
+          const signal = options?.signal ?? context.signal;
+          signal.throwIfAborted();
+          if (input.fields.source !== 'native') {
+            return { status: 'rejected', diagnostic: diagnostic(
+              'claude_subscription_native_source_unsupported', 'This Claude native login source is not supported.',
+            ) };
+          }
+          const native = await readClaudeCodeNativeCredential({ signal });
+          signal.throwIfAborted();
+          if (!native) {
+            return { status: 'unavailable', diagnostic: diagnostic(
+              'claude_subscription_native_credentials_unavailable', 'No supported Claude native login was found on this machine.',
+            ) };
+          }
+          const credential = native.claudeAiOauth;
+          if (!credential.refreshToken || typeof credential.expiresAt !== 'number'
+            || credential.expiresAt <= Date.now() || findMissingClaudeCodeCredentialScopes(credential.scopes).length > 0) {
+            return { status: 'rejected', diagnostic: diagnostic(
+              'claude_subscription_native_reauthorization_required', 'Sign in to Claude again before importing this native login.',
+            ) };
+          }
+          // Copy a valid native grant without rotating it. Separate root-config identity cannot
+          // prove this credential's account; the host owns account identity when it is unknown.
+          const tokens: ClaudeTokens = {
+            accessToken: credential.accessToken, refreshToken: credential.refreshToken,
+            expiresAtMs: credential.expiresAt, scopes: credential.scopes,
+            providerAccountId: '', providerEmail: '',
+          };
+          const operationOptions = { signal };
+          await writeTokens(context.attemptCredentials, tokens, operationOptions);
+          await writeOptionalCredential(context.attemptCredentials, SUBSCRIPTION_TYPE_KEY, credential.subscriptionType ?? '', operationOptions);
+          await writeOptionalCredential(context.attemptCredentials, RATE_LIMIT_TIER_KEY, credential.rateLimitTier ?? '', operationOptions);
+          return connectedResult(tokens);
+        },
+      },
       [CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.setupToken.authenticationModeId]: {
         kind: 'manual',
         async complete(input, context, options) {
@@ -375,10 +456,7 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
   },
   async refresh(context, options) {
     const authenticationModeId = modeId(context);
-    if (
-      authenticationModeId
-      === CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.setupToken.authenticationModeId
-    ) {
+    if (!usesClaudeOAuthCredentials(authenticationModeId)) {
       return readHealth(authenticationModeId, context.credentials, options);
     }
     const refreshToken = await readCredential(context.credentials, REFRESH_TOKEN_KEY, options);
@@ -443,10 +521,7 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     ) {
       return { observedAtMs: Date.now(), limits: [] };
     }
-    if (
-      authenticationModeId
-      !== CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.oauth.authenticationModeId
-    ) {
+    if (!usesClaudeOAuthCredentials(authenticationModeId)) {
       throw new Error('Claude connected-account authentication mode is unavailable');
     }
     const signal = options?.signal ?? context.signal;
@@ -454,27 +529,44 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
     if (!accessToken) {
       throw new Error('Claude OAuth credentials are unavailable');
     }
-    const response = await context.services.http.request({
-      url: CLAUDE_DEFAULT_SUBSCRIPTION_USAGE_URL,
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'anthropic-beta': 'oauth-2025-04-20',
-      },
-      redirect: 'error',
-    }, { signal });
-    if (response.status < 200 || response.status >= 300) {
-      throw createClaudeSubscriptionQuotaFetchError({
-        status: response.status, headers: response.headers, body: new TextDecoder().decode(response.body), nowMs: Date.now(),
-      });
-    }
-    const limits = parseClaudeSubscriptionConnectedAccountQuotaLimits(
-      parseResponseBody(response.body),
-    );
+    const payload = await (await createRuntimeQuotaClient(context, signal)).readUsage({ accessToken, now: Date.now(), signal });
+    const limits = parseClaudeSubscriptionConnectedAccountQuotaLimits(payload);
     const planLabel = resolveClaudeSubscriptionPlanLabelFromMetadata(await readPlanMetadata(context.credentials, options));
     return { observedAtMs: Date.now(), limits, ...(planLabel ? { planLabel } : {}) };
+  },
+  recoveryCredits: {
+    async read(context, options) {
+      const observedAtMs = Date.now();
+      if (!usesClaudeOAuthCredentials(modeId(context))) {
+        return { observedAtMs, availableCount: 0, credits: [] };
+      }
+      const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
+      if (!accessToken) throw new Error('Claude OAuth credentials are unavailable');
+      const { inventory } = await (await createRuntimeQuotaClient(context, options?.signal ?? context.signal)).readResets({ accessToken, now: observedAtMs,
+        signal: options?.signal ?? context.signal });
+      if (!inventory) {
+        throw new PluginError({
+          code: 'plugin_connected_account_claude_reset_inventory_unavailable',
+          message: 'Claude reset eligibility was not evaluated.',
+        });
+      }
+      return { observedAtMs, availableCount: inventory.recoveryCredits.availableCount,
+        credits: inventory.recoveryCredits.credits.flatMap(({ id, ...credit }) => id
+          ? [{ ...credit, providerCreditId: id }] : []),
+        recoveryCreditDetails: inventory.recoveryCreditDetails };
+    },
+    async consume(request, context, options) {
+      if (!usesClaudeOAuthCredentials(modeId(context))) {
+        return { status: 'not_available' };
+      }
+      const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
+      if (!accessToken) throw new Error('Claude OAuth credentials are unavailable');
+      const scopes = await readScopes(context.credentials, options);
+      if (!scopes.includes('user:inference') || !scopes.includes('user:sessions:claude_code')) return { status: 'not_available' };
+      const status = await (await createRuntimeQuotaClient(context, options?.signal ?? context.signal)).consume({ ...request, accessToken, now: Date.now(),
+        signal: options?.signal ?? context.signal });
+      return { status };
+    },
   },
   async materialize(request, context, options) {
     const authenticationModeId = modeId(context);
@@ -511,10 +603,7 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
       }));
       return { kind: 'files', files };
     }
-    if (
-      authenticationModeId
-      !== CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.oauth.authenticationModeId
-    ) {
+    if (!usesClaudeOAuthCredentials(authenticationModeId)) {
       throw new Error('Claude connected-account authentication mode is unavailable');
     }
     if (request.kind === 'environment') {

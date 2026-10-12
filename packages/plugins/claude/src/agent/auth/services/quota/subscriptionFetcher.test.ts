@@ -193,7 +193,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
         const headers = headersFromFetchCall(fetchMock.mock.calls[0] ?? []);
         expect(headers.Authorization).toBe('Bearer at');
         expect(headers['anthropic-beta']).toBe('oauth-2025-04-20');
-        expect(String(headers['User-Agent'])).toMatch(/^claude-code\//);
+        expect(String(headers['User-Agent'])).toMatch(/^claude-cli\//);
     });
 
     it('preserves new Anthropic usage windows instead of dropping unknown meter keys', async () => {
@@ -744,9 +744,10 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
     it('retries once when usage endpoint returns a transient server error', async () => {
         const now = 4_000_000;
         let usageCalls = 0;
-        const fetchMock = vi.fn(async () => {
-            usageCalls += 1;
-            if (usageCalls === 1) {
+        const fetchMock = vi.fn(async (url: string | URL | Request) => {
+            const ordinaryUsage = !String(url).includes('?');
+            if (ordinaryUsage) usageCalls += 1;
+            if (ordinaryUsage && usageCalls === 1) {
                 return {
                     ok: false,
                     status: 500,

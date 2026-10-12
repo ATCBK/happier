@@ -14,6 +14,8 @@ import { parseClaudeUsageLimitReset } from '../runtime/reset.js';
 import { resolveClaudeUsageSubjectRef } from '../usage/identity.js';
 import { mapClaudeProviderHttpUsageSnapshot } from '../usage/snapshot.js';
 import { resolveClaudeCodeUsageUserAgent } from './userAgent.js';
+import { parseClaudeQuotaResets, claudeResetRequestId } from './resets.js';
+import type { ConnectedServiceQuotaRecoveryCreditV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 export const CLAUDE_DEFAULT_SUBSCRIPTION_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -24,15 +26,15 @@ const DEFAULT_USAGE_WINDOW_IDS = [
     'five_hour', 'seven_day', 'seven_day_oauth_apps', 'seven_day_sonnet', 'seven_day_opus', 'iguana_necktie',
 ] as const;
 
-type ClaudeRuntimeFetchRequest = Readonly<{
+export type ClaudeRuntimeFetchRequest = Readonly<{
     url: string;
-    method?: string;
+    method?: 'GET' | 'POST';
     headers?: Readonly<Record<string, string>>;
     body?: unknown;
     signal?: AbortSignal;
 }>;
 
-type ClaudeRuntimeFetchResponse = Readonly<{
+export type ClaudeRuntimeFetchResponse = Readonly<{
     ok: boolean;
     status: number;
     statusText?: string;
@@ -43,7 +45,7 @@ type ClaudeRuntimeFetchResponse = Readonly<{
     arrayBuffer(): Promise<ArrayBuffer>;
 }>;
 
-type ClaudeRuntimeFetch = (request: ClaudeRuntimeFetchRequest) => Promise<ClaudeRuntimeFetchResponse>;
+export type ClaudeRuntimeFetch = (request: ClaudeRuntimeFetchRequest) => Promise<ClaudeRuntimeFetchResponse>;
 
 export function createClaudeSubscriptionQuotaFetchError(input: Readonly<{
     status: number;
@@ -106,6 +108,10 @@ export function parseClaudeSubscriptionConnectedAccountQuotaLimits(
 }
 
 type ClaudeQuotaFetcher = Readonly<{
+    consumeRecoveryCredit: (input: Readonly<{
+        record: OauthCredentialRecord | TokenCredentialRecord; now: number; signal: AbortSignal;
+        idempotencyKey: string; providerCreditId?: string; providerLimitIds?: readonly string[];
+    }>) => Promise<ClaudeResetConsumeStatus>;
     serviceId: string;
     loadQuota: (params: Readonly<{
         record: OauthCredentialRecord | TokenCredentialRecord;
@@ -539,7 +545,7 @@ function buildUsageWindowMeter(
     return {
         meterId,
         label: resolveConnectedServiceQuotaMeterLabel(meterId),
-        providerLimitId: meterId,
+        providerLimitId: window ? readNonEmptyStringProperty(window, ['provider_limit_id', 'providerLimitId', 'limit_id', 'limitId', 'id']) ?? meterId : meterId,
         ...(meterId === 'seven_day' || meterId.startsWith('seven_day_')
             ? { windowDurationMs: 7 * 24 * 60 * 60 * 1000 }
             : meterId === 'five_hour' || meterId.startsWith('five_hour_')
@@ -759,36 +765,19 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
     const userAgent = resolveClaudeCodeUsageUserAgent({ configuredUserAgent: params?.userAgent });
     const runtimeFetch = params?.runtimeFetch ?? defaultRuntimeFetch();
 
-    async function fetchUsage(input: Readonly<{
-        usageUrl: string;
-        accessToken: string;
-        betaHeaderValue: string;
-        userAgent: string;
-        signal: AbortSignal;
-    }>): Promise<ClaudeRuntimeFetchResponse> {
-        return runtimeFetch({
-            url: input.usageUrl,
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${input.accessToken}`,
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                'anthropic-beta': input.betaHeaderValue,
-                'User-Agent': input.userAgent,
-            },
-            signal: input.signal,
-        });
-    }
-
-    async function throwUsageError(response: ClaudeRuntimeFetchResponse, now: number): Promise<never> {
-        const body = await response.text().catch(() => '');
-        throw createClaudeSubscriptionQuotaFetchError({
-            status: response.status, statusText: response.statusText, headers: response.headers, body, nowMs: now,
-        });
-    }
+    const client = createClaudeSubscriptionHttpClient({ usageUrl, betaHeaderValue, userAgent, runtimeFetch });
 
     return {
         serviceId: 'claude-subscription',
+        consumeRecoveryCredit: async ({ record, now, signal, ...request }) => {
+            if (record.kind !== 'oauth' || disablePrivateEndpoint) return 'not_available';
+            if (classifyClaudeCodeCredentialHealth(record).status !== 'ok') {
+                throw new ConnectedServiceQuotaFetchError('Claude OAuth scopes cannot redeem a reset.', {
+                    quotaFetchErrorCode: 'auth_failure', recoveryCreditConsumeOutcomeUnknown: false,
+                });
+            }
+            return client.consume({ ...request, accessToken: record.oauth.accessToken, now, signal });
+        },
         loadQuota: async ({ record, now, signal }) => {
             if (record.kind !== 'oauth') return null;
             if (!usageUrl) return null;
@@ -819,39 +808,22 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
             }
             const accessToken = record.oauth.accessToken;
 
-            let response = await fetchUsage({
-                usageUrl,
-                accessToken,
-                betaHeaderValue,
-                userAgent,
-                signal,
-            });
-
-            if (!response.ok && response.status >= 500 && response.status < 600) {
-                response = await fetchUsage({
-                    usageUrl,
-                    accessToken,
-                    betaHeaderValue,
-                    userAgent,
-                    signal,
-                });
-            }
-
-            if (!response.ok) await throwUsageError(response, now);
-
-            const json: unknown = await response.json();
-            const data = isRecord(json) ? json : {};
-
-            const meters = parseClaudeSubscriptionUsageMeters(data);
-
-            return buildClaudeProviderHttpQuotaSnapshot({
-                record,
-                now,
-                staleAfterMs,
-                planLabel,
+            const data = await client.readUsage({ accessToken, now, signal });
+            const snapshot = buildClaudeProviderHttpQuotaSnapshot({
+                record, now, staleAfterMs, planLabel,
                 accountLabel: resolveConnectedServiceQuotaAccountLabel(record),
-                meters,
+                meters: parseClaudeSubscriptionUsageMeters(data),
             });
+            try {
+                const inventory = (await client.readResets({ accessToken, now, signal })).inventory;
+                if (!inventory) return snapshot;
+                return { ...snapshot, ...inventory };
+            } catch {
+                return { ...snapshot, diagnostics: [...(snapshot.diagnostics ?? []), {
+                    kind: 'provider_http', code: 'claude_reset_discovery_failed', observedAtMs: now,
+                    message: 'Claude reset discovery failed; ordinary usage remains available.',
+                }] };
+            }
         },
     };
 }
@@ -883,3 +855,98 @@ export const claudeSubscriptionQuotaFetcherDescriptor: ClaudeQuotaFetcherDescrip
         ),
     }),
 };
+
+
+type ClaudeResetConsumeStatus = 'consumed' | 'already_consumed' | 'nothing_to_reset' | 'not_available';
+
+export function createClaudeSubscriptionHttpClient(params: Readonly<{
+    runtimeFetch: ClaudeRuntimeFetch; usageUrl?: string; betaHeaderValue?: string; userAgent?: string;
+}>) {
+    const usageUrl = params.usageUrl ?? CLAUDE_DEFAULT_SUBSCRIPTION_USAGE_URL;
+    const headers = (accessToken: string) => ({ Authorization: `Bearer ${accessToken}`, Accept: 'application/json',
+        'Content-Type': 'application/json', 'anthropic-beta': params.betaHeaderValue ?? DEFAULT_BETA_HEADER_VALUE,
+        'User-Agent': resolveClaudeCodeUsageUserAgent({ configuredUserAgent: params.userAgent }) });
+    type Input = Readonly<{ accessToken: string; now: number; signal: AbortSignal }>;
+    async function get(url: string, input: Input, retryServerError = false): Promise<unknown> {
+        input.signal.throwIfAborted();
+        let response = await params.runtimeFetch({ url, method: 'GET', headers: headers(input.accessToken), signal: input.signal });
+        if (retryServerError && response.status >= 500 && response.status < 600) {
+            response = await params.runtimeFetch({ url, method: 'GET', headers: headers(input.accessToken), signal: input.signal });
+        }
+        if (!response.ok) throw createClaudeSubscriptionQuotaFetchError({ status: response.status,
+            statusText: response.statusText, headers: response.headers, body: await response.text().catch(() => ''), nowMs: input.now });
+        return response.json();
+    }
+    async function readResets(input: Input) {
+        const url = new URL(usageUrl);
+        url.searchParams.set('cedar_ember', '1'); url.searchParams.set('at_wall', '1'); url.searchParams.set('skip_spend', '1');
+        const payload = await get(url.toString(), input);
+        return { payload, inventory: parseClaudeQuotaResets(payload, input.now) };
+    }
+    return {
+        readUsage: (input: Input) => get(usageUrl, input, true),
+        readResets,
+        async consume(input: Input & Readonly<{ idempotencyKey: string; providerCreditId?: string; providerLimitIds?: readonly string[] }>): Promise<ClaudeResetConsumeStatus> {
+            let selected: ConnectedServiceQuotaRecoveryCreditV1 | undefined;
+            let organizationId: string;
+            try {
+                const { payload, inventory } = await readResets(input);
+                selected = inventory?.recoveryCredits.credits.find(credit => credit.status === 'available'
+                    && (!input.providerCreditId || credit.id === input.providerCreditId));
+                if (!selected?.id) return 'not_available';
+                if (input.providerLimitIds !== undefined) {
+                    const clears = inventory?.recoveryCreditDetails[selected.id]?.appliesToProviderLimitIds ?? [];
+                    const exhausted = new Set(parseClaudeSubscriptionUsageMeters(payload)
+                        .filter(meter => meter.utilizationPct !== null && meter.utilizationPct >= 100)
+                        .map(meter => meter.providerLimitId ?? meter.meterId));
+                    if (!input.providerLimitIds.some(id => clears.includes(id) && exhausted.has(id))) return 'not_available';
+                }
+                const profile = await get(new URL('./profile', usageUrl).toString(), input);
+                organizationId = isRecord(profile) && isRecord(profile.organization) && typeof profile.organization.uuid === 'string'
+                    ? profile.organization.uuid.trim() : '';
+                if (!organizationId) throw new Error('Claude reset organization is unavailable');
+                input.signal.throwIfAborted();
+            } catch (error) {
+                if (error instanceof ConnectedServiceQuotaFetchError) throw new ConnectedServiceQuotaFetchError(error.message, {
+                    status: error.status, retryAfterMs: error.retryAfterMs, resetAtMs: error.resetAtMs,
+                    providerCode: error.providerCode, quotaFetchErrorCode: error.quotaFetchErrorCode,
+                    recoveryCreditConsumeOutcomeUnknown: false,
+                });
+                throw new ConnectedServiceQuotaFetchError('Claude reset preflight failed.', {
+                    quotaFetchErrorCode: 'malformed', recoveryCreditConsumeOutcomeUnknown: false,
+                });
+            }
+            let response: ClaudeRuntimeFetchResponse;
+            try {
+                response = await params.runtimeFetch({ url: new URL(`/api/organizations/${encodeURIComponent(organizationId)}/reset_rate_limits`, usageUrl).toString(),
+                    method: 'POST', headers: headers(input.accessToken), signal: input.signal,
+                    body: selected.providerResetType === 'cedar_ember'
+                        ? { program: 'cedar_ember', grant_id: selected.id, request_id: claudeResetRequestId(input.idempotencyKey) }
+                        : { program: 'juniper_tide' } });
+            } catch {
+                throw new ConnectedServiceQuotaFetchError('Claude reset outcome is unknown after a transport failure.', {
+                    quotaFetchErrorCode: 'network', recoveryCreditConsumeOutcomeUnknown: true,
+                });
+            }
+            if (!response.ok) {
+                const failure = createClaudeSubscriptionQuotaFetchError({ status: response.status, statusText: response.statusText,
+                    headers: response.headers, body: await response.text().catch(() => ''), nowMs: input.now });
+                throw new ConnectedServiceQuotaFetchError('Claude reset request failed.', { status: failure.status,
+                    retryAfterMs: failure.retryAfterMs, resetAtMs: failure.resetAtMs, quotaFetchErrorCode: failure.quotaFetchErrorCode,
+                    recoveryCreditConsumeOutcomeUnknown: response.status !== 401 && response.status !== 403 && response.status !== 429 });
+            }
+            let result: unknown;
+            try { result = await response.json(); } catch { result = null; }
+            if (isRecord(result) && (result.reason === undefined || result.reason === null || typeof result.reason === 'string')
+                && (result.cleared === undefined || (Array.isArray(result.cleared) && result.cleared.every(id => typeof id === 'string')))) {
+                if (result.result === 'reset') return 'consumed';
+                if (result.result === 'already_used') return 'already_consumed';
+                if (result.result === 'not_limited') return 'nothing_to_reset';
+                if (['ineligible', 'unavailable', 'cooldown'].includes(String(result.result))) return 'not_available';
+            }
+            throw new ConnectedServiceQuotaFetchError('Claude reset returned an unknown outcome.', {
+                quotaFetchErrorCode: 'malformed', recoveryCreditConsumeOutcomeUnknown: true,
+            });
+        },
+    };
+}

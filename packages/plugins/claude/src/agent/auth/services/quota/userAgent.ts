@@ -1,4 +1,4 @@
-export const CLAUDE_CODE_USAGE_USER_AGENT_FALLBACK = 'claude-code/0.0.0';
+export const CLAUDE_CODE_USAGE_USER_AGENT_FALLBACK = 'claude-cli/0.0.0 (external, cli)';
 
 const CLAUDE_CODE_USER_AGENT_ENV_KEYS = [
     'HAPPIER_CONNECTED_SERVICES_CLAUDE_CODE_USER_AGENT',
@@ -15,7 +15,7 @@ function readNonEmptyString(value: unknown): string | null {
 }
 
 function isClaudeCodeUserAgent(value: string): boolean {
-    return /^claude-code\/[^\s/]+$/u.test(value);
+    return /^claude-(?:code|cli)\/[^\s/]+(?: \(external, cli\))?$/u.test(value);
 }
 
 function readEnvValue(
@@ -33,15 +33,19 @@ function readEnvValue(
 export function resolveClaudeCodeUsageUserAgent(params?: Readonly<{
     env?: Readonly<Record<string, string | undefined>>;
     configuredUserAgent?: string | null;
+    installedVersion?: string | null;
 }>): string {
     const envUserAgent = readEnvValue(params?.env, CLAUDE_CODE_USER_AGENT_ENV_KEYS);
     if (envUserAgent && isClaudeCodeUserAgent(envUserAgent)) return envUserAgent;
 
     const envVersion = readEnvValue(params?.env, CLAUDE_CODE_VERSION_ENV_KEYS);
-    if (envVersion) return `claude-code/${envVersion}`;
+    if (envVersion) return `claude-cli/${envVersion} (external, cli)`;
 
     const configuredUserAgent = readNonEmptyString(params?.configuredUserAgent);
     if (configuredUserAgent && isClaudeCodeUserAgent(configuredUserAgent)) return configuredUserAgent;
+
+    const installedVersion = readNonEmptyString(params?.installedVersion);
+    if (installedVersion) return `claude-cli/${installedVersion} (external, cli)`;
 
     return CLAUDE_CODE_USAGE_USER_AGENT_FALLBACK;
 }
