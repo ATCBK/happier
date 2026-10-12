@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { chmod, cp, mkdtemp, mkdir, writeFile, readFile, realpath, rename, symlink, rm, access, readdir, stat } from 'node:fs/promises';
 import { existsSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -94,7 +94,7 @@ test('source plugin UI preparation isolates cold failure, retains green bytes an
   assert.match(await readFile(join(warmNative, nativeGraph.entries[0].entry), 'utf8'), /broken-v1/,
     'the native runtime receives its own retained graph before temporary preparation is retired');
   assert.deepEqual(await load(), new Map([['happier.healthy', 'healthy-v2'], ['happier.openai', 'broken-v1']]));
-  const brokenPath = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1).find(path => path.includes('/openai/'));
+  const brokenPath = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1).find(path => path.includes(`${sep}openai${sep}`));
   assert.ok(brokenPath);
   await rm(brokenPath);
   const damaged = await prepare();
@@ -153,14 +153,14 @@ test('source plugin UI preparation reuses unchanged plugins and rebuilds only ch
   await prepare();
   assert.deepEqual(compiled, ['alpha']);
   const nextPaths = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1);
-  assert.notEqual(nextPaths.find(path => path.includes('/alpha/')), firstPaths.find(path => path.includes('/alpha/')));
-  assert.equal(nextPaths.find(path => path.includes('/beta/')), firstPaths.find(path => path.includes('/beta/')));
+  assert.notEqual(nextPaths.find(path => path.includes(`${sep}alpha${sep}`)), firstPaths.find(path => path.includes(`${sep}alpha${sep}`)));
+  assert.equal(nextPaths.find(path => path.includes(`${sep}beta${sep}`)), firstPaths.find(path => path.includes(`${sep}beta${sep}`)));
   compiled.length = 0;
   await writeFile(join(helperRoot, 'src/value.ts'), 'export const value = "helper-v2";');
   await prepare();
   assert.deepEqual(compiled, ['beta'], 'a bundled build dependency is an input even when declared as a development dependency');
   compiled.length = 0;
-  const currentBeta = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1).find(path => path.includes('/beta/'));
+  const currentBeta = resolveBundledPluginUiArtifactsInputPaths(outputPath).slice(1).find(path => path.includes(`${sep}beta${sep}`));
   await setBundleReadOnly(join(dirname(currentBeta), '../..'), false);
   await rm(currentBeta);
   await prepare();
