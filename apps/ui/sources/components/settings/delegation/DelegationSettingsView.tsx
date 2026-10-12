@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
@@ -11,6 +10,9 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { buildHappierWorkMap } from '@happier-dev/plugin-ui/presentation';
+import { WorkMapView } from '@/components/work/map/WorkMapView';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
@@ -77,109 +79,47 @@ export const DelegationSettingsView = React.memo(function DelegationSettingsView
     );
 });
 
-/** Level 0 (work you start) through the limit, then the refused hand-off. */
+type LadderGlyph = 'person' | 'git-branch' | 'x';
+
+/**
+ * Level 0 (work you start) through the limit, then the refused hand-off (lab `settings-D`): the one
+ * Work map renderer in read-only mode draws the levels as cards joined by a connector, so the ladder
+ * reads like the chains it limits. The refused level is the same card, quieter.
+ */
 export function DepthLadder(props: Readonly<{ limit: number }>) {
     const { theme } = useUnistyles();
-    const levels = Array.from({ length: props.limit }, (_, index) => index + 1);
+    const map = React.useMemo(() => {
+        const step = (nodeId: string, label: string, detail: string, glyph: LadderGlyph, refused = false) => (
+            { nodeId, label, detail, glyph, refused, parentNodeId: null }
+        );
+        const declared = [
+            step('root', t('roles.delegation.ladderRoot'), t('roles.delegation.ladderRootDetail'), 'person'),
+            ...Array.from({ length: props.limit }, (_, index) => index + 1).map((level) => step(
+                `level.${level}`, t('roles.delegation.ladderLevel', { level }), t('roles.delegation.ladderLevelDetail', { level }), 'git-branch',
+            )),
+            step('refused', t('roles.delegation.ladderRefused'), t('roles.delegation.ladderRefusedDetail', { level: props.limit + 1 }), 'x', true),
+        ];
+        return buildHappierWorkMap({ relationships: 'authored', nodes: declared });
+    }, [props.limit]);
     return (
-        <View style={styles.ladder} accessibilityRole="list">
-            <LadderStep
-                testID="settings.delegation.ladder.root"
-                glyph={<Icon name="person" size={14} color={theme.colors.text.secondary} />}
-                title={t('roles.delegation.ladderRoot')}
-                detail={t('roles.delegation.ladderRootDetail')}
-                connected
-            />
-            {levels.map((level) => (
-                <LadderStep
-                    key={level}
-                    testID={`settings.delegation.ladder.level.${level}`}
-                    glyph={<Text style={styles.levelNumber}>{level}</Text>}
-                    title={t('roles.delegation.ladderLevel', { level })}
-                    detail={t('roles.delegation.ladderLevelDetail', { level })}
-                    connected
-                />
-            ))}
-            <LadderStep
-                testID="settings.delegation.ladder.refused"
-                glyph={<Icon name="x" size={14} color={theme.colors.text.tertiary} />}
-                title={t('roles.delegation.ladderRefused')}
-                detail={t('roles.delegation.ladderRefusedDetail', { level: props.limit + 1 })}
-                refused
-            />
-        </View>
+        <WorkMapView
+            map={map}
+            selectedNodeId={null}
+            testIDPrefix="settings.delegation.ladder"
+            rootLayout="sequence"
+            accessibilityLabelForNode={(node) => `${node.label}. ${node.detail}`}
+            presentNode={(node) => ({ muted: node.refused })}
+            renderLeading={(node) => (
+                <Icon name={node.glyph} size={16} color={node.refused ? theme.colors.text.tertiary : theme.colors.text.secondary} />
+            )}
+            renderSubtitle={(node) => <Text style={styles.stepDetail}>{node.detail}</Text>}
+        />
     );
 }
-
-function LadderStep(props: Readonly<{
-    glyph: React.ReactNode;
-    title: string;
-    detail: string;
-    connected?: boolean;
-    refused?: boolean;
-    testID?: string;
-}>) {
-    return (
-        <View testID={props.testID} style={styles.step} accessible accessibilityLabel={`${props.title}. ${props.detail}`}>
-            <View style={styles.rail}>
-                <View style={styles.glyph}>{props.glyph}</View>
-                {props.connected ? <View style={styles.connector} /> : null}
-            </View>
-            <View style={[styles.stepText, props.refused ? styles.refused : null]}>
-                <Text style={styles.stepTitle}>{props.title}</Text>
-                <Text style={styles.stepDetail}>{props.detail}</Text>
-            </View>
-        </View>
-    );
-}
-
-const GLYPH_SIZE = 24;
 
 const styles = StyleSheet.create((theme) => ({
-    ladder: {
-        paddingVertical: 4,
-    },
-    step: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    rail: {
-        width: GLYPH_SIZE,
-        alignItems: 'center',
-    },
-    glyph: {
-        width: GLYPH_SIZE,
-        height: GLYPH_SIZE,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    connector: {
-        flex: 1,
-        width: StyleSheet.hairlineWidth,
-        minHeight: 10,
-        backgroundColor: theme.colors.border.default,
-    },
-    stepText: {
-        flex: 1,
-        minWidth: 0,
-        paddingTop: 3,
-        paddingBottom: 12,
-        gap: 1,
-    },
-    refused: {
-        opacity: 0.6,
-    },
-    stepTitle: {
-        fontSize: 14,
-        color: theme.colors.text.primary,
-    },
     stepDetail: {
-        fontSize: 12,
+        ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
-    },
-    levelNumber: {
-        fontSize: 12,
-        color: theme.colors.text.secondary,
-        fontVariant: ['tabular-nums'],
     },
 }));

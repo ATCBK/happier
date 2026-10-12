@@ -61,21 +61,21 @@ describe('Settings › Delegation', () => {
 
     it('lays out the ladder of the current limit and refuses the hand-off past it', async () => {
         const screen = await renderSettingsView(<DelegationSettingsView />);
-        expect(screen.findRow('settings.delegation.ladder.root')).toBeTruthy();
-        expect(screen.listRows('settings.delegation.ladder.level.').filter((node) => typeof node.type === 'string')
+        expect(screen.findRow('settings.delegation.ladder-node-root')).toBeTruthy();
+        expect(screen.listRows('settings.delegation.ladder-node-level.').filter((node) => typeof node.type === 'string')
             .map((node) => node.props.testID)).toEqual([
-            'settings.delegation.ladder.level.1',
-            'settings.delegation.ladder.level.2',
-            'settings.delegation.ladder.level.3',
-            'settings.delegation.ladder.level.4',
+            'settings.delegation.ladder-node-level.1',
+            'settings.delegation.ladder-node-level.2',
+            'settings.delegation.ladder-node-level.3',
+            'settings.delegation.ladder-node-level.4',
         ]);
-        expect(screen.findRow('settings.delegation.ladder.refused')?.props.accessibilityLabel)
+        expect(screen.findRow('settings.delegation.ladder-node-refused')?.props.accessibilityLabel)
             .toContain('roles.delegation.ladderRefusedDetail:5');
     });
 
     it('says something different on every ladder step: each level names the level that started it', async () => {
         const screen = await renderSettingsView(<DelegationSettingsView />);
-        const details = [1, 2, 3, 4].map((level) => String(screen.findRow(`settings.delegation.ladder.level.${level}`)?.props.accessibilityLabel ?? ''));
+        const details = [1, 2, 3, 4].map((level) => String(screen.findRow(`settings.delegation.ladder-node-level.${level}`)?.props.accessibilityLabel ?? ''));
         expect(details[0]).toContain('roles.delegation.ladderLevelDetail:1');
         expect(details[3]).toContain('roles.delegation.ladderLevelDetail:4');
         expect(new Set(details).size).toBe(4);
@@ -91,7 +91,7 @@ describe('Settings › Delegation', () => {
         shared.workDepthLimit = 8;
         const screen = await renderSettingsView(<DelegationSettingsView />);
         expect(screen.findRow('settings.delegation.workDepthLimit:8')).toBeTruthy();
-        expect(screen.findRow('settings.delegation.ladder.refused')?.props.accessibilityLabel)
+        expect(screen.findRow('settings.delegation.ladder-node-refused')?.props.accessibilityLabel)
             .toContain('roles.delegation.ladderRefusedDetail:9');
     });
 });
