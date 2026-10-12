@@ -88,8 +88,8 @@ describe('MCP catalog row authority', () => {
     expect(rowWrites).toBe(0);
   });
 
-  it('keeps active personal or invalid references diagnostic while retained source still reaches its importer', async () => {
-    for (const secretId of ['personal-source', 'happier:shared-secret:v1:']) {
+  it('admits active personal references while malformed shared references remain diagnostic', async () => {
+    for (const secretId of ['happier:shared-secret:v1:']) {
       const source = { ...catalog, servers: catalog.servers.map(entry => ({ ...entry,
         remote: { ...entry.remote!, headers: { Authorization: { t: 'savedSecret' as const, secretId } } } })) };
       const opened = openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } });
@@ -99,6 +99,11 @@ describe('MCP catalog row authority', () => {
     }
     const source = { ...catalog, servers: catalog.servers.map(entry => ({ ...entry,
       remote: { ...entry.remote!, headers: { Authorization: { t: 'savedSecret' as const, secretId: 'personal-source' } } } })) };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+      .toEqual({ status: 'opened', catalog: source });
+    expect(listMcpServerCatalogSavedSecretRefsV1(source)).toContainEqual({
+      path: 'servers[0].remote.headers.Authorization', secretId: 'personal-source',
+    });
     const retainedSource = { ...source, servers: source.servers.map(({ configOverrides: _overrides, ...server }) => server), bindings: retainedCatalog.bindings };
     const retained = await loadMcpServerCatalogV1({ mode: 'plain', material: null,
       readRow: async () => ({ status: 'absent' }), transfer: {
@@ -108,6 +113,70 @@ describe('MCP catalog row authority', () => {
     expect(retained).toMatchObject({ status: 'ready', authority: 'inactive', revision: 'absent', catalog: source });
     expect(readMcpServersFromCatalogSnapshotV1({ snapshot: retained, strictMode: false }))
       .toEqual({ status: 'unavailable', reason: 'authority-not-confirmed' });
+  });
+
+  it('counts and rewrites template secrets in configuration and machine overrides', () => {
+    const template = { t: 'template' as const, template: 'Bearer {api_key}', vars: {
+      api_key: { t: 'savedSecret' as const, secretId: 'personal-source' },
+    } };
+    const source = { ...catalog, servers: catalog.servers.map(entry => ({ ...entry,
+      remote: { ...entry.remote!, headers: { Authorization: template } },
+      configOverrides: [{ target: { t: 'machine' as const, machineId: 'machine' }, envPatch: { API_KEY: template },
+        remote: { headersPatch: { Authorization: template } } }],
+    })) };
+    const opened = openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } });
+    expect(opened).toEqual({ status: 'opened', catalog: source });
+    if (opened.status !== 'opened') throw new Error('Template references must be admitted');
+    const refs = listMcpServerCatalogSavedSecretRefsV1(opened.catalog);
+    expect(refs).toEqual([
+      { path: 'servers[0].remote.headers.Authorization.vars.api_key', secretId: 'personal-source' },
+      { path: 'servers[0].configOverrides[0].envPatch.API_KEY.vars.api_key', secretId: 'personal-source' },
+      { path: 'servers[0].configOverrides[0].remote.headersPatch.Authorization.vars.api_key', secretId: 'personal-source' },
+    ]);
+    const rewritten = remapMcpServerCatalogSavedSecretReferencesV1(opened.catalog, { 'personal-source': newReference });
+    expect(listMcpServerCatalogSavedSecretRefsV1(rewritten)).toEqual(refs.map(ref => ({ ...ref, secretId: newReference })));
+    expect(rewritten.servers[0]?.remote?.headers.Authorization).toMatchObject({ template: 'Bearer {api_key}' });
+  });
+
+  it('preserves tool policies and snapshots for catalog and plugin servers through stored projection', () => {
+    const tools = { default: 'allow_read_only', overrides: { read: 'allow', remove: 'off' } };
+    const toolsSnapshot = { checkedAt: 20, machineId: 'machine', protocolVersion: '2025-11-25',
+      serverInfo: { name: 'example', version: '1' }, instructions: 'Use read first',
+      tools: [{ name: 'read', title: 'Read', description: 'Read entries', tokens: 17, annotations: { readOnlyHint: true } }],
+    };
+    const source = { ...catalog, servers: catalog.servers.map(server => ({ ...server, tools, toolsSnapshot })),
+      pluginServers: { 'plugin:example/server': { tools, toolsSnapshot } },
+    };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+      .toEqual({ status: 'opened', catalog: source });
+    const extra = { ...source, pluginServers: { 'plugin:example/server': { ...source.pluginServers['plugin:example/server'],
+      future: 'metadata', toolsSnapshot: { ...toolsSnapshot, tools: toolsSnapshot.tools.map(tool => ({ ...tool, future: 'metadata' })) },
+    } } };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: extra } }))
+      .toEqual({ status: 'opened', catalog: source });
+    const invalid = { ...source, pluginServers: { 'plugin:example/server': { tools: { default: 'allow_all', overrides: { remove: 'invalid' } } } } };
+    expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: invalid } }))
+      .toMatchObject({ status: 'partial', diagnostics: [{ path: 'pluginServers', reason: 'invalid-stored-content' }] });
+  });
+
+  it('retains registry and machine origins through the canonical catalog reader', () => {
+    const registry = { kind: 'registry', provenance: { sourceId: 'builtin:mcp-registry', format: 'mcp-registry',
+      sourceUrl: 'https://registry.modelcontextprotocol.io', itemId: 'example/server',
+      ref: { kind: 'version', version: '1' }, importedAt: 10 },
+      upstream: { state: 'update_available', latest: { kind: 'version', version: '2' } },
+    };
+    for (const origin of [registry, { kind: 'machine', machineId: 'machine', agentId: 'claude' }]) {
+      const source = { ...catalog, servers: catalog.servers.map(server => ({ ...server, origin })) };
+      expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
+        .toEqual({ status: 'opened', catalog: source });
+    }
+  });
+
+  it.each(['server-create', 'server-create-batch', 'server-duplicate'] as const)('refuses reserved plugin ids on %s', kind => {
+    const entry = { ...catalog.servers[0]!, id: 'plugin:example/server', name: 'copy' };
+    const change = kind === 'server-create-batch' ? { kind, entries: [{ entry, rules: [] }] }
+      : kind === 'server-duplicate' ? { kind, serverId: 'server', entry, rules: [] } : { kind, entry, rules: [] };
+    expect(() => applyMcpServerCatalogMutationV1(catalog, change)).toThrow();
   });
 
   it('preserves typed transport refusals rather than reporting an unsupported server as unreachable', async () => {

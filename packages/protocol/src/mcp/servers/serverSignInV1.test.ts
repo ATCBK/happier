@@ -12,9 +12,9 @@ const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https:
 const custody = { occurrenceId: 'host-occurrence', sourceCustody: { kind: 'host' } } as const;
 
 function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: boolean; reconnect?: boolean;
-  waitingSignal?: AbortSignal; onRead?: () => void } = {}) {
+  waitingSignal?: AbortSignal; onRead?: () => void; httpsRequired?: boolean } = {}) {
   let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [{ id: 'server', name: 'linear', transport: 'http',
-    remote: { url: 'https://resource.example.test/mcp', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] };
+    remote: { url: options.httpsRequired ? 'http://resource.example.test/mcp' : 'https://resource.example.test/mcp', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] };
   let revision = 9;
   let values: Record<string, unknown> = options.reconnect ? { issuer: 'https://issuer.example.test',
     registrations: { 'https://issuer.example.test': { clientId: 'cached-client' } }, stepUpScopes: ['tasks:write'] } : {};
@@ -38,6 +38,8 @@ function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: 
           if (signal.aborted) reject(signal.reason);
         });
       }
+      if (command.operation === 'read' && options.httpsRequired) return { status: 'rejected', attemptId: 'attempt',
+        code: 'mcp_oauth_resource_requires_https', diagnostic: { code: 'mcp_oauth_resource_requires_https', severity: 'error' } };
       if (command.operation === 'read' && command.waitForProviderStart === true) return { status: 'awaitingOAuth', attemptId: 'attempt',
         authorizationUrl: 'https://issuer.example.test/authorize?state=attempt.nonce', callbackUrl: mode.callbackUrl, expiresAtMs: 5000 };
       throw new Error('Unexpected authentication command');
@@ -104,6 +106,11 @@ describe('MCP sign-in through canonical Connected Services', () => {
     expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server' }, context }))
       .toEqual({ ok: false, errorCode: 'no_machine_online', error: 'no_machine_online' });
     expect(owner.commands).toEqual([]);
+  });
+  it('retains the host HTTPS-required OAuth refusal without changing static HTTP catalog admission', async () => {
+    const owner = harness({ httpsRequired: true });
+    expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server' }, context }))
+      .toEqual({ ok: false, errorCode: 'mcp_oauth_resource_requires_https', error: 'mcp_oauth_resource_requires_https' });
   });
   it('reconnects the exact grant with configuration CAS while retaining issuer registration and granted scopes', async () => {
     const owner = harness({ reconnect: true });

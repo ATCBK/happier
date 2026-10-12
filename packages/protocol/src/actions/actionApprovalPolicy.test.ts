@@ -136,8 +136,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
       }
     }
   });
-  it('applies reversible MCP rules directly for the present user and asks other callers unless waived', () => {
-    const actionId = 'mcp.rules.set' satisfies ActionId;
+  it.each(['mcp.rules.set', 'skills.rules.set'] as const)('applies reversible %s directly for the present user and asks other callers unless waived', actionId => {
     const spec = getActionSpec(actionId);
     expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
       context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }).required).toBe(false);
