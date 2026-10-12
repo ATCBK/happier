@@ -14,6 +14,8 @@ export type InstalledVoiceModelPackMetadataV1 = Readonly<{
   packVersion: string;
   manifestDigest: string;
   verifiedAtMs: number;
+  /** Epoch milliseconds of the last successful host model load; absent for older installs. */
+  lastUsedAt?: number;
 }>;
 
 export type InstalledVoiceModelPackSourceStateV1 = Readonly<{

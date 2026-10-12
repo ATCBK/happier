@@ -7,7 +7,8 @@
  * currently supported development path. Neither arm is a hash of extracted
  * plugin files or a process-local runtime occurrence.
  */
-import { DevelopmentPluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { VoiceModelPackArtifactBindingV1Schema } from '@happier-dev/protocol/voice/modelPacks/artifactBindingV1';
 import type { DevelopmentPluginSourceCustodyV1 } from '@happier-dev/protocol';
 
 export type VoiceModelPackArtifactBindingV1 =
@@ -19,8 +20,6 @@ export type VoiceModelPackArtifactBindingV1 =
       kind: 'materialization';
       sourceCustody: DevelopmentPluginSourceCustodyV1;
     }>;
-
-const MAX_SOURCE_INTEGRITY_LENGTH = 1024;
 
 function invalid(): never {
   throw new Error('voice_model_pack_artifact_binding_invalid');
@@ -44,43 +43,25 @@ function readStrictRecord(value: unknown): Record<string, unknown> {
   }
 }
 
-function readExactKeys(record: Record<string, unknown>, expected: readonly string[]): void {
-  const keys = Object.keys(record);
-  if (keys.length !== expected.length || expected.some((key) => !Object.hasOwn(record, key))) invalid();
-}
-
-function readBoundedString(value: unknown, maximumLength: number): string {
-  if (
-    typeof value !== 'string'
-    || value.length < 1
-    || value.length > maximumLength
-    || value.trim() !== value
-  ) {
-    return invalid();
-  }
-  return value;
-}
-
-/** Parses the strict persisted/protocol binding without canonicalizing source-owned SRI. */
+/** Strict input binding without canonicalizing source-owned SRI. */
 export function parseVoiceModelPackArtifactBindingV1(value: unknown): VoiceModelPackArtifactBindingV1 {
   const record = readStrictRecord(value);
-  if (record.kind === 'sourceIntegrity') {
-    readExactKeys(record, ['kind', 'integrity']);
+  const parsed = VoiceModelPackArtifactBindingV1Schema.safeParse(record);
+  if (!parsed.success) return invalid();
+  return freezeBinding(parsed.data);
+}
+
+function freezeBinding(binding: VoiceModelPackArtifactBindingV1): VoiceModelPackArtifactBindingV1 {
+  if (binding.kind === 'sourceIntegrity') {
     return Object.freeze({
       kind: 'sourceIntegrity',
-      integrity: readBoundedString(record.integrity, MAX_SOURCE_INTEGRITY_LENGTH),
+      integrity: binding.integrity,
     });
   }
-  if (record.kind === 'materialization') {
-    readExactKeys(record, ['kind', 'sourceCustody']);
-    const sourceCustody = DevelopmentPluginSourceCustodyV1Schema.safeParse(record.sourceCustody);
-    if (!sourceCustody.success) return invalid();
-    return Object.freeze({
-      kind: 'materialization',
-      sourceCustody: Object.freeze(sourceCustody.data),
-    });
-  }
-  return invalid();
+  return Object.freeze({
+    kind: 'materialization',
+    sourceCustody: Object.freeze(binding.sourceCustody),
+  });
 }
 
 export function voiceModelPackArtifactBindingsEqualV1(

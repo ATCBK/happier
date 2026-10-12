@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { VoiceModelPackArtifactBindingV1Schema } from '@happier-dev/protocol/voice/modelPacks/artifactBindingV1';
 
 import {
   parseVoiceModelPackArtifactBindingV1,
@@ -6,6 +8,15 @@ import {
 } from './artifactBinding.js';
 
 describe('Voice model-pack artifact binding', () => {
+  it('projects stored binding and nested custody fields through the canonical schema', () => {
+    const binding = { kind: 'materialization', sourceCustody: { kind: 'development', registeredRootId: 'root-a' } };
+    const stored = { ...binding, retired: true, sourceCustody: { ...binding.sourceCustody, retired: true } };
+    const reader = createStoredReadSchema(VoiceModelPackArtifactBindingV1Schema);
+    expect(reader.parse(stored)).toEqual(binding);
+    expect(() => parseVoiceModelPackArtifactBindingV1(stored)).toThrow('voice_model_pack_artifact_binding_invalid');
+    expect(reader.safeParse({ ...stored, sourceCustody: { ...stored.sourceCustody, registeredRootId: ' ' } }).success).toBe(false);
+  });
+
   it('keeps source integrity and development custody as non-aliasing discriminated identities', () => {
     const sameText = `sha512-${'a'.repeat(86)}==`;
     const source = parseVoiceModelPackArtifactBindingV1({

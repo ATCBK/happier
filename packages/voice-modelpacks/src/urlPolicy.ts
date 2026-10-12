@@ -126,6 +126,27 @@ export function assertModelPackUrlAllowed(rawUrl: string, policy: ModelPackUrlPo
   return url;
 }
 
+/**
+ * Assess an HTTP Location received from an admitted HTTPS download. Signed
+ * queries are transport credentials issued by that server, not configured
+ * endpoint credentials. Keep them inside the host's request only: return a
+ * query-free destination for address checks and response metadata. All other
+ * configured-URL rules still apply, and HTTPS cannot downgrade to HTTP.
+ */
+export function assertModelPackRedirectUrlAllowed(rawUrl: string, policy: ModelPackUrlPolicy = {}): URL {
+  let destination: URL;
+  try {
+    destination = new URL(rawUrl);
+  } catch {
+    throw new ModelPackUrlPolicyError('model_pack_url_invalid');
+  }
+  if (destination.protocol !== 'https:') {
+    throw new ModelPackUrlPolicyError('model_pack_url_insecure_scheme');
+  }
+  destination.search = '';
+  return assertModelPackUrlAllowed(destination.toString(), policy);
+}
+
 /** Assert every manifest file URL satisfies the policy (manifest URL checked separately). */
 export function assertManifestUrlsAllowed(
   manifest: Readonly<{ files: readonly Readonly<{ url: string }>[] }>,

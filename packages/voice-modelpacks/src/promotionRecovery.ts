@@ -1,3 +1,6 @@
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ModelPackPromotionIntentV1Schema } from '@happier-dev/protocol/voice/modelPacks/promotionIntentV1';
+
 export type ModelPackPromotionPriorInstallV1 = Readonly<{
   scopeKey: string;
   identityKey: string;
@@ -20,25 +23,7 @@ export type ModelPackPromotionIntentV1 = Readonly<{
   recovery: ModelPackDurableRecoveryRecord | null;
 }>;
 
-const PHASES = new Set<ModelPackPromotionIntentV1['phase']>([
-  'swap_prepared',
-  'metadata_pending',
-  'metadata_committed',
-  'rollback_pending',
-]);
-const INTENT_KEYS = new Set([
-  'schemaVersion',
-  'packId',
-  'phase',
-  'startedAtMs',
-  'token',
-  'priorInstall',
-  'recovery',
-]);
-
-function boundedString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength && value.trim() === value;
-}
+const StoredModelPackPromotionIntentV1Schema = createStoredReadSchema(ModelPackPromotionIntentV1Schema);
 
 function invalidIntent(): never {
   throw new Error('model_pack_promotion_intent_invalid');
@@ -48,59 +33,29 @@ export function parseModelPackPromotionIntentV1(
   raw: unknown,
   expectedPackId: string,
 ): ModelPackPromotionIntentV1 {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalidIntent();
-  const value = raw as Readonly<Record<string, unknown>>;
-  if (Object.keys(value).some((key) => !INTENT_KEYS.has(key))) invalidIntent();
-  if (
-    value.schemaVersion !== 1
-    || value.packId !== expectedPackId
-    || !PHASES.has(value.phase as ModelPackPromotionIntentV1['phase'])
-    || typeof value.startedAtMs !== 'number'
-    || !Number.isSafeInteger(value.startedAtMs)
-    || value.startedAtMs < 0
-    || !boundedString(value.token, 256)
-  ) invalidIntent();
+  const parsed = ModelPackPromotionIntentV1Schema.safeParse(raw);
+  if (!parsed.success || parsed.data.packId !== expectedPackId) invalidIntent();
+  return freezeIntent(parsed.data);
+}
 
-  const prior = value.priorInstall;
-  if (prior !== null) {
-    if (!prior || typeof prior !== 'object' || Array.isArray(prior)) invalidIntent();
-    const record = prior as Readonly<Record<string, unknown>>;
-    if (
-      Object.keys(record).some((key) => key !== 'scopeKey' && key !== 'identityKey')
-      || !boundedString(record.scopeKey, 1024)
-      || !boundedString(record.identityKey, 1024)
-    ) invalidIntent();
-  }
+export function parseStoredModelPackPromotionIntentV1(
+  raw: unknown,
+  expectedPackId: string,
+): ModelPackPromotionIntentV1 {
+  const parsed = StoredModelPackPromotionIntentV1Schema.safeParse(raw);
+  if (!parsed.success || parsed.data.packId !== expectedPackId) invalidIntent();
+  return freezeIntent(parsed.data);
+}
 
-  const recovery = value.recovery;
-  if (recovery !== null) {
-    if (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)) invalidIntent();
-    const record = recovery as Readonly<Record<string, unknown>>;
-    if (
-      Object.keys(record).some((key) => key !== 'kind' && key !== 'value')
-      || !boundedString(record.kind, 256)
-      || !Object.prototype.hasOwnProperty.call(record, 'value')
-    ) invalidIntent();
-  }
-
+function freezeIntent(value: ModelPackPromotionIntentV1): ModelPackPromotionIntentV1 {
   return Object.freeze({
-    schemaVersion: 1,
-    packId: expectedPackId,
-    phase: value.phase as ModelPackPromotionIntentV1['phase'],
-    startedAtMs: value.startedAtMs as number,
-    token: value.token as string,
-    priorInstall: prior === null
+    ...value,
+    priorInstall: value.priorInstall === null
       ? null
-      : Object.freeze({
-          scopeKey: (prior as Readonly<Record<string, unknown>>).scopeKey as string,
-          identityKey: (prior as Readonly<Record<string, unknown>>).identityKey as string,
-        }),
-    recovery: recovery === null
+      : Object.freeze({ ...value.priorInstall }),
+    recovery: value.recovery === null
       ? null
-      : Object.freeze({
-          kind: (recovery as Readonly<Record<string, unknown>>).kind as string,
-          value: (recovery as Readonly<Record<string, unknown>>).value,
-        }),
+      : Object.freeze({ ...value.recovery }),
   });
 }
 

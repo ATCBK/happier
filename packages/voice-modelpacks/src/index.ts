@@ -28,6 +28,7 @@ export {
   isLegacyModelPackPromotionIntent,
   MODEL_PACK_PROMOTION_INTENT_MAX_BYTES,
   parseModelPackPromotionIntentV1,
+  parseStoredModelPackPromotionIntentV1,
   type ModelPackDurableRecoveryRecord,
   type ModelPackPromotionIntentV1,
   type ModelPackPromotionPriorInstallV1,
@@ -35,6 +36,7 @@ export {
 
 export {
   assertModelPackUrlAllowed,
+  assertModelPackRedirectUrlAllowed,
   assertManifestUrlsAllowed,
   assertModelPackResolvedAddressesAllowed,
   ModelPackUrlPolicyError,
