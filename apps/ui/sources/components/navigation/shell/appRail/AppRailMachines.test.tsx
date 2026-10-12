@@ -5,7 +5,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+
+const vitalsRpc = vi.hoisted(() => vi.fn(async (_input: { machineId: string }) => ({ state: 'not_reported', sample: null,
+    series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } })));
+// The resource request leaves the app process; warm demand and membership stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(vitalsRpc);
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -14,11 +26,28 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
+let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
 afterEach(() => {
     standardCleanup();
+    clearMachineRequestReachabilityForTest();
+    machineResourceStore.reset();
+    vitalsRpc.mockClear();
+    servedHome?.dispose();
+    servedHome = undefined;
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A machine's published resource summary (plan 20's daemonState `resources`), as the daemon writes it. */
+function published(level: 'calm' | 'look' | 'needs_you', reasons: readonly unknown[]) {
+    return { v: 1, vitals: { state: 'reporting' }, host: { logicalCores: 8, memoryTotalBytes: 16 * 2 ** 30, bootedAt: 1 },
+        attention: { level, reasons } };
+}
+
+function memoryReason(key: string) {
+    return { key, level: 'needs_you', since: Date.now() - 6 * 60_000, metric: 'memory', nextStep: 'review_processes',
+        kind: 'memory_pressure', pressure: 'critical', swapping: true };
+}
 
 function machine(id: string, overrides: Partial<Machine> = {}): Machine {
     return {
@@ -41,12 +70,30 @@ function setHomeMachines(machines: readonly Machine[]) {
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || 'server-active';
     storage.setState((state) => ({
         ...state,
+        profileScope: { serverId: activeServerId, accountId: 'rail-account' },
         machines: {},
         machineListByServerId: { ...state.machineListByServerId, [activeServerId]: [...machines] },
     }));
 }
 
 describe('AppRailMachines', () => {
+    it('warms only executable fleet machines on pointer intent', async () => {
+        servedHome = await serveActionHomes({ homes: [{ key: 'rail', serverUrl: 'https://rail-warm.test', accountId: 'rail-account', currentAccount: true }],
+            route: request => request.path === '/v1/features' ? Response.json(createRootLayoutFeaturesResponse()) : undefined });
+        const serverId = servedHome.homes.rail!.id;
+        const failed = machine('warm-failed');
+        const ready = machine('warm-ready');
+        storage.setState({ profileScope: { serverId, accountId: 'rail-account' }, machines: { [failed.id]: failed, [ready.id]: ready },
+            machineListByServerId: { [serverId]: [failed, ready] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+        recordMachineRequestFailed({ serverId, accountId: 'rail-account', machineId: failed.id });
+        const { AppRailMachines } = await import('./AppRailMachines');
+        const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
+        const screen = await renderScreen(<AppRailMachines />);
+        await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent());
+        await flushHookEffects();
+        await vi.waitFor(() => expect(vitalsRpc).toHaveBeenCalled());
+        expect(vitalsRpc.mock.calls.map(([call]) => call.machineId)).toEqual(['warm-ready']);
+    });
     it('names the counts on the closed icon, draws no badge for machines that are merely offline, and stays still on heartbeats', async () => {
         const previousState = storage.getState();
         try {
@@ -84,5 +131,54 @@ describe('AppRailMachines', () => {
         } finally {
             storage.setState(previousState);
         }
+    });
+
+    it('counts the machines that need you, names the machine and reason, and stays still when another machine changes', async () => {
+        const previousState = storage.getState();
+        const edge = { resources: published('needs_you', [memoryReason('memory:critical')]) } as never;
+        try {
+            setHomeMachines([
+                machine('edge-1', { metadata: { host: 'edge-1', displayName: 'edge-1', platform: 'linux', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                    daemonState: edge }),
+                machine('laptop', { daemonState: { resources: published('calm', []) } as never }),
+            ]);
+            const { AppRailMachines } = await import('./AppRailMachines');
+            let commits = 0;
+            const screen = await renderScreen(
+                <React.Profiler id="rail-machines" onRender={() => { commits += 1; }}>
+                    <AppRailMachines />
+                </React.Profiler>,
+            );
+            await flushHookEffects({ cycles: 2 });
+
+            expect(screen.findByTestId('app-rail-machines-badge')?.props.testID).toBe('app-rail-machines-badge');
+            const label = screen.findByTestId('app-rail-machines')?.props.accessibilityLabel as string;
+            expect(label).toContain('machineAttention.phrases.memoryCritical');
+            expect(label).toContain('edge-1');
+
+            const commitsBefore = commits;
+            await act(async () => {
+                setHomeMachines([
+                    machine('edge-1', { metadata: { host: 'edge-1', displayName: 'edge-1', platform: 'linux', happyCliVersion: '1', happyHomeDir: '.happy', homeDir: '/home' },
+                        daemonState: edge }),
+                    // An unrelated machine's state moves on: the closed icon renders nothing.
+                    machine('laptop', { daemonState: { resources: published('calm', []) } as never, daemonStateVersion: 3, activeAt: Date.now() }),
+                ]);
+            });
+            expect(commits).toBe(commitsBefore);
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('shows the icon selected while the Machines page is open through the rail door, without opening the popover', async () => {
+        const { AppRailMachines } = await import('./AppRailMachines');
+        const selectedButtons = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAll((node) =>
+            node.props?.testID === 'app-rail-machines' && node.props?.selected === true);
+        const closed = await renderScreen(<AppRailMachines />);
+        expect(selectedButtons(closed)).toHaveLength(0);
+        const open = await renderScreen(<AppRailMachines selected />);
+        expect(selectedButtons(open).length).toBeGreaterThan(0);
+        expect(open.findByTestId('sidebar-machines-popover-content')).toBeNull();
     });
 });

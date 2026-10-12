@@ -20,6 +20,17 @@ vi.mock('react-native-reanimated', async () => {
 });
 
 describe('native shell material planes', () => {
+    it('leaves the native content plane clear over a band even when Reduce Transparency makes surfaces solid', async () => {
+        const { AppShellMaterialPlane } = await import('./AppShellMaterialFrame');
+        const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+        const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'band', reduceTransparency: true }}>
+            <AppShellMaterialPlane group="content" color="#112233" translucentColor="#112233" testID="content-plane" style={{ flex: 1 }}>
+                <View />
+            </AppShellMaterialPlane>
+        </GlassRuntimeEnvironmentProvider>);
+        expect(flattenTestStyle(screen.findHostByTestId('content-plane')!.props.style).backgroundColor).toBe('transparent');
+        standardCleanup();
+    });
     it('renders one sidebar tint and resolves Reduce Transparency to the exact solid color', async () => {
         const { AppShellMaterialFrame } = await import('./AppShellMaterialFrame');
         const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');

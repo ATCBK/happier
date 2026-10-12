@@ -13,8 +13,6 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Header } from '@/components/navigation/Header';
 import { NavigationTitleChromeProvider, PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
 import {
     InboxModelBoundary,
     useInboxModel,
@@ -28,27 +26,8 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     phoneTabs: {
-        paddingHorizontal: 16,
-        paddingBottom: 4,
-    },
-    headerTitle: {
-        fontSize: 17,
-        color: theme.colors.chrome.header.foreground,
-        ...Typography.default('semiBold'),
-    },
-    idleDetail: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 24,
-        backgroundColor: theme.colors.surface.base,
-    },
-    idleDetailText: {
-        ...Typography.default(),
-        fontSize: 14,
-        lineHeight: 20,
-        color: theme.colors.text.secondary,
-        textAlign: 'center',
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s4,
     },
 }));
 
@@ -66,16 +45,13 @@ const INBOX_LIST_MIN_WIDTH_PX = 400;
 const INBOX_DETAIL_MIN_WIDTH_PX = 440;
 const INBOX_LIST_SHARE = 0.6;
 
-function InboxHeaderTitle() {
-    return <Text style={styles.headerTitle}>{t('tabs.inbox')}</Text>;
-}
-
 const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ focusedItem?: InboxItemFocus | null }>) {
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const model = useInboxModel();
-    // Phones show the title in the navigation header and the page header shows only the purpose;
-    // wide layouts have no navigation title, so the page header carries it.
+    // Lab `phone-P4`: on a phone the page carries the Inbox's large title itself (the Home hub's hero
+    // step), with the view control under it and no purpose line; the tabs and groups say what it holds.
+    // Wide layouts have no navigation title either: the page header carries it beside the control.
     const phone = !useIsTablet();
     // `/inbox?item=` (a Boards card): open on Needs you with that item's row selected.
     const focusedItem = props.focusedItem ?? null;
@@ -90,8 +66,8 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
         <SegmentedTabBar
             testIDPrefix="inbox.view"
             accessibilityLabel={t('inbox.work.tabs.a11y')}
-            // A phone's full-width control is a thumb target (lab `phone-P4`); the header's sits beside the title.
-            compact={!phone}
+            // A phone's control spans the width as a thumb target (lab `phone-P4`); the header's hugs its
+            // labels beside the title at the control step (lab `inbox-I1`), not the compact one.
             segmentSizing={phone ? undefined : 'content'}
             tabs={[
                 { id: 'needs_you' as const, label: t('inbox.work.tabs.needsYou'), ...(needsYouCount > 0 ? { count: String(needsYouCount) } : {}) },
@@ -103,11 +79,13 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     );
 
     const renderList = (onSelectItem: ((focus: InboxItemFocus) => void) | undefined) => (
-        <NavigationTitleChromeProvider showsTitle={phone}>
-            <ItemList testID="inbox.screen">
+        <NavigationTitleChromeProvider showsTitle={false}>
+            {/* A page of work rows with their inline answers (lab `inbox-I1`): the wide column. */}
+            <ItemList testID="inbox.screen" pageColumn="wide">
                 <PageHeader
                     title={t('tabs.inbox')}
-                    description={t('inbox.work.pageDescription')}
+                    titleProminence={phone ? 'hero' : 'page'}
+                    description={phone ? undefined : t('inbox.work.pageDescription')}
                     actions={phone ? undefined : tabs}
                 />
                 {phone ? <View style={styles.phoneTabs}>{tabs}</View> : null}
@@ -118,13 +96,16 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
 
     return (
         <View style={[styles.container, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
-            <Header
-                title={phone ? <InboxHeaderTitle /> : null}
-                headerLeft={() => null}
-                headerRight={() => null}
-                headerShadowVisible={false}
-                headerTransparent
-            />
+            {/* A phone's bar belongs to the tab shell (`MainView`); a second empty band would push the title down. */}
+            {phone ? null : (
+                <Header
+                    title={null}
+                    headerLeft={() => null}
+                    headerRight={() => null}
+                    headerShadowVisible={false}
+                    headerTransparent
+                />
+            )}
             {phone ? renderList(undefined) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} />}
         </View>
     );
@@ -134,6 +115,10 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
  * Lab `inbox-I1`: the list beside the selected item, selection held by the route's `item` parameter
  * so a link, Back and a reload all land on the same item. Where both panes do not fit, the list is
  * the page and a row opens its item's own page, as on a phone (DESIGN.md, Collections).
+ *
+ * With nothing selected the list is the whole page: no empty pane beside it. The Inbox does not land
+ * on a first item, because opening an item is reading it (a session marks itself seen), and the Inbox
+ * must not settle what the person has not looked at.
  */
 const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
     focusedItem: InboxItemFocus | null;
@@ -141,7 +126,6 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
 }>) {
     const router = useRouter();
     const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
     const { fontScale } = useWindowDimensions();
     const scale = Math.max(1, fontScale);
     const select = React.useCallback((focus: InboxItemFocus) => {
@@ -159,18 +143,14 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
             minDetailWidth={INBOX_DETAIL_MIN_WIDTH_PX * scale}
             preferredListRatio={INBOX_LIST_SHARE}
             stackedPane="list"
-            listStyle={{ borderRightWidth: 1, borderRightColor: theme.colors.border.default }}
+            // The hairline separates the list from an open item; a list alone has nothing to separate from.
+            listStyle={props.focusedItem ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}
             list={(layout) => props.renderList(layout?.mode === 'split' ? select : undefined)}
             detail={props.focusedItem ? (
                 <React.Suspense fallback={<PaneLoadingFallback />}>
                     <InboxItemDetail focus={props.focusedItem} onClose={close} />
                 </React.Suspense>
             ) : null}
-            idleDetail={(
-                <View testID="inbox.detail.idle" style={[styles.idleDetail, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
-                    <Text style={styles.idleDetailText}>{t('inbox.work.detail.idle')}</Text>
-                </View>
-            )}
         />
     );
 });

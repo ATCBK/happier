@@ -146,20 +146,23 @@ describe('navigation shell surfaces follow the content-width setting', () => {
         storageState.localSettings.uiContentWidthMode = 'compact';
     });
 
-    it('preserves the Inbox reading column across content-width changes without remounting its scroll owner', async () => {
+    it('fits the Inbox work column to the content-width preference without remounting its scroll owner', async () => {
         const { HappierPageHeader } = await import('@happier-dev/plugin-ui/presentation');
 
         const tree = (await renderScreen(<InboxView />)).tree;
         const readColumnWidth = () => tree.root.findByType(HappierPageHeader).props.columnMaxWidthPx;
-        // ItemList lets the scroll owner fill the screen; its page children own the reading measure.
-        expect(readColumnWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.reading);
+        // ItemList lets the scroll owner fill the screen; its page children own the measure. The Inbox
+        // is a page of work rows with inline answers (lab `inbox-I1`), so it takes the wide column,
+        // which the person's content-width preference can only narrow.
+        const wide = PAGE_COLUMN_MAX_WIDTH_PX.wide;
+        expect(readColumnWidth()).toBe(Math.min(CONTENT_WIDTH_PX_BY_MODE.compact, wide));
         expect(scrollOwner.mounts).toBe(1);
 
         await setContentWidthMode('medium');
-        expect(readColumnWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.reading);
+        expect(readColumnWidth()).toBe(Math.min(CONTENT_WIDTH_PX_BY_MODE.medium, wide));
 
         await setContentWidthMode('full');
-        expect(readColumnWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.reading);
+        expect(readColumnWidth()).toBe(wide);
 
         // The preference must reach the container in place, not by replacing it.
         expect(scrollOwner.mounts).toBe(1);

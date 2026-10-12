@@ -10,6 +10,7 @@ import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
 import { useSession, useSessionProjectScmStatus, useSetting } from '@/sync/domains/state/storage';
 import { useSessionReachableMachineTarget } from '@/components/sessions/model/useSessionMachineReachability';
+import { useAppRightSidebarTabInputs } from '@/components/appShell/rightSidebar/appRightSidebarTabs';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
 import { resolveGitTabBadge } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
@@ -21,8 +22,8 @@ import {
     resolveSessionCockpitMobileTabVisibility,
     type SessionCockpitMobileCatalogEntry,
 } from '@/components/workspaceCockpit/session/sessionCockpitMobileCatalog';
-import { updateNavigationPlacement } from '@/sync/domains/settings/mobileSurfacePinning';
-import { useNavigationSurfacePlacement } from '@/components/ui/navigation/useNavigationSurfacePlacement';
+import { updateNavigationPlacement, type NavigationPlacementPreferences, type NavigationSurfacePlacementsV1 } from '@/sync/domains/settings/mobileSurfacePinning';
+import { useNavigationSurfacePlacement, useNavigationSurfacePlacementActionWriter } from '@/components/ui/navigation/useNavigationSurfacePlacement';
 import { Modal } from '@/modal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveFloatingTabBarSlotCount } from '@/components/ui/navigation/FloatingTabBarSurface';
@@ -68,6 +69,28 @@ const PREVIOUS_SESSION_ACTION = 'previousSession';
 const NEXT_SESSION_ACTION = 'nextSession';
 const SWITCH_SESSION_ACTION = 'switchSession';
 
+/** This editor mounts in More, never in the closed navigation chrome. */
+function SessionCockpitPinButton(props: Readonly<{
+    entryId: string;
+    pinned: boolean;
+    label: string;
+    preferences: NavigationPlacementPreferences;
+    placementsBySurface: NavigationSurfacePlacementsV1;
+    minimumInteractiveTargetSize: number;
+}>) {
+    const { theme } = useUnistyles();
+    const setPreferences = useNavigationSurfacePlacementActionWriter('sessionTabBar', props.placementsBySurface);
+    return <IconButton testID={`session-cockpit-pin:${props.entryId}`} accessibilityLabel={props.label} tooltip={props.label}
+        icon={<Icon name="push-pin" size={16} weight={props.pinned ? 'fill' : 'regular'}
+            color={props.pinned ? theme.colors.text.primary : theme.colors.text.secondary} />}
+        minimumInteractiveTargetSize={props.minimumInteractiveTargetSize} accessibilityRole="checkbox" checked={props.pinned}
+        size={28} variant="plain" onPress={event => {
+            event?.stopPropagation?.();
+            fireAndForget(setPreferences(updateNavigationPlacement(props.preferences, props.entryId, props.pinned ? 'overflow' : 'pinned')),
+                { tag: 'SessionCockpitTabBar.pin' });
+        }} />;
+}
+
 export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps) => {
     const { theme } = useUnistyles();
     const sessionServerId = usePreferredServerIdForSession({ serverId: props.serverId, sessionId: props.sessionId });
@@ -103,7 +126,7 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
     const scmStatus = useSessionProjectScmStatus(props.sessionId, props.serverId);
     const gitBadgeMode = useSetting('tabBarGitBadgeMode');
     const openTabsBadgeEnabled = useSetting('tabBarOpenTabsBadgeEnabled');
-    const { preferences, setPreferences } = useNavigationSurfacePlacement('sessionTabBar');
+    const { preferences, placementsBySurface } = useNavigationSurfacePlacement('sessionTabBar');
     // "Always swipe between sessions" depends on the sideways swipe itself.
     const alwaysSwipeSetting = useSetting('sessionCockpitSwipeAlwaysSessionsEnabled');
     const swipeSetting = useSetting('sessionCockpitSwipeNavigationEnabled');
@@ -130,14 +153,16 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
         [session],
     );
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const appTabInputs = useAppRightSidebarTabInputs();
 
     const catalog = React.useMemo(() => resolveSessionCockpitMobileCatalog({
+        ...appTabInputs,
         sessionSharingAvailable,
         boardFeatureEnabled,
         terminalTabAvailable: props.terminalTabAvailable,
         pluginPlacements: props.pluginPlacements,
         projectionGeneration: props.projectionGeneration,
-    }), [boardFeatureEnabled, sessionSharingAvailable, props.pluginPlacements, props.projectionGeneration, props.terminalTabAvailable]);
+    }), [appTabInputs, boardFeatureEnabled, sessionSharingAvailable, props.pluginPlacements, props.projectionGeneration, props.terminalTabAvailable]);
     const visibility = React.useMemo(() => resolveSessionCockpitMobileTabVisibility({
         catalog,
         preferences,
@@ -246,23 +271,9 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
                             testID="session-cockpit-more-fact:collaboration"
                         />
                     ) : null}
-                    <IconButton
-                        testID={`session-cockpit-pin:${entry.id}`}
-                        accessibilityLabel={pinLabel}
-                        tooltip={pinLabel}
-                        // State is the glyph's own weight (filled = on the bar), never a tile behind it.
-                        icon={<Icon name="push-pin" size={16} weight={pinned ? 'fill' : 'regular'}
-                            color={pinned ? theme.colors.text.primary : theme.colors.text.secondary} />}
-                        minimumInteractiveTargetSize={minimumInteractiveTargetSize}
-                        accessibilityRole="checkbox"
-                        checked={pinned}
-                        size={28}
-                        variant="plain"
-                        onPress={(event) => {
-                            event?.stopPropagation?.();
-                            setPreferences(updateNavigationPlacement(preferences, entry.id, pinned ? 'overflow' : 'pinned'));
-                        }}
-                    />
+                    <SessionCockpitPinButton entryId={entry.id} pinned={pinned} label={pinLabel}
+                        preferences={preferences} placementsBySurface={placementsBySurface}
+                        minimumInteractiveTargetSize={minimumInteractiveTargetSize} />
                 </>
             ),
         };

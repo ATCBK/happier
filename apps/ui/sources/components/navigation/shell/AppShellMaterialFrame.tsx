@@ -1,11 +1,10 @@
 import * as React from 'react';
 import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 import { DesktopMainContentDragSurface } from '@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurface';
-import { glassSurfaceBackgroundColor, glassSurfacePlaneStyle } from '@/components/ui/glass/glassSurfacePaint';
+import { AtmosphereLayer } from '@/components/atmosphere/AtmosphereLayer';
+import { glassSurfacePlaneStyle } from '@/components/ui/glass/glassSurfacePaint';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
-import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
 import type { GlassSurfaceGroup } from '@/components/ui/glass/glassMaterial';
 import { appShellColumnSurface } from './appRail/appShellColumnSurface';
 import { APP_RAIL_WIDTH_PX } from './appRail/appRailMetrics';
@@ -87,7 +86,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-/** Web window planes keep their tint-only paint; native planes use the same tier owner as overlays. */
+/** Structural coats share the surface owner; Wallpaper filters paint beside their content. */
 export function AppShellMaterialPlane(props: Readonly<{
     group: GlassSurfaceGroup;
     color: string;
@@ -98,20 +97,14 @@ export function AppShellMaterialPlane(props: Readonly<{
     nested?: boolean;
     children?: React.ReactNode;
 }>) {
-    const resolveMaterialColor = useGlassMaterialColorResolver(props.group);
-    if (Platform.OS !== 'web') {
-        if (props.pointerEvents === 'none') return <View pointerEvents="none" style={[props.style, { backgroundColor: 'transparent' }]}>
-            <GlassSurface surfaceGroup={props.group} solidColor={props.color} finishRole={null} nested={props.nested} style={StyleSheet.absoluteFillObject}>
-                {props.children}
-            </GlassSurface>
-        </View>;
-        return <GlassSurface testID={props.testID} surfaceGroup={props.group} solidColor={props.color} finishRole={null} nested={props.nested} style={props.style}>
+    if (props.pointerEvents === 'none') return <View pointerEvents="none" style={[props.style, { backgroundColor: 'transparent' }]}>
+        <GlassSurface plane surfaceGroup={props.group} solidColor={props.color} translucentColor={props.translucentColor} finishRole={null} nested={props.nested} style={StyleSheet.absoluteFillObject}>
             {props.children}
-        </GlassSurface>;
-    }
-    return <HappierMaterialRoleProvider role={props.group} translucentColor={props.translucentColor} resolveMaterialColor={resolveMaterialColor}>
-        <View testID={props.testID} pointerEvents={props.pointerEvents} style={[props.style, { backgroundColor: glassSurfaceBackgroundColor(props.color, props.group, props.nested) }]}>{props.children}</View>
-    </HappierMaterialRoleProvider>;
+        </GlassSurface>
+    </View>;
+    return <GlassSurface plane testID={props.testID} surfaceGroup={props.group} solidColor={props.color} translucentColor={props.translucentColor} finishRole={null} nested={props.nested} style={props.style}>
+        {props.children}
+    </GlassSurface>;
 }
 
 
@@ -131,6 +124,8 @@ export function AppShellMaterialFrame(props: Readonly<{
     const { theme } = useUnistyles();
     return <DesktopMainContentDragSurface enabled={props.dragEnabled} leftOffsetPx={props.leftOffsetPx}
         style={styles.root}>
+        {/* The atmosphere's picture lies under every plane; route changes only change the content coat. */}
+        <AtmosphereLayer sheetRadius={CONTENT_SHEET_RADIUS_PX} chrome={props.showChrome} />
         {props.titleStrip ? <AppShellMaterialPlane group="chrome" color={theme.colors.background.canvas} translucentColor={theme.colors.surface.selected} style={styles.chromePlane}>
             {props.titleStrip}
         </AppShellMaterialPlane> : null}

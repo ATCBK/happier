@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { AppRailSurface } from './AppRail';
 import { buildAppRailEntries, buildAppRailPlacementItems } from './appRailModel';
@@ -27,9 +28,9 @@ describe('AppRail native customization recovery', () => {
         }), { includeHidden: true });
         const items = buildAppRailPlacementItems(entries, true);
         const customize = vi.fn();
-        const screen = await renderScreen(<AppRailSurface entries={entries} activeId={null} onOpen={() => {}}
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><AppRailSurface entries={entries} activeId={null} onOpen={() => {}}
             updatesVisible onCustomize={customize}
-            preferences={{ orderedIds: [], placements: Object.fromEntries(items.map(item => [item.id, 'hidden' as const])) }} />);
+            preferences={{ orderedIds: [], placements: Object.fromEntries(items.map(item => [item.id, 'hidden' as const])) }} /></InjectedAuthProvider>);
 
         expect(screen.findHostByTestId('app-rail')?.props.onContextMenu).toBeUndefined();
         const more = screen.findHostByTestId('app-rail-more.trigger');

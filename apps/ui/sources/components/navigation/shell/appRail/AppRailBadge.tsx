@@ -1,12 +1,14 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import type { PluginUiToneV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { formatBadgeCount } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
 import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
 import { Text } from '@/components/ui/text/Text';
+import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { Typography } from '@/constants/Typography';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 import { APP_RAIL_BADGE } from './appRailMetrics';
 
@@ -28,7 +30,9 @@ export function resolveAppRailBadgeTone(
         /** Connected accounts that need a new sign-in (never low limits). */
         | Readonly<{ source: 'signIn' }>
         | Readonly<{ source: 'updates'; failed: boolean }>
-        | Readonly<{ source: 'plugin'; tone: PluginUiToneV1 }>,
+        | Readonly<{ source: 'plugin'; tone: PluginUiToneV1 }>
+        /** A machine that needs you (counted) or is worth a look (dot) is amber; the guard having acted is muted. */
+        | Readonly<{ source: 'machines'; level: 'needs_you' | 'look' | 'guard' }>,
 ): AppRailBadgeTone {
     switch (source.source) {
         case 'inbox':
@@ -40,6 +44,8 @@ export function resolveAppRailBadgeTone(
             return source.tone === 'danger' || source.tone === 'warning'
                 ? 'attention'
                 : source.tone === 'neutral' ? 'neutral' : 'accent';
+        case 'machines':
+            return source.level === 'guard' ? 'neutral' : 'attention';
     }
 }
 
@@ -50,20 +56,41 @@ export function resolveAppRailBadgeTone(
  */
 export const AppRailBadge = React.memo(function AppRailBadge(props: Readonly<{ signal: AppRailBadgeSignal; testID?: string }>) {
     const styles = stylesheet;
+    const appear = useBadgeAppear();
     const tone = props.signal.tone === 'attention'
         ? styles.attention
         : props.signal.tone === 'accent' ? styles.accent : styles.neutral;
     if (props.signal.kind === 'dot') {
-        return <View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.dot, tone]} />;
+        return <Animated.View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.dot, tone, appear]} />;
     }
     return (
-        <View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.count, tone]}>
+        <Animated.View pointerEvents="none" testID={props.testID} style={[styles.anchor, styles.count, tone, appear]}>
             <Text style={styles.countText} numberOfLines={1}>
                 {formatBadgeCount(props.signal.value)}
             </Text>
-        </View>
+        </Animated.View>
     );
 });
+
+/** The badge arrives in 160 ms, fading in from 0.8 scale (MPG-32); under reduced motion it is simply there. */
+const BADGE_APPEAR_MS = 160;
+const BADGE_APPEAR_FROM_SCALE = 0.8;
+
+function useBadgeAppear() {
+    const reducedMotion = useReducedMotionPreference();
+    const progress = useSharedValue(reducedMotion ? 1 : 0);
+    React.useEffect(() => {
+        if (reducedMotion) {
+            progress.value = 1;
+            return;
+        }
+        progress.value = withTiming(1, { duration: BADGE_APPEAR_MS, easing: reanimatedMotionTokens.easing.standard });
+    }, [progress, reducedMotion]);
+    return useAnimatedStyle(() => ({
+        opacity: progress.value,
+        transform: [{ scale: BADGE_APPEAR_FROM_SCALE + (1 - BADGE_APPEAR_FROM_SCALE) * progress.value }],
+    }));
+}
 
 /**
  * The same signal on a row of the rail's More menu (a rail slot that moved there): a count in the

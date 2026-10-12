@@ -24,7 +24,8 @@ export function resolveRailPopoverRosterListMaxHeight(
 
 /**
  * The one anatomy of a rail roster popover (Bots, Machines): what it lists and a quiet summary of
- * those things on one line, the list itself, a hairline, then the rows that add to it. The list owns
+ * those things on one line (or on a second header line), the list itself, a hairline, then the rows
+ * that add to it. The list owns
  * its scrolling; size it with `resolveRailPopoverRosterListMaxHeight`.
  */
 export function RailPopoverRoster(
@@ -33,6 +34,8 @@ export function RailPopoverRoster(
     title: string;
     /** What the listed things are doing, at the end of the title line. */
     summary?: React.ReactNode;
+    /** A second header line under the title (Machines: presence and work counts, then All machines). */
+    subheader?: React.ReactNode;
     children?: React.ReactNode;
     actions: ReadonlyArray<ActionListItem | null>;
   }>,
@@ -45,6 +48,9 @@ export function RailPopoverRoster(
         </Text>
         {props.summary}
       </View>
+      {props.subheader ? (
+        <View style={styles.subheader}>{props.subheader}</View>
+      ) : null}
       {props.children}
       <View style={styles.divider} />
       <ActionListSection style={styles.actions} actions={props.actions} />
@@ -57,23 +63,32 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingTop: theme.space.s12,
+    paddingBottom: theme.space.s4,
+  },
+  subheader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingBottom: theme.space.s6,
   },
   title: {
+    // The roster's name leads its rows: the section-title step, one above the rows' meta and summary line.
     ...Typography.default('semiBold'),
-    ...happierPageTextMetrics('meta'),
+    ...happierPageTextMetrics('sectionTitle'),
     color: theme.colors.text.primary,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    marginHorizontal: 12,
+    marginHorizontal: theme.space.s12,
     backgroundColor: theme.colors.border.default,
   },
   actions: {
-    paddingTop: 4,
-    paddingBottom: 4,
+    paddingTop: theme.space.s4,
+    paddingBottom: theme.space.s4,
   },
 }));

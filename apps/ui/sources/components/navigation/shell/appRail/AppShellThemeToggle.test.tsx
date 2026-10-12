@@ -80,11 +80,12 @@ async function renderStrip() {
 }
 
 describe('AppShellThemeToggle', () => {
-    it('offers one Customize path and an honest browser state in the popover', async () => {
+    it('offers one Appearance settings path and an honest browser state in the popover', async () => {
         const screen = await renderStrip();
         await screen.pressByTestIdAsync('app-shell-theme-toggle');
         expect(screen.findByTestId('appearance-material:custom')).toBeNull();
-        expect(screen.findByTestId('appearance-customize-link')).not.toBeNull();
+        expect(screen.findByTestId('appearance-customize-link')).toBeNull();
+        expect(screen.findByTestId('appearance-more-settings')).not.toBeNull();
         expect(screen.findAllByProps({ title: 'settingsAppearance.glassControls.effectiveBrowser' }).length).toBeGreaterThan(0);
         expect(screen.findByTestId('appearance-desktop-download')).not.toBeNull();
         await screen.pressByTestIdAsync('appearance-material:solid');
@@ -183,26 +184,37 @@ describe('AppShellThemeToggle', () => {
         expect(screen.findByTestId('app-shell-column-toggle')).not.toBeNull();
     });
 
-    it('applies strongest blur and fully transparent content from the Appearance disclosure', async () => {
+    it('edits Elements without leaving Auto and keeps non-card layer choices Custom', async () => {
         const { GlassAppearanceSection } = await import('@/components/settings/appearance/GlassAppearanceControls');
         const screen = await renderScreen(<GlassAppearanceSection />);
-        await screen.pressByTestIdAsync('appearance-customize');
-        await screen.pressByTestIdAsync('appearance-content-blur:strong');
-        const slider = screen.findAllByTestId('appearance-content-opacity').find(node => typeof node.props.onKeyDown === 'function');
-        expect(slider).toBeDefined();
-        await act(async () => { slider?.props.onKeyDown({ key: 'Home', preventDefault: () => {} }); });
+        expect(screen.findByTestId('appearance-customize')).toBeNull();
+        expect(screen.findByTestId('appearance-content:glass')).toBeNull();
+        await screen.pressByTestIdAsync('appearance-card:solid');
         const { storage } = await import('@/sync/domains/state/storage');
-        expect(storage.getState().settings.glassSurfaceMaterials?.content).toEqual({ blur: 'strong', opacity: 0 });
-        expect(screen.findByTestId('appearance-content-opacity-value')?.findAll(node => node.props.children === '0%').length).toBeGreaterThan(0);
-        await screen.pressByTestIdAsync('appearance-material:auto');
-        expect(storage.getState().settings.glassSurfaceMaterials).toBeNull();
+        const { readGlassPreset, readGlassMaterials } = await import('@/components/ui/glass/glassMaterial');
+        expect(readGlassPreset(storage.getState().settings)).toBe('auto');
+        expect(readGlassMaterials(storage.getState().settings).card).toEqual({ blur: 'off', opacity: 1 });
+        await screen.pressByTestIdAsync('appearance-card:glass');
+        expect(readGlassPreset(storage.getState().settings)).toBe('auto');
+        await screen.pressByTestIdAsync('appearance-sidebar:solid');
+        expect(readGlassPreset(storage.getState().settings)).toBe('custom');
+        expect(readGlassMaterials(storage.getState().settings).sidebar).toEqual({ blur: 'off', opacity: 1 });
     });
 
-    it('reveals a requested group inside the closed Customize disclosure', async () => {
-        routeParams.setting = 'appearance.glassContentOpacity';
+    it('shows the Window layer only in a desktop app', async () => {
+        const { GlassAppearanceSection } = await import('@/components/settings/appearance/GlassAppearanceControls');
+        const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+        const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ desktopWindow: true }}><GlassAppearanceSection /></GlassRuntimeEnvironmentProvider>);
+        expect(screen.findByTestId('appearance-content:glass')).not.toBeNull();
+        expect(screen.findByTestId('appearance-chrome:glass')).not.toBeNull();
+        expect(screen.findByTestId('appearance-floating:glass')).not.toBeNull();
+    });
+
+    it('reveals a requested layer directly from settings search', async () => {
+        routeParams.setting = 'appearance.glassElements';
         const { GlassAppearanceSection } = await import('@/components/settings/appearance/GlassAppearanceControls');
         const screen = await renderScreen(<GlassAppearanceSection />);
-        expect(screen.findByTestId('appearance-content-opacity')).not.toBeNull();
+        expect(screen.findByTestId('appearance-card:glass')).not.toBeNull();
     });
 
     it('opens Android accessibility settings from the Reduce Transparency notice, not app settings', async () => {

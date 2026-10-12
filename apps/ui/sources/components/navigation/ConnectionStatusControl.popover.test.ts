@@ -2054,6 +2054,8 @@ describe('ConnectionStatusControl (native popover config)', () => {
         const message = screen.findByTestId('connection-popover-machine-guidance-message');
         expect(message).toBeTruthy();
         expect(screen.getTextContent()).toContain('machine.thisComputer.noComputers');
+        // The viewer's own Account is named by the one viewer rule, never by an id or "unknown".
+        expect(screen.getTextContent()).toContain('appAccount=accountDisplay.yours');
         expect(screen.getTextContent()).not.toContain('newSession.noMachinesFound');
 
         routerMocks.push.mockClear();

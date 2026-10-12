@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
-import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import {
+    isCompactAppDestinationInvokable,
+    isCompactAppDestinationVisible,
+    resolveCompactAppDestinations,
+} from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { createSessionFixture } from '@/dev/testkit';
 import { buildSessionOrganizationProjection, buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 
 import {
     buildAppRailEntries,
+    buildAppRailPlacementItems,
     resolveAppRailEntryColumn,
     resolveAppShellLocation,
 } from './appRailModel';
@@ -61,6 +66,19 @@ describe('app rail model', () => {
         // Browse external sessions and the notes page belong to the Sessions column, not the rail.
         expect(ids([...rail.app, ...rail.plugins, ...rail.account])).not.toContain('browseExistingSessions');
         expect(ids([...rail.app, ...rail.plugins, ...rail.account])).not.toContain('plugin:acme.notes:notes');
+    });
+
+    it('lists Machines once on the rail and in its customizer (its footer control), while the palette can open it', () => {
+        const destinations = catalog([]);
+        const entries = buildAppRailEntries(destinations, { includeHidden: true });
+        expect(ids([...entries.app, ...entries.plugins, ...entries.account])).not.toContain('machines');
+        const items = buildAppRailPlacementItems(entries, false);
+        expect(items.filter(item => item.id === 'machines' || item.id === 'app-rail-machines').map(item => item.id))
+            .toEqual(['app-rail-machines']);
+        // The command palette lists every visible, invokable destination: Machines is one (MPG-34).
+        const machines = destinations.find(destination => destination.id === 'machines');
+        expect(machines && isCompactAppDestinationVisible(machines) && isCompactAppDestinationInvokable(machines)).toBe(true);
+        expect(machines?.routePath).toBe('/machines');
     });
 
     it('projects only explicit rail-pinned Bots, keeping demoted choices for re-promotion', () => {
@@ -125,6 +143,12 @@ describe('app rail model', () => {
         expect(at('/plugins/acme.tools')).toEqual(['plugins', 'plugins', 'plugins']);
         expect(at('/plugins/acme.triage/triage/pr/1')).toEqual(['plugin:acme.triage:triage', 'plugin:acme.triage:triage', 'none']);
         expect(at('/settings/appearance')).toEqual(['settings', 'settings', 'settings']);
+        // The rail door of the Machines page: the machine list as its column, the Machines rail item open (R1).
+        expect(at('/machines')).toEqual(['machines', 'machines', 'machines']);
+        expect(at('/machines/m-1')).toEqual(['machines', 'machines', 'machines']);
+        expect(at('/machines/m-1/doctor')).toEqual(['machines', 'machines', 'machines']);
+        // The Settings door keeps the Settings column.
+        expect(at('/settings/machines/m-1')).toEqual(['settings', 'settings', 'settings']);
         // A Home's console keeps the settings navigation beside its own.
         expect(at('/settings/home/srv%201/people/acc')).toEqual(['settings', 'settings', 'settings']);
         expect(at('/search')).toEqual(['search', 'search', 'none']);

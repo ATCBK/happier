@@ -109,6 +109,11 @@ export function RootLayoutRedirectGate({ children }: { children: React.ReactNode
     return <>{children}</>;
 }
 
+/** Keep routes registered while withholding protected scenes during a redirect. */
+export function renderRootLayoutRedirectGate(props: { children: React.ReactNode }): React.ReactElement {
+    return <RootLayoutRedirectGate>{props.children}</RootLayoutRedirectGate>;
+}
+
 /** Admit a supplied Home below modal ownership and before shell or cache consumers mount. */
 export function WebServerOverrideGate({ children }: { children: React.ReactNode }): React.ReactElement | null {
     const { refreshFromActiveServer: refreshAuth } = useAuth();

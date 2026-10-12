@@ -28,7 +28,8 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { SidebarFooterPopoverButton, type SidebarFooterPopoverContentProps, type SidebarFooterPopoverTrigger } from '../sidebarFooter/SidebarFooterPopoverButton';
-import { SidebarUsagePopoverContent, USAGE_POPOVER_WIDTH_PX } from '../sidebarFooter/SidebarUsagePopoverContent';
+import { SidebarUsagePopoverContent } from '../sidebarFooter/SidebarUsagePopoverContent';
+import { RAIL_POPOVER_WIDE_WIDTH_PX } from '../sidebarFooter/sidebarFooterLayout';
 import { InboxPopoverContent } from '@/components/inbox/InboxPopover';
 import { AppRailAccount } from './AppRailAccount';
 import { AppRailMachines } from './AppRailMachines';
@@ -55,6 +56,7 @@ import { useAppShellLocation } from './useAppShellLocation';
 import { useSessionListRailOrganizationAction } from '@/components/sessions/shell/useSessionListRailOrganizationAction';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { moveAppRailBot } from './useAppRailBotReorder';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 /** A rail-pinned Bot, standing right under the Bots entry among the top items. */
 type AppRailTopGroup = AppRailPlacementItem['group'] | 'bots';
@@ -170,7 +172,7 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
         seenBotIdsRef.current = new Set([...(seenBotIdsRef.current ?? []), ...entries.bots.map(bot => bot.id)]);
     }, [entries.bots]);
     const renderFooter = props.renderFooter ?? ((item: AppRailPlacementItem, trigger?: SidebarFooterPopoverTrigger) =>
-        <AppRailFooterItem item={item} renderTrigger={trigger} />);
+        <AppRailFooterItem item={item} renderTrigger={trigger} activeId={activeId} />);
 
     return (
         <View testID="app-rail" style={[styles.rail, { backgroundColor: materialColor(theme.colors.background.canvas, 'transparent') }]} onLayout={onRailLayout}
@@ -326,7 +328,8 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const [open, setOpen] = React.useState(false);
-    // Keyboard selection and a row press invoke the same live popover trigger.
+    // Keyboard selection and a row press invoke the same current mounted More presentation.
+    // Footer triggers and Bot commands stay here only; this map never resolves an Action or an order.
     const footerActions = React.useRef(new Map<string, () => void>());
     const registerFooterAction = React.useCallback((id: string, action: (() => void) | null) => {
         if (action) footerActions.current.set(id, action);
@@ -363,6 +366,8 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
     }))];
     return (
         <View style={styles.itemSlot}>
+            {botHomeIds.map(serverId => <AppRailBotOverflowActions key={serverId} serverId={serverId}
+                bots={props.bots ?? []} neighbors={props.botNeighbors} registerAction={registerFooterAction} />)}
             <DropdownMenu
                 testID="app-rail-more"
                 open={open}
@@ -378,9 +383,7 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
                 onSelect={(id) => {
                     const direction = id.startsWith('move-up:') ? 'up' : id.startsWith('move-down:') ? 'down' : null;
                     if (direction) {
-                        const bot = props.bots?.find(candidate => id === `move-${direction}:${candidate.id}`);
-                        const target = bot && props.botNeighbors.get(bot.id)?.[direction === 'up' ? 'previous' : 'next'];
-                        if (bot && target) fireAndForget(moveAppRailBot(botScopes.get(bot.serverId), bot, target, direction === 'up' ? 'top' : 'bottom'), { tag: 'AppRail.More.Bot.move' });
+                        footerActions.current.get(id)?.();
                         return;
                     }
                     const bot = props.bots?.find(candidate => candidate.id === id);
@@ -417,6 +420,34 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
     );
 });
 
+/** Keep each overflow Home's original result continuation mounted even while More is closed. */
+function AppRailBotOverflowActions(props: Readonly<{
+    serverId: string;
+    bots: readonly AppRailBotEntry[];
+    neighbors: ReadonlyMap<string, { previous?: string; next?: string }>;
+    registerAction: (id: string, action: (() => void) | null) => void;
+}>) {
+    const { binding, execute } = useMountedActionExecution(props.serverId);
+    React.useEffect(() => {
+        const ids: string[] = [];
+        for (const bot of props.bots) {
+            if (bot.serverId !== props.serverId) continue;
+            for (const direction of ['up', 'down'] as const) {
+                const target = props.neighbors.get(bot.id)?.[direction === 'up' ? 'previous' : 'next'];
+                if (!target) continue;
+                const id = `move-${direction}:${bot.id}`;
+                ids.push(id);
+                props.registerAction(id, () => fireAndForget(
+                    moveAppRailBot(binding, bot, target, direction === 'up' ? 'top' : 'bottom', execute),
+                    { tag: 'AppRail.More.Bot.move' },
+                ));
+            }
+        }
+        return () => { for (const id of ids) props.registerAction(id, null); };
+    }, [binding, execute, props.bots, props.neighbors, props.registerAction, props.serverId]);
+    return null;
+}
+
 function AppRailFooterMenuRow(props: Readonly<{
     item: AppRailPlacementItem;
     trigger: Parameters<SidebarFooterPopoverTrigger>[0];
@@ -437,9 +468,11 @@ function AppRailFooterMenuRow(props: Readonly<{
 const AppRailFooterItem = React.memo(function AppRailFooterItem(props: Readonly<{
     item: AppRailPlacementItem;
     renderTrigger?: SidebarFooterPopoverTrigger;
+    /** The open rail entry: a footer control whose destination is open shows selected (Machines' rail door). */
+    activeId?: string | null;
 }>) {
     if (props.item.id === 'app-rail-usage') return <AppRailUsage renderTrigger={props.renderTrigger} />;
-    if (props.item.id === 'app-rail-machines') return <AppRailMachines renderTrigger={props.renderTrigger} />;
+    if (props.item.id === 'app-rail-machines') return <AppRailMachines renderTrigger={props.renderTrigger} selected={props.activeId === 'machines'} />;
     if (props.item.id === 'app-rail-updates') return <AppRailUpdates renderTrigger={props.renderTrigger} />;
     if (props.item.id === 'app-rail-account') return <AppRailAccount renderTrigger={props.renderTrigger
         ? state => props.renderTrigger?.({ onPress: state.activate, open: state.open }) : undefined} />;
@@ -470,7 +503,7 @@ const AppRailUsage = React.memo(function AppRailUsage(props: Readonly<{ renderTr
                         placement="right"
                         buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
                         iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
-                        popoverWidthPx={USAGE_POPOVER_WIDTH_PX}
+                        popoverWidthPx={RAIL_POPOVER_WIDE_WIDTH_PX}
                         hoverPreview
                         renderContent={renderUsage}
                         renderTrigger={menuTrigger}

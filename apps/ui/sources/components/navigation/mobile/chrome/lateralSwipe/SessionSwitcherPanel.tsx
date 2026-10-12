@@ -74,7 +74,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 18,
-        gap: 12,
+        gap: theme.space.s12,
     },
     mark: {
         width: 22,
@@ -85,9 +85,8 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     title: {
-        fontSize: 15,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     titleUnavailable: {
         color: theme.colors.text.tertiary,
@@ -95,30 +94,27 @@ const styles = StyleSheet.create((theme) => ({
     statusLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         marginTop: 1,
     },
     status: {
         flexShrink: 1,
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     time: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default(),
     },
     here: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s2,
         borderRadius: 999,
         overflow: 'hidden',
         backgroundColor: theme.colors.surface.inset,
-        ...Typography.default('semiBold'),
     },
     heading: {
         position: 'absolute',
@@ -128,18 +124,16 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 18,
         flexDirection: 'row',
         alignItems: 'flex-end',
-        paddingBottom: 4,
-        gap: 6,
+        paddingBottom: theme.space.s4,
+        gap: theme.space.s6,
     },
     headingText: {
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     headingMeta: {
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        ...Typography.default(),
     },
     end: {
         position: 'absolute',
@@ -149,7 +143,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 18,
-        gap: 12,
+        gap: theme.space.s12,
     },
     dockedHeader: {
         height: DOCKED_HEADER_HEIGHT,
@@ -159,45 +153,40 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 18,
     },
     dockedTitle: {
-        fontSize: 17,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     link: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
         minHeight: 44,
     },
     linkText: {
-        fontSize: 15,
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.link,
-        ...Typography.default(),
     },
     peek: {
         position: 'absolute',
         left: 18,
         right: 18,
         paddingHorizontal: 14,
-        paddingVertical: 10,
-        gap: 4,
+        paddingVertical: theme.space.s10,
+        gap: theme.space.s4,
     },
     peekWhere: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     peekWhereText: {
         flexShrink: 1,
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     peekText: {
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
-        ...Typography.default(),
     },
 }));
 
@@ -422,8 +411,8 @@ const SwitcherPeek = React.memo(function SwitcherPeek(props: Readonly<{ row: Ses
     const { row } = props;
     const where = [row.status?.text, row.timeLabel].filter(Boolean).join(' · ');
     return (
-        <View style={[styles.peek, { bottom: '100%', marginBottom: 10 }]} pointerEvents="none">
-            <GlassPanel radius={20} surfaceColor={theme.colors.surface.base} style={{ paddingHorizontal: 14, paddingVertical: 10, gap: 4 }}>
+        <View style={[styles.peek, { bottom: '100%', marginBottom: theme.space.s10 }]} pointerEvents="none">
+            <GlassPanel radius={20} surfaceColor={theme.colors.surface.base} style={{ paddingHorizontal: 14, paddingVertical: theme.space.s10, gap: theme.space.s4 }}>
                 <View style={styles.peekWhere}>
                     <RowMark row={row} size={13} />
                     <Text style={styles.peekWhereText} numberOfLines={1}>{where || row.title}</Text>

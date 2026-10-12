@@ -6,14 +6,21 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import {
     getAppliedActiveServerId,
+    getAppliedActiveServerSnapshot,
+    isAppliedActiveServerRuntimeAvailable,
     retryActiveServerConnection,
     subscribeAppliedActiveServer,
+    subscribeAppliedActiveServerRuntimeAvailability,
 } from '@/sync/runtime/orchestration/connectionManager';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { storage } from '@/sync/domains/state/storage';
+import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
+import { resolveServerScopedMachineInventoryKeys } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 import { resolveHomeConnectionSummary } from './resolveHomeConnectionSummary';
 import { useActiveHomeConnectionHealth } from './useConnectionHealth';
+import { resolveConnectionHealth } from './resolveConnectionHealth';
 
 function subscribeApplied(listener: () => void): () => void {
     return subscribeAppliedActiveServer(() => listener());
@@ -26,6 +33,12 @@ function useReportedHomeServerId(): string | null {
     return appliedServerId || requestedServerId || null;
 }
 
+/** Whether the Home this device uses is unreachable: the canonical connection summary the footer shows. */
+export function useActiveHomeUnavailable(): boolean {
+    const health = useActiveHomeConnectionHealth();
+    return resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
+}
+
 /**
  * Whether a failed read that needed only these Homes is explained by the Home this device uses being
  * unreachable: every one of them is that Home, and the canonical connection summary says it is
@@ -33,8 +46,33 @@ function useReportedHomeServerId(): string | null {
  * that one banner instead of reporting the same cause again.
  */
 export function useFailureExplainedByUnreachableHome(homeServerIds: readonly string[]): boolean {
-    const health = useActiveHomeConnectionHealth();
-    const unavailable = resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
+    // A closed or non-pending caller observes no health. Pending callers select only
+    // the Home's unavailable bit, never its machine inventory or display details.
+    const enabled = homeServerIds.length > 0;
+    const readUnavailable = React.useCallback(() => {
+        if (!enabled || !isAppliedActiveServerRuntimeAvailable()) return false;
+        const state = storage.getState();
+        const serverId = getAppliedActiveServerSnapshot().serverId;
+        const syncError = selectSyncErrorForServer(state.syncError, serverId);
+        const statuses = state.machineListStatusByServerId;
+        const keys = resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId: statuses });
+        const status = keys.map(key => statuses[key]).find(value => value !== undefined) ?? 'idle';
+        // Machine counts refine connected-state labels but cannot make a Home
+        // unavailable. Its list's error/sign-in state still enters the same classifier.
+        const health = resolveConnectionHealth({ socketStatus: state.socketStatus,
+            endpointStatus: state.endpointStatus, endpointReason: state.endpointReason,
+            hasSyncError: Boolean(syncError), syncErrorKind: syncError?.kind,
+            machineGroups: [{ machineCount: null, onlineCount: null, status }] });
+        return resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
+    }, [enabled]);
+    const subscribeUnavailable = React.useCallback((listener: () => void) => {
+        if (!enabled) return () => {};
+        const unsubscribe = storage.subscribe(listener);
+        const unsubscribeApplied = subscribeAppliedActiveServer(listener);
+        const unsubscribeAvailability = subscribeAppliedActiveServerRuntimeAvailability(listener);
+        return () => { unsubscribe(); unsubscribeApplied(); unsubscribeAvailability(); };
+    }, [enabled]);
+    const unavailable = React.useSyncExternalStore(subscribeUnavailable, readUnavailable, readUnavailable);
     const reportedServerId = useReportedHomeServerId();
     return unavailable
         && reportedServerId !== null
@@ -56,8 +94,7 @@ export function HomeReachabilityGate(props: Readonly<{
     /** For multi-Home lists, only report this Home when it is part of the visible query. */
     relevantServerIds?: readonly string[];
 }>) {
-    const health = useActiveHomeConnectionHealth();
-    const unavailable = resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
+    const unavailable = useActiveHomeUnavailable();
     // Name the Home whose health this reports: the applied one (during a switch the requested Home
     // is not yet the one the transport is talking to), as the footer's Home line does.
     const serverId = useReportedHomeServerId();

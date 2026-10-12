@@ -152,7 +152,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     statusChevron: {
-        marginLeft: 2,
+        marginLeft: theme.space.s2,
         marginTop: 1,
         opacity: 0.9,
     },
@@ -162,7 +162,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: MENU_ROW_METRICS.sectionPaddingVerticalPx,
     },
     popoverStatusList: {
-        marginHorizontal: 12,
+        marginHorizontal: theme.space.s12,
         borderRadius: 14,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -173,8 +173,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minHeight: 54,
-        paddingVertical: 9,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
         position: 'relative',
     },
     statusRowDivider: {
@@ -188,7 +188,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     statusRowLeft: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         flexShrink: 1,
         minWidth: 0,
     },
@@ -203,23 +203,19 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     statusRowTitle: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
-        lineHeight: 17,
     },
     statusRowSubtitle: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
-        lineHeight: 16,
         marginTop: 1,
     },
     statusRowRight: {
-        marginLeft: 10,
+        marginLeft: theme.space.s10,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     statusRowRetryButton: {
         minWidth: minimumInteractiveTargetSize,
@@ -232,57 +228,53 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 0,
     },
     statusMeta: {
-        paddingHorizontal: 16,
-        paddingTop: 10,
-        gap: 6,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s10,
+        gap: theme.space.s6,
     },
     statusMetaRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
         alignItems: 'flex-start',
     },
     statusMetaLabel: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     statusMetaValue: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
-        ...Typography.default(),
     },
     technicalDetails: {
-        marginHorizontal: 12,
-        marginTop: 4,
-        padding: 12,
+        marginHorizontal: theme.space.s12,
+        marginTop: theme.space.s4,
+        padding: theme.space.s12,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        gap: 8,
+        gap: theme.space.s8,
     },
     technicalDetailsTitle: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     technicalDetailsValue: {
-        fontSize: 11,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         ...Typography.mono(),
     },
     popoverActionsRow: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 12,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
     },
     popoverActionButton: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 10,
         backgroundColor: theme.colors.background.canvas,
         borderWidth: StyleSheet.hairlineWidth,
@@ -291,15 +283,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     popoverActionButtonText: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     detailsDisclosure: {
         minHeight: minimumInteractiveTargetSize,
-        marginHorizontal: 12,
-        marginTop: 6,
-        paddingHorizontal: 8,
+        marginHorizontal: theme.space.s12,
+        marginTop: theme.space.s6,
+        paddingHorizontal: theme.space.s8,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -308,12 +299,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: minimumInteractiveTargetSize,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     detailsDisclosureText: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
 }));
 
@@ -726,9 +716,8 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
     const serverTargets = React.useMemo(() => {
         return listServerSelectionTargets({
             serverProfiles: servers.map((profile) => ({
+                ...profile,
                 id: resolveServerProfileScopeId(profile),
-                name: profile.name,
-                serverUrl: profile.serverUrl,
             })),
             groupProfiles: normalizeStoredServerSelectionGroups(serverSelectionScopeSettings.serverSelectionGroups),
             usableServerIds,
@@ -1214,14 +1203,14 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                             name="warning"
                             size={dotSize + 4}
                             color={collapsedStatusColor}
-                            style={{ marginRight: 4 }}
+                            style={{ marginRight: theme.space.s4 }}
                         />
                     ) : (
                         <StatusDot
                             color={collapsedStatusColor}
                             isPulsing={collapsedStatusIsPulsing}
                             size={dotSize}
-                            style={{ marginRight: 4 }}
+                            style={{ marginRight: theme.space.s4 }}
                         />
                     )}
                     <Text

@@ -8,6 +8,7 @@ import { WorkflowsColumn } from '@/components/workflows/column/WorkflowsColumn';
 import { BoardsColumn } from '@/components/boards/BoardsColumn';
 import { PluginsNavigationColumn } from '@/components/settings/plugins/PluginsNavigationColumn';
 import { SettingsSidebar } from '@/components/settings/shell/SettingsSidebar';
+import { MachinesColumn } from '@/components/machines/collection/MachinesColumn';
 import { PopoverScope } from '@/components/ui/popover';
 
 import type { BuiltinAppShellColumnId } from '@/components/appShell/destinations/compactAppDestinationCatalog';
@@ -19,7 +20,8 @@ import type { AppShellColumn as AppShellColumnModel } from './appRailModel';
  * The column beside the page, owned by the open destination (lab `xrail-R1*`): the grouped session
  * list for Sessions, the projects for Projects, what needs you, runs and your library for Workflows,
  * Installed/Browse and the installed plugins for Plugins, and the settings
- * navigation for Settings (a Home's console stands its own sidebar beside it, inside the page). Only
+ * navigation for Settings (a Home's console stands its own sidebar beside it, inside the page), and the
+ * machine list for the Machines page's rail door. Only
  * the open destination's column is mounted, so a closed one keeps no subscriptions.
  */
 export const AppShellColumn = React.memo(function AppShellColumn(props: Readonly<{ column: AppShellColumnModel }>) {
@@ -52,6 +54,7 @@ const BUILTIN_COLUMNS = {
     boards: BoardsColumn,
     plugins: PluginsNavigationColumn,
     settings: SettingsSidebar,
+    machines: MachinesColumn,
 } satisfies Record<BuiltinAppShellColumnId, React.ComponentType>;
 
 const stylesheet = StyleSheet.create(() => ({

@@ -22,7 +22,11 @@ import {
     subscribeAppliedActiveServerRuntimeAvailability,
 } from '@/sync/runtime/orchestration/connectionManager';
 import { useHomeViewSelectionSettings } from '@/hooks/server/useHomeViewSelectionSettings';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 import { resolveConnectionHealthPresentation } from './connectionHealthPresentation';
 import { resolveConnectionHealth } from './resolveConnectionHealth';
@@ -74,6 +78,8 @@ export function useConnectionHealth() {
             serverSelectionActiveTargetId,
         },
     });
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const presenceNowMs = useMachinePresenceNowMs(activeSelectionMachineGroups.visibleMachineGroups.flatMap(group => group.machines));
     const activeSyncError = React.useMemo(() => {
         return selectSyncErrorForServer(syncError, activeServerSnapshot.serverId);
     }, [activeServerSnapshot.serverId, syncError]);
@@ -114,17 +120,20 @@ export function useConnectionHealth() {
                 }
 
                 const visibleMachines = group.machines.filter((machine) => !machine.revokedAt);
-                const onlineMachines = visibleMachines.filter((machine) => isMachineOnline(machine));
+                const scope = group.accountScope;
+                const onlineMachines = visibleMachines.filter((machine) => isMachineReachable(scope, machine, presenceNowMs));
                 return {
                     machineCount: visibleMachines.length,
                     onlineCount: onlineMachines.length,
-                    readyCount: onlineMachines.filter((machine) => isMachineReadyForConnectionHealth(machine)).length,
+                    readyCount: onlineMachines.filter((machine) => isMachineSelectableForFleet(scope, machine, presenceNowMs) && isMachineReadyForConnectionHealth(machine)).length,
                     status: group.status,
                 };
             }),
         });
     }, [
         activeSelectionMachineGroups.visibleMachineGroups,
+        reachabilityRevision,
+        presenceNowMs,
         activeSyncError,
         endpointConnectivity.reason,
         endpointConnectivity.status,
@@ -171,6 +180,10 @@ export function useActiveHomeConnectionHealth() {
     );
     const appliedServerId = appliedServerSnapshot.serverId;
     const appliedMachines = useMachineListForServer(appliedServerId) ?? [];
+    const { binding } = useServerCredentialAccountScopeBinding(appliedServerId);
+    const accountScope = binding?.isCurrent() ? binding.scope : null;
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const presenceNowMs = useMachinePresenceNowMs(appliedMachines);
     const machineListStatus = useMachineListStatusForServer(appliedServerId);
     const subscribeAppliedRuntime = React.useCallback(
         (listener: () => void) => subscribeAppliedActiveServerRuntimeAvailability(() => listener()),
@@ -191,8 +204,8 @@ export function useActiveHomeConnectionHealth() {
         [appliedMachines],
     );
     const onlineMachines = React.useMemo(
-        () => visibleMachines.filter((machine) => isMachineOnline(machine)),
-        [visibleMachines],
+        () => visibleMachines.filter((machine) => isMachineReachable(accountScope, machine, presenceNowMs)),
+        [visibleMachines, accountScope, presenceNowMs, reachabilityRevision],
     );
     const primaryMachineLabel = React.useMemo(() => {
         if (visibleMachines.length !== 1) return null;
@@ -224,7 +237,7 @@ export function useActiveHomeConnectionHealth() {
                 : {
                     machineCount: visibleMachines.length,
                     onlineCount: onlineMachines.length,
-                    readyCount: onlineMachines.filter(isMachineReadyForConnectionHealth).length,
+                    readyCount: onlineMachines.filter(machine => isMachineSelectableForFleet(accountScope, machine, presenceNowMs) && isMachineReadyForConnectionHealth(machine)).length,
                 }),
             status: machineListStatus,
         }],
@@ -235,6 +248,8 @@ export function useActiveHomeConnectionHealth() {
         isAppliedHomeTransitioning,
         machineListStatus,
         onlineMachines,
+        accountScope,
+        presenceNowMs,
         socketStatus.status,
         visibleMachines.length,
     ]);

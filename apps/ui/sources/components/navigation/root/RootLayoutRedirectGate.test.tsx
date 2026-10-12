@@ -7,7 +7,22 @@ import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testH
 import { renderScreen } from '@/dev/testkit';
 import { createSignInServiceFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
-import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
+import { initializeAuthRouteRuntimeForTests } from '@/dev/testkit/harness/authRouteRuntimeHarness';
+import { BaseNavigationContainer, createNavigatorFactory, NavigationHelpersContext, StackActions, StackRouter, useNavigationBuilder } from '@react-navigation/core';
+
+// Installed navigator logic remains real; Expo's Redirect is the SDK boundary below.
+function TestNavigator(props: Readonly<{ children: React.ReactNode; layout?: (props: { children: React.ReactNode }) => React.ReactElement }>) {
+    const { state, descriptors, NavigationContent } = useNavigationBuilder(StackRouter, props);
+    return <NavigationContent>{descriptors[state.routes[state.index].key].render()}</NavigationContent>;
+}
+const TestStack = createNavigatorFactory(TestNavigator)();
+let dispatchRedirects = false;
+function NavigationRedirect() {
+    // Expo routes through the registered navigator, not the parent SceneView's navigation prop.
+    const navigation = React.useContext(NavigationHelpersContext);
+    React.useEffect(() => { navigation?.dispatch(StackActions.replace('index')); }, [navigation]);
+    return null;
+}
 
 // Controllable navigation store so that only components calling the navigation hooks
 // (via useSyncExternalStore) re-render when the route changes — faithfully modelling
@@ -35,6 +50,7 @@ vi.mock('expo-router', async () => ({
     }).module,
     useSegments: () => useSyncExternalStore(subscribeNav, () => navState.segments),
     usePathname: () => useSyncExternalStore(subscribeNav, () => navState.pathname),
+    Redirect: (props: { href: string }) => dispatchRedirects ? <NavigationRedirect /> : React.createElement('Redirect', props),
 }));
 
 const replaceSpy = vi.hoisted(() => vi.fn());
@@ -53,9 +69,9 @@ vi.mock('@/modal', async () => {
 });
 
 import { useSegments } from 'expo-router';
-import { RootLayoutRedirectGate, WebServerOverrideGate } from './RootLayoutRedirectGate';
+import { RootLayoutRedirectGate, renderRootLayoutRedirectGate, WebServerOverrideGate } from './RootLayoutRedirectGate';
 
-await initializeTerminalRouteRuntimeForTests();
+await initializeAuthRouteRuntimeForTests();
 
 function renderGateScreen(children: React.ReactNode) {
     const credentials = authState.isAuthenticated ? { token: 'e30.eyJzdWIiOiJhY2NvdW50LWEifQ.signature' } : null;
@@ -78,6 +94,7 @@ function NavProbe({ counter }: { counter: Counter }): null {
 describe('RootLayoutRedirectGate', () => {
     let locks: ReturnType<typeof installWebLockManagerMock>;
     beforeEach(() => {
+        dispatchRedirects = false;
         authState.isAuthenticated = true;
         replaceSpy.mockClear();
         runtimeFetchSpy.mockClear();
@@ -89,6 +106,37 @@ describe('RootLayoutRedirectGate', () => {
     });
 
     afterEach(() => { locks.restore(); });
+
+    it('settles a signed-out first machine deep link through the registered Home navigator without mounting protected content', async () => {
+        authState.isAuthenticated = false;
+        dispatchRedirects = true;
+        setNav('/machines/machine-a', ['(app)', 'machines', '[id]', 'index']);
+        const unhandled: unknown[] = [];
+        const protectedMount = vi.fn();
+        function Home() { return React.createElement('HomeSurface'); }
+        function Machine() { protectedMount(); return React.createElement('ProtectedMachine'); }
+        function App() {
+            return <TestStack.Navigator layout={renderRootLayoutRedirectGate}>
+                <TestStack.Screen name="index" component={Home} />
+                <TestStack.Screen name="machines/[id]/index" component={Machine} />
+            </TestStack.Navigator>;
+        }
+        const screen = await renderGateScreen(<BaseNavigationContainer
+            initialState={{ routes: [{ name: 'App', state: { routes: [{ name: 'machines/[id]/index', params: { id: 'machine-a' } }] } }] }}
+            onUnhandledAction={action => unhandled.push(action)}
+            onStateChange={state => {
+                const app = state?.routes[state.index];
+                const leaf = app?.state?.routes[app.state.index ?? 0];
+                if (leaf?.name === 'index') setNav('/', ['(app)', 'index']);
+            }}>
+            <TestStack.Navigator><TestStack.Screen name="App" component={App} /></TestStack.Navigator>
+        </BaseNavigationContainer>);
+        try {
+            expect(protectedMount).not.toHaveBeenCalled();
+            expect(screen.findAllByType('HomeSurface' as never)).toHaveLength(1);
+            expect(unhandled).toEqual([]);
+        } finally { await screen.unmount(); }
+    });
 
     it('does not re-render its children (Stack subtree) on a pathname/segments-only change', async () => {
         authState.isAuthenticated = true;
@@ -142,9 +190,13 @@ describe('RootLayoutRedirectGate', () => {
         }
     });
 
-    it('renders a redirect (and not its children) when unauthenticated on a protected route', async () => {
+    it.each([
+        { pathname: '/settings', segments: ['(app)', 'settings'] },
+        { pathname: '/settings/plugins/happier.connected-accounts/accounts', segments: ['(app)', 'settings', 'plugins', '[pluginId]', '[pageId]'] },
+        { pathname: '/plugins/happier.triage-board/board', segments: ['(app)', 'plugins', '[pluginId]', '[localId]'] },
+    ])('redirects a signed-out cold deep link to sign-in rather than rendering a blank protected page ($pathname)', async ({ pathname, segments }) => {
         authState.isAuthenticated = false;
-        setNav('/settings', ['(app)', 'settings']);
+        setNav(pathname, segments);
 
         const shell: Counter = { n: 0 };
         const screen = await renderGateScreen(
@@ -157,6 +209,7 @@ describe('RootLayoutRedirectGate', () => {
 
         try {
             expect(screen.findAllByType('Redirect' as never).length).toBe(1);
+            expect(screen.findAllByType('Redirect' as never)[0]?.props.href).toBe('/');
             expect(shell.n).toBe(0);
         } finally {
             await screen.unmount();

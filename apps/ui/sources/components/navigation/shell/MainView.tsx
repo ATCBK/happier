@@ -8,7 +8,7 @@ import { PhoneHomeLogoButton } from './PhoneHomeLogoButton';
 import { HomeHub } from '@/components/hub/HomeHub';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
-import { TabBarNewSessionButton } from '@/components/ui/navigation/TabBarNewSessionButton';
+import { SIDEBAR_NEW_SESSION_INSET_PX, TabBarNewSessionButton } from '@/components/ui/navigation/TabBarNewSessionButton';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { FriendsView } from '@/components/navigation/shell/FriendsView';
 import { SessionsListWrapper } from '@/components/sessions/shell/SessionsListWrapper';
@@ -58,7 +58,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     phoneHeaderContent: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
     },
     sidebarContentContainer: {
         flex: 1,
@@ -67,8 +67,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     sidebarNewSession: {
         position: 'absolute',
-        right: 12,
-        bottom: 12,
+        right: SIDEBAR_NEW_SESSION_INSET_PX,
+        bottom: SIDEBAR_NEW_SESSION_INSET_PX,
     },
     titleContainer: {
         flex: 1,
@@ -76,9 +76,8 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: -4,
     },
     titleText: {
-        fontSize: 16,
+        ...Typography.variant('heading'),
         color: theme.colors.chrome.header.foreground,
-        ...Typography.default('semiBold'),
     },
     statusContainer: {
         flexDirection: 'row',
@@ -86,9 +85,7 @@ const styles = StyleSheet.create((theme) => ({
         marginTop: -2,
     },
     statusText: {
-        fontSize: 11,
-        lineHeight: 16,
-        ...Typography.default(),
+        ...Typography.variant('micro'),
     },
     headerButton: {
         width: 32,
@@ -99,7 +96,7 @@ const styles = StyleSheet.create((theme) => ({
     headerButtonsRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     primaryPaneFallback: {
         flex: 1,
@@ -107,15 +104,14 @@ const styles = StyleSheet.create((theme) => ({
         flexGrow: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 20,
+        paddingHorizontal: theme.space.s20,
         backgroundColor: theme.colors.background.canvas,
     },
     primaryPaneFallbackText: {
         textAlign: 'center',
         maxWidth: 520,
         color: theme.colors.text.secondary,
-        fontSize: 15,
-        ...Typography.default(),
+        ...Typography.variant('reading'),
     },
 }));
 
@@ -133,15 +129,21 @@ const TAB_TITLES = {
 // Active tabs (excludes zen which is disabled)
 type ActiveTabType = 'sessions' | 'projects' | 'inbox' | 'friends' | 'settings';
 
+/** Phone tabs whose page header draws the tab's name as its large title, so the bar does not repeat it. */
+const TABS_WITH_PAGE_TITLE: ReadonlySet<ActiveTabType> = new Set(['inbox']);
+
 // Header title component with connection status
 const HeaderTitle = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => {
     const { theme } = useUnistyles();
 
     return (
         <View style={styles.titleContainer}>
-            <Text style={styles.titleText}>
-                {t(TAB_TITLES[activeTab])}
-            </Text>
+            {/* A tab whose page carries its own large title (lab `phone-P4`) leaves the bar to the Home it shows. */}
+            {TABS_WITH_PAGE_TITLE.has(activeTab) ? null : (
+                <Text style={styles.titleText}>
+                    {t(TAB_TITLES[activeTab])}
+                </Text>
+            )}
             <ConnectionStatusControl variant="header" />
         </View>
     );

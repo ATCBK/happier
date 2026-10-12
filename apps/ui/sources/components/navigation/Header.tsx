@@ -138,8 +138,8 @@ export const DefaultBackButton: React.FC<{ tintColor?: string; onPress: () => vo
 // Component wrapper for navigation header
 export function NavigationHeaderTitle(props: Readonly<{ title: string; tintColor?: string; style?: NativeStackHeaderProps['options']['headerTitleStyle'] }>) {
     return <Text numberOfLines={1} ellipsizeMode="tail" style={[
-        { fontSize: 16, textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: props.tintColor || '#000', flexShrink: 1, minWidth: 0 },
-        Typography.default('semiBold'), props.style,
+        { textAlign: Platform.OS === 'ios' ? 'center' : 'left', color: props.tintColor || '#000', flexShrink: 1, minWidth: 0 },
+        Typography.variant('heading'), props.style,
     ]}>{props.title}</Text>;
 }
 
@@ -215,7 +215,6 @@ const AppStackHeader = React.memo(function AppStackHeader(props: NativeStackHead
  * so nothing a route offers is lost.
  */
 const ShellPageHeaderActions = React.memo(function ShellPageHeaderActions(props: NativeStackHeaderProps) {
-    const styles = stylesheet;
     const { headerLeft, headerRight, headerTintColor } = props.options;
     const canGoBack = Boolean(props.back);
     const render = React.useMemo(() => {
@@ -227,11 +226,18 @@ const ShellPageHeaderActions = React.memo(function ShellPageHeaderActions(props:
             </>
         );
     }, [canGoBack, headerLeft, headerRight, headerTintColor]);
-    useStackHeaderActionsPublisher(props.route.key, render);
-    const claimed = useStackHeaderActionsClaimed(props.route.key);
+    return <PageHeaderActionsHost scopeKey={props.route.key} render={render} />;
+});
+
+/** Both stack and retained destinations lend actions through the same page-header owner. */
+export function PageHeaderActionsHost(props: Readonly<{ scopeKey: string; render: (() => React.ReactNode) | null }>) {
+    const styles = stylesheet;
+    const { render } = props;
+    useStackHeaderActionsPublisher(props.scopeKey, render);
+    const claimed = useStackHeaderActionsClaimed(props.scopeKey);
     if (!render || claimed) return null;
     return <View testID="app-stack-header-actions" style={styles.shellActionsBar}>{render()}</View>;
-});
+}
 
 // Export a render function for React Navigation
 export const createHeader = (props: NativeStackHeaderProps) => {
@@ -247,9 +253,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s8,
     },
     container: {
         position: 'relative',
@@ -286,7 +292,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: Platform.OS === 'ios' ? 'center' : 'flex-start',
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     rightContainer: {
         flexGrow: 0,
@@ -294,18 +300,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'flex-end',
     },
     title: {
-        fontSize: 16,
+        ...Typography.variant('heading'),
         textAlign: 'center',
         color: theme.colors.chrome.header.foreground,
-        ...Typography.default('semiBold'),
     },
     subtitle: {
-        fontSize: 13,
-        fontWeight: '400',
+        ...Typography.variant('body'),
         textAlign: Platform.OS === 'ios' ? 'center' : 'left',
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.chrome.header.foreground,
-        ...Typography.default('regular'),
     },
     shadow: {
         ...shadowLevelStyle(theme.colors.shadowLevels[3]),

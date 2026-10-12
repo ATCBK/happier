@@ -1,4 +1,5 @@
 import {
+    isRailControlDestination,
     resolveCurrentAppDestination,
     selectAppDestinationsInPlacement,
     type BuiltinAppShellColumnId,
@@ -37,6 +38,7 @@ const BUILTIN_COLUMNS: Readonly<Record<BuiltinAppShellColumnId, Extract<AppShell
     boards: Object.freeze({ kind: 'builtin', id: 'boards' }),
     plugins: Object.freeze({ kind: 'builtin', id: 'plugins' }),
     settings: Object.freeze({ kind: 'builtin', id: 'settings' }),
+    machines: Object.freeze({ kind: 'builtin', id: 'machines' }),
 };
 
 const PLUGIN_COLUMNS = new Map<string, Extract<AppShellColumn, { kind: 'plugin' }>>();
@@ -110,15 +112,21 @@ export function buildAppRailPlacementItems(entries: AppRailEntries, updatesVisib
     ];
 }
 
-/** The rail's entries, per region, in catalog order. Column destinations and hidden ones stay off. */
+/**
+ * The rail's entries, per region, in catalog order. Column destinations and hidden ones stay off, and
+ * so do destinations the rail draws as its own footer control (Machines), which would otherwise appear
+ * twice on the rail and in its customizer.
+ */
 export function buildAppRailEntries(catalog: readonly CompactAppDestination[], options?: Readonly<{
     includeHidden?: boolean;
     botHomes?: readonly AppRailBotHome[];
 }>): AppRailEntries {
+    const region = (name: 'app' | 'plugins' | 'account') => selectAppDestinationsInPlacement(catalog, { kind: 'rail', region: name }, options)
+        .filter(destination => !isRailControlDestination(destination));
     return {
-        app: selectAppDestinationsInPlacement(catalog, { kind: 'rail', region: 'app' }, options),
-        plugins: selectAppDestinationsInPlacement(catalog, { kind: 'rail', region: 'plugins' }, options),
-        account: selectAppDestinationsInPlacement(catalog, { kind: 'rail', region: 'account' }, options),
+        app: region('app'),
+        plugins: region('plugins'),
+        account: region('account'),
         bots: (options?.botHomes ?? []).flatMap(home => home.organization.railPinnedSessionIds.flatMap(sessionId => {
             const session = home.rowsBySessionId[sessionId];
             if (!session || readSessionBotV1(session.metadata?.bot)?.kind !== 'bot') return [];

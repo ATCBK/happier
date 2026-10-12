@@ -14,7 +14,7 @@ import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { formatAccountLabel } from '@/sync/domains/server/relayDrift/thisComputerConnection';
+import { resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { buildMachineAddHref } from '@/components/settings/machines/collection/machineCollectionModel';
@@ -29,10 +29,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: MENU_ROW_METRICS.paddingVerticalPx,
     },
     message: {
-        fontSize: 12,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     actions: {
         flexDirection: 'row',
@@ -57,14 +55,14 @@ export function ConnectionPopoverMachineGuidance(props: Readonly<{
     const router = useRouter();
     const { status } = useLocalDaemonControl();
     const connection = useThisComputerConnection(status);
-    const { accountId, accountLabel } = useAppAccountIdentity();
+    const { accountLabel } = useAppAccountIdentity();
     const presentation = connection ? presentThisComputerConnection(connection) : null;
 
     const message = presentation
         ? presentation.description
         : t('machine.thisComputer.noComputers', {
             home: props.homeLabel,
-            appAccount: formatAccountLabel(accountLabel, accountId) ?? t('status.unknown'),
+            appAccount: resolveViewerAccountDisplayName(accountLabel),
         });
     const actionLabel = presentation
         ? t('machine.thisComputer.openThisComputer')

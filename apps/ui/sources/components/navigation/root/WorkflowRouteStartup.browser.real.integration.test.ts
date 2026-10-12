@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { collectBrowserDiagnostics, appendBrowserDiagnostics } from '../../../../../../packages/tests/src/testkit/uiE2e/browserDiagnostics';
 import { resolveChromiumExecutable } from '@/dev/testkit/render/measureWebLayout';
 import { buildWorkspaceHistoryBrowser } from '@/dev/testkit/render/buildWorkspaceHistoryBrowser.mjs';
+import { workflowRouteStartupBrowserBuildTimeoutMs, workflowRouteStartupBrowserOptions } from '@/dev/testkit/render/workflowRouteStartupBrowserOptions';
 import { createWorkspaceBrowserServer } from '@/dev/testkit/render/workspaceBrowserServer';
 import type { navigationHydrationBrowser } from '@/dev/testkit/render/navigationHydrationBrowser';
 import { parseWorkspaceLayout } from '@/components/appShell/workspace/workspacePersistence';
@@ -17,6 +18,12 @@ const lostCopyPath = '/workflows/new?definitionDraftSeedId=10000000-0000-4000-80
 const runPath = '/workflows/runs/10000000-0000-4000-8000-000000000004';
 const accountKv = createAccountKvHttpFixture();
 const server = createWorkspaceBrowserServer(() => script, accountKv.handle);
+function readAccountTabTargets() {
+    const row = accountKv.read('workspace:tabs:v1');
+    const envelope = row ? decodeBase64StoredJsonContentEnvelope(row.value) : null;
+    if (envelope?.t !== 'plain') return [];
+    return Object.values(WorkspaceTabsV1StoredSchema.parse(envelope.v).tabsById).map(tab => tab.target);
+}
 type BrowserFixture = typeof window & {
     navigationHydrationBrowser: typeof navigationHydrationBrowser;
     startupHarness: { mount: (seed: boolean, holdHome?: boolean) => Promise<void>; readNavigationState: () => unknown;
@@ -29,25 +36,18 @@ type BrowserFixture = typeof window & {
 };
 
 beforeAll(async () => {
-    script = await buildWorkspaceHistoryBrowser({
-        entryFile: 'sources/dev/testkit/render/workflowRouteStartupBrowserEntry.ts', realExpoRouter: true, asyncRoutes: true, lazy: false, production: true,
-        boundaryModules: {
-            'expo-router/build/renderRootComponent': 'sources/dev/testkit/render/workflowRouteStartupRootBoundary.tsx',
-            'node:child_process': 'sources/dev/testkit/render/workflowRouteStartupProcessBoundary.ts',
-            'node:buffer': 'sources/dev/testkit/render/workflowRouteStartupBufferBoundary.ts',
-            ...Object.fromEntries(['node:module', 'node:stream', 'node:stream/promises', 'node:http',
-                'node:https', 'node:net', 'node:async_hooks', 'node:timers/promises', 'node:zlib', 'node:v8', 'tar', 'yauzl'].map(name => [
-                name, 'sources/dev/testkit/render/workflowRouteStartupNodeBoundary.ts',
-            ])),
-        },
-    });
+    script = await buildWorkspaceHistoryBrowser(workflowRouteStartupBrowserOptions);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Startup browser harness did not bind');
     origin = `http://127.0.0.1:${address.port}`;
 // Same build budget as the incumbent real Metro workspace history journey.
-}, 600_000);
-afterAll(async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
+}, workflowRouteStartupBrowserBuildTimeoutMs);
+afterAll(async () => {
+    try {
+        if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    } finally { script = ''; }
+});
 
 describe('workflow real Expo web startup', () => {
     it('retains a parsed child until admission and clears a genuinely unmounted navigator', async () => {
@@ -118,13 +118,9 @@ describe('workflow real Expo web startup', () => {
                             return tab ? [tab.target] : [];
                         });
                     }).toEqual(expect.arrayContaining([{ kind: 'session', params: { id: session.split('/').at(-1) } }]));
-                    await expect.poll(() => {
-                        const row = accountKv.read('workspace:tabs:v1');
-                        const envelope = row ? decodeBase64StoredJsonContentEnvelope(row.value) : null;
-                        if (envelope?.t !== 'plain') return [];
-                        const parsed = WorkspaceTabsV1StoredSchema.parse(envelope.v);
-                        return Object.values(parsed.tabsById).map(tab => tab.target);
-                    }).toEqual(expect.arrayContaining([{ kind: 'session', params: { id: session.split('/').at(-1) } }]));
+                    await expect.poll(readAccountTabTargets).toEqual(expect.arrayContaining([
+                        { kind: 'session', params: { id: session.split('/').at(-1) } },
+                    ]));
                     await page.goto(`${origin}${href}`);
                 }
                 await page.addScriptTag({ url: `${origin}/bundle.js` });
@@ -166,15 +162,22 @@ describe('workflow real Expo web startup', () => {
                         await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(prior, origin).pathname);
                     }
                     await page.getByTestId(readyId).waitFor();
+                    // These real Actions seed the returning Account, not merely
+                    // local history. Do not reload before its queued KV write.
+                    await expect.poll(readAccountTabTargets).toEqual(expect.arrayContaining([
+                        { kind: 'session', params: { id: '10000000-0000-4000-8000-000000000003' } },
+                    ]));
                 }
             }
         } catch (error) {
             const history = await page.evaluate(() => (window as BrowserFixture).startupHistory);
             const unserved = await page.evaluate(() => (window as BrowserFixture).startupHarness?.readUnservedHttpPaths());
+            const workspace = await page.evaluate(() => (window as BrowserFixture).startupHarness?.listWorkspace());
+            const kv = { row: accountKv.read('workspace:tabs:v1'), requests: accountKv.readRequests() };
             const body = await page.locator('body').innerText();
             const bundleLine = /bundle\.js:(\d+):\d+/.exec(body)?.[1];
             const source = bundleLine ? script.split('\n').slice(Number(bundleLine) - 3, Number(bundleLine) + 3).join('\n') : '';
-            throw appendBrowserDiagnostics(error, `${diagnostics()}\nHistory writes:\n${JSON.stringify(history, null, 2)}\nUnserved HTTP paths:\n${JSON.stringify(unserved)}\nBody:\n${body}\nFirst error bundle source:\n${source}`);
+            throw appendBrowserDiagnostics(error, `${diagnostics()}\nHistory writes:\n${JSON.stringify(history, null, 2)}\nUnserved HTTP paths:\n${JSON.stringify(unserved)}\nWorkspace/KV facts:\n${JSON.stringify({ workspace, kv })}\nBody:\n${body}\nFirst error bundle source:\n${source}`);
         } finally { await browser.close(); }
     });
 });

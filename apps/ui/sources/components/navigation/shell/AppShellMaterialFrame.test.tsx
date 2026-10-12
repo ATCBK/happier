@@ -16,22 +16,52 @@ vi.mock('react-native-unistyles', async () => {
 import { AppShellMaterialFrame } from './AppShellMaterialFrame';
 import { applyGlassDocumentPresentation } from '@/components/ui/glass/glassDocumentPresentation';
 import { glassPresetMaterials } from '@/components/ui/glass/glassMaterial';
+import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
+import { GlassMaterialSettingsProvider } from '@/components/ui/glass/useGlassMaterialSettings';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { StyleSheet, View } from 'react-native';
 
 function alphaAt(leaf: ReactTestInstance, doc: Document) {
     let remaining = 1;
     for (let node: ReactTestInstance | null = leaf; node; node = node.parent) {
         if (typeof node.type !== 'string') continue;
-        const color = StyleSheet.flatten(node.props.style)?.backgroundColor;
-        if (typeof color !== 'string' || color === 'transparent') continue;
-        const variable = color.match(/var\((--happier-glass-(?:chrome|sidebar|content|floating)-(?:nested-)?opacity),/);
-        const alpha = variable ? parseFloat(doc.documentElement.style.getPropertyValue(variable[1]!)) / 100 : 1;
-        remaining *= 1 - alpha;
+        // Material background siblings paint this region without becoming content ancestors.
+        const coats = node.findAll(child => {
+            if (typeof child.type !== 'string' || child.props.dataSet?.happyGlassBackdrop !== 'true') return false;
+            let parent = child.parent;
+            while (parent && typeof parent.type !== 'string') parent = parent.parent;
+            return parent === node;
+        });
+        for (const layer of [node, ...coats]) {
+            const color = StyleSheet.flatten(layer.props.style)?.backgroundColor;
+            if (typeof color !== 'string' || color === 'transparent') continue;
+            const variable = color.match(/var\((--happier-glass-(?:chrome|sidebar|content|floating)-(?:nested-)?(?:plane-)?opacity),/);
+            const alpha = variable ? parseFloat(doc.documentElement.style.getPropertyValue(variable[1]!)) / 100 : 1;
+            remaining *= 1 - alpha;
+        }
     }
     return 1 - remaining;
 }
 
 describe('real shell material planes', () => {
+    it('blurs wallpaper beside chrome/sidebar content without making either plane a popover backdrop root', async () => {
+        const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper' }}>
+            <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('clear') }}>
+                <AppShellMaterialFrame showChrome dragEnabled={false} leftOffsetPx={384} sidebarWidth={320}
+                    titleStrip={<GlassSurface><View testID="chrome-popover" /></GlassSurface>} rail={null}
+                    column={<GlassSurface><View testID="sidebar-popover" /></GlassSurface>} peek={null}><View /></AppShellMaterialFrame>
+            </GlassMaterialSettingsProvider>
+        </GlassRuntimeEnvironmentProvider>);
+        const backdrop = (node: ReactTestInstance) => typeof node.type === 'string'
+            && typeof StyleSheet.flatten(node.props.style)?.backdropFilter === 'string';
+        // The two floating surfaces plus the title, sidebar and two edge siblings.
+        expect(screen.findAll(backdrop)).toHaveLength(6);
+        for (const id of ['chrome-popover', 'sidebar-popover']) {
+            for (let node = screen.findHostByTestId(id)?.parent; node; node = node.parent) {
+                expect(backdrop(node)).toBe(false);
+            }
+        }
+    });
     it('applies each coat once in its own region with live material variables', async () => {
         const screen = await renderScreen(<AppShellMaterialFrame showChrome dragEnabled={false} leftOffsetPx={384} sidebarWidth={320}
             titleStrip={<View testID="title" />} rail={<View testID="rail" />}

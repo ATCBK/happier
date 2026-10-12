@@ -50,24 +50,21 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 24,
+        padding: theme.space.s24,
     },
     emptyIcon: {
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     emptyTitle: {
-        fontSize: 20,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('title'),
         color: theme.colors.text.primary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
         textAlign: 'center',
     },
     emptyDescription: {
-        fontSize: 16,
-        ...Typography.default(),
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
-        lineHeight: 22,
     },
 }));
 
@@ -78,10 +75,8 @@ function HeaderTitleTablet() {
     const { theme } = useUnistyles();
     return (
         <Text style={{
-            fontSize: 17,
+            ...Typography.variant('heading'),
             color: theme.colors.chrome.header.foreground,
-            fontWeight: '600',
-            ...Typography.default('semiBold'),
         }}>
             {t('tabs.friends')}
         </Text>

@@ -1,6 +1,8 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { create } from 'zustand';
+import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { createSessionFixture, createMachineFixture, createSessionMessagesFixture, createToolCallMessageFixture, renderScreen } from '@/dev/testkit';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
@@ -158,8 +160,11 @@ const storageState: Partial<StorageState> = {
             id: 'machine-target',
             active: true,
             activeAt: 10,
-            metadata: { ...createMachineFixture().metadata!, host: 'workstation.local' },
+            metadata: { ...createMachineFixture().metadata!, displayName: 'Rebound workstation', host: 'workstation.local' },
         }),
+    },
+    get machineListByServerId() {
+        return { 'server-a': Object.values(this.machines ?? {}) };
     },
     getProjectForSession: (sessionId: string) =>
         sessionId === 'session-1'
@@ -173,6 +178,17 @@ const storageState: Partial<StorageState> = {
             }
             : null,
 };
+
+let attentionStorage: ReturnType<typeof createStorageStoreMock> | undefined;
+function getAttentionStorage() {
+    return attentionStorage ??= create<StorageState>(() => createStorageStoreMock(storageState).getState());
+}
+
+async function renderAttentionScreen(element: React.ReactElement) {
+    // Materialize the case's changing getters into one real, subscribable Zustand snapshot.
+    getAttentionStorage().setState(createStorageStoreMock(storageState).getState(), true);
+    return renderScreen(element);
+}
 
 installNavigationShellCommonModuleMocks({
     reactNative: async () => {
@@ -217,9 +233,9 @@ installNavigationShellCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
     },
-    storage: async () => {
-        const { createStorageModuleStub, createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
+    storage: async (importOriginal) => {
+        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleMock({ importOriginal, overrides: {
             useArtifacts: () => [],
             useFriendRequests: () => [],
             useRequestedFriends: () => [],
@@ -424,24 +440,8 @@ installNavigationShellCommonModuleMocks({
                     serverName: null,
                 },
             ],
-            useMachine: (machineId: string) =>
-                machineId === 'machine-target'
-                    ? {
-                        id: 'machine-target',
-                        metadata: { displayName: 'Rebound workstation', host: 'workstation.local' },
-                    }
-                    : null,
-            useServerScopedMachine: (_serverId: string | null, machineId: string) =>
-                machineId === 'machine-stale'
-                    ? {
-                        id: 'machine-target',
-                        metadata: { displayName: 'Rebound workstation', host: 'workstation.local' },
-                    }
-                    : null,
-            // These fixtures expose changing getters, rather than an immutable
-            // Zustand snapshot. Read them live instead of caching the first case.
-            storage: createLiveStorageStoreMock(() => storageState),
-        });
+            storage: getAttentionStorage(),
+        } });
     },
 });
 
@@ -457,14 +457,12 @@ vi.mock('@/track', () => ({
     trackFriendsProfileView: vi.fn(),
 }));
 
-vi.mock('@/sync/domains/state/storageStore', () => {
-    const storage = Object.assign(
-        (selector: (value: typeof storageState) => unknown) => selector(storageState),
-        {
-            getState: () => storageState,
-        },
-    );
-    return { storage, getStorage: () => storage };
+vi.mock('@/sync/domains/state/storageStore', async (importOriginal) => {
+    const { createStorageStoreModuleMock } = await import('@/dev/testkit/mocks/storage');
+    return createStorageStoreModuleMock({
+        importOriginal,
+        overrides: { storage: getAttentionStorage() },
+    });
 });
 
 vi.mock('@/components/ui/text/Text', () => ({
@@ -557,7 +555,7 @@ describe('InboxView session attention', () => {
         const { InboxView } = await import('./InboxView');
 
         let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<InboxView />)).tree;
+        tree = (await renderAttentionScreen(<InboxView />)).tree;
 
         expect(tree!.findAllByTestId('inbox.session_attention.session-1')).toHaveLength(1);
         expect(tree!.findAllByType('PermissionPromptCard')).toHaveLength(1);
@@ -573,7 +571,7 @@ describe('InboxView session attention', () => {
     it('hides retained attention titles, paths and requests when content readiness is unknown', async () => {
         inboxFixtureState.contentReady = false;
         const { InboxView } = await import('./InboxView');
-        const tree = (await renderScreen(<InboxView />)).tree;
+        const tree = (await renderAttentionScreen(<InboxView />)).tree;
         expect(tree.findAllByTestId('inbox.session_attention.session-1')).toHaveLength(1);
         expect(tree.findAllByType('ItemGroup').some((group) => group.props.title === 'Repo session')).toBe(false);
         expect(collectText(tree)).not.toContain('Repo session');
@@ -592,7 +590,7 @@ describe('InboxView session attention', () => {
             presence: 'online',
             metadata: { name: 'Home B session', host: 'home-b-host', path: '/home/b/project', homeDir: '/home/b', machineId: 'machine-b' },
         });
-        const tree = (await renderScreen(<InboxSessionAttentionGroupCard
+        const tree = (await renderAttentionScreen(<InboxSessionAttentionGroupCard
             identityDisplay="none"
             connected={false}
             session={session}
@@ -611,7 +609,7 @@ describe('InboxView session attention', () => {
         inboxFixtureState.includeHiddenVoiceTranscriptPermission = true;
         const { InboxView } = await import('./InboxView');
 
-        const tree = (await renderScreen(<InboxView />)).tree;
+        const tree = (await renderAttentionScreen(<InboxView />)).tree;
 
         const hiddenVoiceCard = tree.findByTestId('inbox.session_attention.hidden-voice');
         expect(hiddenVoiceCard).not.toBeNull();
@@ -633,16 +631,16 @@ describe('InboxView session attention', () => {
         inboxFixtureState.includeHiddenVoiceLateResult = true;
         const { InboxView } = await import('./InboxView');
 
-        const tree = (await renderScreen(<InboxView />)).tree;
+        const tree = (await renderAttentionScreen(<InboxView />)).tree;
         // A finished result to read lives in the Inbox's Updates view (ORC R-10, lab `inbox-I1`).
         const updatesTab = tree.findByTestId('inbox.view:updates');
         if (!updatesTab) throw new Error('Expected the Inbox Updates view tab.');
         await renderer.act(async () => {
             updatesTab.props.onPress?.();
         });
-        const lateResultItem = tree.findAllByType('Item')
-            .find((item) => item.props.title === 'Global Voice late result');
-        expect(lateResultItem).toBeDefined();
+        const lateResultItem = tree.findByTestId('inbox.ready_session.server-a.hidden-voice-late-result');
+        expect(collectText(tree)).toContain('Global Voice late result');
+        expect(lateResultItem).not.toBeNull();
         if (!lateResultItem) {
             throw new Error('Expected hidden Voice late-result Inbox item.');
         }

@@ -6,21 +6,19 @@ import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId
 import { describeSessionListDropPreview, describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
 import { readWindowBounds, useEntityDragDropRuntime, useEntityDragDomBinding, useEntityDropDomBinding } from '@/components/ui/treeDragDrop';
 import { PINNED_GROUP_KEY_V1 } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
-import { useServerCredentialAccountScopeBindings, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getStorage, readSessionOrganizationProjectionCached } from '@/sync/domains/state/storage';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import type { AppRailBotEntry } from './appRailModel';
 
-const execute = createFrontDoorActionExecute();
+type MountedActionExecute = ReturnType<typeof useMountedActionExecution>['execute'];
 
-async function dispatchMove(input: SessionOrganizationMoveInput): Promise<EntityDropOutcomeV1> {
-  const result = await execute('session.organization.move', input, {
-    surface: 'ui', serverId: input.scope.serverId, expectedAccountId: input.scope.accountId,
-  });
+async function dispatchMove(input: SessionOrganizationMoveInput, execute: MountedActionExecute): Promise<EntityDropOutcomeV1> {
+  const result = await execute('session.organization.move', input);
   const { projectActionOutcome } = await import('@/components/sessions/shell/useSessionListEntityDragDrop');
   return projectActionOutcome('session.organization.move', result);
 }
@@ -34,31 +32,29 @@ function moveInput(binding: ServerCredentialAccountScopeBinding | undefined, ser
 }
 
 /** The same qualified menu/keyboard command for visible and overflow rail pins. */
-export async function moveAppRailBot(binding: ServerCredentialAccountScopeBinding | undefined, bot: AppRailBotEntry, targetSessionId: string, edge: 'top' | 'bottom') {
-  const input = moveInput(binding, bot.serverId, bot.sessionId, targetSessionId, edge);
-  const outcome = input ? await dispatchMove(input) : { status: 'refused' as const, reason: describeSessionListDropReason('unavailable') };
+export async function moveAppRailBot(binding: ServerCredentialAccountScopeBinding | null | undefined, bot: AppRailBotEntry, targetSessionId: string, edge: 'top' | 'bottom', execute: MountedActionExecute) {
+  const input = moveInput(binding ?? undefined, bot.serverId, bot.sessionId, targetSessionId, edge);
+  const outcome = input ? await dispatchMove(input, execute) : { status: 'refused' as const, reason: describeSessionListDropReason('unavailable') };
   if (outcome.status !== 'applied') Modal.alert(t('common.error'), outcome.reason.message);
 }
 
 /** Rail gestures produce semantic anchors only; the mounted Sessions adapter owns current order and writes. */
 export function useAppRailBotReorder(bot: AppRailBotEntry) {
-  const homeIds = React.useMemo(() => [bot.serverId], [bot.serverId]);
-  const bindings = useServerCredentialAccountScopeBindings(homeIds);
-  const binding = bindings.get(bot.serverId);
+  const { binding, execute } = useMountedActionExecution(bot.serverId);
   const runtime = useEntityDragDropRuntime();
   const sourceId = React.useId();
   const targetId = `${sourceId}:order`;
   const host = React.useRef<unknown>(null);
-  const latest = React.useRef({ bot, binding });
-  latest.current = { bot, binding };
+  const latest = React.useRef({ bot, binding, execute });
+  latest.current = { bot, binding, execute };
 
   const buildMove = React.useCallback((sourceSessionId: string, targetSessionId: string, edge: 'top' | 'bottom'): SessionOrganizationMoveInput | null => {
     const current = latest.current;
-    return moveInput(current.binding, current.bot.serverId, sourceSessionId, targetSessionId, edge);
+    return moveInput(current.binding ?? undefined, current.bot.serverId, sourceSessionId, targetSessionId, edge);
   }, []);
   const move = React.useCallback(async (targetSessionId: string, edge: 'top' | 'bottom') => {
     const current = latest.current;
-    await moveAppRailBot(current.binding, current.bot, targetSessionId, edge);
+    await moveAppRailBot(current.binding, current.bot, targetSessionId, edge, current.execute);
   }, []);
 
   React.useEffect(() => {
@@ -90,11 +86,11 @@ export function useAppRailBotReorder(bot: AppRailBotEntry) {
       execute: async effect => {
         // The realm runtime revalidates this exact captured effect immediately before dispatch.
         const { SessionOrganizationMoveInputSchema } = await import('@happier-dev/protocol/actions/sessionOrganizationMoveAction');
-        return dispatchMove(SessionOrganizationMoveInputSchema.parse(effect.input));
+        return dispatchMove(SessionOrganizationMoveInputSchema.parse(effect.input), execute);
       },
     });
     return () => { retireTarget(); retireSource(); };
-  }, [binding, bot.serverId, bot.sessionId, buildMove, runtime, sourceId, targetId]);
+  }, [binding, bot.serverId, bot.sessionId, buildMove, execute, runtime, sourceId, targetId]);
   const sourceRef = useEntityDragDomBinding({ runtime, sourceId, enabled: binding?.isCurrent() === true,
     describe: () => getSessionName(latest.current.bot.session, bot.serverId) });
   const dropRef = useEntityDropDomBinding(runtime);

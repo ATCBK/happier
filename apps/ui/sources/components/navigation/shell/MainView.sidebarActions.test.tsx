@@ -41,19 +41,19 @@ installNavigationShellCommonModuleMocks({
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
             router: { push: routerPushSpy },
-            get pathname() {
-                return navigationState.pathname;
-            },
+            pathname: () => navigationState.pathname,
         });
         return expoRouterMock.module;
     },
-    storage: async () => {
+    storage: async (importOriginal) => {
+        const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
             useFriendRequests: () => [],
             useSocketStatus: () => ({ status: 'connected' }),
             useRealtimeStatus: () => ({ status: 'idle' }),
             useLocalSettingMutable: (name: string) => {
+                if (name === 'navigationSurfacePlacementsV1') return actual.useLocalSettingMutable(name);
                 if (name === 'sessionsListStorageFilter') {
                     return [localSettingsState.sessionsListStorageFilter, setSessionsListStorageFilterSpy] as const;
                 }

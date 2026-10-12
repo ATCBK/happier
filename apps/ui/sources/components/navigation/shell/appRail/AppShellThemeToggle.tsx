@@ -104,9 +104,9 @@ function AppearancePopoverContent(props: Readonly<{ onClose: () => void; onHide:
     const applyThemeSelection = useApplyThemeSelection();
     const [themePreference] = useLocalSettingMutable('themePreference');
     const [themeProfiles] = useLocalSettingMutable('themeProfiles');
-    const openAppearance = (customize: boolean) => {
+    const openAppearance = () => {
         props.onClose();
-        router.push({ pathname: '/settings/appearance', params: customize ? { setting: 'appearance.glassCustomize' } : {} });
+        router.push({ pathname: '/settings/appearance', params: {} });
     };
     const pointerPlatform = resolveHappierPointerPlatform(Platform.OS);
     const modifier = pointerPlatform === 'macos' || pointerPlatform === 'ios' ? '⌘' : 'Ctrl';
@@ -123,10 +123,9 @@ function AppearancePopoverContent(props: Readonly<{ onClose: () => void; onHide:
             onChange={mode => applyThemeSelection(mode, themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE)}
         />
         <GlassAppearanceControls presentation="compact" />
-        <Item testID="appearance-customize-link" title={t('settingsAppearance.glassControls.customizeLink')} onPress={() => openAppearance(true)} />
-        <Item testID="appearance-more-settings" title={t('settingsAppearance.glassControls.moreSettings')} onPress={() => openAppearance(false)} />
+        <Item testID="appearance-more-settings" title={t('settingsAppearance.glassControls.moreSettings')} onPress={openAppearance} />
         <Item testID="app-shell-theme-menu-hide" title={t('settingsAppearance.themeToggle.hideFromToolbar')} onPress={() => { props.onClose(); props.onHide(); }} showChevron={false} />
-        <SectionContentRow showDivider={false}><Text style={{ color: theme.colors.text.secondary, fontSize: 12, lineHeight: 16 }}>{t('settingsAppearance.glassControls.shortcutHint', { modifier })}</Text></SectionContentRow>
+        <SectionContentRow showDivider={false}><Text variant="meta" style={{ color: theme.colors.text.secondary }}>{t('settingsAppearance.glassControls.shortcutHint', { modifier })}</Text></SectionContentRow>
     </View>;
 }
 
