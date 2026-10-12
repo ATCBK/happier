@@ -507,7 +507,7 @@ describe('rightSidebarTabRegistry', () => {
     ).toBe('git');
   });
 
-  it("lists the App's tabs after a Session's and a Project's own tabs, never in the phone cockpit", () => {
+  it("lists the App's tabs after scoped tabs and admits them in the phone Session cockpit", () => {
     const sessionTabs = resolveRightSidebarTabs({
       scope: 'session',
       pluginPlacements: [reviewSidebarPlacement],
@@ -522,10 +522,10 @@ describe('rightSidebarTabRegistry', () => {
       (tab) => tab.id === `plugin:${APP_PLUGIN_ID}:app-panel`,
     );
     expect(appTab).toMatchObject({ owner: 'plugin', scopes: ['app'] });
-    // An App panel is not a Session surface: the phone opens it from the launcher instead.
+    // Presentation beside a Session does not change the panel's App target binding.
     expect(
       appTab ? resolveRightSidebarMobileSurface(appTab, 'session') : 'missing',
-    ).toBeNull();
+    ).toBe('plugin');
 
     const projectTabs = resolveRightSidebarTabs({
       scope: 'project',
