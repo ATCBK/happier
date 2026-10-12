@@ -38,6 +38,7 @@ export type SettingOperationContext = Readonly<{
     signal?: AbortSignal;
     input?: SettingsDeclarationOperationInputV1;
     isCurrent(): boolean;
+    isFeatureEnabled?: (featureId: FeatureId) => Promise<boolean>;
     readSettings(): Promise<Settings>;
     mutateSettings(mutate: SettingOwnerMutation): Promise<void>;
     services?: SettingsMutationServices;
@@ -48,6 +49,9 @@ export type SettingOperationResult = Readonly<{
     value?: z.infer<typeof StrictJsonValueSchema>;
 }>;
 export type SettingsMutationServices = Readonly<{
+    projectAccountRows?: Pick<ReturnType<typeof import('@/sync/api/projects/projectAccountRowsClient').createUiProjectAccountRowsClient>, 'read' | 'mutateOrganization'>;
+    readAtmospherePictureFile?: (input: Readonly<{ machineId: string; path: string }>, signal?: AbortSignal) => Promise<
+        Readonly<{ success: true; content: string }> | Readonly<{ success: false; error: string }>>;
     readConnectedAccountPurposes?: (signal?: AbortSignal) => Promise<import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1').ConnectedPurposeCatalogV1 | null>;
     executeSettingsOwnerAction?: SettingsOwnerActionExecute;
     purgeAccountSettingsHistory?: (versions: readonly number[], signal?: AbortSignal) => Promise<
@@ -72,6 +76,7 @@ export type SettingStorageBinding = Readonly<{
     invertBoolean?: boolean;
 }> & (
     | Readonly<{ scope: 'home'; kind: 'homeSettings'; key: string }>
+    | Readonly<{ scope: 'project'; kind: 'projectAtmosphere' }>
     | Readonly<{ scope: 'home'; kind: 'sessionAutoFollowPreferences'; field: 'assigned' | 'direct' | 'team' | 'group' }>
     | TeamSettingBindingV1
     | Readonly<{ scope: 'account'; key: AccountSettingKey & WritableSettingsKey }>
@@ -85,6 +90,8 @@ export type SettingStorageBinding = Readonly<{
     | Readonly<{
         scope: 'account';
         kind: 'owner';
+        /** Compound presentation owners reset through their admitted default intent. */
+        resetValue?: SettingValue;
         read: (settings: Settings) => unknown;
         parse: (value: unknown) => Readonly<{ success: true; value: SettingValue }> | Readonly<{ success: false }>;
         /** Applied inside the Account CAS owner, including every conflict rebase. */
@@ -107,6 +114,7 @@ export type SettingStorageBinding = Readonly<{
 
 /** Accepted addresses derive from the declaration's actual domain owner, never a parallel catalog. */
 export function settingTargetKinds(binding: SettingStorageBinding | undefined): readonly SettingsDeclarationTargetKindV1[] {
+    if (binding?.scope === 'project') return ['project'];
     if (binding?.scope === 'home') return ['home'];
     if (binding?.scope === 'team') return [binding.kind === 'teamIdentityConnection' ? 'team_identity_connection' : 'team'];
     return [];
@@ -187,6 +195,8 @@ export type SettingDeclaration = Readonly<{
 
 export type SettingsSectionDeclaration = Readonly<{
     titleKey?: TranslationKeyNoParams;
+    /** Resolved author-owned section label for contribution sections (a service's own name). */
+    title?: string;
     /** The section renders only while this feature is on; search offers its settings under the same condition. */
     featureId?: FeatureId;
     /** The section exists only on these hosts. */
@@ -201,6 +211,8 @@ export type SettingRef = Omit<SettingDeclaration, 'host' | 'titleKey'> & Readonl
     /** The enclosing section's id (`SettingsSectionRef.id`), revealed when the row is not rendered. */
     sectionId: string;
     sectionTitleKey?: TranslationKeyNoParams;
+    /** The section's resolved author-owned label, when it has no translation key. */
+    sectionTitle?: string;
     featureId?: FeatureId;
     /** The section's and the row's host predicates together. */
     host?: SettingsHostPredicate;
@@ -235,6 +247,11 @@ export type SettingsSubpageDeclaration = Readonly<{
     id: string;
     route: SettingsSubpageRoute;
     titleKey: TranslationKeyNoParams;
+    /**
+     * `page`: the rows moved here from the catalog page and keep its anchors (`<pageId>.<settingId>`),
+     * so their shared ids, links and Actions resolve unchanged; only where they open differs.
+     */
+    anchors?: 'page';
 }>;
 
 export type SettingsPageDeclaration<Sections extends Record<string, SettingsSectionDeclaration> = Record<string, SettingsSectionDeclaration>> = Readonly<{
@@ -285,6 +302,7 @@ export function builtInSettingsPageSections(anchorPrefix: string): Record<string
 function portableStorageBinding(declaration: PortableSettingDeclarationV1): SettingStorageBinding | undefined {
     const binding = declaration.storage;
     if (!binding) return undefined;
+    if (binding.scope === 'project' && binding.kind === 'projectAtmosphere') return { scope: 'project', kind: 'projectAtmosphere', access: binding.access };
     const platformBinding = readPortablePlatformAccountSettingBindingV1(declaration, Platform.OS === 'web' ? 'web' : 'native');
     if (platformBinding) return platformBinding;
     const domain = readPortableDomainSettingBindingV1(declaration);
@@ -355,7 +373,7 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
     const settings: Record<string, SettingRef> = {};
     const sectionRefs: Record<string, SettingsSectionRef> = {};
     const sections: Record<string, SettingsSectionDeclaration> = {};
-    const anchorPrefix = input.subpage ? `${input.pageId}.${input.subpage.id}` : input.pageId;
+    const anchorPrefix = input.subpage && input.subpage.anchors !== 'page' ? `${input.pageId}.${input.subpage.id}` : input.pageId;
     for (const [sectionKey, section] of Object.entries(input.sections)) {
         const sectionId = `${anchorPrefix}.${sectionKey}`;
         const firstSettingId = Object.keys(section.settings)[0];
@@ -381,6 +399,7 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
                 anchor,
                 sectionId,
                 sectionTitleKey,
+                ...(!sharedSection && section.title ? { sectionTitle: section.title } : {}),
                 ...(featureId ? { featureId } : {}),
                 ...(combinedHost ? { host: combinedHost } : {}),
             };

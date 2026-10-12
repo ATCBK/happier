@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSettingHref } from './settingDeclarations';
+import { buildSettingHref, defineSettingsPage } from './settingDeclarations';
 
 describe('scoped setting links', () => {
     it('uses explicit route context and omits a setting when its destination is unavailable', () => {
@@ -20,5 +20,20 @@ describe('scoped setting links', () => {
         expect(buildSettingHref(route, ref, { ...context, pathname: '/settings' })).toBeNull();
         expect(buildSettingHref(route, ref)).toBeNull();
         expect(buildSettingHref('/settings/session?mode=resume', ref)).toBe('/settings/session?mode=resume&setting=teams.oidc.issuer');
+    });
+});
+
+describe('a sub-page that keeps its catalog page anchors', () => {
+    it('keeps the shared ids of rows that moved to a sub-page route', () => {
+        const moved = defineSettingsPage({
+            pageId: 'appearance',
+            subpage: { id: 'motion', route: '/settings/appearance/motion', titleKey: 'settingsAppearance.visualEffects.title', anchors: 'page' },
+            sections: { loadingIndicator: { settings: { loadingIndicatorStyle: {} } } },
+        });
+
+        expect(moved.settings.loadingIndicatorStyle.anchor).toBe('appearance.loadingIndicatorStyle');
+        expect(moved.sectionRefs.loadingIndicator.id).toBe('appearance.loadingIndicator');
+        expect(buildSettingHref(moved.subpage!.route, moved.settings.loadingIndicatorStyle))
+            .toBe('/settings/appearance/motion?setting=appearance.loadingIndicatorStyle');
     });
 });
