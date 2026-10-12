@@ -69,11 +69,11 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
-// The native Markdown package is a rendering boundary, not part of trigger admission.
-vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
-
 // Home remains reachable while Machine daemons are offline. Keep the real
 // connection supervisor and replace only its external Socket.IO transport.
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary((socket) => {
     vi.mocked(socket.connect).mockImplementation(() => {
         socket.connected = true;
@@ -526,6 +526,15 @@ describe('UI Workflow Action front door', () => {
             expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId[automationId]).toBeUndefined();
 
+            h.transport.mockResolvedValueOnce({ ...receipt, run: { ...receipt.run, automationId: 'another-automation' } });
+            expect(await h.createUiWorkflowAction({ account: h.account, transport: h.transport })({
+                actionId: 'workflow.trigger.run_now', input: { automationId },
+                context: { ...h.context, surface: 'agent',
+                    externalActionTarget: { kind: 'machine', machineId: 'machine-a' } },
+            })).toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().automationRunIdsByAutomationId['another-automation']).toBeUndefined();
+
             misboundReceipt = false;
             retireBeforeReceipt = true;
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toMatchObject({ ok: false });
@@ -541,10 +550,20 @@ describe('UI Workflow Action front door', () => {
     });
     it('mounts a digest suggestion without a write and creates it only through explicit Automation Action consent', async () => {
         const previous = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
         const h = await createHarness();
         const controller = createUsageCoachController({ lifetime: h.account.accountLifetime, executor: { execute: h.execute } });
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
         try {
+            const request = runtimeFetch.getMockImplementation();
+            if (!request) throw new Error('Expected the Workflow HTTP boundary');
+            await loadSyncSingletonForTests();
+            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId,
+                credentials: h.account.credentials, request });
+            runtimeFetch.mockImplementation(request);
+            storage.setState({ profileScope: { serverId: h.account.serverId, accountId } });
             const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, sources: ['runtime'] });
             const slice = resolveUsagePageAggregation({ queries: [query] }).results[0]!;
             const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice, pending: false,
@@ -554,6 +573,11 @@ describe('UI Workflow Action front door', () => {
             }));
             expect(h.automationWrites).toEqual([]);
             expect(screen.findByTestId('digest.digest.configure')).toBeTruthy();
+            expect(screen.findByTestId('digest.digest.editor')).toBeNull();
+            await screen.pressByTestIdAsync('digest.digest.configure');
+            expect(screen.findByTestId('digest.digest.editor')).toBeTruthy();
+            expect(screen.findByTestId('digest.digest.editor-submit')?.props.disabled).toBe(true);
+            expect(h.automationWrites).toEqual([]);
             const suggestion = slice.coach!.digestSuggestion!;
             const created = await controller.createDigest(suggestion, { machineId: 'machine-a', directory: '/repo' }, scheduleTrigger);
             expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
@@ -565,7 +589,8 @@ describe('UI Workflow Action front door', () => {
             expect(await h.execute('workflow.trigger.remove', { automationId: receipt!.result.set.automationId,
                 triggerId: receipt!.result.triggerId }, h.context)).toMatchObject({ ok: true });
             expect(h.automationRows.get(receipt!.result.set.automationId)?.triggers).toEqual([]);
-        } finally { await screen?.unmount(); controller.dispose(); h.account.dispose(); storage.setState(previous); }
+        } finally { await screen?.unmount(); controller.dispose(); h.account.dispose(); await connection?.dispose();
+            storage.setState(previous); publishAppliedActiveServerSnapshot(previousApplied, previousAvailable); }
     });
     it('returns saved workflows before awaiting the real plugin projection provider', async (testContext) => {
         const previousState = storage.getState();
@@ -769,7 +794,7 @@ describe('UI Workflow Action front door', () => {
         const previousState = storage.getState();
         const h = await createHarness();
         const sessionId = 'session-pr-links';
-        const pullRequest = { provider: 'github' as const, repository: 'happier-dev/happier', number: 42 };
+        const pullRequest = { provider: 'github' as const, repository: 'happier-dev/happier', number: 42, url: 'https://github.com/happier-dev/happier/pull/42' };
         let pullRequestLinks: typeof pullRequest[] = [];
         let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
         let hook: Awaited<ReturnType<typeof renderHook<ReturnType<typeof useSessionTriggers>>>> | null = null;
@@ -815,7 +840,7 @@ describe('UI Workflow Action front door', () => {
         const h = await createHarness();
         const sessionId = 'session-pr-form';
         const pullRequest = { repository: 'happier-dev/happier', number: 42 };
-        const pullRequestLinks = kind === 'ciFailed' ? [{ provider: 'github' as const, ...pullRequest }] : [];
+        const pullRequestLinks = kind === 'ciFailed' ? [{ provider: 'github' as const, ...pullRequest, url: 'https://github.com/happier-dev/happier/pull/42' }] : [];
         const attachments: ReturnType<typeof SessionPullRequestBindingInputV1Schema.parse>[] = [];
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -1173,7 +1198,9 @@ describe('UI Workflow Action front door', () => {
             runtimeFetch.mockImplementation(request);
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId } });
             storage.getState().applySessions([createSessionFixture({ id: 'session-closed', active: false,
-                metadata: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine-a' } as ReturnType<typeof createSessionFixture>['metadata'] })]);
+                metadataLayoutVersion: 1,
+                metadata: { name: 'Session' } as ReturnType<typeof createSessionFixture>['metadata'],
+                ownerMetadataView: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine-a' } as ReturnType<typeof createSessionFixture>['metadata'] })]);
             storage.setState({ machines: {}, machineListByServerId: {} });
             h.transport.mockResolvedValue({ ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' });
             machineRpc.mockRejectedValue(new Error('Daemon offline'));
@@ -1182,7 +1209,7 @@ describe('UI Workflow Action front door', () => {
             const added = await h.execute('session.trigger.add', { sessionId: 'session-closed', target,
                 trigger: scheduleTrigger }, h.context);
             expect(added).toMatchObject({ ok: true });
-            const pullRequestLinks = [{ provider: 'github' as const, repository: 'happier-dev/happier', number: 42 }];
+            const pullRequestLinks = [{ provider: 'github' as const, repository: 'happier-dev/happier', number: 42, url: 'https://github.com/happier-dev/happier/pull/42' }];
             projection.setLinks(pullRequestLinks);
             h.account.assertCurrent();
             const listed = await h.execute('session.trigger.list', { sessionId: 'session-closed' }, h.context);
