@@ -25,16 +25,15 @@ export function isBorrowedExpoConsumer({ consumerStackName, producerStackName })
   return Boolean(consumer && producer && consumer !== producer);
 }
 
-/** Source QA serves a one-shot export; moving Expo must be requested explicitly. */
+/** Source QA borrows dev Expo; frozen exports are an explicit acceptance mode. */
 export function resolveSourceQaUiMode({ uiMode, noUi = false, consumerStackName, producerStackName }) {
-  const mode = uiMode ?? 'export';
+  const mode = uiMode ?? 'borrowed';
   if (mode !== 'export' && mode !== 'borrowed') {
     throw new Error('[start] source QA --ui must be export or borrowed');
   }
   if (noUi) return 'disabled';
-  if (mode === 'borrowed' && !isBorrowedExpoConsumer({ consumerStackName, producerStackName })) {
-    throw new Error('[start] --ui=borrowed requires a configured borrowed Expo producer');
-  }
+  // Missing Expo is a UI prerequisite, never a server/daemon admission gate.
+  if (mode === 'borrowed') isBorrowedExpoConsumer({ consumerStackName, producerStackName });
   return mode;
 }
 

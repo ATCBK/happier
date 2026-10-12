@@ -5,7 +5,79 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { inspectDependencyRefresh, isDependencyRefreshLockActive, withDependencyRefresh, withDependencyRefreshLock } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, isDependencyRefreshLockActive, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock, resolveDependencyRefreshLockPath } from './dependency_refresh.mjs';
+
+test('finite dependency readers share while queued writers exclude new readers', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-shared-readers-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  let release, releaseSecond;
+  const held = new Promise(resolve => { release = resolve; });
+  const heldSecond = new Promise(resolve => { releaseSecond = resolve; });
+  let firstEntered, secondEntered;
+  const first = new Promise(resolve => { firstEntered = resolve; });
+  const second = new Promise(resolve => { secondEntered = resolve; });
+  const pending = [withDependencyConsumption({ installDir: root, env, signal: t.signal }, async custody => {
+    await withDependencyConsumption({ installDir: root, env: custody, signal: t.signal }, async () => {});
+    firstEntered(); await held;
+  })];
+  let writerEntered = false, lateEntered = false;
+  try {
+    await first;
+    pending.push(withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => { secondEntered(); await heldSecond; }));
+    assert.equal(await Promise.race([second.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 500))]), true,
+      'independent finite readers must enter concurrently');
+    pending.push(withDependencyRefreshLock({ installDir: root, env, signal: t.signal }, async () => { writerEntered = true; }));
+    const waiters = `${resolveDependencyRefreshLockPath(root, env)}.waiters`;
+    while (!(await readdir(waiters)).some(name => /^\d+\.json$/.test(name))) await new Promise(resolve => setTimeout(resolve, 5));
+    pending.push(withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => {
+      assert.equal(writerEntered, true, 'queued writer runs before a new reader'); lateEntered = true;
+    }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(writerEntered, false, 'writer cannot mutate either active reader');
+    assert.equal(lateEntered, false);
+    release(); await pending[0];
+    assert.equal(isDependencyRefreshLockActive({ installDir: root, env }), true, 'remaining reader retains exclusion');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(writerEntered, false, 'first reader leaving does not release the second reader');
+    releaseSecond(); await Promise.all(pending);
+    assert.equal(lateEntered, true);
+    assert.equal(isDependencyRefreshLockActive({ installDir: root, env }), false);
+  } finally { release(); releaseSecond(); await Promise.allSettled(pending); }
+});
+
+test('queued dependency writers retain FIFO priority over new finite readers', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-dependency-writer-priority-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  let enter, release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const order = [];
+  const pending = [withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => { enter(); await held; })];
+  const queued = async count => {
+    const directory = `${resolveDependencyRefreshLockPath(root, env)}.waiters`;
+    while ((await readdir(directory).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)))
+      .filter(name => /^\d+\.json$/.test(name)).length < count) {
+      t.signal.throwIfAborted();
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  };
+  try {
+    await entered;
+    pending.push(withDependencyRefreshLock({ installDir: root, env, signal: t.signal }, async () => { order.push('writer-first'); }));
+    await queued(1);
+    pending.push(withDependencyRefreshLock({ installDir: root, env, signal: t.signal }, async () => { order.push('writer'); }));
+    await queued(2);
+    pending.push(withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => { order.push('reader-after'); }));
+    await queued(3);
+    release();
+    await Promise.all(pending);
+    assert.deepEqual(order, ['writer-first', 'writer', 'reader-after']);
+  } finally { release(); await Promise.allSettled(pending); }
+});
 
 test('dependency refresh waits for its live owner beyond the former acquisition cutoff', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-owner-lifetime-'));
@@ -13,18 +85,21 @@ test('dependency refresh waits for its live owner beyond the former acquisition 
   let clock = Date.now();
   t.mock.method(Date, 'now', () => clock);
   t.mock.timers.enable({ apis: ['setInterval'] });
+  let notices = '';
+  t.mock.method(process.stderr, 'write', chunk => { notices += String(chunk); return true; });
+  const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
   let releaseOwner;
   let markOwnerStarted;
   const held = new Promise(resolve => { releaseOwner = resolve; });
   const started = new Promise(resolve => { markOwnerStarted = resolve; });
-  const owner = withDependencyRefreshLock({ installDir: root }, async () => {
+  const owner = withDependencyRefreshLock({ installDir: root, env }, async () => {
     markOwnerStarted();
     await held;
   });
   await started;
   let payloadStarts = 0;
   let outcome = 'pending';
-  const contender = withDependencyRefreshLock({ installDir: root }, async () => { payloadStarts += 1; })
+  const contender = withDependencyRefreshLock({ installDir: root, env }, async () => { payloadStarts += 1; })
     .then(() => { outcome = 'completed'; }, error => { outcome = error.message; });
   try {
     // OS clock/timer boundaries advance the waiting duration while retaining
@@ -34,6 +109,8 @@ test('dependency refresh waits for its live owner beyond the former acquisition 
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(outcome, 'pending', 'a live dependency owner governs admission, not a subordinate acquisition deadline');
     assert.equal(payloadStarts, 0, 'a waiting contender must not start authoritative installation');
+    assert.match(notices, new RegExp(`dependency refresh lock.*pid=${process.pid}.*heldMs=.*heartbeatAgeMs=`),
+      'dependency consumers must see the existing owner diagnostic while waiting');
     // The real bootstrap uses synchronous Yarn subprocesses, which can delay
     // this owner's JavaScript heartbeat without ending its installation.
     clock += 240_001;
@@ -89,6 +166,12 @@ test('dependency readiness is published only after postinstall completion and re
   await withDependencyRefresh({ installDir: root }, async () => {});
   const admittedPath = join(root, 'node_modules', '.happier-stack-dependencies-ready');
   const admittedState = JSON.parse(await readFile(admittedPath, 'utf8'));
+  await withDependencyRefresh({ installDir: root, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE,
+    onDependenciesReady: async () => await writeFile(patchedPath, 'export const patched = true;\n') },
+  async () => assert.fail('warm full admission must satisfy scriptless preparation without extraction'));
+  assert.deepEqual(JSON.parse(await readFile(admittedPath, 'utf8')), admittedState,
+    'warm scriptless completion must retain the full admission identity when no extraction occurred');
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
   await writeFile(join(root, 'yarn.lock'), '# changed source, prior installed tree remains coherent\n');
   await withDependencyRefresh({ installDir: root, refreshExisting: false,
     onDependenciesReady: async () => await writeFile(patchedPath, 'export const patched = true;\n') },
@@ -99,7 +182,7 @@ test('dependency readiness is published only after postinstall completion and re
     'the normal installer must still refresh changed inputs after last-green repair');
 });
 
-test('UI password codec source changes invalidate remote install readiness', async (t) => {
+test('source edits during and after installation preserve dependency readiness', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-password-source-freshness-'));
   t.after(async () => await rm(root, { recursive: true, force: true }));
   for (const component of ['ui', 'cli', 'server']) {
@@ -117,15 +200,24 @@ test('UI password codec source changes invalidate remote install readiness', asy
   // Real package metadata is the production boundary: the freshness owner must
   // observe this asset dependency, not a test-only declaration of its inputs.
   await cp(new URL('../../../../../packages/protocol/package.json', import.meta.url), join(protocolDir, 'package.json'));
+  await cp(new URL('../../../../ui/package.json', import.meta.url), join(root, 'apps', 'ui', 'package.json'));
+  const workerPath = join(root, 'apps', 'ui', 'sources', 'auth', 'password', 'passwordKdf.worker.ts');
+  await mkdir(join(workerPath, '..'), { recursive: true });
+  await writeFile(workerPath, 'export const sourceRevision = 1;\n');
   const codecPath = join(protocolDir, 'src', 'auth', 'accountPasswordCredential.ts');
   await writeFile(codecPath, 'export const codecRevision = 1;\n');
-  await withDependencyRefresh({ installDir: root }, async () => {});
+  await withDependencyRefresh({ installDir: root }, async () => {
+    await writeFile(codecPath, 'export const codecRevision = 2;\n');
+    await writeFile(workerPath, 'export const sourceRevision = 2;\n');
+  });
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
-  await writeFile(codecPath, 'export const codecRevision = 2;\n');
+  await writeFile(codecPath, 'export const codecRevision = 3;\n');
+  await writeFile(workerPath, 'export const sourceRevision = 3;\n');
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false,
+    'source asset compilation owns its last-green output, not installed dependency identity');
+  await writeFile(join(root, 'yarn.lock'), '# dependency change\n');
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, true,
-    'the generated password worker consumes this source even without Protocol dist');
-  await withDependencyRefresh({ installDir: root }, async () => {});
-  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
+    'lockfile changes still require an explicit dependency refresh');
 });
 
 test('dependency refresh reclaims a lock whose owner exited', async (t) => {

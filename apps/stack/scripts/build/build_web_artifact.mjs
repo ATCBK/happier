@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
-import { cp, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { cp, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 
 import { execYarn } from '../../../../scripts/workspaces/execYarnCommand.mjs';
 import { buildIntoTempThenReplace } from '../utils/fs/atomic_dir_swap.mjs';
 import { ensureDepsInstalled, requireDir } from '../utils/proc/pm.mjs';
+import { withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 import { getComponentDir } from '../utils/paths/paths.mjs';
 import { getDefaultAutostartPaths } from '../utils/paths/paths.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, resolveExpoTmpDir, wantsExpoClearCache } from '../utils/expo/expo.mjs';
@@ -26,11 +28,11 @@ function runCanonicalUiPostinstall({ uiDir, env }) {
   });
 }
 
-async function runPreparedWebExport({ dir, args, env }) {
+async function runPreparedWebExport({ dir, args, env, repoDir = join(dir, '../..') }) {
   const exportEnv = applyExpoNodeHeapEnv({ ...env, CI: '1', EXPO_UNSTABLE_WEB_MODAL: '1' });
-  await runSourceBuildCommand({ repoDir: join(dir, '../..'), cwd: dir,
+  await runSourceBuildCommand({ repoDir, cwd: dir,
     command: await resolveExpoBin(dir), args: applyExpoExportMaxWorkersArgs(args, exportEnv),
-    env: exportEnv, captureStdout: false });
+    env: exportEnv, captureStdout: false, stdoutStream: process.stderr });
 }
 
 export async function ensureWebUiDependencies({
@@ -122,6 +124,7 @@ async function moveDir({ fromDir, toDir }) {
 
 export async function exportWebPayloadToArtifactPayloadDir({
   uiDir,
+  repoDir,
   payloadDir,
   env,
   artifactFingerprint,
@@ -138,6 +141,7 @@ export async function exportWebPayloadToArtifactPayloadDir({
   try {
     await expoExecImpl({
       dir: uiDir,
+      repoDir,
       args: [
         'export',
         '--platform',
@@ -215,21 +219,21 @@ export async function buildWebArtifact({
 
   await buildIntoTempThenReplace(artifactDir, async (tmpArtifactDir) => {
     const payloadDir = artifactPayloadDir(tmpArtifactDir);
-    const sourceInputsDir = join(tmpArtifactDir, 'source-inputs');
-    const { inventoryPath } = await prepareSourceWebUi({ repoDir: join(uiDir, '../..'), outputDir: sourceInputsDir, env });
-    const exportEnv = buildStackWebExportEnv({ baseEnv: {
-      ...env, HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
-    } });
-    const paths = getExpoStatePaths({
-      baseDir: getDefaultAutostartPaths(env).baseDir,
-      kind: 'ui-export-runtime-artifact',
-      projectDir: uiDir,
-      stateFileName: 'ui.export.runtime.state.json',
-    });
-    const tmpDir = resolveExpoTmpDir({ env: exportEnv, defaultTmpDir: paths.tmpDir, kind: 'ui-export-runtime-artifact', projectDir: uiDir });
-    await ensureExpoIsolationEnv({ env: exportEnv, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir });
-    const entrypoint = await exportWebPayloadToArtifactPayloadDir({ uiDir, payloadDir, env: exportEnv, artifactFingerprint, expoExecImpl });
-    await rm(sourceInputsDir, { recursive: true, force: true });
+    // Metro excludes atomic .tmp.* trees; component retention reclaims invalid
+    // artifact siblings. Keep consumed inputs outside both, unlike the payload.
+    const sourceInputsRoot = await mkdtemp(join(dirname(dirname(tmpArtifactDir)), 'web-source-inputs-'));
+    const repoDir = join(uiDir, '../..');
+    let entrypoint;
+    try {
+      entrypoint = expoExecImpl === runPreparedWebExport
+        ? JSON.parse(await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
+          args: [JSON.stringify({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint })], env, captureStderr: true }))
+        : await consumeWebArtifactInputs({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint, env, expoExecImpl });
+    } finally {
+      // Also retire the parent's allocation if dispatch failed before the
+      // finite child entered its own capture/cleanup scope.
+      await rm(sourceInputsRoot, { recursive: true, force: true });
+    }
 
     await writeArtifactManifest({
       artifactDir: tmpArtifactDir,
@@ -250,4 +254,33 @@ export async function buildWebArtifact({
 
   const manifest = await readArtifactManifest({ artifactDir });
   return { artifactDir, manifest };
+}
+
+async function consumeWebArtifactInputs({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint, env, expoExecImpl = runPreparedWebExport }) {
+  const repoDir = join(uiDir, '../..');
+  return await withBuildInputDependencies({ sourceDir: repoDir, env }, async env => { try {
+      const { inventoryPath, uiProjectDir } = await prepareSourceWebUi({ repoDir, outputDir: join(sourceInputsRoot, 'prepared'), env,
+        stdoutStream: process.stderr });
+      const exportEnv = buildStackWebExportEnv({ baseEnv: {
+        ...env, HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
+      } });
+      const paths = getExpoStatePaths({
+        baseDir: getDefaultAutostartPaths(env).baseDir,
+        kind: 'ui-export-runtime-artifact',
+        projectDir: uiDir,
+        stateFileName: 'ui.export.runtime.state.json',
+      });
+      const tmpDir = resolveExpoTmpDir({ env: exportEnv, defaultTmpDir: paths.tmpDir, kind: 'ui-export-runtime-artifact', projectDir: uiDir });
+      await ensureExpoIsolationEnv({ env: exportEnv, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir });
+      return await exportWebPayloadToArtifactPayloadDir({ uiDir: uiProjectDir, repoDir, payloadDir, env: exportEnv, artifactFingerprint, expoExecImpl });
+    } finally {
+      await rm(sourceInputsRoot, { recursive: true, force: true });
+    } });
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const options = JSON.parse(process.argv[2]);
+  console.log = (...values) => console.error(...values);
+  const entrypoint = await consumeWebArtifactInputs({ ...options, env: process.env });
+  process.stdout.write(JSON.stringify(entrypoint));
 }

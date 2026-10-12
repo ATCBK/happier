@@ -406,7 +406,10 @@ test('background readiness gives a late-observed CLI preparation its bounded pha
   }
 });
 
-test('background readiness gives each real CLI build-lock owner a bounded preparation phase', async () => {
+test('background readiness gives each real CLI build-lock owner a bounded preparation phase', async t => {
+  // These temporary lock owners model preparation before admission; they do
+  // not compile or publish workspace bytes under the executor's reservation.
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const temp = await withTempDir();
   const runtimeStatePath = join(temp.dir, 'stack.runtime.json');
   const lockPath = resolveCliDistBuildLockPath(temp.dir);

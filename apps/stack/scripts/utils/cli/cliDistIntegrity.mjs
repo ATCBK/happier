@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import cliDistBuildManifest from './cliDistBuildManifestLoader.mjs';
@@ -61,6 +63,7 @@ export async function probeCliDistRuntimeImport(entrypoint, options = {}) {
   const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
     ? Math.trunc(timeoutMsRaw)
     : DEFAULT_CLI_DIST_RUNTIME_IMPORT_TIMEOUT_MS;
+  const scratch = await mkdtemp(join(tmpdir(), 'hstack-cli-import-probe-'));
   const env = {
     ...process.env,
     ...(options.env ?? {}),
@@ -69,12 +72,17 @@ export async function probeCliDistRuntimeImport(entrypoint, options = {}) {
     [CLI_DIST_INTEGRITY_PROBE_ENV]: 'daemon-command',
     HAPPIER_CLI_RUNTIME_DISABLE: '1',
     HAPPIER_CLI_UPDATE_CHECK: '0',
+    // Index bootstrap can read credentials before command dispatch. A module
+    // probe must neither query the incumbent Account nor share its daemon lock.
+    HAPPIER_HOME_DIR: scratch,
+    HAPPIER_STACK_CLI_HOME_DIR: scratch,
   };
-
+  try {
   await new Promise((resolve, reject) => {
     const child = spawn(nodeExecutable, [entry, 'daemon', '--help'], {
       cwd: options.cwd,
       env,
+      signal: options.signal,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
@@ -91,7 +99,7 @@ export async function probeCliDistRuntimeImport(entrypoint, options = {}) {
       stderr += String(chunk);
     });
     child.on('error', (error) => {
-      spawnError = error;
+      spawnError = options.signal?.aborted ? options.signal.reason ?? error : error;
     });
     child.on('close', (code, signal) => {
       if (settled) return;
@@ -113,4 +121,5 @@ export async function probeCliDistRuntimeImport(entrypoint, options = {}) {
       reject(new Error(`[cli-dist] runtime import probe failed for ${entry} (code=${code}, signal=${signal ?? 'none'}).${suffix}`));
     });
   });
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 }

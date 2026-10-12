@@ -1,6 +1,9 @@
 # The worker owns this OS-global location. Caller homes, task mirrors, aliases
 # and temporary directories do not define an independent admission authority.
-native_host_admission_root='/tmp/happier-heavyweight-admission-v1'
+# Bump this protocol revision when waiter/owner semantics change: incompatible
+# launchers must not share a queue. Live owners across roots remain accounted
+# through service_memory.mjs's authenticated process-tree observation.
+native_host_admission_root='/tmp/happier-heavyweight-admission-v3'
 
 resolve_native_host_admission_root() {
   (umask 077; mkdir -p -- "$native_host_admission_root") 2>/dev/null || return 1

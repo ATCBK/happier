@@ -371,8 +371,10 @@ test('workspace capture includes authored root declarations without admitting te
   const sourceDir = join(root, 'source');
   const captureDir = join(root, 'capture');
   await mkdir(sourceDir);
-  await writeFile(join(sourceDir, 'package.json'), JSON.stringify({ files: ['dist'] }));
+  await writeFile(join(sourceDir, 'package.json'), JSON.stringify({ files: ['dist', 'resources'] }));
   const files = {
+    'README.md': 'authored SDK documentation',
+    'resources/testkit/sample.json': '{"shipped":true}',
     'workspaceBundleLock.mjs': 'export const lock = true;',
     'workspaceBundleLock.d.mts': 'export declare const lock: boolean;',
     'cliDistBuildManifest.cjs': 'exports.manifest = true;',
@@ -398,7 +400,9 @@ test('workspace capture includes authored root declarations without admitting te
     }),
   });
   assert.deepEqual(captured, [
+    'README.md',
     'cliDistBuildManifest.cjs', 'cliDistBuildManifest.d.cts', 'package.json',
+    'resources/testkit/sample.json',
     'runtime.d.ts', 'runtime.js', 'src/index.ts',
     'workspaceBundleLock.d.mts', 'workspaceBundleLock.mjs',
   ]);

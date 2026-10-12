@@ -309,7 +309,7 @@ async function main() {
       );
       if (!borrowedExpo.running) {
         console.log(
-          `${dim('↪ prerequisite:')} restore Expo on producer stack ${borrowedExpo.producerStackName}; this consumer does not own Expo.`,
+          `${dim('↪ prerequisite:')} park UI/QA-UI until Expo READY on ${borrowedExpo.producerStackName}; --ui=export is release/boundary acceptance only, never a fallback.`,
         );
       }
     }

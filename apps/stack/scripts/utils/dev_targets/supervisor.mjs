@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls';
 import { packControlledRuntimeSnapshot, transferRuntimeFile, removeRemoteRuntimeTransferArchives } from './runtime_artifact_transfer.mjs';
 import { ensureRemoteServerDataReady } from './retained_server_data.mjs';
-import { isAuthFlowEnabled } from '../auth/daemon_gate.mjs';
+import { isAuthFlowEnabled, resolveStackDaemonStartRequested } from '../auth/daemon_gate.mjs';
 import { findExistingStackCredentialPath } from '../auth/credentials_paths.mjs';
+import { getStackRuntimePendingRemoteTargets } from '../stack/runtime_state.mjs';
+import { parseSourcePreparationPhaseLine } from '../../runtime/shared/pending_source_start.mjs';
 
 import { killProcessTree, spawnProc } from '../proc/proc.mjs';
 import { resolveMutagenSessionName } from './mutagen_project.mjs';
@@ -35,10 +37,99 @@ import {
   resolveRemoteStackStatePaths,
   buildSshForwardArgs,
   buildSshWorkerArgs,
+  resolveRemoteServerRuntimeConfig,
 } from './remote_commands.mjs';
 
 const TARGET_SYNC_READY = Symbol('TARGET_SYNC_READY');
 const READINESS_RETRY_INTERVAL_MS = 5_000;
+
+/** Prepare on the actual service hosts while their incumbent supervisor is
+ * still serving. The existing executor/control pipe owns each preparation
+ * worker; only the existing restart owner may subsequently retire services.
+ */
+export async function prepareStackDevTargetSourceReload({ stackName, stackBaseDir, repoDir, placement, args, env, signal, serverRequested, onPhase, sourceStartRequestId },
+  { runProcess = runDevTargetControlProcess, executorDependencies = {} } = {}) {
+  env = { ...env, HAPPIER_STACK_SYNC_SOURCE_DIR: repoDir, HAPPIER_STACK_PROCESS_KIND: 'infra' };
+  const daemonRequested = resolveStackDaemonStartRequested({ env, noDaemon: args.includes('--no-daemon') });
+  const plans = placement.targetPlans.map(plan => ({ ...plan, services: { ...plan.services,
+    server: plan.services.server && serverRequested,
+    daemon: plan.services.daemon && daemonRequested,
+  } })).filter(plan => plan.services.server || plan.services.daemon);
+  await ensureDevTargetSyncProject({ stackBaseDir: placement.authority.producerStackBaseDir,
+    sourceDir: repoDir, targets: placement.config.targets, requiredTargets: plans.map(plan => plan.target),
+    ownerId: process.pid, allowIndependentBorrow: true, borrowOnly: true, env }, { runProcess });
+  const workers = [];
+  const cancellation = new AbortController();
+  const cancel = () => cancellation.abort(signal.reason);
+  signal.addEventListener('abort', cancel, { once: true });
+  const close = async () => {
+    for (const worker of workers) worker.child?.stdin.write('cancel\n');
+    cancellation.abort(new Error('[reload] preparation workers closed'));
+    await Promise.allSettled(workers.map(worker => worker.completion));
+    signal.removeEventListener('abort', cancel);
+  };
+  try {
+    await Promise.all(plans.map(async plan => {
+      const paths = resolveRemoteStackStatePaths(plan.target, { stackName, runtimeMode: 'source-snapshot' });
+      const serverConfig = resolveRemoteServerRuntimeConfig({
+        serverComponentName: env.HAPPIER_STACK_SERVER_COMPONENT ?? 'happier-server-light', env });
+      const hostArgs = args.filter(arg => arg !== '--restart' && arg !== '--reuse-source-runtime');
+      if (!plan.services.server) hostArgs.push('--no-server', '--no-ui');
+      if (!plan.services.daemon) hostArgs.push('--no-daemon');
+      let prepared;
+      const ready = new Promise(resolve => { prepared = resolve; });
+      const worker = {};
+      let phaseProjection = Promise.resolve();
+      let phaseError;
+      workers.push(worker);
+      worker.completion = runDevTargetCommand({ target: plan.target,
+        stackBaseDir: placement.authority.producerStackBaseDir, sourceDir: repoDir,
+        commandArgs: ['node', './apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs', '--worker',
+          JSON.stringify({ stackName, stackBaseDir: paths.stackBaseDir, repoDir: plan.target.repoDir, args: hostArgs, sourceStartRequestId })],
+        environment: { ...serverConfig.environment, HAPPIER_DB_PROVIDER: serverConfig.dbProvider,
+          HAPPIER_STACK_SERVER_COMPONENT: serverConfig.serverComponentName,
+          HAPPIER_STACK_REPO_DIR: plan.target.repoDir, HAPPIER_STACK_STACK: stackName,
+          HAPPIER_STACK_CLI_HOME_DIR: paths.cliHomeDir, HAPPIER_HOME_DIR: paths.cliHomeDir,
+          HAPPIER_SERVER_URL: env.HAPPIER_SERVER_URL,
+          HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_STACK_SYNC_BUNDLED_WORKSPACES: '0',
+          ...(env.HAPPIER_STACK_EXPO_SOURCE_STACK ? { HAPPIER_STACK_EXPO_SOURCE_STACK: env.HAPPIER_STACK_EXPO_SOURCE_STACK } : {}) },
+        controlStdin: true, dependencyAdmission: 'skip', workspacePreparation: 'skip', provenance: 'skip',
+        signal: cancellation.signal, env, silent: true,
+        onLine: ({ stream, line }) => {
+          const preparation = stream === 'stdout' ? parseSourcePreparationPhaseLine(line) : null;
+          if (preparation) phaseProjection = phaseProjection.then(() => onPhase?.(plan.target.name, preparation))
+            .catch(error => { phaseError = error; });
+          else if (stream === 'stdout' && line === 'HSTACK_SOURCE_RELOAD_PREPARED') prepared();
+          else (stream === 'stderr' ? process.stderr : process.stdout).write(`[reload:${plan.target.name}] ${line}\n`);
+        },
+      }, { ...executorDependencies, spawnProcess: input => {
+        const { label, command, args, env: workerEnv, onLine } = input;
+        worker.child = executorDependencies.spawnProcess
+          ? executorDependencies.spawnProcess(input)
+          : spawnProc(label, command, args, workerEnv,
+            { onLine, stdio: ['pipe', 'pipe', 'pipe'], ownedProcessGroup: true, silent: true });
+        worker.child.stdin.on('error', () => {});
+        return worker.child;
+      } });
+      // An exit (including SSH loss) is a failure before readiness, even if
+      // the target's old /health is still responding.
+      await Promise.race([ready, worker.completion.then(result => {
+        throw new Error(`[reload] ${plan.target.name} preparation exited before readiness (${result.code ?? result.signal})`);
+      })]);
+      await phaseProjection;
+      if (phaseError) throw phaseError;
+    }));
+    return {
+      async activate() {
+        signal.throwIfAborted();
+        for (const worker of workers) worker.child.stdin.write('activate\n');
+        const results = await Promise.all(workers.map(worker => worker.completion));
+        if (results.some(result => result.code !== 0)) throw new Error('[reload] remote replacement selection failed; incumbent retained');
+      },
+      close,
+    };
+  } catch (error) { await close(); throw error; }
+}
 
 export function resolveRemoteServerReadyTimeoutMs(env = process.env) {
   const configured = Number.parseInt(String(env.HAPPIER_STACK_SERVER_READY_TIMEOUT_MS ?? ''), 10);
@@ -52,7 +143,28 @@ function planRunsRuntimeServices(plan) {
 }
 
 export function planRequiresRemoteCliWorkspacePreparation(plan) {
-  return plan?.services?.daemon === true;
+  return plan?.services?.daemon === true && plan.preserveDaemon !== true;
+}
+
+// --no-daemon declines new execution, but an already retained remote Machine
+// still needs this controller's transport. Consume custody rather than choosing
+// another placement or treating the configured target as proof of execution.
+export function resolvePreservedDaemonTargetPlans({ targetPlans, targets, runtimeState, daemonRequested }) {
+  if (daemonRequested) return targetPlans;
+  const plans = targetPlans.map(plan => ({ ...plan, services: { ...plan.services, daemon: false } }));
+  for (const [name, state] of getStackRuntimePendingRemoteTargets(runtimeState)) {
+    if (state.services?.daemon !== true || (state.serviceStatus?.daemon ?? state.status) === 'stopped') continue;
+    let plan = plans.find(candidate => candidate.target.name === name);
+    if (!plan) {
+      const target = targets.find(candidate => candidate.name === name);
+      if (!target) throw new Error(`[dev-targets] preserved daemon target ${name} is not configured`);
+      plan = { target, services: { server: false, expo: false, daemon: false } };
+      plans.push(plan);
+    }
+    plan.services.daemon = true;
+    plan.preserveDaemon = true;
+  }
+  return plans.filter(plan => plan.commands || planRunsRuntimeServices(plan));
 }
 
 function planDefersRemoteCompanionPreparation(plan) {
@@ -99,8 +211,9 @@ function defaultSpawnProcess({
   silent = false,
   persistOutput = true,
   lineFilter,
+  onLine,
 }) {
-  return spawnProc(label, command, args, env, { silent, persistOutput, lineFilter });
+  return spawnProc(label, command, args, env, { silent, persistOutput, lineFilter, onLine });
 }
 
 async function defaultStopProcess(child) {
@@ -257,6 +370,7 @@ export async function startStackDevTargets(
     remoteWorkspacePreparation = null,
     runtimeSnapshot = null,
     sourceSnapshot = false,
+    sourceStartRequestId,
     sourceUi = 'export',
     runtimeTarget = null,
     borrowedExpoProducerStackName = '',
@@ -323,7 +437,7 @@ export async function startStackDevTargets(
   // by the command executor; an unrelated target must not keep Expo/daemon down.
   // Preserve the original command-only behavior when no runtime service exists.
   const requiredSyncPlans = servicePlans.length > 0 ? servicePlans : plans;
-  if (plans.some((plan) => plan.services.daemon) && !credentialPath && !isAuthFlowEnabled(env)) {
+  if (plans.some((plan) => plan.services.daemon && !plan.preserveDaemon) && !credentialPath && !isAuthFlowEnabled(env)) {
     throw new Error(
       '[dev-targets] the local stack has no daemon credential to seed remotely; authenticate the local daemon first',
     );
@@ -359,6 +473,11 @@ export async function startStackDevTargets(
     resolveCloseRequested = resolve;
   });
   const publishTargetState = (plan, status, details = {}) => {
+    if (status !== 'starting') {
+      const observation = sourceRuntimeObservationsByTarget.get(plan.target.name);
+      if (observation?.sourcePreparation) sourceRuntimeObservationsByTarget.set(plan.target.name,
+        { ...observation, sourcePreparation: null });
+    }
     if (sourceSnapshot) {
       const nextPhase = status === 'running' ? 'running' : details.phase;
       const previous = phaseTimingsByTarget.get(plan.target.name);
@@ -391,6 +510,7 @@ export async function startStackDevTargets(
         ? { runtimeSnapshotId: resolvePlanRuntime(plan).snapshot.snapshotId } : {}),
       ...(sourceSnapshot && sourceRuntimeObservationsByTarget.has(plan.target.name)
         ? sourceRuntimeObservationsByTarget.get(plan.target.name) : {}),
+      ...(status === 'running' ? { sourcePreparation: null } : {}),
       ...details,
     };
     try {
@@ -446,7 +566,7 @@ export async function startStackDevTargets(
     });
 
     const verifyLoadedRuntimeIdentity = async (plan, component) => {
-      if (!retainedRuntime) return;
+      if (!retainedRuntime && !plan.preserveDaemon) return;
       const { target, services } = plan;
       const result = await runProcess({
         label: `remote:${target.name}`, command: 'ssh', args: [
@@ -454,12 +574,18 @@ export async function startStackDevTargets(
           buildRemoteRuntimeSnapshotProbeCommand(target, {
             stackName, runtimeMode, sourceUi, snapshotId: resolvePlanRuntime(plan).snapshot?.snapshotId,
             services: sourceSnapshot && component ? { [component]: true } : services,
+            includeDaemonServerUrl: plan.preserveDaemon === true,
           }),
         ], env: infraEnv,
       });
       requireSuccessful(result, `${target.name} loaded runtime identity`);
+      const observed = sourceSnapshot || plan.preserveDaemon ? JSON.parse(result.out) : null;
+      if (plan.preserveDaemon) {
+        const forward = resolveCanonicalLoopbackForward(observed.daemonServerUrl, localServerPort);
+        if (!forward) throw new Error(`[dev-targets] ${target.name} preserved daemon has no verified loopback server endpoint`);
+        servicePortsByTarget.set(target.name, { ...servicePortsByTarget.get(target.name), daemon: forward.listenPort });
+      }
       if (sourceSnapshot) {
-        const observed = JSON.parse(result.out);
         if (!observed.sourceRuntimeIdentities || typeof observed.sourceRuntimeIdentities !== 'object'
           || (component && !observed.sourceRuntimeIdentities[component])) {
           throw new Error(`[dev-targets] ${target.name} source runtime identity observation is missing`);
@@ -467,7 +593,13 @@ export async function startStackDevTargets(
         const previous = sourceRuntimeObservationsByTarget.get(target.name);
         for (const [observedComponent, identity] of Object.entries(observed.sourceRuntimeIdentities)) {
           const selected = previous?.sourceRuntimeIdentities?.[observedComponent]?.selected;
-          if (selected && identity.selected !== selected) {
+          // An explicit daemon reload updates the target's canonical selected
+          // and loaded launch together. Recovery must consume that attested
+          // successor instead of retaining this controller's old observation.
+          const loadedDaemonReload = observedComponent === 'daemon'
+            && typeof identity.selected === 'string' && identity.selected.length > 0
+            && identity.loaded === identity.selected;
+          if (selected && identity.selected !== selected && !loadedDaemonReload) {
             throw new Error(`[dev-targets] ${target.name} recovered ${observedComponent} changed its selected source runtime`);
           }
         }
@@ -476,6 +608,7 @@ export async function startStackDevTargets(
           sourceRuntimeIdentities: { ...previous?.sourceRuntimeIdentities, ...observed.sourceRuntimeIdentities },
         });
       }
+      return observed;
     };
 
     const startTarget = async (plan, index, existingTunnel = null) => {
@@ -489,6 +622,7 @@ export async function startStackDevTargets(
       let createdTunnel = false;
       let credentialSeedTask = null;
       let credentialSeeded = false;
+      let credentialWaitReported = false;
       let workspacePreparationCurrent = false;
       let retainedRemoteData = false;
       let serverAuthorityPinned = false;
@@ -504,10 +638,18 @@ export async function startStackDevTargets(
       };
       const seedRemoteCredential = async () => {
         if (!services.daemon || credentialSeeded) return true;
+        const credentialServerUrl = canonicalServerUrl || publicServerUrl || `http://127.0.0.1:${localServerPort}`;
         const currentCredentialPath = credentialPath || (cliHomeDir
-          ? findExistingStackCredentialPath({ cliHomeDir, serverUrl: `http://127.0.0.1:${localServerPort}`, env })
+          ? findExistingStackCredentialPath({ cliHomeDir, serverUrl: credentialServerUrl, env })
           : null);
-        if (!currentCredentialPath) return false;
+        if (!currentCredentialPath) {
+          if (!credentialWaitReported) {
+            credentialWaitReported = true;
+            beginPhase('credentials');
+            logger.info?.(`[dev-targets] waiting for CLI sign-in for ${stackName}: no credential for ${credentialServerUrl}; run \`hstack stack auth ${stackName} login\``);
+          }
+          return false;
+        }
         beginPhase('credentials');
         const { stagedPath, finalPath } = remoteCredentialPaths(target, stackName, runtimeMode);
         requireSuccessful(
@@ -574,7 +716,9 @@ export async function startStackDevTargets(
         await beginCredentialSeed();
         beginPhase('bootstrap');
         if (retainedRuntime) {
+          beginPhase('sync');
           await flushSync({ target, env: mutagenEnv }, { runProcess });
+          beginPhase('bootstrap');
           if (services.server) {
             const readiness = await ensureRemoteServerDataReady({ target, stackName, stackBaseDir, syncStackBaseDir, env: infraEnv }, { runCommand });
             retainedRemoteData = readiness?.retainedRemoteData === true;
@@ -641,6 +785,35 @@ export async function startStackDevTargets(
       };
       try {
         beginPhase('prepare');
+        let preservedDaemonForward = null;
+        if (plan.preserveDaemon) {
+          beginPhase('runtime-identity');
+          const observed = await verifyLoadedRuntimeIdentity(plan, 'daemon');
+          preservedDaemonForward = resolveCanonicalLoopbackForward(observed.daemonServerUrl, localServerPort);
+          credentialSeeded = true;
+          if (!services.server && !services.expo) provisionedTargets.add(target.name);
+        }
+        if (!services.server && ['tunnel', 'server-readiness'].includes(targetFailuresByTarget.get(target.name)?.phase)) {
+          // A reverse forward cannot reach a server still preparing locally.
+          // Recovery uses the same server readiness and controller lifetime as
+          // remote server startup, before probing the dependent target again.
+          beginPhase('server-readiness');
+          const readinessController = new AbortController();
+          try {
+            const outcome = await Promise.race([
+              waitForServerReady({
+                url: `http://127.0.0.1:${localServerPort}`,
+                target,
+                env,
+                signal: readinessController.signal,
+              }).then(() => 'ready'),
+              closeRequested.then(() => 'close'),
+            ]);
+            if (outcome === 'close' || closed) return null;
+          } finally {
+            readinessController.abort();
+          }
+        }
         if (syncProject.unhealthyTargets?.has(target.name)) {
           beginPhase('sync');
           const syncStatus = await inspectSync({ target, stackBaseDir: syncStackBaseDir, env: infraEnv });
@@ -703,7 +876,7 @@ export async function startStackDevTargets(
           return TARGET_SYNC_READY;
         }
         const remoteServerPort =
-          target.remoteServerPort ?? resolveDefaultRemoteServerPort({
+          preservedDaemonForward?.listenPort ?? target.remoteServerPort ?? resolveDefaultRemoteServerPort({
             localServerPort,
             targetIndex: index,
             instanceId,
@@ -712,6 +885,7 @@ export async function startStackDevTargets(
           ? resolveDefaultRemoteExpoPort({ localExpoPort, targetIndex: index, instanceId })
           : null;
         servicePortsByTarget.set(target.name, {
+          ...(services.daemon ? { daemon: remoteServerPort } : {}),
           ...(services.server ? { server: remoteServerPort } : {}),
           ...(services.expo ? { expo: remoteExpoPort } : {}),
         });
@@ -725,7 +899,7 @@ export async function startStackDevTargets(
             targetPort: remoteServerPort,
           });
         } else if (services.daemon || services.expo) {
-          forwards.push({
+          forwards.push(preservedDaemonForward ?? {
             direction: 'reverse',
             listenHost: '127.0.0.1',
             listenPort: remoteServerPort,
@@ -771,12 +945,15 @@ export async function startStackDevTargets(
         }
         const remoteStackOptions = {
           runtimeMode,
-          reuseSourceRuntime: Boolean(retainedSourceRuntime),
+          sourceStartRequestId,
+          reuseSourceRuntime: Boolean(retainedSourceRuntime) || env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD === '1',
+          preparedSourceReload: sourceSnapshot && !retainedSourceRuntime && env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD === '1',
           sourceUiLaunch: retainedSourceRuntime?.sourceUiLaunch,
           runtimeSnapshotId: selectedSnapshot?.snapshotId,
           borrowedExpoProducerStackName,
           sourceUi,
-          services,
+          services: { ...services, daemon: services.daemon && !plan.preserveDaemon },
+          preserveDaemon: plan.preserveDaemon === true,
           attended: env.HAPPIER_STACK_TUI === '1',
           deferDaemonStartUntilCredentials: services.daemon && (deferCompanionPreparation || !credentialPath),
           serverUrl: `http://127.0.0.1:${remoteServerPort}`,
@@ -798,14 +975,15 @@ export async function startStackDevTargets(
         // A dropped SSH worker is not evidence that its detached daemon died.
         // Recovery replaces only the runner through Stack's existing
         // preserve-daemon restart owner; explicit starts/stops still retire all.
-        if (!retainedSourceRuntime) await retireRemoteTarget(target, remoteStackOptions);
+        if ((!plan.preserveDaemon || services.server || services.expo) && !retainedSourceRuntime) await retireRemoteTarget(target, remoteStackOptions);
         // Retire recorded source consumers before bootstrap can rewrite the
         // shared dependency tree. Legacy Expo state can outlive runtime state.
         if (!retainedRuntime && !provisionedTargets.has(target.name) && !deferCompanionPreparation) {
           await prepareRemoteServices();
         }
         if (closed) return null;
-        const remoteCommand = buildRemoteStackCommand(target, remoteStackOptions);
+        const remoteCommand = plan.preserveDaemon && !services.server && !services.expo
+          ? null : buildRemoteStackCommand(target, remoteStackOptions);
         beginPhase('tunnel');
         // A worker-only failure keeps a healthy forward, but that forward can
         // die while retirement/backoff is pending. Recheck at dispatch.
@@ -833,42 +1011,27 @@ export async function startStackDevTargets(
           tunnelsByTarget.set(target.name, tunnel);
         }
         if (!services.server) {
-          const readinessDeadline = Date.now() + resolveRemoteServerReadyTimeoutMs(env);
-          let readinessAttempt = 0;
-          let readinessResult;
-          do {
-            readinessResult = await runProcess({
-              label: `remote:${target.name}`,
-              command: 'ssh',
-              args: [
-                ...openSsh.sshArgs,
-                '-o',
-                'BatchMode=yes',
-                target.ssh,
-                buildRemoteForwardProbeCommand(target, { remoteServerPort }),
-              ],
-              env: infraEnv,
-            });
-            if (readinessResult?.code === 0 || tunnel.exitCode != null || Date.now() >= readinessDeadline) {
-              break;
-            }
-            readinessAttempt += 1;
-            const retryOutcome = await Promise.race([
-              waitForRetry({
-                attempt: readinessAttempt,
-                delayMs: READINESS_RETRY_INTERVAL_MS,
-                target,
-              }).then(() => 'retry'),
-              closeRequested.then(() => 'close'),
-            ]);
-            if (retryOutcome === 'close' || closed) return null;
-          } while (!closed);
+          // Probe once; failures return to the target lifecycle's recovery
+          // rather than holding initial startup in a separate retry loop.
+          const readinessResult = await runProcess({
+            label: `remote:${target.name}`,
+            command: 'ssh',
+            args: [
+              ...openSsh.sshArgs,
+              '-o',
+              'BatchMode=yes',
+              target.ssh,
+              buildRemoteForwardProbeCommand(target, { remoteServerPort }),
+            ],
+            env: infraEnv,
+          });
           requireSuccessful(
             readinessResult,
             `${target.name} reverse tunnel readiness`,
           );
         }
         beginPhase('worker');
+        if (!remoteCommand) return null;
         // Once a server command might create data, its target must remain the
         // authority even if SSH dies before readiness is observed.
         await pinServerDataAuthority();
@@ -880,6 +1043,13 @@ export async function startStackDevTargets(
             sshArgs: openSsh.sshArgs,
           }),
           env: infraEnv,
+          onLine: ({ stream, line }) => {
+            const preparation = sourceSnapshot && stream === 'stdout' ? parseSourcePreparationPhaseLine(line) : null;
+            if (!preparation || closed) return;
+            const previous = sourceRuntimeObservationsByTarget.get(target.name);
+            sourceRuntimeObservationsByTarget.set(target.name, { ...previous, sourcePreparation: preparation });
+            publishTargetState(plan, 'starting', { phase: preparation.phase, sourcePreparation: preparation });
+          },
         });
         workersByTarget.set(target.name, worker);
         startedRemoteTargets.add(target.name);
@@ -898,7 +1068,14 @@ export async function startStackDevTargets(
         }
         return worker;
       } catch (error) {
-        if (tunnel && (createdTunnel || phase === 'tunnel')) {
+        const dependentReadinessFailure = !services.server && (phase === 'tunnel' || phase === 'server-readiness');
+        // The first probe can race forward establishment. A reused forward
+        // that still fails after local server readiness is not usable merely
+        // because its SSH process is alive, even before the first worker starts.
+        // Retire it through the existing lifecycle and backoff owner.
+        const lostReusedForward = phase === 'tunnel' && tunnel === existingTunnel;
+        if (tunnel && (createdTunnel || phase === 'tunnel')
+          && (!dependentReadinessFailure || lostReusedForward || tunnel.exitCode != null || tunnel.signalCode != null)) {
           if (tunnelsByTarget.get(target.name) === tunnel) {
             tunnelsByTarget.delete(target.name);
           }
@@ -915,7 +1092,11 @@ export async function startStackDevTargets(
             error instanceof Error ? error.message : String(error)
           }`,
         );
-        if (retainedRuntime && !startedRemoteTargets.has(target.name)) {
+        // Pre-dispatch server/data admission still owns safe local fallback.
+        // Daemon preparation and transient sync failures recover under this
+        // target's lifecycle without tearing down the independent local Stack.
+        if (retainedRuntime && services.server && phase !== 'sync'
+          && !startedRemoteTargets.has(target.name) && !dependentReadinessFailure) {
           const unavailable = error.commandExitCode === 255
             || (error.name === 'OpenSshExecutionError' && error.code === 'command_failed' && error.status === 255);
           if (unavailable && !retainedRemoteData && !serverAuthorityPinned) error.remotePreDispatchUnavailable = true;
@@ -938,6 +1119,8 @@ export async function startStackDevTargets(
         let expoReady = !services.expo;
         let daemonReady = !services.daemon;
         const readinessPhase = () => {
+          const preparation = sourceRuntimeObservationsByTarget.get(target.name)?.sourcePreparation;
+          if (preparation && preparation.phase !== 'prepared') return preparation.phase;
           if (!serverReady) return 'server-readiness';
           if (!companionPreparationReady) return 'bootstrap';
           if (!expoReady) return 'expo-readiness';
@@ -968,7 +1151,7 @@ export async function startStackDevTargets(
           return retryOutcome !== 'close' && !closed;
         };
         while (!closed) {
-          if (worker && tunnel) {
+          if (tunnel && (worker || plan.preserveDaemon)) {
             if (serverReady && !companionPreparationReady) {
               const deferredPreparation = deferredCompanionPreparationsByTarget.get(target.name);
               try {
@@ -1007,7 +1190,7 @@ export async function startStackDevTargets(
               ? new AbortController()
               : null;
             const outcomePromises = [
-              waitForProcess(worker).then((result) => ({ kind: 'worker-exit', result })),
+              ...(worker ? [waitForProcess(worker).then((result) => ({ kind: 'worker-exit', result }))] : []),
               waitForProcess(tunnel).then((result) => ({ kind: 'tunnel-exit', result })),
               closeRequested.then(() => ({ kind: 'close' })),
             ];
@@ -1109,7 +1292,7 @@ export async function startStackDevTargets(
             if (tunnelExited && tunnelsByTarget.get(target.name) === tunnel) {
               tunnelsByTarget.delete(target.name);
             }
-            await stopProcess(worker);
+            if (worker) await stopProcess(worker);
             if (tunnelExited) {
               await stopProcess(tunnel);
             }
@@ -1153,7 +1336,7 @@ export async function startStackDevTargets(
             if (targetFailuresByTarget.get(target.name)?.error?.code === 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED') return;
             if (worker === TARGET_SYNC_READY) return;
             tunnel = tunnelsByTarget.get(target.name) ?? null;
-            if (worker && tunnel) {
+            if (tunnel && (worker || plan.preserveDaemon)) {
               serverReady = !services.server;
               companionPreparationReady = retainedRuntime || !planDefersRemoteCompanionPreparation(plan)
                 || provisionedTargets.has(target.name);
@@ -1165,29 +1348,13 @@ export async function startStackDevTargets(
       })());
     };
 
-    const syncFailedTargets = [];
     await Promise.all(plans.map(async (plan, index) => {
       const { target } = plan;
       const initialWorker = await startTarget(plan, index);
       const initialTunnel = tunnelsByTarget.get(target.name) ?? null;
-      const initialFailure = targetFailuresByTarget.get(target.name);
       if (initialWorker === TARGET_SYNC_READY) return;
-      if (!initialWorker && initialFailure?.phase === 'sync') {
-        syncFailedTargets.push({ plan, index, initialWorker, initialTunnel });
-        return;
-      }
       startTargetLifecycle(plan, index, initialWorker, initialTunnel);
     }));
-    if (
-      workersByTarget.size === 0
-      && targetFailuresByTarget.size > 0
-      && [...targetFailuresByTarget.values()].every(({ phase }) => phase === 'sync')
-    ) {
-      throw [...targetFailuresByTarget.values()].at(-1).error;
-    }
-    for (const { plan, index, initialWorker, initialTunnel } of syncFailedTargets) {
-      startTargetLifecycle(plan, index, initialWorker, initialTunnel);
-    }
 
     return {
       get workers() {
@@ -1197,18 +1364,25 @@ export async function startStackDevTargets(
       get targetFailures() {
         return [...targetFailuresByTarget.values()];
       },
-      async close() {
+      async close({ preserveDaemon = false } = {}) {
         if (closed) return;
         closed = true;
         resolveCloseRequested();
         let stopFailure = null;
         for (const plan of servicePlans) {
           const { target } = plan;
-          if (!startedRemoteTargets.has(target.name)) continue;
+          if (!startedRemoteTargets.has(target.name) && !plan.preserveDaemon) continue;
           const options = remoteStackOptionsByTarget.get(target.name);
           try {
-            await retireRemoteTarget(target, options, { probeBeforeStop: false });
-            await publishTargetState(plan, 'stopped', { phase: null, error: null });
+            if (startedRemoteTargets.has(target.name) || !preserveDaemon) {
+              await retireRemoteTarget(target, { ...options, preserveDaemon }, { probeBeforeStop: false });
+            }
+            const daemonPreserved = preserveDaemon && plan.services.daemon === true;
+            await publishTargetState(plan, daemonPreserved ? 'running' : 'stopped', {
+              phase: null, error: null,
+              serviceStatus: Object.fromEntries(Object.entries(plan.services).filter(([, enabled]) => enabled === true)
+                .map(([service]) => [service, daemonPreserved && service === 'daemon' ? 'running' : 'stopped'])),
+            });
           } catch (error) {
             stopFailure ??= error;
             await publishTargetState(plan, 'failed', { phase: 'stop', error: error instanceof Error ? error.message : String(error) });
@@ -1263,6 +1437,7 @@ export function startStackDevTargetsInBackground(
   let activeController = null;
   let closing = false;
   let closedByReady = false;
+  let closeOptions;
   let resolveCloseRequested;
   const closeRequested = new Promise((resolve) => {
     resolveCloseRequested = resolve;
@@ -1274,7 +1449,7 @@ export function startStackDevTargetsInBackground(
         const controller = await startStackDevTargetsImpl(options);
         activeController = controller;
         if (closing) {
-          await activeController?.close?.();
+          await activeController?.close?.(closeOptions);
           closedByReady = true;
         }
         return controller;
@@ -1311,16 +1486,17 @@ export function startStackDevTargetsInBackground(
 
   return {
     ready,
-    async close() {
+    async close(options) {
       if (closing) return;
       closing = true;
+      closeOptions = options;
       resolveCloseRequested();
       const controller = activeController ?? await ready;
       if (controller && controller !== activeController) {
         activeController = controller;
       }
       if (!closedByReady) {
-        await activeController?.close?.();
+        await activeController?.close?.(closeOptions);
         closedByReady = true;
       }
     },

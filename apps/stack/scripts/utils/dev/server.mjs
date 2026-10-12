@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveServerMigrationsEnabled } from '@happier-dev/cli-common/firstPartyRuntime/selfHostServerEnv';
 
-import { ensureDepsInstalled, pmExecBin, pmSpawnScript } from '../proc/pm.mjs';
+import { ensureDepsInstalled, hasUsableWorkspaceLastGreen, pmExecBin, pmSpawnScript, readWorkspaceComponentDependencyGraph } from '../proc/pm.mjs';
+import { resolveWorkspaceBuildInputWatchPaths } from '../fs/workspaceBuildInputs.mjs';
 import { killProcessTree, markSpawnedProcessPlannedExit, spawnProc } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from '../server/apply_server_light_env_defaults.mjs';
@@ -305,16 +307,15 @@ function requestSafePostStopRetry(error) {
   return error;
 }
 
-export function createDevServerReloadDescriptors({ serverDir, existsSyncImpl = existsSync } = {}) {
+export async function createDevServerReloadDescriptors({ serverDir, existsSyncImpl = existsSync } = {}) {
   const repoRoot = resolve(serverDir, '..', '..');
-  const sharedPackages = ['agents', 'cli-common', 'protocol'];
-  const serverAppPaths = [
-    join(serverDir, 'sources'),
-    join(serverDir, 'scripts'),
-    join(serverDir, 'package.json'),
-    join(serverDir, 'tsconfig.json'),
-    join(serverDir, 'tsconfig.build.json'),
-  ];
+  let graph;
+  try {
+    graph = await readWorkspaceComponentDependencyGraph(serverDir, { monorepoRoot: repoRoot });
+  } catch (error) {
+    console.warn(`[local] server input discovery failed; observing workspace corrections. ${error.message}`);
+  }
+  const serverAppPaths = resolveWorkspaceBuildInputWatchPaths(serverDir, { existsSyncImpl });
   const serverPrismaPaths = [join(serverDir, 'prisma')];
   const makeDescriptor = (id, target, paths) => {
     const existingPaths = paths.filter((p) => existsSyncImpl(p));
@@ -330,14 +331,11 @@ export function createDevServerReloadDescriptors({ serverDir, existsSyncImpl = e
   return [
     makeDescriptor('server:app', 'server', serverAppPaths),
     makeDescriptor('server:prisma', 'server', serverPrismaPaths),
-    ...sharedPackages.map((pkg) => makeDescriptor(
-      `shared:${pkg}`,
+    ...(!graph ? [makeDescriptor('shared:workspace-observation', 'shared', [join(repoRoot, 'packages')])] : []),
+    ...[...(graph?.closure ?? [])].map((packageName) => makeDescriptor(
+      `shared:${packageName.split('/')[1] ?? packageName}`,
       'shared',
-      [
-        join(repoRoot, 'packages', pkg, 'src'),
-        join(repoRoot, 'packages', pkg, 'package.json'),
-        join(repoRoot, 'packages', pkg, 'tsconfig.json'),
-      ],
+      resolveWorkspaceBuildInputWatchPaths(graph.packageDirsByName.get(packageName), { existsSyncImpl }),
     )),
   ].filter((descriptor) => descriptor.paths.length > 0);
 }
@@ -783,8 +781,7 @@ export async function startDevServer({
     if (dbProvider === 'postgres') applyRuntimeServerDatabaseEnv({ env: serverEnv, serverDir });
   }
   let usePriorRuntime = Boolean(
-    serverComponentName === 'happier-server-light'
-    && priorRuntimeServerLaunchSpec?.source === 'runtime'
+    priorRuntimeServerLaunchSpec?.source === 'runtime'
     && String(priorRuntimeServerLaunchSpec?.command ?? '').trim(),
   );
 
@@ -819,8 +816,8 @@ export async function startDevServer({
       if (dbProvider === 'mysql') serverEnv.DATABASE_URL = explicitDatabaseUrl;
     }
 
-    const autoMigrate = (baseEnv.HAPPIER_STACK_PRISMA_MIGRATE ?? '1') !== '0';
-    if (autoMigrate) {
+    const autoMigrate = resolveServerMigrationsEnabled(serverEnv);
+    if (autoMigrate && !usePriorRuntime) {
       await applyHappyServerMigrationsImpl({ serverDir, env: serverEnv, dbProvider });
     }
   }
@@ -835,6 +832,7 @@ export async function startDevServer({
         serverDir,
         quiet,
         env: serverEnv,
+        ...(admitPriorBuildsImmediately ? { startup: true, refresh: null } : {}),
       });
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
@@ -857,10 +855,9 @@ export async function startDevServer({
   if (restart && stackMode && runtimeStatePath) {
     if (!usePriorRuntime) {
       if (admitPriorBuildsImmediately) {
-        // A prior runtime can keep the service available while source refreshes,
-        // but a source server resolves workspace packages through their published
-        // dist entrypoints. It must wait for the canonical publisher rather than
-        // boot against declarations from an older source revision.
+        // Admit an intact retained closure at the canonical workspace owner.
+        // The existing reload coordinator refreshes it after startup and owns
+        // the restart; it must not compete with another background publisher.
         await ensureWorkspacePackagesBuiltBeforeSpawn();
       } else {
         const preflightResult = await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, consoleImpl: console });
@@ -900,6 +897,7 @@ export async function startDevServer({
       // A last-known-good runtime must not replay its older migration ledger against a database
       // that may already have advanced. The current source refresh remains the migration owner.
       launchEnv.HAPPIER_SQLITE_AUTO_MIGRATE = '0';
+      launchEnv.RUN_MIGRATIONS = 'false';
     }
     const readinessTimeoutMs = resolveServerReadyTimeoutMs({ serverComponentName, env: launchEnv });
     const startupDeadline = createServerReadinessDeadline({
@@ -2200,6 +2198,19 @@ export function createDevServerReloadExecutor({
     },
     getBackoffRemainingMs() {
       return restartFailureTracker.getBackoffRemainingMs();
+    },
+    async recoverBuildFailure(error) {
+      if (!enabled || isShuttingDown?.() || error?.signal || error?.name === 'AbortError'
+        || error?.code !== 'BUILD_INPUTS_CHANGED'
+        || !await hasUsableWorkspaceLastGreen(serverDir)) return null;
+      const activeServer = serverProcRef?.current;
+      return {
+        ok: true,
+        retainedBuildError: error,
+        ...(!activeServer || hasChildExited(activeServer)
+          ? { allowSupersededActivation: true }
+          : {}),
+      };
     },
     async build(context = {}) {
       if (!enabled || isShuttingDown?.()) return { skipped: true };

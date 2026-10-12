@@ -3,8 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
-import { ensureDepsInstalled, ensureWorkspacePackagesBuiltForComponent, resolveDependencyInstallRoot } from '../proc/pm.mjs';
-import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { ensureDepsInstalled, ensureWorkspacePackagesBuiltForComponent, hasUsableWorkspaceLastGreen, prepareWorkspaceComponentStartup, resolveDependencyInstallRoot } from '../proc/pm.mjs';
+import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption } from '../proc/dependency_refresh.mjs';
 import { resolveWorkspaceToolBinDirs } from '../proc/workspace_tool_bins.mjs';
 import { run } from '../proc/proc.mjs';
 import { killProcessTree, spawnProc } from '../proc/proc.mjs';
@@ -58,10 +58,21 @@ async function loadCanonicalUiPreflight(projectDir) {
   };
 }
 
-export async function hasUsableExpoWorkspaceLastGreen({ projectDir }) {
+export async function hasUsableExpoWorkspaceLastGreen({ projectDir, env = process.env }) {
   const canonical = await loadCanonicalUiPreflight(projectDir);
   if (!canonical) return false;
-  return await canonical.module.hasUsableUiWorkspaceLastGreen?.({ uiPackageDir: projectDir }) === true;
+  const describe = canonical.module.resolveUiWorkspaceStartupOutputs;
+  if (!describe) return false;
+  const requiredFiles = describe({ uiPackageDir: projectDir, env });
+  if (requiredFiles && await hasUsableWorkspaceLastGreen(projectDir, { requiredFiles })) return true;
+  if (!env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY) return false;
+  // Seed this consumer's existing inventory path, so Metro also observes the
+  // normal compiler's later atomic publication without a process restart.
+  const { HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: requested, ...producerEnv } = env;
+  const producerFiles = describe({ uiPackageDir: projectDir, env: producerEnv });
+  if (!producerFiles || !await hasUsableWorkspaceLastGreen(projectDir, { requiredFiles: producerFiles })) return false;
+  if (!canonical.module.retainBundledPluginUiArtifactsInventory) return false;
+  return await canonical.module.retainBundledPluginUiArtifactsInventory({ inventoryPath: producerFiles[0], outputPath: requested });
 }
 
 export async function resolveExpoBin(runnerDir) {
@@ -176,7 +187,11 @@ function isAndroidRunCommand(args) {
   return Array.isArray(args) && args[0] === 'run:android';
 }
 
-export async function ensureExpoWorkspacePrepared({ projectDir, env, quiet = false }) {
+export async function ensureExpoWorkspacePrepared({ projectDir, env = process.env, quiet = false, startup = false }) {
+  if (startup) return await prepareWorkspaceComponentStartup({
+    readLastGreen: async () => await hasUsableExpoWorkspaceLastGreen({ projectDir, env }) ? { lastGreen: true } : null,
+    prepare: () => ensureExpoWorkspacePrepared({ projectDir, env, quiet }),
+  });
   const canonical = await loadCanonicalUiPreflight(projectDir);
   if (canonical) {
     try {
@@ -186,10 +201,13 @@ export async function ensureExpoWorkspacePrepared({ projectDir, env, quiet = fal
           `[expo] canonical UI workspace preflight is unavailable: ${canonical.path}`,
         );
       }
-      return await preflightModule.ensureUiWorkspacePackagesBuilt({
+      const result = await preflightModule.ensureUiWorkspacePackagesBuilt({
         env,
         uiPackageDir: projectDir,
+        source: true,
       });
+      if (result?.outputPath) env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY = result.outputPath;
+      return result;
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       const error = new Error(`[expo] canonical UI workspace preflight failed: ${detail}`, { cause });
@@ -211,10 +229,16 @@ export async function expoExec({
   const runnerDir = dir;
   const cwd = projectDir ?? runnerDir;
   const workspaceDepsDir = projectDir ?? runnerDir;
+  env = { ...(env ?? process.env) };
+  const developmentStart = args?.[0] === 'start';
+  if (developmentStart) env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
   await withExpoPreparationEnv(env, async (preparationEnv) => {
     await ensureDepsInstalled(runnerDir, ensureDepsLabel, { quiet, env: preparationEnv });
-    await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv });
-    await repairExpoYarnPackageBinShims({ runnerDir, projectDir: workspaceDepsDir });
+    await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv, startup: developmentStart });
+    if (preparationEnv.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY) {
+      env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY = preparationEnv.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY;
+    }
+    if (!developmentStart) await repairExpoYarnPackageBinShims({ runnerDir, projectDir: workspaceDepsDir });
     if (isIosRunCommand(args)) {
       await ensureReactNativeSkiaIosBinaries({ runnerDir, projectDir: workspaceDepsDir, env: preparationEnv, quiet });
       await ensureReactNativeLibsodiumNativeBuild({ runnerDir, projectDir: workspaceDepsDir, env: preparationEnv, quiet });
@@ -253,6 +277,9 @@ export async function expoSpawn({
   const runnerDir = dir;
   const cwd = projectDir ?? runnerDir;
   const workspaceDepsDir = projectDir ?? runnerDir;
+  env = { ...(env ?? process.env) };
+  const developmentStart = args?.[0] === 'start';
+  if (developmentStart) env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
   await withExpoPreparationEnv(env, async (preparationEnv) => {
     await ensureDepsInstalled(runnerDir, ensureDepsLabel, {
       quiet,
@@ -267,7 +294,10 @@ export async function expoSpawn({
     });
     if (!workspacePrepared) {
       try {
-        await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv });
+        await ensureExpoWorkspacePrepared({ projectDir: workspaceDepsDir, quiet, env: preparationEnv, startup: developmentStart });
+        if (preparationEnv.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY) {
+          env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY = preparationEnv.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY;
+        }
       } catch (error) {
         if (isCanonicalExpoUiPreflightError(error)) throw error;
         const detail = error instanceof Error ? error.message : String(error);
@@ -279,20 +309,19 @@ export async function expoSpawn({
     }
   });
   const installDir = resolveDependencyInstallRoot(runnerDir);
-  return await withDependencyRefreshLock({ installDir, env }, async () => {
+  return await withDependencyConsumption({ installDir, env }, async () => {
     const readiness = await inspectDependencyRefresh({
       installDir, componentDir: runnerDir, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE,
     });
-    // Canonical workspace consumers require the completed install certificate.
-    // Standalone/manual fixtures retain their existing explicit dependency
-    // policy, but are not advertised as safely restartable install consumers.
-    if (coerceHappyMonorepoRootFromPath(runnerDir) && !readiness.admitted) {
+    // Development serves installed bytes while source/manifest inputs move.
+    // Missing imports fail their bundle; they do not withdraw Metro availability.
+    if (!developmentStart && coerceHappyMonorepoRootFromPath(runnerDir) && !readiness.admitted) {
       const error = new Error('[expo] dependencies are not ready; complete dependency refresh before starting Metro');
       error.code = 'HAPPIER_EXPO_DEPENDENCIES_NOT_READY';
       throw error;
     }
     await withExpoPreparationEnv(env, async (preparationEnv) => {
-      await repairExpoYarnPackageBinShims({ runnerDir, projectDir: workspaceDepsDir });
+      if (!developmentStart) await repairExpoYarnPackageBinShims({ runnerDir, projectDir: workspaceDepsDir });
       if (isIosRunCommand(args)) {
         await ensureReactNativeSkiaIosBinaries({ runnerDir, projectDir: workspaceDepsDir, env: preparationEnv, quiet });
         await ensureReactNativeLibsodiumNativeBuild({ runnerDir, projectDir: workspaceDepsDir, env: preparationEnv, quiet });

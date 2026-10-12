@@ -56,6 +56,9 @@ test('source snapshot info never depends on native selection and hides stopped l
     ownerPid: 999999999, runtimeSnapshotId: null,
     sourceRuntimeIdentities: { server: { selected: 'new-code', loaded: 'old-code' } },
   }));
+  const reload = { status: 'failed', message: 'candidate-entry-load-failed', logPath: join(fixture.stackDir, 'logs/run.reload.log') };
+  await mkdir(join(fixture.stackDir, 'source-runtime'), { recursive: true });
+  await writeFile(join(fixture.stackDir, 'source-runtime/reload.json'), JSON.stringify(reload));
   const restore = withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: fixture.storageDir });
   try {
     const out = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
@@ -64,6 +67,7 @@ test('source snapshot info never depends on native selection and hides stopped l
     assert.equal(out.runtime.loadedSnapshotId, null);
     assert.deepEqual(out.runtime.sourceRuntimeIdentities, { server: { selected: 'new-code', loaded: null } });
     assert.equal(out.runtime.pendingManualRestart, false);
+    assert.deepEqual(out.runtime.sourceReload, reload);
   } finally { restore(); }
 });
 
@@ -91,7 +95,7 @@ test('remote-only info reports the recorded running role and an incomplete stop 
   assert.equal(ownerFailed.runtime.health.status, 'degraded', 'owner-initiated failed retirement also preserves remote custody');
 });
 
-test('source snapshot info uses its recorded UI choice rather than implicitly borrowing a configured Expo producer', async t => {
+test('source snapshot info defaults to borrowed Expo while preserving recorded export and headless choices', async t => {
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'source-ui-info' });
   const producerStackName = 'source-ui-producer';
   await writeFile(join(fixture.stackDir, 'env'), `HAPPIER_STACK_RUNTIME_MODE=source-snapshot\nHAPPIER_STACK_DAEMON=0\nHAPPIER_STACK_EXPO_SOURCE_STACK=${producerStackName}\n`);
@@ -99,15 +103,18 @@ test('source snapshot info uses its recorded UI choice rather than implicitly bo
   await writeFile(join(fixture.storageDir, producerStackName, 'stack.runtime.json'), JSON.stringify({ expo: {}, processes: {} }));
   withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: fixture.storageDir });
   const sourceUiLaunch = { uiDir: '/remote/server/source-export/ui' };
-  for (const sourceUi of [undefined, 'borrowed', 'disabled']) {
+  for (const sourceUi of [undefined, 'export', 'borrowed', 'disabled']) {
     await writeFile(join(fixture.stackDir, 'stack.runtime.json'), JSON.stringify({ version: 1, stackName: fixture.stackName,
       sourceRuntimeIdentities: {}, sourceUi, sourceUiLaunch,
     }));
     const out = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
-    assert.equal(Boolean(out.runtime.borrowedExpo), sourceUi === 'borrowed');
-    assert.equal(out.runtime.sourceUi, sourceUi ?? 'export');
-    assert.deepEqual(out.runtime.sourceUiLaunch, sourceUi === 'borrowed' || sourceUi === 'disabled' ? null : sourceUiLaunch);
-    if (sourceUi === 'borrowed') assert.equal(out.runtime.borrowedExpo.producerStackName, producerStackName);
+    assert.equal(Boolean(out.runtime.borrowedExpo), sourceUi == null || sourceUi === 'borrowed');
+    assert.equal(out.runtime.sourceUi, sourceUi ?? 'borrowed');
+    assert.deepEqual(out.runtime.sourceUiLaunch, sourceUi === 'export' ? sourceUiLaunch : null);
+    if (sourceUi == null || sourceUi === 'borrowed') {
+      assert.equal(out.runtime.borrowedExpo.producerStackName, producerStackName);
+      assert.equal(out.runtime.components.ui.status, 'waiting for dev Expo');
+    }
     if (sourceUi === 'disabled') assert.equal(out.runtime.components.ui.running, false);
   }
 });

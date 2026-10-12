@@ -7,6 +7,9 @@ export async function ensureSourceServerWorkspacePackagesBuilt(
     serverDir,
     env = process.env,
     quiet = false,
+    startup = false,
+    refresh,
+    signal,
   } = {},
   { ensureWorkspacePackagesBuiltForComponentImpl = ensureWorkspacePackagesBuiltForComponent } = {},
 ) {
@@ -18,6 +21,8 @@ export async function ensureSourceServerWorkspacePackagesBuilt(
     quiet,
     env,
     buildMode: env[WORKSPACE_BUILD_MODE_ENV] ?? 'source-dev',
+    ...(startup ? { startup, refresh } : {}),
+    ...(signal ? { signal } : {}),
   });
   return { ran: true, reason: 'source-server', result };
 }
@@ -30,7 +35,7 @@ export async function spawnSourceServerScript(
   } = {},
 ) {
   await ensureSourceServerWorkspacePackagesBuilt(
-    { runtimeBackedStart: false, serverDir, env, quiet },
+    { runtimeBackedStart: false, serverDir, env, quiet, startup: true },
     { ensureWorkspacePackagesBuiltForComponentImpl },
   );
   return await pmSpawnScriptImpl({ label, dir: serverDir, script, env });

@@ -5,6 +5,51 @@ import { join } from 'node:path';
 
 import { readJsonIfExists, writeJsonAtomic } from '../../utils/fs/json.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
+import { isPidAlive } from '../../utils/proc/pids.mjs';
+
+const preparationPhases = new Set(['preparing', 'queued', 'building', 'prepared', 'checking']);
+const phaseEventPrefix = 'HSTACK_SOURCE_PREPARATION_PHASE=';
+
+export function readSourcePreparationPhase(value) {
+  if (!value || !preparationPhases.has(value.phase)) return null;
+  if (value.component != null && !['server', 'daemon', 'ui'].includes(value.component)) return null;
+  return { phase: value.phase, ...(value.component != null ? { component: value.component } : {}) };
+}
+
+/** Typed diagnostic on the existing worker stdout transport, not a log parser. */
+export function parseSourcePreparationPhaseLine(line) {
+  if (!line.startsWith(phaseEventPrefix)) return null;
+  try { return readSourcePreparationPhase(JSON.parse(line.slice(phaseEventPrefix.length))); }
+  catch { return null; }
+}
+
+export function emitSourcePreparationPhase(phase) {
+  process.stdout.write(phaseEventPrefix + JSON.stringify(phase) + '\n');
+}
+
+export async function readPendingSourcePreparation({ stackBaseDir }) {
+  const current = await readJsonIfExists(join(stackBaseDir, 'source-runtime/start.pending.json'));
+  const phase = readSourcePreparationPhase(current);
+  if (!phase || !isPidAlive(current.pid)) return null;
+  const targets = Object.fromEntries(Object.entries(current.targets ?? {})
+    .map(([target, value]) => [target, readSourcePreparationPhase(value)]).filter(([, value]) => value));
+  return { ...phase, ...(Object.keys(targets).length ? { targets } : {}) };
+}
+
+/** The admitted producer updates only its caller's existing pending request. */
+export async function updatePendingSourcePreparationPhase({ stackBaseDir, requestId, phase, component, target, signal }) {
+  const preparation = readSourcePreparationPhase({ phase, component });
+  if (!preparation) throw new Error('invalid source preparation phase');
+  const markerPath = join(stackBaseDir, 'source-runtime/start.pending.json');
+  await withJsonOwnerFileLock(async () => {
+    signal?.throwIfAborted();
+    const current = await readJsonIfExists(markerPath);
+    if (current?.requestId !== requestId) throw supersededError();
+    await writeJsonAtomic(markerPath, target
+      ? { ...current, targets: { ...current.targets, [target]: preparation } }
+      : { ...current, component: null, ...preparation });
+  }, { lockPath: `${markerPath}.lock`, signal });
+}
 
 function supersededError() {
   const error = new Error('Source Stack start superseded by a newer start for this stack');
@@ -13,25 +58,54 @@ function supersededError() {
   return error;
 }
 
+/** The finite producer pins completed output before it releases build custody.
+ * It consumes the same pending request as its Stack caller, never selects UI. */
+export async function retainPendingSourcePreparation({ stackBaseDir, requestId, preparationDir, signal }) {
+  const markerPath = join(stackBaseDir, 'source-runtime/start.pending.json');
+  await withJsonOwnerFileLock(async () => {
+    signal?.throwIfAborted();
+    const current = await readJsonIfExists(markerPath);
+    if (current?.requestId !== requestId) throw supersededError();
+    const preparationDirs = [...new Set([...(current.preparationDirs ?? []), current.preparationDir, preparationDir].filter(Boolean))];
+    // Already-loaded retainers may only understand the original singular
+    // field. Keep its primary graph pinned while current readers retain all
+    // preparations through the same pending request.
+    await writeJsonAtomic(markerPath, { ...current, preparationDir: current.preparationDir ?? preparationDir, preparationDirs });
+  }, { lockPath: `${markerPath}.lock`, signal });
+}
+
 /** Only pending source preparation is replaceable. Publication and replacement
  * share the existing file-lock primitive so an old start cannot publish after a
  * successor claims this stack. No process is signalled by this owner.
  */
-export async function beginPendingSourceStart({ stackBaseDir }) {
+export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId: inheritedRequestId, replacePending = !inheritedRequestId }) {
   const directory = join(stackBaseDir, 'source-runtime');
   const markerPath = join(directory, 'start.pending.json');
   const lockPath = `${markerPath}.lock`;
-  const requestId = randomUUID();
+  const requestId = inheritedRequestId ?? randomUUID();
   const controller = new AbortController();
+  let ownsMarker = false;
   await mkdir(directory, { recursive: true });
   await withJsonOwnerFileLock(async () => {
-    await writeJsonAtomic(markerPath, { requestId, pid: process.pid });
+    const current = await readJsonIfExists(markerPath);
+    // A delegated half participates in the existing start; its publication and
+    // cleanup must not replace or retire the parent's preparation custody.
+    if (inheritedRequestId && current?.requestId === requestId) return;
+    if (inheritedRequestId && current && !replacePending) throw supersededError();
+    await writeJsonAtomic(markerPath, { requestId, pid: process.pid, phase: 'preparing' });
+    ownsMarker = true;
   }, { lockPath });
   let closed = false;
+  let lastPhase;
   const checkCurrent = async () => {
     if (closed || controller.signal.aborted) return;
     const current = await readJsonIfExists(markerPath);
     if (!closed && current?.requestId !== requestId) controller.abort(supersededError());
+    if (!closed && current?.requestId === requestId && onPhase) {
+      const phase = readSourcePreparationPhase(current);
+      const serialized = JSON.stringify(phase);
+      if (phase && serialized !== lastPhase) { lastPhase = serialized; onPhase(phase); }
+    }
   };
   const watcher = watch(directory, { persistent: false }, () => {
     void checkCurrent().catch(error => controller.abort(error));
@@ -40,22 +114,37 @@ export async function beginPendingSourceStart({ stackBaseDir }) {
   const close = () => { closed = true; watcher.close(); };
   await checkCurrent();
   const removeOwnMarker = async () => {
-    if ((await readJsonIfExists(markerPath))?.requestId === requestId) await unlink(markerPath);
+    if (ownsMarker && (await readJsonIfExists(markerPath))?.requestId === requestId) await unlink(markerPath);
   };
+  const publishCurrent = async fn => await withJsonOwnerFileLock(async () => {
+    controller.signal.throwIfAborted();
+    if ((await readJsonIfExists(markerPath))?.requestId !== requestId) {
+      controller.abort(supersededError());
+      controller.signal.throwIfAborted();
+    }
+    return await fn();
+  }, { lockPath, signal: controller.signal });
   return {
+    requestId,
     signal: controller.signal,
+    async setPhase(phase, target) {
+      await updatePendingSourcePreparationPhase({ stackBaseDir, requestId, ...phase, target, signal: controller.signal });
+      await checkCurrent();
+    },
+    async retainPreparation(preparationDir) {
+      await retainPendingSourcePreparation({ stackBaseDir, requestId, preparationDir, signal: controller.signal });
+    },
+    abort(reason) { controller.abort(reason); },
+    // A completed serving path may be admitted before the rest of startup.
+    // Keep the same request and its retained preparations until final publish.
+    publishPreparation: publishCurrent,
     async publish(fn) {
-      return await withJsonOwnerFileLock(async () => {
-        controller.signal.throwIfAborted();
-        if ((await readJsonIfExists(markerPath))?.requestId !== requestId) {
-          controller.abort(supersededError());
-          controller.signal.throwIfAborted();
-        }
+      return await publishCurrent(async () => {
         const result = await fn();
         close();
         await removeOwnMarker();
         return result;
-      }, { lockPath, signal: controller.signal });
+      });
     },
     async dispose() {
       close();

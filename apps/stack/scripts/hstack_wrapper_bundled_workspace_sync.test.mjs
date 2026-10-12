@@ -222,7 +222,7 @@ function bundledWorkspaceFailureEnv({ fixtureDir, loaderPath, storageDir }) {
   });
 }
 
-function createSourceWorkspaceReadBoundary(fixtureDir, repoRoot) {
+function createSourceWorkspaceReadBoundary(fixtureDir, repoRoot, { rejectPublicationLock = false } = {}) {
   const markerPath = join(fixtureDir, 'source-workspace-read.txt');
   const loaderPath = join(fixtureDir, 'source-workspace-read-loader.mjs');
   const stubPaths = new Map();
@@ -244,6 +244,15 @@ function createSourceWorkspaceReadBoundary(fixtureDir, repoRoot) {
       `  return real.${functionName}(path, ...args);`,
       `}`,
       `export default { ...real, ${functionName} };`,
+      ...(specifier === 'node:fs' && rejectPublicationLock ? [
+        'export function openSync(path, ...args) {',
+        `  if (String(path) === ${JSON.stringify(join(repoRoot, '.project', 'tmp', 'cli-dist-build.lock'))}) {`,
+        `    writeMarker(${JSON.stringify(markerPath)}, String(path));`,
+        "    throw new Error('launcher workspace publication is unavailable');",
+        '  }',
+        '  return real.openSync(path, ...args);',
+        '}',
+      ] : []),
       '',
     ].join('\n'), 'utf8');
   }
@@ -309,6 +318,41 @@ test('required runtime auth login does not admit checkout source workspaces befo
   assert.equal(result.code, 0, `runtime auth must remain available\n${result.stderr}`);
   assert.equal(existsSync(markerPath), false, 'runtime auth must not read checkout source build inputs');
   assert.match(JSON.parse(result.stdout).cmd, /runtime\/builds\/snap-1\/cli\/happier\.mjs/);
+});
+
+test('source auth login reaches its CLI owner without launcher workspace publication', async (t) => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const repoRoot = coerceHappyMonorepoRootFromPath(rootDir);
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-auth-preflight-' });
+  const { stackName, storageDir, envPath } = createStackManagementFixture(fixture.root);
+  writeFileSync(envPath, [
+    `HAPPIER_STACK_STACK=${stackName}`, `HAPPIER_STACK_REPO_DIR=${repoRoot}`,
+    'HAPPIER_STACK_RUNTIME_MODE=source', 'HAPPIER_STACK_SERVER_PORT=4102',
+    'HAPPIER_STACK_TAILSCALE_PREFER_PUBLIC_URL=0', 'HAPPIER_STACK_TAILSCALE_SERVE=0', '',
+  ].join('\n'));
+  const { loaderPath, markerPath } = createSourceWorkspaceReadBoundary(fixture.root, repoRoot, { rejectPublicationLock: true });
+  const env = {
+    ...bundledWorkspaceFailureEnv({ fixtureDir: fixture.root, loaderPath, storageDir }),
+    HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_ENV_FILE: envPath,
+  };
+  for (const argv of [
+    ['stack', 'auth', stackName, 'login'],
+    [stackName, 'auth', 'login'],
+    ['auth', 'login'],
+  ]) {
+    await t.test(argv.join(' '), async () => {
+      rmSync(markerPath, { force: true });
+      const result = await runNodeCapture([
+        join(rootDir, 'bin', 'hstack.mjs'), ...argv, '--no-open', '--print', '--json',
+      ], { cwd: rootDir, env });
+      assert.equal(existsSync(markerPath), false, 'auth login must not prepare launcher workspace dist');
+      assert.equal(result.code, 0, result.stderr);
+      const printed = JSON.parse(result.stdout);
+      assert.equal(printed.stackName, stackName);
+      assert.ok(printed.cmd.includes(join(repoRoot, 'apps', 'cli')), 'auth must select its real CLI entrypoint');
+      assert.match(printed.cmd, /"auth" "login"/);
+    });
+  }
 });
 
 test('runtime CLI wrapper does not admit checkout source workspaces before auth login', async (t) => {
@@ -769,14 +813,12 @@ test('hstack wrapper lets a direct watched stack restart reach its scoped dev ow
   }
 });
 
-test('hstack wrapper keeps direct non-watch stack restart behind bundled workspace publication', async () => {
+test('hstack wrapper lets direct non-watch Expo startup reach its component owners', async () => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixtureDir = mkdtempSync(join(tmpdir(), 'hstack-wrapper-direct-strict-restart-preflight-'));
   try {
-    const { bundleMarkerPath, loaderPath, syncMarkerPath } = createBundledWorkspaceSyncLoaderFixture(fixtureDir, {
-      failPreflight: true,
-      healthResults: [false],
-    });
+    const repoRoot = coerceHappyMonorepoRootFromPath(rootDir);
+    const { loaderPath, markerPath } = createSourceWorkspaceReadBoundary(fixtureDir, repoRoot);
     const { stackName, storageDir } = createStackManagementFixture(fixtureDir);
     const env = bundledWorkspaceFailureEnv({ fixtureDir, loaderPath, storageDir });
     const res = await runNodeCapture(
@@ -784,13 +826,26 @@ test('hstack wrapper keeps direct non-watch stack restart behind bundled workspa
       { cwd: rootDir, env },
     );
 
-    assert.notEqual(res.code, 0, 'non-watch restart must retain the strict bundled workspace preflight');
-    assert.match(res.stderr, /test bundled workspace preflight is unavailable/);
-    assert.equal(existsSync(syncMarkerPath), true, 'non-watch restart must attempt bundled workspace synchronization');
-    assert.equal(existsSync(bundleMarkerPath), true, 'non-watch restart must invoke the bundled workspace fallback');
+    assert.equal(res.code, 0, res.stderr);
+    assert.doesNotThrow(() => JSON.parse(res.stdout));
+    assert.equal(existsSync(markerPath), false, 'Expo startup must not read package dist build inputs before dispatch');
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
   }
+});
+
+test('hstack wrapper dispatches named mobile Expo before dist publication', async (t) => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createTempFixture(t, { prefix: 'hstack-mobile-source-preflight-' });
+  const { stackName, storageDir, envPath } = createStackManagementFixture(fixture.root);
+  writeFileSync(envPath, `HAPPIER_STACK_STACK=${stackName}\nHAPPIER_STACK_REPO_DIR=${fixture.path('missing-repo')}\n`);
+  const { loaderPath, markerPath } = createSourceWorkspaceReadBoundary(fixture.root, coerceHappyMonorepoRootFromPath(rootDir));
+  const result = await runNodeCapture([join(rootDir, 'bin/hstack.mjs'), 'stack', 'mobile', stackName, '--no-metro'], {
+    cwd: rootDir, env: bundledWorkspaceFailureEnv({ fixtureDir: fixture.root, loaderPath, storageDir }),
+  });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /missing happier-ui/, 'the mobile component owner must receive dispatch');
+  assert.equal(existsSync(markerPath), false, 'mobile Expo must not prepare unrelated package dist');
 });
 
 test('hstack wrapper keeps Stack-local management commands available when bundled workspace preflight is unavailable', async () => {

@@ -73,7 +73,7 @@ test('spawnSourceServerScript validates source-backed server package exports bef
 
   assert.equal(result, child);
   assert.deepEqual(calls, [
-    ['workspace', '/repo/apps/server', { quiet: true, env: { PORT: '34567' }, buildMode: 'source-dev' }],
+    ['workspace', '/repo/apps/server', { quiet: true, env: { PORT: '34567' }, buildMode: 'source-dev', startup: true, refresh: undefined }],
     ['spawn', { label: 'server', dir: '/repo/apps/server', script: 'start', env: { PORT: '34567' } }],
   ]);
 });

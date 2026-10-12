@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createRuntimeSnapshotFixture } from '../../testkit/runtime_snapshot_testkit.mjs';
+import { inspectActiveRuntimeSnapshot } from '../../runtime/launch/inspectActiveRuntimeSnapshot.mjs';
 
 import {
   resolveDevPriorRuntimeServer,
-  shouldPreflightDevRestart,
 } from './priorRuntimeServer.mjs';
+
+test('server last-green admission is independent of an unavailable CLI/plugin publication', async t => {
+  const fixture = await createRuntimeSnapshotFixture(t);
+  await unlink(join(fixture.snapshotDir, 'cli/package-dist/index.mjs'));
+  const prior = await resolveDevPriorRuntimeServer({ stackBaseDir: fixture.stackDir,
+    serverComponentName: 'happier-server-light' });
+  assert.equal(prior.admitted, true, prior.detail);
+  const full = await inspectActiveRuntimeSnapshot({ stackBaseDir: fixture.stackDir });
+  assert.equal(full.valid, false, 'whole-stack admission still rejects its missing CLI output');
+});
 
 test('dev prior-runtime admission ignores source freshness and returns the structurally valid server launch', async () => {
   const snapshot = {
@@ -60,42 +73,18 @@ test('dev prior-runtime admission rejects a structurally invalid or server-misma
   assert.equal(mismatch.reason, 'server_component_mismatch');
 });
 
-test('dev prior-runtime admission stays source-only for the full server until managed-infra bootstrap is supported', async () => {
-  let inspected = false;
+test('dev prior-runtime admission also selects the full server last-green output', async () => {
   const result = await resolveDevPriorRuntimeServer(
     { stackBaseDir: '/tmp/stack', serverComponentName: 'happier-server' },
     {
       inspectActiveRuntimeSnapshotImpl: async () => {
-        inspected = true;
-        return { snapshot: null };
+        return { snapshot: { snapshotId: 'full-last-green', snapshotPath: '/tmp/runtime/full',
+          manifest: { source: { serverComponent: 'happier-server' },
+            components: { server: { entrypoint: 'server/happier-server' } } } } };
       },
     },
   );
 
-  assert.deepEqual(result, {
-    admitted: false,
-    reason: 'unsupported_server_component',
-    detail: null,
-  });
-  assert.equal(inspected, false);
-});
-
-test('an admitted prior runtime or source output avoids the blocking outer restart preflight', () => {
-  assert.equal(shouldPreflightDevRestart({
-    startServer: true,
-    priorRuntimeServer: { admitted: true },
-  }), false);
-  assert.equal(shouldPreflightDevRestart({
-    startServer: true,
-    priorRuntimeServer: { admitted: false },
-  }), true);
-  assert.equal(shouldPreflightDevRestart({
-    startServer: true,
-    priorRuntimeServer: { admitted: false },
-    admitPriorBuildsImmediately: true,
-  }), false);
-  assert.equal(shouldPreflightDevRestart({
-    startServer: false,
-    priorRuntimeServer: { admitted: false },
-  }), false);
+  assert.equal(result.admitted, true);
+  assert.equal(result.launchSpec.command, '/tmp/runtime/full/server/happier-server');
 });

@@ -1,24 +1,13 @@
 import { inspectActiveRuntimeSnapshot } from '../../runtime/launch/inspectActiveRuntimeSnapshot.mjs';
 import { resolveServerRuntimeLaunchSpec } from '../../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
 
-export function shouldPreflightDevRestart({
-  startServer = false,
-  priorRuntimeServer = null,
-  admitPriorBuildsImmediately = false,
-} = {}) {
-  // Source-output admission is validated by startDevServer, which rebuilds only when its retained
-  // outputs are missing or invalid. The outer wrapper must not recreate that freshness gate.
-  return Boolean(startServer && priorRuntimeServer?.admitted !== true && !admitPriorBuildsImmediately);
-}
-
 export async function resolveDevPriorRuntimeServer(
   { stackBaseDir, serverComponentName } = {},
   { inspectActiveRuntimeSnapshotImpl = inspectActiveRuntimeSnapshot } = {},
 ) {
-  // The light server is self-contained and can safely boot against its retained SQLite data
-  // with migration replay disabled. The full server still requires its source-owned managed
-  // infrastructure preparation, so it must not use this fast bootstrap path yet.
-  if (serverComponentName !== 'happier-server-light') {
+  // Infrastructure remains startDevServer's responsibility for the full
+  // server. Both flavors can admit a retained executable without source builds.
+  if (!['happier-server-light', 'happier-server'].includes(serverComponentName)) {
     return {
       admitted: false,
       reason: 'unsupported_server_component',
@@ -26,7 +15,7 @@ export async function resolveDevPriorRuntimeServer(
     };
   }
 
-  const inspection = await inspectActiveRuntimeSnapshotImpl({ stackBaseDir });
+  const inspection = await inspectActiveRuntimeSnapshotImpl({ stackBaseDir, requiredComponents: ['server'] });
   if (!inspection?.snapshot) {
     return {
       admitted: false,

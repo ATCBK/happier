@@ -32,8 +32,8 @@ test('admission reclaims dead and incomplete owners even while capacity is unava
   assert.deepEqual(await readdir(join(admissionRoot, 'owners')), [`${process.pid}-${token}`]);
 });
 
-for (const entry of ['native', 'explicit']) {
-  test(`${entry} remote compilation bootstraps dependencies before admission so their lock holder can finish`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+for (const entry of ['native', 'explicit', 'local']) {
+  test(`${entry} compilation bootstraps dependencies before admission so their lock holder can finish`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
     const fixture = await createTempFixture(t, { prefix: 'hstack-preparation-admission-' });
     const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
     await chmod(launcher, 0o755);
@@ -78,7 +78,9 @@ esac
     };
     const target = { name: 'worker', platform: 'posix', repoDir: checkout, cliHomeDir: home, remotePath: [fixture.path('bin'), '/usr/bin', '/bin'] };
     let args;
-    if (entry === 'explicit') {
+    if (entry === 'local') {
+      args = [launcher, '--local', '--allow-local-compilation', '--', 'node', '../../scripts/workspaces/runTypeScriptCli.mjs', '--noEmit'];
+    } else if (entry === 'explicit') {
       args = ['-c', buildRemoteExecCommand(target, { executionId: 'preparation-regression', cwd: 'apps/ui',
         commandArgs: ['node', '../../scripts/workspaces/runTypeScriptCli.mjs', '--noEmit'], admissionClass: 'compilation-ui',
         preparation: { bootstrap: true, componentRelativeDir: 'apps/ui', validationKind: 'typecheck' },
@@ -116,7 +118,7 @@ esac
     let stderr = '';
     try {
       await withDependencyRefreshLock({ installDir: checkout, env }, async () => {
-        child = spawn(entry === 'native' ? '/bin/sh' : '/bin/bash', args, { cwd: component, env });
+        child = spawn(entry === 'explicit' ? '/bin/bash' : '/bin/sh', args, { cwd: component, env });
         child.stderr.on('data', chunk => { stderr += chunk; });
         completed = new Promise((resolveExit, reject) => {
           child.once('error', reject);
@@ -149,3 +151,69 @@ esac
   });
 
 }
+
+async function createPublisherPlacementFixture(t, capacityKiB = 19922944) {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-publisher-environment-' });
+  const { launcher } = await installNativeAdmissionFixture({ root: fixture.root });
+  const checkout = fixture.path('native-owner');
+  const stack = fixture.path('stack');
+  const dispatched = fixture.path('dispatched');
+  await Promise.all([mkdir(join(stack, 'mutagen/data'), { recursive: true }),
+    mkdir(join(checkout, 'packages/protocol'), { recursive: true })]);
+  const config = join(stack, 'dev-targets.json');
+  await writeFile(config, '{}\n');
+  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
+    HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
+    HAPPIER_PREFERRED_EXECUTION: '', HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev',
+    HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '',
+    HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '', DISPATCHED: dispatched };
+  await writeFile(join(stack, 'dev-target-exec-v1.sh'), [
+    "HSTACK_EXEC_PROJECTION_VERSION='2'", `projection_repo_root='${checkout}'`,
+    `projection_mutagen_data_dir='${stack}/mutagen/data'`, `projection_mutagen_ssh_path='${stack}/mutagen/ssh'`,
+    "command_mode='auto'", "include_local='0'", "fallback_mode='error'",
+    "load_ttl_seconds='15'", "unavailable_ttl_seconds='120'", "target_count='1'",
+    "target_1_name='worker'", "target_1_ssh='fixture-host'", "target_1_ssh_config=''",
+    `target_1_repo_dir='${checkout}'`, `target_1_cli_home='${fixture.path('cli-home')}'`,
+    `target_1_remote_path='${env.PATH}'`, '',
+  ].join('\n'));
+  writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  writeFakeBin({ root: fixture.root, name: 'mutagen', content: '#!/bin/sh\nif [ "$2" = list ]; then printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"; fi\nexit 0\n' });
+  // SSH, host measurements and the eventual compiler are OS boundaries. The
+  // real canonical emit/publisher policy decides the envelope and placement.
+  writeFakeBin({ root: fixture.root, name: 'ssh', content: `#!/bin/sh
+case "$*" in
+  *getconf*) printf '8 0.1 1 ${capacityKiB} 20 0 ${capacityKiB} ${capacityKiB} 0 0 0 0 0 0 0 linux\\n' ;;
+  *"&& command -v "*|*-MNf*|*-O\\ check*) exit 0 ;;
+  *) for argument in "$@"; do remote=$argument; done; exec /bin/sh -c "$remote" ;;
+esac
+` });
+  writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
+case "$1" in
+  *remote_dependency_bootstrap.mjs|*remote_validation_preparation.mjs) exit 0 ;;
+  *buildTypeScriptPackageDist.mjs) printf dispatched > "$DISPATCHED" ;;
+  *) exec '${process.execPath}' "$@" ;;
+esac
+` });
+  return { checkout, env, dispatched, launcher };
+}
+
+test('native publisher placement uses explicit payload environment before selecting its compiler envelope', { skip: process.platform !== 'linux' }, async t => {
+  const { launcher, checkout, env, dispatched } = await createPublisherPlacementFixture(t);
+  const result = spawnSync('/bin/sh', [launcher, '--target=worker', '--env=HAPPIER_WORKSPACE_BUILD_MODE=strict', '--',
+    'node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', 'tsconfig.json', '--noCheck'],
+  { cwd: checkout, env, encoding: 'utf8' });
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, /insufficient memory capacity.*compilation.*requires=20971520 KiB/, result.stderr);
+  await assert.rejects(access(dispatched), { code: 'ENOENT' });
+});
+
+test('native publisher placement resolves its exact entry and compiler class from explicit payload cwd', { skip: process.platform !== 'linux' }, async t => {
+  const { launcher, checkout, env, dispatched } = await createPublisherPlacementFixture(t, 17825792);
+  const result = spawnSync('/bin/sh', [launcher, '--target=worker', '--cwd=packages/protocol', '--',
+    'node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', 'tsconfig.json', '--noCheck'],
+  { cwd: checkout, env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict' }, encoding: 'utf8' });
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, /insufficient memory capacity.*requires=18874368 KiB/, result.stderr);
+  await assert.rejects(access(dispatched), { code: 'ENOENT' });
+});

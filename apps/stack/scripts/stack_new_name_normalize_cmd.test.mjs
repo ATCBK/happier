@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { setupStackNewMonorepoFixture } from './testkit/stack_new_monorepo_testkit.mjs';
 import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { resolveRepoStackIdentity } from './utils/stack/repo_stack_identity.mjs';
 
 test('hstack stack new normalizes stack names across valid and punctuation-heavy inputs', async (t) => {
   const fixture = await setupStackNewMonorepoFixture({
@@ -42,17 +44,20 @@ test('hstack stack new normalizes stack names across valid and punctuation-heavy
 
 test('new QA stacks request the dedicated hosts while normal stacks and existing QA retain their placement', async t => {
   const fixture = await setupStackNewMonorepoFixture({ importMetaUrl: import.meta.url, t, tmpPrefix: 'hstack-qa-creation-' });
-  await fixture.createMonorepoCheckout('main', { includeServerPrisma: true });
+  const repoDir = await fixture.createMonorepoCheckout('main', { includeServerPrisma: true });
+  await mkdir(join(repoDir, '.git'), { recursive: true });
   for (const [name, options, enabled] of [
     ['agent-qa-example', [], true], ['custom-qa', ['--qa'], true], ['normal-stack', [], false],
   ]) {
     const created = await fixture.runStackNew([name, ...options, '--no-copy-auth', '--json']);
     assert.equal(created.code, 0, created.stderr);
+    const producer = resolveRepoStackIdentity({ repoRoot: repoDir, stacksStorageRoot: fixture.storageDir }).stackName;
     const contents = await fixture.readStackEnv(name);
     assert.equal(contents.includes('HAPPIER_STACK_QA_DAEMON_TARGETS=nl1,nl2,linux3,linux2,linux1\n'), enabled);
     assert.doesNotMatch(contents, /^HAPPIER_STACK_QA_DAEMON_TARGETS=.*\bwindows1-linux\b/m,
       'the disk-unhealthy Windows host is not a default QA candidate');
     assert.equal(contents.includes('HAPPIER_STACK_RUNTIME_MODE=source-snapshot\n'), enabled);
+    assert.equal(contents.includes(`HAPPIER_STACK_EXPO_SOURCE_STACK=${producer}\n`), enabled);
   }
   const before = await fixture.readStackEnv('normal-stack');
   const retained = await fixture.runStackNew(['normal-stack', '--qa', '--if-missing', '--json']);

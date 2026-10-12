@@ -1,4 +1,7 @@
-import { resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
+import { readSourceComponentBuildInputs } from '../fs/workspaceBuildInputs.mjs';
+import { resolveDevReloadPollIntervalMs } from './reloadPollInterval.mjs';
+import { resolveDependencyRefreshMarkerPath } from '../proc/dependency_refresh.mjs';
 
 import { watchDebounced } from '../proc/watch.mjs';
 
@@ -15,6 +18,7 @@ export function requestInitialDevRefreshes({
 }
 import {
   isDevRuntimeReloadIgnoredPath,
+  createWatchSourceObserver,
   readDevReloadWatchChangeSignature,
   readDevReloadWatchChangeSignatureAsync,
 } from './watchSignature.mjs';
@@ -27,7 +31,105 @@ export {
   readDevReloadWatchChangeSignatureAsync,
 } from './watchSignature.mjs';
 
-const RESTART_ORDER = ['server', 'daemon'];
+const RESTART_ORDER = ['server', 'daemon', 'expo'];
+
+// Source preparation reports child-build exits or canonical UI admission
+// failures. Unknown configuration/OS errors retain their fail-fast behavior.
+export function isDevStartupSourceDrift(error, target) {
+  if (error?.signal || error?.name === 'AbortError') return false;
+  if (error?.code === 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED') {
+    return isDevStartupSourceDrift(error.cause, target);
+  }
+  // Expo's UI preflight wraps its build exits. An unwrapped exit later in
+  // Expo startup can be dependency installation or process admission instead.
+  // Finite source builders retain this observation from compiler/Metro output.
+  // A numeric exit alone also covers admission, dependency and config failures.
+  // Metro's missing SHA-1 means a source file was added or removed mid-bundle.
+  // A workspace build's child output can report a declared export whose file is still being written.
+  if (/EACCES|EPERM|ENOSPC|EADDRINUSE|permission denied/i.test(String(error?.message ?? ''))) return false;
+  const sourceDiagnostic = (error?.code === 'EEXIT' || (Number.isInteger(error?.code) && error.code > 0))
+    && (/\.go:\d+(?::\d+)?: |SyntaxError:/.test(String(error?.message ?? ''))
+      || /Could not resolve ["'](?:\.{1,2}\/|@\/|@happier-dev\/)|Unable to resolve (?:module )?["']?(?:\.{1,2}\/|@\/)|Could not read from file: .*\.[cm]?[jt]sx?|Failed to get the SHA-1 for: .*\.[cm]?[jt]sx?|No matching export in |ERROR: (?:Expected |Unexpected |Unterminated )|error TS(?:1|2|7)\d{3}:|Source runtime (?:requires an explicit source export|workspace owner is missing)|Bundled Plugin UI artifact publication failed for |Staged TypeScript package build is missing declared package export files:/.test(String(error?.message ?? '')));
+  return error?.sourceDrift === true || sourceDiagnostic
+    || error?.code === 'HAPPIER_EXPO_DEPENDENCIES_NOT_READY'
+    // The workspace builder retained its last coherent output after inputs moved.
+    || error?.code === 'BUILD_INPUTS_CHANGED'
+    || (!error?.code && (
+      error instanceof SyntaxError
+      || [
+        '[ui] patched dependency preflight failed:',
+        'UI artifact publication failed for ',
+        'Staged TypeScript package build is missing declared package export files:',
+        '[local] build completed but expected staged outputs are still missing for ',
+      ].some((diagnostic) => String(error?.message ?? '').startsWith(diagnostic))
+    ));
+}
+
+/** Source preparation and reload observe the same component inputs. */
+export async function resolveSourceComponentWatchPaths({ repoDir, target,
+  projectDir = join(repoDir, 'apps', target === 'expo' ? 'ui' : target === 'daemon' ? 'cli' : 'server') }) {
+  return [...(await readSourceComponentBuildInputs({ repoDir, component: target })).watchPaths,
+    resolveDependencyRefreshMarkerPath(repoDir)];
+}
+
+export async function prepareSourceComponent({ repoDir, target, prepare, signal, env = process.env, logger = console }) {
+  const paths = await resolveSourceComponentWatchPaths({ repoDir, target });
+  return await prepareDevComponent({
+    enabled: true, target, descriptors: [{ id: `source:${target}`, target, paths }],
+    prepare, signal, logger, pollIntervalMs: resolveDevReloadPollIntervalMs(env),
+  });
+}
+
+export async function prepareDevComponent({
+  enabled = false,
+  target,
+  descriptors,
+  prepare,
+  signal,
+  logger = console,
+  debounceMs = 500,
+  pollIntervalMs = 0,
+} = {}) {
+  signal?.throwIfAborted();
+  if (!enabled) return await prepare();
+  let complete;
+  let fail;
+  const prepared = new Promise((resolve, reject) => { complete = resolve; fail = reject; });
+  const coordinator = startDevReloadCoordinator({
+    descriptors: descriptors.map((descriptor) => ({ ...descriptor, target })),
+    executors: [{
+      target,
+      async build() {
+        try {
+          // Preparation may already have admitted a process. Complete here,
+          // so a source edit during startup cannot launch that process twice.
+          complete(await prepare());
+        } catch (error) {
+          if (!isDevStartupSourceDrift(error, target)) {
+            fail(error);
+            return { skipped: true };
+          }
+          throw error;
+        }
+      },
+    }],
+    debounceMs,
+    pollIntervalMs,
+    isShuttingDown: () => signal?.aborted === true,
+    logger,
+  });
+  if (!coordinator) return await prepare();
+  const onAbort = () => fail(signal.reason);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    signal?.throwIfAborted();
+    void coordinator.requestReload(target);
+    return await prepared;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    await coordinator.close();
+  }
+}
 
 function normalizeDescriptors(descriptors) {
   const byId = new Map();
@@ -170,6 +272,8 @@ export function startDevReloadCoordinator(
     executors,
     debounceMs = 500,
     pollIntervalMs = 0,
+    persistent = true,
+    observeChanges = true,
     isShuttingDown,
     logger = console,
   } = {},
@@ -205,6 +309,7 @@ export function startDevReloadCoordinator(
     }
   }
 
+  const sourceObserver = createWatchSourceObserver(watchPaths);
   const sampleSignatures = createSingleFlightSampler(
     () => readDescriptorSignaturesAsync(normalizedDescriptors),
   );
@@ -288,8 +393,13 @@ export function startDevReloadCoordinator(
     retryTimerGeneration += 1;
   };
 
+  // Drift is intrinsically retryable even during cold preparation, which has
+  // no server process to retain. Reuse this owner's normal coalescing delay
+  // and single retry episode rather than requiring another filesystem edit.
+  const readRetryDelayMs = (error) => Number(error?.reloadRetryAfterMs
+    ?? (error?.code === 'BUILD_INPUTS_CHANGED' ? debounceMs : null));
   const scheduleRetry = (error) => {
-    const delayMs = Number(error?.reloadRetryAfterMs);
+    const delayMs = readRetryDelayMs(error);
     if (
       !Number.isFinite(delayMs)
       || delayMs <= 0
@@ -417,6 +527,7 @@ export function startDevReloadCoordinator(
     let lastRevalidatedSignatures = nextSignatures;
     const revalidateGeneration = async (target) => {
       if (closed || isShuttingDown?.()) return false;
+      if (sourceObserver.hasObservations()) await sourceObserver.reconcile();
       const currentSignatures = await sampleSignatures();
       lastRevalidatedSignatures = currentSignatures;
       const targetDescriptors = normalizedDescriptors.filter((descriptor) => descriptorAffectsTarget(descriptor, target));
@@ -470,7 +581,7 @@ export function startDevReloadCoordinator(
         }
       }
     };
-    const handleTargetFailure = async ({ target, error, stage }) => {
+    const handleTargetFailure = async ({ target, error, stage, retainedBuild = false }) => {
       hadFailure = true;
       const executor = executorsByTarget.get(target);
       const plan = context.reloadPlans?.[target] ?? null;
@@ -488,7 +599,7 @@ export function startDevReloadCoordinator(
           revalidatedSignatures: lastRevalidatedSignatures,
         });
       }
-      const retryAfterMs = retryScheduled ? Math.trunc(Number(error?.reloadRetryAfterMs)) : null;
+      const retryAfterMs = retryScheduled ? Math.trunc(readRetryDelayMs(error)) : null;
       try {
         if (stage === 'restart' && typeof executor?.publishFailureDisposition === 'function') {
           await executor.publishFailureDisposition({ error, plan, retryScheduled, retryAfterMs });
@@ -498,7 +609,9 @@ export function startDevReloadCoordinator(
             plan,
             ...(retryScheduled
               ? { retryAfterMs }
-              : { disposition: { code: stage === 'build' ? 'build_failed' : 'restart_failed' } }),
+              : retainedBuild
+                ? { phase: 'idle' }
+                : { disposition: { code: stage === 'build' ? 'build_failed' : 'restart_failed' } }),
           });
         }
       } catch (projectionError) {
@@ -509,7 +622,9 @@ export function startDevReloadCoordinator(
         logger.error?.(formatError(projectionError));
       }
       logger.error?.(
-        `[local] watch: ${target} reload ${stage} failed; keeping existing services running ` +
+        (retainedBuild
+          ? `[local] watch: ${target} build inputs drifted; activated retained coherent output `
+          : `[local] watch: ${target} reload ${stage} failed; `) +
           (retryScheduled ? '(bounded retry scheduled).' : '(will retry when affected inputs change).'),
       );
       logger.error?.(formatError(error));
@@ -525,8 +640,18 @@ export function startDevReloadCoordinator(
         buildResult = await executor?.build?.(targetContext);
       } catch (error) {
         if (closed || isShuttingDown?.()) return;
-        await handleTargetFailure({ target, error, stage: 'build' });
-        continue;
+        try {
+          // The component owner must prove its retained closure usable; a drift
+          // code alone does not certify cold or damaged output.
+          buildResult = await executor?.recoverBuildFailure?.(error, targetContext);
+        } catch (recoveryError) {
+          await handleTargetFailure({ target, error: recoveryError, stage: 'build' });
+          continue;
+        }
+        if (!buildResult) {
+          await handleTargetFailure({ target, error, stage: 'build' });
+          continue;
+        }
       }
       if (buildResult?.requestFollowup === true) {
         requestedFollowupTargets.add(target);
@@ -574,6 +699,11 @@ export function startDevReloadCoordinator(
         signatures: nextSignatures,
         revalidatedSignatures: lastRevalidatedSignatures,
       });
+      if (buildResult?.retainedBuildError) {
+        // Arm refresh after activation/revalidation: marking this target forced
+        // earlier would invalidate the very generation starting its service.
+        await handleTargetFailure({ target, error: buildResult.retainedBuildError, stage: 'build', retainedBuild: true });
+      }
     }
 
     clearSignatureInitializationRecovery();
@@ -596,6 +726,7 @@ export function startDevReloadCoordinator(
   const onChange = (event) => {
     if (closed || isShuttingDown?.()) return;
     if (!shouldObserve(event)) return;
+    if (['recrawl', 'change', 'rename'].includes(event?.eventType)) sourceObserver.observe(event);
     if (executorsByTarget.has(event?.forcedTarget)) forcedTargets.add(event.forcedTarget);
     recordSignatureInitializationEvent(event);
     if (inFlight) {
@@ -626,6 +757,7 @@ export function startDevReloadCoordinator(
 
   const onObservation = (event) => {
     if (closed || isShuttingDown?.()) return false;
+    if (event?.eventType === 'change' || event?.eventType === 'rename') sourceObserver.observe(event);
     if (!shouldObserve(event)) return false;
     recordSignatureInitializationEvent(event);
     if (!inFlight) return false;
@@ -633,21 +765,37 @@ export function startDevReloadCoordinator(
     return true;
   };
 
-  const watcher = watchDebouncedImpl({
-    paths: watchPaths,
-    debounceMs,
-    ignorePath: isDevRuntimeReloadIgnoredPath,
-    logger,
-    shouldObserve,
-    onObservation,
-    onChange,
-    pollIntervalMs,
-    readSignature: async () => serializeDescriptorSignatures(
-      normalizedDescriptors,
-      await sampleSignatures(),
-    ),
-  });
-  if (!watcher) return null;
+  let watcher;
+  try {
+    watcher = observeChanges ? watchDebouncedImpl({
+      persistent,
+      paths: watchPaths,
+      debounceMs,
+      ignorePath: isDevRuntimeReloadIgnoredPath,
+      logger,
+      shouldObserve,
+      onObservation,
+      onChange,
+      pollIntervalMs,
+      onSourceEvent: event => sourceObserver.observe(event),
+      recoverSignature: async () => {
+        await sourceObserver.reconcile();
+        return serializeDescriptorSignatures(normalizedDescriptors, await sampleSignatures());
+      },
+      // Completion revalidates the generation before activation. While its
+      // build/admission is pending, native observations still invalidate it;
+      // another recovery check cannot advance that same operation.
+      shouldPoll: () => !inFlight,
+      readSignature: async () => serializeDescriptorSignatures(
+        normalizedDescriptors,
+        await sampleSignatures(),
+      ),
+    }) : { close() {} };
+  } catch (error) {
+    sourceObserver.close();
+    throw error;
+  }
+  if (!watcher) { sourceObserver.close(); return null; }
   for (const [target, executor] of executorsByTarget) {
     executor?.setUnexpectedExitHandler?.(async (event) => {
       try {
@@ -686,6 +834,7 @@ export function startDevReloadCoordinator(
       signatureInitializationFallbackAll = false;
       watcher.close?.();
       await inFlightPromise;
+      sourceObserver.close();
     },
   };
 }

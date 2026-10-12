@@ -396,7 +396,7 @@ test('stopped-stack restart delegates declaration admission once to a running ru
   });
 });
 
-test('watch restart publishes current source declarations before spawning', async (t) => {
+test('watch startup admits last-green workspace output and leaves refresh to the reload owner', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
     const calls = [];
     const child = { pid: 2001, exitCode: null };
@@ -425,7 +425,9 @@ test('watch restart publishes current source declarations before spawning', asyn
           assert.equal(options.refreshExisting, false);
           assert.equal(options.prepareComponentOutputs, false);
         },
-        ensureSourceServerWorkspacePackagesBuiltImpl: async () => {
+        ensureSourceServerWorkspacePackagesBuiltImpl: async ({ startup, refresh }) => {
+          assert.equal(startup, true);
+          assert.equal(refresh, null);
           calls.push('workspace');
         },
         preflightDevServerRestartImpl: async () => {
@@ -662,6 +664,33 @@ test('startDevServer prepares dependencies before full-server infrastructure and
   });
 });
 
+test('startDevServer admits migrations from the resolved server env, including shared database ownership', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const sourceEnvPath = join(serverDir, 'source.env');
+    await writeFile(sourceEnvPath, 'HAPPIER_DB_PROVIDER=postgres\nDATABASE_URL=postgresql://fixture@host/dev\nHANDY_MASTER_SECRET=fixture-only-secret\n');
+    for (const overrides of [
+      { HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev', HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: sourceEnvPath },
+      { RUN_MIGRATIONS: 'false' },
+    ]) {
+      const migrations = [];
+      await startDevServer({
+        serverComponentName: 'happier-server', serverDir,
+        autostart: { stackName: 'start-test', baseDir: serverDir },
+        baseEnv: { HAPPIER_STACK_MANAGED_INFRA: '0', HAPPIER_STACK_PRISMA_MIGRATE: '1', ...overrides },
+        serverPort: 34567, internalServerUrl: 'http://127.0.0.1:34567',
+        publicServerUrl: 'http://localhost:34567', envPath: join(serverDir, 'env'),
+        stackMode: true, runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+        serverAlreadyRunning: true, restart: false, children: [], quiet: true,
+      }, {
+        // Dependency installation and database deployment are external side effects.
+        ensureDepsInstalledImpl: async () => {},
+        applyHappyServerMigrationsImpl: async () => migrations.push('deployment'),
+      });
+      assert.deepEqual(migrations, []);
+    }
+  });
+});
+
 test('startDevServer validates workspace package exports before spawning a server process', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
     const calls = [];
@@ -724,6 +753,7 @@ test('startDevServer validates workspace package exports before spawning a serve
 });
 
 test('startDevServer boots an admitted prior runtime before source preparation and leaves source reload env current', async (t) => {
+  for (const serverComponentName of ['happier-server-light', 'happier-server']) {
   await withTempServerDir(t, async (serverDir) => {
     const calls = [];
     const child = { pid: 2001, exitCode: null, kill() {} };
@@ -737,10 +767,13 @@ test('startDevServer boots an admitted prior runtime before source preparation a
 
     const result = await startDevServer(
       {
-        serverComponentName: 'happier-server-light',
+        serverComponentName,
         serverDir,
         autostart: { stackName: 'start-test', baseDir: serverDir },
-        baseEnv: {},
+        baseEnv: { HAPPIER_STACK_MANAGED_INFRA: '0',
+          ...(serverComponentName === 'happier-server' ? {
+            HAPPIER_DB_PROVIDER: 'postgres', DATABASE_URL: 'postgresql://fixture@localhost/lastgreen',
+          } : {}) },
         serverPort: 34567,
         internalServerUrl: 'http://127.0.0.1:34567',
         publicServerUrl: 'http://localhost:34567',
@@ -758,6 +791,9 @@ test('startDevServer boots an admitted prior runtime before source preparation a
         ensureDepsInstalledImpl: async () => {
           throw new Error('source dependency preparation must stay in the background refresh');
         },
+        applyHappyServerMigrationsImpl: async () => {
+          throw new Error('current source migrations must stay in the background refresh');
+        },
         ensureSourceServerWorkspacePackagesBuiltImpl: async () => {
           throw new Error('source workspace builds must stay in the background refresh');
         },
@@ -768,7 +804,10 @@ test('startDevServer boots an admitted prior runtime before source preparation a
           calls.push('spawn-runtime');
           assert.equal(launchSpec, priorRuntimeServerLaunchSpec);
           assert.equal(env.HAPPIER_SQLITE_AUTO_MIGRATE, '0');
-          assert.equal(env.HAPPIER_SQLITE_MIGRATIONS_DIR, join(runtimeServerDir, 'prisma', 'sqlite', 'migrations'));
+          assert.equal(env.RUN_MIGRATIONS, 'false');
+          if (serverComponentName === 'happier-server-light') {
+            assert.equal(env.HAPPIER_SQLITE_MIGRATIONS_DIR, join(runtimeServerDir, 'prisma', 'sqlite', 'migrations'));
+          }
           return child;
         },
         waitForServerReadyImpl: async () => calls.push('ready'),
@@ -782,10 +821,12 @@ test('startDevServer boots an admitted prior runtime before source preparation a
 
     assert.equal(result.serverProc, child);
     assert.equal(result.bootstrapSource, 'runtime');
-    assert.equal(result.serverEnv.DATABASE_URL, undefined);
+    assert.equal(result.serverEnv.DATABASE_URL, serverComponentName === 'happier-server'
+      ? 'postgresql://fixture@localhost/lastgreen' : undefined);
     assert.equal(result.serverEnv.HAPPIER_SQLITE_MIGRATIONS_DIR, undefined);
     assert.deepEqual(calls, ['spawn-runtime', 'ready', 'ownership', 'record']);
   });
+  }
 });
 
 test('startDevServer keeps prior runtime availability while publishing current source outputs before source fallback', async (t) => {

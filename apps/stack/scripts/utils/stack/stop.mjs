@@ -641,11 +641,13 @@ async function stopStackWithEnvInternal({
       // startup admission and must not prevent cleanup of existing processes.
       await retireStackDevTarget({ target, sshArgs: prepared.sshArgs, env: syncRuntime.env,
         options: { stackName, services: state.services, serverUrl: internalServerUrl,
-          runtimeMode } },
+          runtimeMode, preserveDaemon } },
       { runProcess: input => runDevTargetControlProcess(input, { capture: runCaptureResultImpl }) });
       await recordStackRuntimeUpdate(runtimeStatePath, { remoteTargets: { [name]: {
-        status: 'stopped', phase: null, error: null,
-        serviceStatus: Object.fromEntries(Object.entries(state.services).filter(([, enabled]) => enabled === true).map(([service]) => [service, 'stopped'])),
+        status: preserveDaemon && state.services.daemon === true ? (state.serviceStatus?.daemon ?? state.status) : 'stopped',
+        phase: null, error: null,
+        serviceStatus: Object.fromEntries(Object.entries(state.services).filter(([, enabled]) => enabled === true)
+          .map(([service]) => [service, preserveDaemon && service === 'daemon' ? (state.serviceStatus?.daemon ?? state.status) : 'stopped'])),
       } } });
     } catch (error) {
       if (error?.code === 'EDEVTARGETUNREACHABLE') {

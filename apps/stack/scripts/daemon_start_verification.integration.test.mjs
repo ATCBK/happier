@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
+import { createTempFixture } from './testkit/core/temp_fixture.mjs';
+import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 
 import {
   checkDaemonState,
@@ -19,7 +21,7 @@ import {
   startLocalDaemonWithAuth,
 } from './daemon.mjs';
 import { killDetachedProcessGroup } from './testkit/core/spawn_daemon_like_process.mjs';
-import { spawnDetachedInlineNodeTestProcess, spawnDetachedTestProcess } from './testkit/core/spawn_test_process.mjs';
+import { spawnDetachedInlineNodeTestProcess, spawnDetachedTestProcess, spawnTestProcess } from './testkit/core/spawn_test_process.mjs';
 import {
   writeStubCliDistBuildManifest,
   writeStubHappierCliFiles,
@@ -27,11 +29,113 @@ import {
 import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli_server_set.mjs';
 import { resolveStackCredentialPaths } from './utils/auth/credentials_paths.mjs';
 import { inspectDependencyRefresh } from './utils/proc/dependency_refresh.mjs';
+import { readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(scriptsDir);
 const DAEMON_TEST_PROCESS_HELPER_PATH = join(rootDir, 'scripts', 'testkit', 'core', 'spawn_daemon_like_process.mjs');
 const PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS = '15000';
+
+test('source restart uses empty authenticated control restart and attests the actual selected entrypoint', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-control-', registerCleanup: false });
+  const cliHomeDir = fixture.path('cli');
+  await mkdir(cliHomeDir, { recursive: true });
+  await writeFile(join(cliHomeDir, 'access.key'), 'fixture-credential\n');
+  const stackName = 'source-control-reload';
+  const statePath = join(cliHomeDir, 'servers', `stack_${stackName}__id_default`, 'daemon.state.json');
+  const runtimeStatePath = fixture.path('stack.runtime.json');
+  const requestPath = fixture.path('request.json');
+  const incumbent = fixture.path('incumbent.mjs');
+  const selected = fixture.path('selected.mjs');
+  const children = [];
+  t.after(async () => {
+    if (existsSync(statePath)) {
+      const { pid } = JSON.parse(await readFile(statePath, 'utf8'));
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    for (const child of children) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      await exited;
+    }
+    await fixture.cleanup();
+  });
+  const serverUrl = 'http://127.0.0.1:4301';
+  const env = { ...process.env, HAPPIER_STACK_STACK: stackName,
+    HAPPIER_STACK_ENV_FILE: fixture.path('env'), HAPPIER_HOME_DIR: cliHomeDir,
+    HAPPIER_STACK_PROCESS_KIND: 'daemon', HAPPIER_SERVER_URL: serverUrl,
+    HAPPIER_STACK_AUTO_AUTH_SEED: '0', HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
+    HAPPIER_STACK_RUNTIME_STATE_PATH: runtimeStatePath,
+    HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS };
+  const script = `
+import { createServer } from 'node:http';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+const statePath = ${JSON.stringify(statePath)};
+if (process.argv[2] === 'daemon' && process.argv[3] === 'stop') {
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  const response = await fetch('http://127.0.0.1:' + state.httpPort + '/stop', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-daemon-token': state.controlToken },
+    body: JSON.stringify({ stopSessions: true }),
+  });
+  process.exit(response.ok ? 0 : 1);
+}
+if (process.argv[2] !== 'daemon' || process.argv[3] !== 'start-sync') process.exit(1);
+const server = createServer((req, res) => {
+  if (req.headers['x-happier-daemon-token'] !== 'fixture-token') { res.writeHead(401); res.end(); return; }
+  let raw = '';
+  req.on('data', chunk => raw += chunk);
+  req.on('end', () => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/ping') { res.end('{"ok":true}'); return; }
+    writeFileSync(${JSON.stringify(requestPath)}, JSON.stringify({ path: req.url, body: JSON.parse(raw) }));
+    if (req.url !== '/restart') { res.writeHead(409); res.end('{}'); return; }
+    const state = JSON.parse(readFileSync(${JSON.stringify(runtimeStatePath)}, 'utf8'));
+    const entrypoint = state.sourceRuntimeIdentities.daemon.selected === 'unloaded' ? ${JSON.stringify(selected)} : state.sourceRuntimeLaunch.entrypoint;
+    const staleDataArgs = state.sourceRuntimeIdentities.daemon.selected === 'unloaded' ? [state.sourceRuntimeLaunch.entrypoint] : [];
+    const child = spawn(process.execPath, [entrypoint, 'daemon', 'start-sync', ...staleDataArgs], { env: process.env, detached: true, stdio: 'ignore' });
+    child.unref();
+    res.end('{"status":"restarting"}');
+    res.once('finish', () => server.close());
+  });
+});
+server.listen(0, '127.0.0.1', () => {
+  mkdirSync(dirname(statePath), { recursive: true });
+  writeFileSync(statePath, JSON.stringify({ pid: process.pid, httpPort: server.address().port, controlToken: 'fixture-token' }));
+  process.send?.('ready'); process.disconnect?.();
+});
+`;
+  await writeFile(incumbent, script);
+  await writeFile(selected, script);
+  await recordStackRuntimeUpdate(runtimeStatePath, { stackName, processes: {},
+    sourceRuntimeLaunch: { entrypoint: incumbent, cliDir: fixture.root },
+    sourceRuntimeIdentities: { server: { selected: 'server', loaded: 'server' }, daemon: { selected: 'old', loaded: 'old' } } });
+  const runner = spawnTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+  children.push(runner);
+  const initial = spawnTestProcess(process.execPath, [incumbent, 'daemon', 'start-sync'], {
+    env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  children.push(initial);
+  await once(initial, 'message');
+  const options = { cliBin: incumbent, cliEntrypoint: selected, cliHomeDir,
+    internalServerUrl: serverUrl, publicServerUrl: serverUrl, stackName, runtimeStatePath, env,
+    forceRestart: true, preserveSessionsOnRestart: true,
+    sourceRuntimeLaunchUpdate: { launch: { entrypoint: selected, cliDir: fixture.root }, identity: 'next' } };
+  const result = await startLocalDaemonWithAuth(options).catch(error => ({ error }));
+  assert.deepEqual(JSON.parse(await readFile(requestPath, 'utf8')), { path: '/restart', body: {} });
+  assert.equal(result.ok, true, result.error?.message);
+  assert.doesNotThrow(() => process.kill(runner.pid, 0));
+  let state = await readStackRuntimeStateFile(runtimeStatePath);
+  assert.deepEqual(state.sourceRuntimeIdentities.daemon, { selected: 'next', loaded: 'next' });
+  assert.deepEqual(state.sourceRuntimeIdentities.server, { selected: 'server', loaded: 'server' });
+  await assert.rejects(startLocalDaemonWithAuth({ ...options,
+    sourceRuntimeLaunchUpdate: { launch: { entrypoint: incumbent, cliDir: fixture.root }, identity: 'unloaded' },
+  }), /selected source daemon.*not loaded/);
+  state = await readStackRuntimeStateFile(runtimeStatePath);
+  assert.equal(state.sourceRuntimeIdentities.daemon.loaded, null);
+});
 
 test('source launch retires unpublished daemon generations before starting and replacing its successor', async (t) => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-source-daemon-supersede-'));
@@ -58,11 +162,22 @@ test('source launch retires unpublished daemon generations before starting and r
     await once(child, 'message');
   }
   const entrypoint = join(tmp, 'source-main.mjs');
-  await writeFile(entrypoint, `
-import { writeFileSync } from 'node:fs';
+  const successorEntrypoint = join(tmp, 'source-successor.mjs');
+  const runtimeStatePath = join(tmp, 'stack.runtime.json');
+  for (const [launchPath, identity] of [[entrypoint, 'source-a'], [successorEntrypoint, 'source-b']]) {
+  await writeFile(launchPath, `
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnDaemonLikeProcess } from ${JSON.stringify(DAEMON_TEST_PROCESS_HELPER_PATH)};
 const [command, action] = process.argv.slice(2);
+if (command === 'daemon' && action === 'stop') {
+  const retained = JSON.parse(readFileSync(${JSON.stringify(runtimeStatePath)}, 'utf8'));
+  if (retained.sourceRuntimeLaunch?.entrypoint && retained.sourceRuntimeLaunch.entrypoint !== ${JSON.stringify(launchPath)}) process.exit(78);
+}
 if (command === 'daemon' && action === 'start') {
+  const retained = JSON.parse(readFileSync(${JSON.stringify(runtimeStatePath)}, 'utf8'));
+  if (retained.sourceRuntimeLaunch.entrypoint !== ${JSON.stringify(launchPath)}
+    || retained.sourceRuntimeIdentities.daemon.selected !== ${JSON.stringify(identity)}
+    || retained.sourceRuntimeIdentities.daemon.loaded !== null) process.exit(79);
   for (const pid of ${JSON.stringify(pids)}) {
     try { process.kill(pid, 0); process.exit(77); } catch {}
   }
@@ -73,8 +188,11 @@ if (command === 'daemon' && action === 'start') {
 }
 process.exit(0);
 `);
+  }
+  await writeFile(runtimeStatePath, JSON.stringify({ stackName, processes: {} }));
   const options = { cliBin: entrypoint, cliEntrypoint: entrypoint, cliHomeDir, internalServerUrl,
     publicServerUrl: internalServerUrl, stackName, forceRestart: true, isShuttingDown: () => false,
+    runtimeStatePath, sourceRuntimeLaunchUpdate: { launch: { entrypoint, cliDir: tmp }, identity: 'source-a' },
     env: { ...process.env, HAPPIER_STACK_REPO_DIR: '', HAPPIER_STACK_STACK: stackName,
       HAPPIER_STACK_AUTO_AUTH_SEED: '0', HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
       HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS,
@@ -82,13 +200,19 @@ process.exit(0);
   assert.equal((await startLocalDaemonWithAuth(options)).started, true);
   const first = Number(await readFile(pidPath, 'utf8'));
   pids.push(first);
+  assert.deepEqual((await readStackRuntimeStateFile(runtimeStatePath)).sourceRuntimeIdentities.daemon,
+    { selected: 'source-a', loaded: 'source-a' });
   for (const pid of pids.slice(0, 2)) assert.throws(() => process.kill(pid, 0));
-  assert.equal((await startLocalDaemonWithAuth(options)).started, true);
+  assert.equal((await startLocalDaemonWithAuth({ ...options,
+    sourceRuntimeLaunchUpdate: { launch: { entrypoint: successorEntrypoint, cliDir: tmp }, identity: 'source-b' },
+  })).started, true);
   const second = Number(await readFile(pidPath, 'utf8'));
   pids.push(second);
   assert.notEqual(second, first);
   assert.throws(() => process.kill(first, 0), 'replacement must retire the previously ready generation');
   assert.doesNotThrow(() => process.kill(second, 0));
+  assert.deepEqual((await readStackRuntimeStateFile(runtimeStatePath)).sourceRuntimeIdentities.daemon,
+    { selected: 'source-b', loaded: 'source-b' });
 });
 
 function buildDelayedDaemonStartCliScript({

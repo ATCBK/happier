@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveStackCredentialPaths } from './utils/auth/credentials_paths.mjs';
@@ -13,9 +13,64 @@ import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { createStackHappierCliCommandFixture } from './testkit/stack_happier_cli_command_testkit.mjs';
 import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli_server_set.mjs';
 import { recordStackRuntimeStart } from './utils/stack/runtime_state.mjs';
+import { resolveDevTargetMutagenRuntime } from './utils/dev_targets/mutagen_runtime.mjs';
+import { resolveMutagenSessionName } from './utils/dev_targets/mutagen_project.mjs';
+import { sanitizeStackTestRunnerEnv } from './utils/test/test_env.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(scriptsDir);
+
+for (const action of ['status', 'restart']) {
+test(`stack daemon ${action} reaches the observed remote daemon without local launch`, { skip: process.platform === 'win32' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-daemon-placement-' });
+  const stackName = 'remote-daemon';
+  const baseDir = fixture.path('stacks', stackName);
+  const bin = fixture.path('bin');
+  await mkdir(baseDir, { recursive: true });
+  await mkdir(bin);
+  const repoDir = fileURLToPath(new URL('../../../', import.meta.url));
+  const env = { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root, repoDir }),
+    HAPPIER_STACK_SYNC_BUNDLED_WORKSPACES: '0', HAPPIER_DEV_TARGET_EXECUTION: '0', PATH: `${bin}:${process.env.PATH}`,
+    HC_TEST_REMOTE_LOG: fixture.path('ssh.log') };
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${repoDir}\nHAPPIER_STACK_SERVER_PORT=3005\n`);
+  const target = { name: 'observed', platform: 'posix', ssh: 'fixture-remote', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
+  await writeFile(join(baseDir, 'dev-targets.json'), JSON.stringify({ version: 3, targets: [target],
+    runtimePlacement: { daemon: { mode: 'prefer-target', target: target.name } } }));
+  const incumbent = fixture.path('incumbent.mjs');
+  await writeFile(incumbent, 'console.log("local-incumbent");');
+  await recordStackRuntimeStart(join(baseDir, 'stack.runtime.json'), { stackName, ownerPid: process.pid,
+    placement: { daemon: target.name, server: 'local' }, runtimeMode: 'source-snapshot',
+    sourceRuntimeLaunch: { entrypoint: incumbent, cliDir: fixture.path('cli') },
+    sourceRuntimeIdentities: { server: { selected: 'server', loaded: 'server' }, daemon: { selected: 'incumbent', loaded: 'incumbent' } },
+    remoteTargets: { [target.name]: { runtimeMode: 'source-snapshot', services: { daemon: true }, status: 'running' } } });
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir: baseDir, sourceDir: repoDir, env });
+  await mkdir(dirname(runtime.projectFile), { recursive: true });
+  await writeFile(runtime.projectFile, '# fixture producer\n');
+  const session = { identifier: 'sync_fixture', name: resolveMutagenSessionName(target.name, repoDir), paused: false, status: 'watching',
+    successfulCycles: 1, alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } };
+  // Mutagen's JSON consumer and native control owner request different public templates.
+  const cleanNativeStatus = `${session.name}|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|1|ok|0|0|WatchModePortable|WatchModePortable`;
+  await writeFile(join(bin, 'mutagen'), `#!/bin/sh\ncase "$*" in *'{{json .}}'*) printf '%s\\n' '${JSON.stringify([session])}';; *list*) printf '%s\\n' '${cleanNativeStatus}';; esac\n`);
+  await writeFile(join(bin, 'ssh'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HC_TEST_REMOTE_LOG"\ncase "$*" in *sourceRuntimeIdentities*) printf \'%s\\n\' \'{"sourceRuntimeIdentities":{"daemon":{"selected":"current","loaded":"current"}}}\';; *) printf \'%s\\n\' \'{"ok":true,"status":"remote-fixture"}\';; esac\n');
+  await chmod(join(bin, 'ssh'), 0o755);
+  await chmod(join(bin, 'mutagen'), 0o755);
+  const result = await runHstack(['stack', 'daemon', stackName, action, '--runtime=source', '--json'], { env });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /remote-fixture/);
+  const command = await readFile(fixture.path('ssh.log'), 'utf8');
+  assert.match(command, /fixture-remote/);
+  assert.match(command, /stack.*daemon.*remote-daemon/);
+  assert.ok(command.includes(action));
+  assert.equal(existsSync(join(baseDir, 'source-runtime')), false, 'controller must not build or launch a local daemon');
+  const state = JSON.parse(await readFile(join(baseDir, 'stack.runtime.json'), 'utf8'));
+  assert.deepEqual(state.sourceRuntimeIdentities.server, { selected: 'server', loaded: 'server' });
+  assert.deepEqual(state.sourceRuntimeIdentities.daemon,
+    action === 'restart' ? { selected: 'current', loaded: 'current' } : { selected: 'incumbent', loaded: 'incumbent' });
+  if (action === 'restart') {
+    assert.deepEqual(state.remoteTargets[target.name].sourceRuntimeIdentities.daemon, { selected: 'current', loaded: 'current' });
+  }
+});
+}
 
 function runHstack(args, { env }) {
   return runNode([join(rootDir, 'bin', 'hstack.mjs'), ...args], { cwd: rootDir, env });

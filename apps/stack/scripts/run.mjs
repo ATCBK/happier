@@ -85,8 +85,9 @@ import { isBorrowedExpoConsumer, resolveSourceQaUiMode } from './runtime/shared/
 import { resolveServerMigrationsEnabled } from '@happier-dev/cli-common/firstPartyRuntime/selfHostServerEnv';
 import { persistControlledServerPlacement, resolveControlledRuntimePlacement } from './utils/dev_targets/service_placement.mjs';
 import { resolveStackRuntimeMode } from './runtime/shared/runtime_mode.mjs';
-import { beginPendingSourceStart } from './runtime/shared/pending_source_start.mjs';
-import { startStackDevTargets } from './utils/dev_targets/supervisor.mjs';
+import { beginPendingSourceStart, emitSourcePreparationPhase } from './runtime/shared/pending_source_start.mjs';
+import { readJsonIfExists } from './utils/fs/json.mjs';
+import { resolvePreservedDaemonTargetPlans, startStackDevTargets } from './utils/dev_targets/supervisor.mjs';
 import { resolveRemoteServerRuntimeConfig } from './utils/dev_targets/remote_commands.mjs';
 import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 
@@ -172,15 +173,6 @@ async function main() {
   let defaultPublicUrl = '';
   let canonicalServerUrl = '';
 
-  // Convenience alias: allow `--server-flavor=light|full` for parity with `stack pr` and `tools setup-pr`.
-  // `--server=...` always wins when both are specified.
-  const serverFlavorFromArg = (kv.get('--server-flavor') ?? '').trim().toLowerCase();
-  if (!kv.get('--server') && serverFlavorFromArg) {
-    if (serverFlavorFromArg === 'light') kv.set('--server', 'happier-server-light');
-    else if (serverFlavorFromArg === 'full') kv.set('--server', 'happier-server');
-    else throw new Error(`[start] invalid --server-flavor=${serverFlavorFromArg} (expected: light|full)`);
-  }
-
   const serverComponentName = getServerComponentName({ kv });
   if (serverComponentName === 'both') {
     throw new Error(`[local] --server=both is not supported for run (pick one: happier-server-light or happier-server)`);
@@ -196,7 +188,9 @@ async function main() {
   }
   const autostart = getDefaultAutostartPaths();
   const pendingSourceStart = !json && resolveStackRuntimeMode({ argv, env: process.env }).mode === 'source-snapshot'
-    ? await beginPendingSourceStart({ stackBaseDir: autostart.baseDir }) : null;
+    ? await beginPendingSourceStart({ stackBaseDir: autostart.baseDir,
+      requestId: kv.get('--source-start-request-id'),
+      onPhase: process.env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? emitSourcePreparationPhase : undefined }) : null;
   try {
   const cleanupEnv = { ...process.env };
   const cleanupStackCtx = resolveStackContext({ env: cleanupEnv, autostart });
@@ -219,8 +213,10 @@ async function main() {
   pendingSourceStart?.signal.throwIfAborted();
   let runtimeSnapshot = runtimeLaunchContext.snapshot;
   const sourceSnapshot = runtimeLaunchContext.runtimeMode.mode === 'source-snapshot';
-  const reuseSourceRuntime = flags.has('--reuse-source-runtime');
-  if (reuseSourceRuntime && (!sourceSnapshot || !flags.has('--no-dev-targets') || process.env.HAPPIER_DEV_TARGET_EXECUTION !== '1')) {
+  const preparedSourceReload = process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD === '1';
+  const reuseSourceRuntime = flags.has('--reuse-source-runtime') || preparedSourceReload;
+  if (flags.has('--reuse-source-runtime') && (!sourceSnapshot || !flags.has('--no-dev-targets')
+      || (process.env.HAPPIER_DEV_TARGET_EXECUTION !== '1' && !preparedSourceReload))) {
     throw new Error('[source-bundle] runtime reuse is restricted to remote source recovery');
   }
   const sourceUi = sourceSnapshot ? resolveSourceQaUiMode({ uiMode: kv.get('--ui') ?? (flags.has('--ui') ? '' : undefined),
@@ -268,7 +264,13 @@ async function main() {
       })
     : null;
   const daemonRequested = resolveStackDaemonStartRequested({ env: process.env, noDaemon: flags.has('--no-daemon') });
-  const remoteSourceDaemonRequested = sourceSnapshot && daemonRequested && Boolean(controlledPlacement?.daemonTarget);
+  const remoteSourceTargetPlans = sourceSnapshot && controlledPlacement ? resolvePreservedDaemonTargetPlans({
+    targetPlans: controlledPlacement.targetPlans, targets: controlledPlacement.config.targets,
+    runtimeState: !json && !daemonRequested ? await readStackRuntimeStateFile(cleanupStackCtx.runtimeStatePath) : null,
+    daemonRequested,
+  }) : [];
+  const remoteSourceDaemonPlan = remoteSourceTargetPlans.find(plan => plan.services.daemon);
+  const remoteSourceDaemonRequested = sourceSnapshot && Boolean(remoteSourceDaemonPlan);
   const localDaemonRequested = daemonRequested && !remoteSourceDaemonRequested;
   const sourceRuntimeIdentities = {};
   let sourceRuntimeEnv = {};
@@ -279,13 +281,13 @@ async function main() {
     await mkdir(sourceRoot, { recursive: true });
     const repoDir = getRepoDir(rootDir);
     if (serverRequested) {
-      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'server', serverComponent: serverComponentName, dbProvider, env: process.env, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
+      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'server', serverComponent: serverComponentName, dbProvider, env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
       serverLaunchSpec = resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch: built,
         migrationsEnabled: resolveServerMigrationsEnabled(process.env) });
       sourceRuntimeIdentities.server = { selected: built.identity, loaded: null };
     }
     if (localDaemonRequested) {
-      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'daemon', env: process.env, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
+      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'daemon', env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
       cliLaunchSpec = resolveCliRuntimeLaunchSpec({ sourceRuntimeLaunch: built });
       sourceRuntimeEnv = applyCliRuntimeLaunchProvenanceEnv({ cliLaunchSpec });
       sourceRuntimeIdentities.daemon = { selected: built.identity, loaded: null };
@@ -294,16 +296,19 @@ async function main() {
     // the long-lived Stack owner must not retain their large idle heaps.
     if (sourceUi === 'export' && serverRequested) {
       if (reuseSourceRuntime) {
-        const uiDir = kv.get('--source-ui-dir');
+        const uiDir = kv.get('--source-ui-dir')
+          ?? (await readJsonIfExists(join(sourceRoot, 'selected-ui.json')))?.uiDir;
         if (!uiDir || !await pathExists(uiDir)) {
           throw new Error('[source-bundle] selected source UI is unavailable; explicitly restart the Stack to select current source');
         }
-        sourceUiLaunch = { uiDir };
+        const { publishSourceWebUi } = await import('./build/build_source_web_ui.mjs');
+        sourceUiLaunch = await publishSourceWebUi({ built: { uiDir }, uiDir: join(sourceRoot, 'ui'), pending: pendingSourceStart });
       } else {
-        const { exportSourceWebUi } = await import('./build/build_source_web_ui.mjs');
-        sourceUiLaunch = await exportSourceWebUi({ repoDir, baseDir: sourceRoot,
-          outputDir: join(await mkdtemp(join(sourceRoot, 'web-')), 'export'), env: process.env,
+        const { exportSourceWebUi, publishSourceWebUi } = await import('./build/build_source_web_ui.mjs');
+        const built = await exportSourceWebUi({ repoDir, baseDir: sourceRoot,
+          stackBaseDir: autostart.baseDir, pending: pendingSourceStart, env: process.env,
           signal: pendingSourceStart?.signal });
+        sourceUiLaunch = await publishSourceWebUi({ built, uiDir: join(sourceRoot, 'ui'), pending: pendingSourceStart });
       }
     }
   }
@@ -522,7 +527,7 @@ async function main() {
     daemonRunning: (!sourceSnapshot || reuseSourceRuntime) && daemonAlreadyRunning,
     expoRequested: startOwnedExpo,
     expoRunning: false,
-    restart: restart && !reuseSourceRuntime,
+    restart: restart && (!reuseSourceRuntime || preparedSourceReload),
   });
 
   if (daemonStartAdmission.skipReason) {
@@ -629,9 +634,9 @@ async function main() {
         ...(startupDecision.adoptedServer ? ['server'] : []),
       ] : [],
       sourceUi,
-      sourceUiLaunch: sourceUiLaunch ? { uiDir: sourceUiLaunch.uiDir } : null,
+      sourceUiLaunch: sourceUiLaunch ? { uiDir: sourceUiLaunch.uiDir, exportDir: sourceUiLaunch.exportDir } : null,
       ...(sourceSnapshot ? { placement: { server: serverRequested ? 'local' : 'external',
-        daemon: remoteSourceDaemonRequested ? controlledPlacement.daemonTarget.name : localDaemonRequested ? 'local' : 'disabled',
+        daemon: remoteSourceDaemonRequested ? remoteSourceDaemonPlan.target.name : localDaemonRequested ? 'local' : 'disabled',
         expo: borrowedExpo ? 'borrowed' : 'disabled' } } : {}),
       serveUi,
     });
@@ -769,12 +774,6 @@ async function main() {
           `--minio-port=${infra.env.S3_PORT}`,
           `--bucket=${infra.env.S3_BUCKET}`,
         ];
-        if (serveUi && (await pathExists(uiBuildDir))) {
-          gatewayArgs.push(`--ui-dir=${uiBuildDir}`);
-        } else {
-          gatewayArgs.push('--no-ui');
-        }
-
         const gateway = spawnProc('ui', process.execPath, gatewayArgs, { ...backendEnv, PORT: String(serverPort) }, { cwd: rootDir });
         children.push(gateway);
         await waitForServerReady(internalServerUrl, { childProcess: gateway });
@@ -890,8 +889,8 @@ async function main() {
 
   // Daemon
   const startDaemonAndRecord = async ({
-    forceRestart = restart && !reuseSourceRuntime && !serviceMode,
-    preserveExistingRunning = reuseSourceRuntime && daemonAlreadyRunning,
+    forceRestart = restart && (!reuseSourceRuntime || preparedSourceReload) && !serviceMode,
+    preserveExistingRunning = reuseSourceRuntime && !preparedSourceReload && daemonAlreadyRunning,
   } = {}) => {
     await startLocalDaemonWithAuth({
       cliBin,
@@ -1062,9 +1061,10 @@ async function main() {
       syncStackBaseDir: controlledPlacement.authority.producerStackBaseDir,
       sourceDir: getRepoDir(rootDir, baseEnv), localServerPort: serverPort,
       publicServerUrl, canonicalServerUrl, sourceSnapshot: true,
+      sourceStartRequestId: pendingSourceStart?.requestId,
       activeServerId: resolveStackActiveServerId({ env: daemonScopeEnv, stackName }),
       credentialPath: findExistingStackCredentialPath({ cliHomeDir, serverUrl: effectiveInternalServerUrl, env: daemonScopeEnv }),
-      cliHomeDir, targetPlans: controlledPlacement.targetPlans, syncTargets: controlledPlacement.config.targets,
+      cliHomeDir, targetPlans: remoteSourceTargetPlans, syncTargets: controlledPlacement.config.targets,
       onTargetStateChange: async ({ name, ...state }) => {
         await recordStackRuntimeUpdate(runtimeStatePath, { remoteTargets: { [name]: state },
           ...(state.sourceRuntimeIdentities ? { sourceRuntimeIdentities: state.sourceRuntimeIdentities } : {}),
@@ -1135,7 +1135,7 @@ async function main() {
     }
 
     const preserveDaemonOnShutdown = shutdownRequest?.preserveDaemon === true;
-    await sourceRemoteController?.close();
+    await sourceRemoteController?.close({ preserveDaemon: preserveDaemonOnShutdown });
 
 	    if (startDaemon && !preserveDaemonOnShutdown) {
 	      if (ownedDaemonPid && Number.isFinite(ownedDaemonPid) && ownedDaemonPid > 0) {
@@ -1224,9 +1224,12 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
   const daemonSnapshot = daemonRequested ? runtimeLaunchContext.componentSnapshots?.daemon ?? null : null;
   let localCli = localDaemonRequested && daemonSnapshot ? resolveCliRuntimeLaunchSpec({ snapshot: daemonSnapshot }) : null;
   let localSourceIdentity;
-  const targetPlans = placement.targetPlans.map(plan => ({ ...plan,
+  const targetPlans = resolvePreservedDaemonTargetPlans({ targetPlans: placement.targetPlans.map(plan => ({ ...plan,
     services: { ...plan.services, daemon: plan.services.daemon && daemonRequested },
-    ...(plan.services.daemon && daemonSnapshot ? { runtimeSnapshot: daemonSnapshot, runtimeTarget: placement.daemonRuntimeTarget } : {}) }));
+    ...(plan.services.daemon && daemonSnapshot ? { runtimeSnapshot: daemonSnapshot, runtimeTarget: placement.daemonRuntimeTarget } : {}) })),
+    targets: placement.config.targets,
+    runtimeState: !json && !daemonRequested ? await readStackRuntimeStateFile(context.runtimeStatePath) : null,
+    daemonRequested });
   const daemonPlacement = localDaemonRequested ? 'local'
     : targetPlans.find(plan => plan.services.daemon)?.target.name ?? 'disabled';
   if (json) {
@@ -1243,7 +1246,8 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
     await mkdir(sourceRoot, { recursive: true });
     const { buildSourceRuntimeBundle } = await import('./build/build_source_runtime.mjs');
     const built = await buildSourceRuntimeBundle({ repoDir: getRepoDir(rootDir, env),
-      stackBaseDir:autostart.baseDir, component: 'daemon', env, signal:pendingSourceStart?.signal });
+      stackBaseDir:autostart.baseDir, component: 'daemon', env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal,
+      reuseSelected: env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD === '1' });
     localCli = resolveCliRuntimeLaunchSpec({ sourceRuntimeLaunch: built });
     localSourceIdentity = { selected: built.identity, loaded: null };
     env = applyCliRuntimeLaunchProvenanceEnv({ env, cliLaunchSpec: localCli });
@@ -1288,6 +1292,7 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
       publicServerUrl: urls.publicServerUrl, canonicalServerUrl: urls.canonicalServerUrl,
       runtimeSnapshot, runtimeTarget: placement.runtimeTarget,
       sourceSnapshot,
+      sourceStartRequestId: pendingSourceStart?.requestId,
       ...(sourceSnapshot ? { sourceUi } : {}),
       borrowedExpoProducerStackName: !sourceSnapshot || sourceUi === 'borrowed'
         ? String(env.HAPPIER_STACK_EXPO_SOURCE_STACK ?? '').trim() : '',
@@ -1342,14 +1347,16 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
     daemonReconciler?.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    const shutdownRequest = (await readStackRuntimeStateFile(context.runtimeStatePath))?.stopRequest;
+    const preserveDaemonOnShutdown = shutdownRequest?.preserveDaemon === true;
     try {
-      if (localCli) await stopLocalDaemon({ cliBin: join(localCli.cliDir, 'bin/happier.mjs'),
+      if (localCli && !preserveDaemonOnShutdown) await stopLocalDaemon({ cliBin: join(localCli.cliDir, 'bin/happier.mjs'),
         cliNodeEntrypoint: localCli.nodeEntrypoint, cliCommand: localCli.command, cliCommandArgs: localCli.args,
         cliHomeDir, internalServerUrl, runtimeStatePath: context.runtimeStatePath, env,
         stackName: context.stackName, cliIdentity: 'default' });
-    } finally { await controller?.close(); }
+    } finally { await controller?.close({ preserveDaemon: preserveDaemonOnShutdown }); }
     const expected = await captureStackRuntimeStopSnapshot(context.runtimeStatePath);
-    if (expected) await finalizeStackRuntimeStop(context.runtimeStatePath, { expected, cleanupResults: [] });
+    if (expected) await finalizeStackRuntimeStop(context.runtimeStatePath, { expected, preserveDaemon: preserveDaemonOnShutdown, cleanupResults: [] });
   }
 }
 

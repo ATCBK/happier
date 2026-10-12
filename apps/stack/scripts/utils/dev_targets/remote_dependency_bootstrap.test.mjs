@@ -3,8 +3,10 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeF
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
@@ -13,14 +15,281 @@ import { resolveTypeScriptCliInvocation } from '../../../../../scripts/workspace
 import {
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
+  verifyUiPatchedDependencies,
 } from '../../../../ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
+import { listApplicablePatchFiles } from '../../../../ui/tools/postinstall/filteredPatchDirectory.mjs';
+import { ensureDepsInstalled } from '../proc/pm.mjs';
+import { withYarnInstallGuard } from '../worktrees/yarn_install_guard.mjs';
 
 import {
   REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS,
-  bootstrapRemoteDependencies,
+  bootstrapRemoteDependencies as bootstrapDependencies,
 } from './remote_dependency_bootstrap.mjs';
 
+test('remote dev startup checks a stale installed tree without bootstrapping dependencies', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-remote-dev-read-only-' });
+  await mkdir(fixture.path('apps', 'stack'), { recursive: true });
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('apps', 'stack', 'package.json'), '{"name":"fixture-stack"}');
+  await writeFile(fixture.path('yarn.lock'), '# stale fixture\n');
+  const installer = fixture.path('yarn.cjs');
+  const installed = fixture.path('implicit-install');
+  await writeFile(installer, `require('node:fs').writeFileSync(${JSON.stringify(installed)}, 'called'); process.exit(43);`);
+  await bootstrapDependencies({ repoDir: fixture.root, executionPlacement: 'remote', toolsOnly: true,
+    env: { ...process.env, npm_execpath: installer, HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1',
+      HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_ENV_FILE: '' } });
+  await assert.rejects(readFile(installed), { code: 'ENOENT' });
+  await assert.rejects(readFile(fixture.path('node_modules/.happier-stack-dependencies-ready')), { code: 'ENOENT' });
+});
+
+// These fixtures model worker mirrors. Local validation opts in explicitly;
+// the real bootstrap entry point defaults to read-only primary admission.
+const bootstrapRemoteDependencies = options => bootstrapDependencies({ executionPlacement: 'remote', ...options });
+
 const runDependencyRefreshImmediately = async (_options, refresh) => await refresh({});
+
+test('scriptless CLI bootstrap restores every real UI patch before admission and repairs warm patch loss without reinstalling', {
+  skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
+}, async t => {
+  const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-scriptless-all-ui-patches-' });
+  const sourceRepoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const uiDir = join(repoDir, 'apps/ui');
+  const sourceUiDir = join(sourceRepoDir, 'apps/ui');
+  const pristineDir = join(repoDir, 'pristine');
+  const require = createRequire(import.meta.url);
+  const { parsePatchFile } = require('patch-package/dist/patch/parse.js');
+  const { reversePatch } = require('patch-package/dist/patch/reverse.js');
+  const { executeEffects } = require('patch-package/dist/patch/apply.js');
+  await mkdir(uiDir, { recursive: true });
+  await cp(join(sourceUiDir, 'tools'), join(uiDir, 'tools'), { recursive: true });
+  await cp(join(sourceUiDir, 'patches'), join(uiDir, 'patches'), { recursive: true });
+  await cp(join(sourceUiDir, 'app.config.js'), join(uiDir, 'app.config.js'));
+  const uiManifest = JSON.parse(await readFile(join(sourceUiDir, 'package.json'), 'utf8'));
+  await writeFile(join(uiDir, 'package.json'), JSON.stringify({ ...uiManifest, scripts: { 'postinstall:real': 'node tools/postinstall.mjs' } }));
+  for (const component of ['stack', 'cli', 'server']) {
+    await mkdir(join(repoDir, 'apps', component), { recursive: true });
+    await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
+  }
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'yarn@1.22.22' }));
+  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  await cp(join(sourceRepoDir, 'packages/brand'), join(repoDir, 'packages/brand'), {
+    recursive: true, filter: source => !source.includes('/node_modules') && !source.includes('/dist'),
+  });
+  await mkdir(join(repoDir, 'node_modules'), { recursive: true });
+  await cp(join(sourceRepoDir, 'node_modules/patch-package'), join(repoDir, 'node_modules/patch-package'), { recursive: true, dereference: true });
+  const patchPackageDependencies = Object.keys(JSON.parse(await readFile(join(sourceRepoDir, 'node_modules/patch-package/package.json'), 'utf8')).dependencies);
+  for (const name of ['esbuild', '@esbuild', ...patchPackageDependencies]) {
+    await mkdir(join(repoDir, 'node_modules', name, '..'), { recursive: true });
+    await symlink(join(sourceRepoDir, 'node_modules', name), join(repoDir, 'node_modules', name));
+  }
+  const patches = [];
+  for (const relativeRoot of ['.', 'apps/ui']) {
+    const sourceRoot = join(sourceRepoDir, relativeRoot);
+    const cwd = join(pristineDir, relativeRoot);
+    for (const patchFile of listApplicablePatchFiles({ patchDir: join(sourceUiDir, 'patches'), nodeModulesDir: join(sourceRoot, 'node_modules') })) {
+      const effects = parsePatchFile(await readFile(join(sourceUiDir, 'patches', patchFile), 'utf8'));
+      patches.push({ cwd: join(repoDir, relativeRoot), patchFile, effects });
+      const packageName = patchFile.startsWith('@') ? patchFile.split('+').slice(0, 2).join('/') : patchFile.split('+')[0];
+      await cp(join(sourceRoot, 'node_modules', packageName), join(cwd, 'node_modules', packageName), { recursive: true, dereference: true });
+      // Produce pristine install bytes in this fixture only. Using the real
+      // patch-package engine also handles a moving checkout with mixed hunks.
+      for (const effect of reversePatch(effects)) {
+        const pieces = effect.type === 'patch' ? [...effect.hunks].reverse().map(hunk => ({ ...effect, hunks: [hunk] })) : [effect];
+        for (const piece of pieces) {
+          try {
+            executeEffects([piece], { cwd, dryRun: true, bestEffort: false });
+          } catch {
+            executeEffects(reversePatch([piece]), { cwd, dryRun: true, bestEffort: false });
+            continue;
+          }
+          executeEffects([piece], { cwd, dryRun: false, bestEffort: false });
+        }
+      }
+    }
+  }
+  assert.ok(patches.some(({ patchFile }) => patchFile.startsWith('react-native-enriched-markdown+')));
+  assert.ok(patches.some(({ patchFile }) => patchFile.startsWith('@elevenlabs+client+')));
+  const binDir = join(repoDir, 'bin');
+  const trace = join(repoDir, 'pm-trace.jsonl');
+  await mkdir(binDir);
+  const packageManager = `#!${process.execPath}
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === 'yarn') args.shift();
+if (args[0] === '--version') { console.log('1.22.22'); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + '\\n');
+if (!fs.existsSync(${JSON.stringify(join(repoDir, '.project/tmp/dependency-install.lock'))})) throw new Error('Dependency mutation escaped its lock');
+if (fs.existsSync(${JSON.stringify(join(repoDir, 'node_modules/.happier-stack-dependencies-ready'))})) throw new Error('Readiness published before patches completed');
+if (args[0] === 'install') {
+  if (!args.includes('--ignore-scripts')) throw new Error('Expected scriptless installation');
+  for (const { cwd, patchFile } of ${JSON.stringify(patches.map(({ cwd, patchFile }) => ({ cwd, patchFile })))}) {
+    const packageName = patchFile.startsWith('@') ? patchFile.split('+').slice(0, 2).join('/') : patchFile.split('+')[0];
+    fs.rmSync(path.join(cwd, 'node_modules', packageName), { recursive: true, force: true });
+  }
+  fs.cpSync(${JSON.stringify(pristineDir)}, ${JSON.stringify(repoDir)}, { recursive: true });
+} else if (args.join(' ') === '-s workspace @happier-dev/app postinstall:real') {
+  const result = spawnSync(process.execPath, [${JSON.stringify(join(uiDir, 'tools/postinstall.mjs'))}], { env: process.env, stdio: 'inherit' });
+  process.exit(result.status ?? 1);
+} else throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
+`;
+  for (const name of ['corepack', 'yarn']) {
+    await writeFile(join(binDir, name), packageManager);
+    await chmod(join(binDir, name), 0o755);
+  }
+  const options = { repoDir, validationKind: 'source-test', componentRelativeDir: 'apps/cli', env: {
+    ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`, npm_execpath: '',
+    HAPPIER_STACK_HOME_DIR: join(repoDir, 'home'), HAPPIER_STACK_ENV_FILE: '', HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
+  } };
+  await bootstrapRemoteDependencies(options);
+  verifyUiPatchedDependencies({ uiPackageDir: uiDir });
+  for (const { cwd, effects } of patches) executeEffects(reversePatch(effects.filter(effect => effect.type !== 'mode change')), { cwd, dryRun: true, bestEffort: false });
+  const output = join(uiDir, 'node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
+  const outputStat = await stat(output);
+  const warmTrace = await readFile(trace, 'utf8');
+  await bootstrapRemoteDependencies(options);
+  assert.equal(await readFile(trace, 'utf8'), warmTrace, 'already installed must not rewrite packages or rerun postinstall');
+  assert.equal((await stat(output)).mtimeMs, outputStat.mtimeMs);
+  // This fixture has no additional component lifecycle tasks. Admit its full
+  // tree before testing warm full-PM/worktree repair; scriptless admission alone
+  // correctly requires extraction when transitioning to a full install.
+  await withDependencyRefresh({ installDir: repoDir, env: options.env }, async () => {});
+  const atmosphere = join(uiDir, 'sources/components/atmosphere/backdropWorkletCore.generated.js');
+  await assert.rejects(stat(atmosphere), { code: 'ENOENT' }, 'dependency bootstrap must not compile moving application source');
+  const elevenLabs = patches.find(({ patchFile }) => patchFile.startsWith('@elevenlabs+client+'));
+  for (const prepare of [
+    () => bootstrapRemoteDependencies(options),
+    () => ensureDepsInstalled(join(repoDir, 'apps/cli'), 'fixture CLI', { env: options.env, prepareComponentOutputs: false }),
+    () => withYarnInstallGuard({ installDir: repoDir, env: options.env }, async () => {}),
+  ]) {
+    executeEffects(reversePatch(elevenLabs.effects), { cwd: elevenLabs.cwd, dryRun: false, bestEffort: false });
+    await prepare();
+    assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, false,
+      'warm scriptless repair must preserve existing full-install admission');
+    verifyUiPatchedDependencies({ uiPackageDir: uiDir });
+    await assert.rejects(stat(atmosphere), { code: 'ENOENT' }, 'source artifact compilation must not participate in dependency repair');
+  }
+  await rm(output);
+  await bootstrapRemoteDependencies(options);
+  verifyUiPatchedDependencies({ uiPackageDir: uiDir });
+  const commands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(commands.filter(args => args[0] === 'install').length, 1, 'warm patch repair must reuse the canonical postinstall without reinstalling');
+  // Local non-UI source tools must also inspect the shared UI patches.
+  const otherPatch = patches.find(({ patchFile }) => patchFile.startsWith('expo-crypto+'));
+  assert.ok(otherPatch);
+  executeEffects(reversePatch(otherPatch.effects), { cwd: otherPatch.cwd, dryRun: false, bestEffort: false });
+  await assert.rejects(bootstrapRemoteDependencies({ ...options, executionPlacement: 'local' }),
+    { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  executeEffects(otherPatch.effects, { cwd: otherPatch.cwd, dryRun: false, bestEffort: false });
+  verifyUiPatchedDependencies({ uiPackageDir: uiDir });
+  assert.equal((await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(args => args[0] === 'install').length, 1);
+});
+
+for (const policy of ['skip', 'disabled', 'service', 'refresh']) test(`local validation never mutates stale dependencies under ${policy} policy`, {
+  skip: process.platform === 'win32' ? 'Exercises the POSIX package-manager executable boundary' : false,
+}, async t => {
+  const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-local-bootstrap-policy-' });
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'], packageManager: 'yarn@1.22.22' }));
+  await writeFile(join(repoDir, 'yarn.lock'), '# original inputs\n');
+  for (const component of ['stack', 'ui', 'cli', 'server']) {
+    await mkdir(join(repoDir, 'apps', component), { recursive: true });
+    await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
+  }
+  await mkdir(join(repoDir, 'node_modules'));
+  await withDependencyRefresh({ installDir: repoDir }, async () => {});
+  const markerPath = join(repoDir, 'node_modules/.happier-stack-dependencies-ready');
+  const admittedBytes = await readFile(markerPath, 'utf8');
+  await writeFile(join(repoDir, 'yarn.lock'), '# changed inputs\n');
+  const binDir = join(repoDir, 'bin');
+  await mkdir(binDir);
+  const installTrace = join(repoDir, 'installs.json');
+  // Only the package-manager process is replaced. Dependency policy, freshness,
+  // bootstrap and lifecycle ownership execute their real internal paths.
+  const packageManager = `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'yarn') args.shift();
+if (args[0] === '--version') console.log('1.22.22');
+else if (args[0] === 'install') fs.writeFileSync(${JSON.stringify(installTrace)}, JSON.stringify(args));
+else throw new Error('Unexpected package-manager command: ' + JSON.stringify(args));
+`;
+  for (const command of ['corepack', 'yarn']) {
+    await writeFile(join(binDir, command), packageManager);
+    await chmod(join(binDir, command), 0o755);
+  }
+  const env = { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+    npm_execpath: '', npm_node_execpath: '', HAPPIER_STACK_HOME_DIR: join(repoDir, 'home'),
+    HAPPIER_STACK_ENV_FILE: '', HAPPIER_DEV_TARGET_EXECUTION: '',
+    HAPPIER_STACK_SKIP_REFRESH_DEPS: policy === 'skip' ? '1' : '',
+    HAPPIER_STACK_DISABLE_REFRESH_DEPS: policy === 'disabled' ? '1' : '',
+    HAPPIER_STACK_SERVICE_MODE: policy === 'service' ? '1' : '',
+    HAPPIER_STACK_SERVICE_ALLOW_REFRESH_DEPS: '', HAPPIER_STACK_ALLOW_REFRESH_DEPS: '' };
+  if (policy === 'refresh') {
+    for (const placement of [[], ['--execution-placement=invalid']]) assert.throws(() => execFileSync(process.execPath, [
+      fileURLToPath(new URL('./remote_dependency_bootstrap.mjs', import.meta.url)),
+      `--repo-dir=${repoDir}`, '--validation-kind=source-test', '--component-relative-dir=apps/server',
+      ...placement,
+    ], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), error =>
+      error.status === 1 && error.stderr.includes('HAPPIER_DEPENDENCIES_NEED_REFRESH'),
+    'bootstrap without an explicit worker placement must refuse primary mutation');
+  }
+  await assert.rejects(bootstrapRemoteDependencies({ repoDir,
+    validationKind: policy === 'refresh' ? 'runtime' : policy === 'disabled' ? 'typecheck' : 'source-test',
+    componentRelativeDir: 'apps/server', executionPlacement: 'local', env }),
+  { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  await assert.rejects(stat(installTrace), { code: 'ENOENT' }, 'validation must not invoke installation');
+  assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'validation must not rewrite admission');
+  assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, true);
+  await writeFile(join(repoDir, 'yarn.lock'), '# original inputs\n');
+  await bootstrapRemoteDependencies({ repoDir, validationKind: 'source-test',
+    componentRelativeDir: 'apps/server', executionPlacement: 'local', env });
+  assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'warm validation must be read-only too');
+  await assert.rejects(stat(installTrace), { code: 'ENOENT' });
+});
+
+for (const scenario of ['cold', 'self-link', 'active-writer']) test(`local validation refuses ${scenario} without repairing dependencies`, async t => {
+  const { root: repoDir } = await createTempFixture(t, { prefix: 'happier-local-read-only-' });
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(repoDir, 'yarn.lock'), '# fixture\n');
+  for (const component of ['stack', 'ui', 'cli', 'server']) {
+    await mkdir(join(repoDir, 'apps', component), { recursive: true });
+    await writeFile(join(repoDir, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
+  }
+  const nodeModules = join(repoDir, 'node_modules');
+  const lockPath = join(repoDir, '.project/tmp/dependency-install.lock');
+  let admittedBytes;
+  if (scenario !== 'cold') {
+    await mkdir(nodeModules);
+    await withDependencyRefresh({ installDir: repoDir }, async () => {});
+    admittedBytes = await readFile(join(nodeModules, '.happier-stack-dependencies-ready'), 'utf8');
+  }
+  if (scenario === 'self-link') await symlink(nodeModules, join(nodeModules, 'node_modules'), 'dir');
+  if (scenario === 'active-writer') {
+    await writeFile(lockPath, JSON.stringify({ pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() }));
+  }
+  // A real child proves fail-fast behavior while the fixture's installer owner
+  // remains alive. The deadline belongs to this finite process-boundary test.
+  assert.throws(() => execFileSync(process.execPath, [
+    fileURLToPath(new URL('./remote_dependency_bootstrap.mjs', import.meta.url)),
+    `--repo-dir=${repoDir}`, '--validation-kind=source-test', '--execution-placement=local',
+  ], { env: { ...process.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '1' }, encoding: 'utf8',
+    timeout: 5_000, stdio: ['ignore', 'pipe', 'pipe'] }), error =>
+    error.status === 1 && error.stderr.includes('HAPPIER_DEPENDENCIES_NEED_REFRESH')
+      && (scenario !== 'active-writer' || error.stderr.includes(`pid=${process.pid}`)));
+  if (scenario === 'cold') await assert.rejects(stat(nodeModules), { code: 'ENOENT' });
+  else assert.equal(await readFile(join(nodeModules, '.happier-stack-dependencies-ready'), 'utf8'), admittedBytes);
+  if (scenario === 'self-link') assert.equal((await stat(join(nodeModules, 'node_modules'))).isDirectory(), true);
+  if (scenario === 'active-writer') {
+    assert.equal(JSON.parse(await readFile(lockPath, 'utf8')).pid, process.pid);
+    const waiters = await readdir(`${lockPath}.waiters`).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    assert.deepEqual(waiters.filter(name => name.endsWith('.json')), [],
+      'read-only admission must not join the install queue');
+  }
+});
 
 test('runtime worker bootstrap emits package prerequisites by default while explicit publication checks remain strict', async t => {
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-runtime-bootstrap-default-'));
@@ -196,13 +465,17 @@ test('scriptless source-test refresh cannot admit changed UI patch inputs as pos
   assert.equal((await inspectDependencyRefresh({ installDir: repoDir })).required, false);
 });
 
-test('UI dependency preparation owner imports from installed source without compiled workspace outputs', async (t) => {
+for (const owner of ['proc/pm.mjs', 'dev/expo_dev.mjs']) test(`${owner} imports from installed source without compiled workspace outputs`, async (t) => {
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-ui-preparation-cold-import-'));
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
   // Relocate the real authored import graph, not a stub of the preparation
   // owner. No first-party dist or caller node_modules can satisfy the child.
   await copyColdPreparationSourceGraph(repoDir);
   const commonDir = join(repoDir, 'packages', 'cli-common');
+  if (owner === 'dev/expo_dev.mjs') {
+    const sourceRepoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
+    await cp(join(sourceRepoDir, 'packages', 'cli-common', 'src'), join(commonDir, 'src'), { recursive: true });
+  }
   const installedCommonDir = join(repoDir, 'node_modules', '@happier-dev', 'cli-common');
   await cp(commonDir, installedCommonDir, { recursive: true });
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({
@@ -210,12 +483,13 @@ test('UI dependency preparation owner imports from installed source without comp
   }));
   await assert.rejects(stat(join(commonDir, 'dist')), { code: 'ENOENT' });
   await assert.rejects(stat(join(installedCommonDir, 'dist')), { code: 'ENOENT' });
-  const ownerUrl = pathToFileURL(join(repoDir, 'apps', 'stack', 'scripts', 'utils', 'proc', 'pm.mjs')).href;
+  const ownerUrl = pathToFileURL(join(repoDir, 'apps', 'stack', 'scripts', 'utils', owner)).href;
 
   // Real Node resolution sees the real cli-common export map and its authored
   // source files. A transitive emitted-package import must fail this admission.
   try {
-    execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(ownerUrl)});`], {
+    execFileSync(process.execPath, [...(owner === 'dev/expo_dev.mjs' ? ['--conditions=happier-source', '--import', import.meta.resolve('tsx')] : []),
+      '--input-type=module', '-e', `await import(${JSON.stringify(ownerUrl)});`], {
       cwd: repoDir,
       env: { ...process.env, NODE_PATH: '', NODE_OPTIONS: '' },
       stdio: 'pipe',
@@ -254,6 +528,7 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
     'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
     'apps/ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs',
+    'apps/ui/tools/postinstall/filteredPatchDirectory.mjs',
   ]) {
     const destination = join(repoDir, relativePath);
     await mkdir(join(destination, '..'), { recursive: true });
@@ -350,6 +625,22 @@ if (args[0] === '--version') {
   // postinstall call-count assertion or a separately repaired fixture.
   assert.equal(await readFile(requiredOutputPath, 'utf8'), preparedModule);
   await assert.rejects(stat(join(protocolDir, 'dist')), { code: 'ENOENT' });
+  await bootstrapRemoteDependencies({
+    repoDir,
+    validationKind: 'typecheck',
+    componentRelativeDir: 'apps/ui',
+    env: {
+      ...process.env,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      npm_execpath: '',
+      HAPPIER_STACK_HOME_DIR: join(repoDir, 'home'),
+      HAPPIER_STACK_ENV_FILE: '',
+      HAPPIER_TEST_UI_PATCH_INPUT: patchInputDir,
+      HAPPIER_TEST_UI_PATCH_OUTPUT: requiredOutputPath,
+    },
+  });
+  await assert.rejects(stat(join(protocolDir, 'dist')), { code: 'ENOENT' },
+    'typecheck bootstrap leaves declaration publication to component preparation');
   assert.equal((await inspectDependencyRefresh({
     installDir: repoDir, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE,
   })).required, false);

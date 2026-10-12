@@ -1114,7 +1114,10 @@ async function finalizeStackRuntimeStopUnlocked(statePath, {
   }
   if (!expected || !stackRuntimeStopSnapshotMatches(current, expected)) return { finalized: false, reason: 'successor_state', runtimeState: current };
   const pendingRemoteTargets = getStackRuntimePendingRemoteTargets(current);
-  if (pendingRemoteTargets.some(([, state]) => state.status !== 'retirement-pending')) {
+  if (pendingRemoteTargets.some(([, state]) => state.status !== 'retirement-pending'
+    && Object.entries(state.services).some(([service, enabled]) => enabled === true
+      && !(preserveDaemon && service === 'daemon')
+      && (state.serviceStatus?.[service] ?? state.status) !== 'stopped'))) {
     return { finalized: false, reason: 'remote_cleanup_incomplete', runtimeState: current };
   }
   const remoteTargets = Object.fromEntries(pendingRemoteTargets.map(([name, state]) => [name, { ...state, forwardPid: null }]));
@@ -1122,10 +1125,14 @@ async function finalizeStackRuntimeStopUnlocked(statePath, {
     const daemonPid = normalizeRuntimePid(current?.processes?.daemonPid);
     const daemonPids = Array.from(new Set((Array.isArray(current?.processes?.daemonPids) ? current.processes.daemonPids : []).map(normalizeRuntimePid).filter(Boolean)));
     if (daemonPid && !daemonPids.includes(daemonPid)) daemonPids.push(daemonPid);
-    if (daemonPids.length > 0) {
+    const remoteDaemonPreserved = pendingRemoteTargets.some(([, state]) => state.services?.daemon === true
+      && (state.serviceStatus?.daemon ?? state.status) !== 'stopped');
+    if (daemonPids.length > 0 || remoteDaemonPreserved) {
       const preservedTargets = Object.fromEntries(Object.entries({ ...current.remoteTargets, ...remoteTargets })
         .map(([name, state]) => [name, { ...state, forwardPid: null }]));
-      const next = { ...current, ownerPid: null, processes: { daemonPid: daemonPid ?? daemonPids.at(-1), daemonPids }, remoteTargets: preservedTargets, stopRequest: null, updatedAt: new Date().toISOString() };
+      const next = { ...current, ownerPid: null,
+        processes: daemonPids.length > 0 ? { daemonPid: daemonPid ?? daemonPids.at(-1), daemonPids } : {},
+        remoteTargets: preservedTargets, stopRequest: null, updatedAt: new Date().toISOString() };
       await writeStackRuntimeStateFileUnlocked(statePath, next);
       return { finalized: true, reason: 'daemon_preserved', runtimeState: next };
     }

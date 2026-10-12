@@ -89,7 +89,7 @@ test('source snapshot doctor does not inspect native selection or require a stat
   const result = await runNode([join(rootDir, 'scripts/doctor.mjs'), '--runtime=source', '--json'], {
     cwd: rootDir, env: { ...process.env, HAPPIER_STACK_STACK: fixture.stackName,
       HAPPIER_STACK_STORAGE_DIR: fixture.storageDir, HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
-      HAPPIER_STACK_REPO_DIR: rootDir },
+      HAPPIER_STACK_REPO_DIR: rootDir, HAPPIER_STACK_SERVE_UI: '0' },
   });
   assert.equal(result.code, 0, result.stderr);
   const report = JSON.parse(result.stdout);
@@ -98,7 +98,7 @@ test('source snapshot doctor does not inspect native selection or require a stat
   assert.equal(report.runtime.components, null);
   assert.equal(report.uiBuildDir, null);
   assert.equal(report.checks.runtimeSnapshot, undefined);
-  await writeFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_RUNTIME_MODE=source-snapshot\n');
+  await writeFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_RUNTIME_MODE=source-snapshot\nHAPPIER_STACK_SERVE_UI=0\n');
   const wrapped = await runNode([join(rootDir, 'bin/hstack.mjs'), 'stack', 'doctor', fixture.stackName, '--json'], {
     cwd: rootDir, env: { ...process.env, HAPPIER_STACK_STORAGE_DIR: fixture.storageDir },
   });
@@ -106,7 +106,7 @@ test('source snapshot doctor does not inspect native selection or require a stat
   assert.equal(JSON.parse(wrapped.stdout).runtime.mode, 'source-snapshot');
 });
 
-test('source snapshot doctor observes the server-host export endpoint and only borrows Expo when recorded explicitly', async t => {
+test('source snapshot doctor preserves the recorded export endpoint and borrowed/headless choices', async t => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'source-ui-doctor' });
   const producerStackName = 'source-ui-producer';
@@ -119,7 +119,7 @@ test('source snapshot doctor observes the server-host export endpoint and only b
     HAPPIER_STACK_ENV_FILE: envPath, HAPPIER_STACK_REPO_DIR: rootDir, HAPPIER_STACK_CLI_HOME_DIR: cliHomeDir,
     HAPPIER_STACK_EXPO_SOURCE_STACK: producerStackName };
   const runtimeState = { version: 1, stackName: fixture.stackName, processes: { serverPid: runtimeServer.pid },
-    ports: { server: runtimeServer.port }, placement: { server: 'mac' },
+    ports: { server: runtimeServer.port }, placement: { server: 'mac' }, sourceUi: 'export',
     remoteTargets: { mac: { status: 'running', services: { server: true }, sourceUi: 'export', sourceUiLaunch } },
     sourceRuntimeIdentities: { server: { selected: 'server-source', loaded: 'server-source' } },
   };

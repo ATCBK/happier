@@ -24,12 +24,29 @@ export async function installNativeAdmissionFixture({ root, admissionRoot = join
   ]);
   const state = await readFile(join(sourceRoot, 'apps/stack/scripts/utils/proc/native_host_admission_state.sh'), 'utf8');
   const quoted = `'${admissionRoot.replaceAll("'", "'\\''")}'`;
-  await writeFile(join(proc, 'native_host_admission_state.sh'), state.replace("'/tmp/happier-heavyweight-admission-v1'", quoted));
+  await writeFile(join(proc, 'native_host_admission_state.sh'), state.replace(/'\/tmp\/happier-heavyweight-admission-v\d+'/, quoted));
   // This fixture is an isolated physical worker, not the test runner's host.
   // Replace only OS enumeration; real RSS/ancestry for explicitly included
   // fixture processes and the production observer's domain logic stay real.
   const observer = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/proc/service_memory.mjs')).href;
+  const commandPolicy = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/remote_commands.mjs')).href;
+  await writeFile(join(targets, 'remote_commands.mjs'), `export * from ${JSON.stringify(commandPolicy)};
+import { runRemoteCommandPolicyCli } from ${JSON.stringify(commandPolicy)};
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  process.exitCode = await runRemoteCommandPolicyCli();
+}
+`);
   const diskObserver = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/worker_disk_budget.mjs')).href;
+  const workspaceAdmissionWorker = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/proc/workspace_build_admission.mjs')).href;
+  await writeFile(join(proc, 'workspace_build_admission.mjs'), `export * from ${JSON.stringify(workspaceAdmissionWorker)};
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { runWorkspaceBuildAdmissionWorker, runWorkspaceBuildAdmission as runOwner } from ${JSON.stringify(workspaceAdmissionWorker)};
+export async function runWorkspaceBuildAdmission(options) { return await runOwner({ ...options, launcherPath: ${JSON.stringify(launcher)} }); }
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) await runWorkspaceBuildAdmissionWorker(process.argv.slice(2));
+`);
   await writeFile(join(targets, 'worker_disk_budget.mjs'), `import { runWorkerDiskBudgetCommand } from ${JSON.stringify(diskObserver)}; await runWorkerDiskBudgetCommand();\n`);
   await writeFile(join(proc, 'service_memory.mjs'), `
 import { readFileSync } from 'node:fs';

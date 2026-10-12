@@ -32,6 +32,6 @@ classify_clean_mutagen_readiness() {
   sync_readiness=ready
 }
 classify_transient_mutagen_transition_errors() {
-  printf '%s\n' "$1" | grep -Eiv '(^|: )unable to validate existing file: modification detected$|(^|: )leaf name does not exist( or has incorrect casing)?$|unable to set staged file permissions: .*(: no such file or directory|: The system cannot find the file specified\.)$' >/dev/null
+  printf '%s\n' "$1" | grep -Eiv '(^|: )unable to validate existing file: modification detected$|(^|: )unable to relocate staged file: file exists$|(^|: )leaf name does not exist( or has incorrect casing)?$|unable to set staged file permissions: .*(: no such file or directory|: The system cannot find the file specified\.)$' >/dev/null
   case "$?" in 1) return 0 ;; *) return 1 ;; esac
 }

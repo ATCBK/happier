@@ -4,11 +4,13 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile, chmod, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ensureDevExpoServer } from './expo_dev.mjs';
 import { getExpoStatePaths, writePidState } from '../expo/expo.mjs';
-import { withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 
 async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-preflight-'));
@@ -29,6 +31,7 @@ async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) 
     workspaces: ['apps/*', 'packages/*'],
   }) + '\n', 'utf-8');
   await writeFile(join(tmp, 'yarn.lock'), '# fixture lockfile\n', 'utf-8');
+  await writeFile(join(tmp, 'retained-inventory.js'), 'export const inventory = [];\n', 'utf-8');
   await writeFile(join(uiDir, 'package.json'), JSON.stringify({
     name: 'happier-ui',
     private: true,
@@ -77,7 +80,7 @@ async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) 
 
 function createExpoBaseEnv(tmp) {
   return {
-    ...process.env,
+    ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: tmp }),
     HAPPIER_STACK_VERBOSE: '1',
     HAPPIER_STACK_EXPO_RESTART_MAX_ATTEMPTS: '0',
     HAPPIER_STACK_PM_CACHE_BASE_DIR: join(tmp, 'cache'),
@@ -114,6 +117,54 @@ test('ensureDevExpoServer rejects a fresh workspace build failure before startin
     await assert.rejects(startFixtureExpo(fixture), /fixture workspace build failed/);
     await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
   } finally {
+    await rm(fixture.tmp, { recursive: true, force: true });
+  }
+});
+
+for (const repaired of [true, false]) test(`Expo workspace file gaps recover beyond the nominal retry count or respect shutdown (repaired=${repaired})`, async () => {
+  const fixture = await createExpoWorkspaceFixture();
+  let shuttingDown = false;
+  try {
+    const attemptsPath = join(fixture.tmp, 'preparation-attempts');
+    const compilerPath = join(fixture.tmp, 'node_modules/@typescript/native/bin/tsc');
+    await mkdir(join(fixture.uiDir, 'scripts'), { recursive: true });
+    // Installed preparation tooling is the filesystem boundary; the actual
+    // Expo lifecycle, preflight adapter, retry policy and spawn remain real.
+    await writeFile(join(fixture.uiDir, 'scripts/ensureWorkspacePackagesBuilt.mjs'), [
+      "import { appendFile, lstat } from 'node:fs/promises';",
+      'export async function ensureUiWorkspacePackagesBuilt() {',
+      `  await appendFile(${JSON.stringify(attemptsPath)}, 'attempt\\n');`,
+      `  await lstat(${JSON.stringify(compilerPath)});`,
+      '}',
+    ].join('\n'));
+    const start = () => startFixtureExpo({ ...fixture, isShuttingDown: () => shuttingDown, baseEnv: {
+      ...createExpoBaseEnv(fixture.tmp),
+      HAPPIER_STACK_EXPO_SUPERVISE_RESTARTS: '1',
+      HAPPIER_STACK_EXPO_RESTART_MAX_ATTEMPTS: '2',
+      HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
+      HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
+    } });
+    const startup = start();
+    void startup.catch(() => {});
+    const deadline = Date.now() + 5_000;
+    while ((await readFile(attemptsPath, 'utf8').catch(() => '')).trim().split('\n').length < 3
+      && Date.now() < deadline) await delay(10);
+    assert.ok((await readFile(attemptsPath, 'utf8')).trim().split('\n').length >= 3);
+    await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
+    if (repaired) {
+      await mkdir(join(fixture.tmp, 'node_modules/@typescript/native/bin'), { recursive: true });
+      await writeFile(compilerPath, 'compiler recovered');
+      await startup;
+      shuttingDown = true;
+      assert.equal(await readFile(fixture.expoStartedMarker, 'utf8'), 'started\n');
+    } else {
+      shuttingDown = true;
+      await assert.rejects(startup, error => error.code === 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED'
+        && error.cause?.code === 'ENOENT');
+      await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
+    }
+  } finally {
+    shuttingDown = true;
     await rm(fixture.tmp, { recursive: true, force: true });
   }
 });
@@ -160,7 +211,7 @@ test('ensureDevExpoServer starts from last-green outputs while the canonical UI 
         "import { existsSync } from 'node:fs';",
         "import { writeFile } from 'node:fs/promises';",
         "import { setTimeout as delay } from 'node:timers/promises';",
-        `export function hasUsableUiWorkspaceLastGreen() { return true; }`,
+        `export function resolveUiWorkspaceStartupOutputs() { return [${JSON.stringify(join(fixture.tmp, 'retained-inventory.js'))}]; }`,
         'export async function ensureUiWorkspacePackagesBuilt() {',
         `  while (existsSync(${JSON.stringify(fixture.tmp)}) && !existsSync(${JSON.stringify(releasePath)})) await delay(10);`,
         `  await writeFile(${JSON.stringify(completedPath)}, 'ready\\n');`,
@@ -199,6 +250,82 @@ test('ensureDevExpoServer starts from last-green outputs while the canonical UI 
   }
 });
 
+test('Expo recovers from retained output while canonical source preparation is pending', async () => {
+  const fixture = await createExpoWorkspaceFixture();
+  const children = [];
+  let preparations = [];
+  let result;
+  let shuttingDown = false;
+  const releasePath = join(fixture.tmp, 'release-recovery-preflight');
+  const completedPath = join(fixture.tmp, 'recovery-preflight-completed');
+  const runCountPath = join(fixture.tmp, 'expo-runs');
+  const recoveryInputPath = join(fixture.uiDir, 'scripts', 'recovery-input.js');
+  try {
+    await mkdir(join(fixture.uiDir, 'scripts'), { recursive: true });
+    await writeFile(recoveryInputPath, 'export const repaired = false;\n');
+    await writeFile(join(fixture.uiDir, 'scripts', 'ensureWorkspacePackagesBuilt.mjs'), [
+      "import { existsSync } from 'node:fs';",
+      "import { writeFile } from 'node:fs/promises';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      `export function resolveUiWorkspaceStartupOutputs() { return [${JSON.stringify(join(fixture.tmp, 'retained-inventory.js'))}]; }`,
+      'export const preparations = [];',
+      'export function ensureUiWorkspacePackagesBuilt() {',
+      '  const preparation = (async () => {',
+      `    while (existsSync(${JSON.stringify(fixture.tmp)}) && !existsSync(${JSON.stringify(releasePath)})) await delay(10);`,
+      `    await writeFile(${JSON.stringify(completedPath)}, 'ready\\n');`,
+      '  })();',
+      '  preparations.push(preparation);',
+      '  return preparation;',
+      '}',
+    ].join('\n') + '\n');
+    ({ preparations } = await import(pathToFileURL(join(fixture.uiDir, 'scripts', 'ensureWorkspacePackagesBuilt.mjs')).href));
+    const expoBin = join(fixture.uiDir, 'node_modules', '.bin', 'expo');
+    await writeFile(expoBin, [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      `const path = ${JSON.stringify(runCountPath)};`,
+      "const count = Number(fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : 0) + 1;",
+      'fs.writeFileSync(path, String(count));',
+      'if (count <= 2) process.exit(0);',
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    await chmod(expoBin, 0o755);
+    result = await ensureDevExpoServer({
+      startUi: true, uiDir: fixture.uiDir, autostart: { baseDir: fixture.tmp },
+      baseEnv: { ...createExpoBaseEnv(fixture.tmp),
+        HAPPIER_STACK_EXPO_RESTART_MAX_ATTEMPTS: '1',
+        HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10',
+        HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10',
+        HAPPIER_STACK_DEV_RELOAD_POLL_MS: '50' },
+      apiServerUrl: 'http://127.0.0.1:1', stackMode: true,
+      // Runtime metadata has its own composed supervision coverage. This
+      // availability fixture does not need its asynchronous exit writer.
+      stackName: 'qa-retained-expo-recovery', runtimeStatePath: null,
+      envPath: '', children, isShuttingDown: () => shuttingDown,
+      spawnOptions: { silent: true }, quiet: true,
+    });
+    const exitDeadline = Date.now() + 5000;
+    while (children[1]?.exitCode !== 0 && Date.now() < exitDeadline) await delay(20);
+    assert.equal(children[1]?.exitCode, 0);
+    // Recovery must not need an edit to wake a suppressed source observer.
+    const recoveryDeadline = Date.now() + 5000;
+    while (children.length < 3 && Date.now() < recoveryDeadline) await delay(20);
+    assert.equal(children.length, 3, 'retained Metro output must restore availability before source preparation finishes');
+    assert.equal(children[2].exitCode, null);
+    await assert.rejects(readFile(completedPath), { code: 'ENOENT' });
+  } finally {
+    shuttingDown = true;
+    await writeFile(releasePath, 'go\n').catch(() => {});
+    await result?.close?.();
+    await Promise.all(preparations);
+    // children is populated before PID publication finishes. Join that real
+    // admission boundary before removing files its callback still writes.
+    await withDependencyRefreshLock({ installDir: fixture.tmp, env: createExpoBaseEnv(fixture.tmp) }, async () => {});
+    for (const child of children) child.kill('SIGTERM');
+    await Promise.all(children.map(child => child.completion));
+    await rm(fixture.tmp, { recursive: true, force: true });
+  }
+});
 
 test('ensureDevExpoServer waits for the first canonical UI publication before starting Expo', async () => {
   const fixture = await createExpoWorkspaceFixture();
@@ -213,7 +340,7 @@ test('ensureDevExpoServer waits for the first canonical UI publication before st
         "import { existsSync } from 'node:fs';",
         "import { writeFile } from 'node:fs/promises';",
         "import { setTimeout as delay } from 'node:timers/promises';",
-        'export function hasUsableUiWorkspaceLastGreen() { return false; }',
+        `export function resolveUiWorkspaceStartupOutputs() { return [${JSON.stringify(join(fixture.tmp, 'absent-inventory.js'))}]; }`,
         'export async function ensureUiWorkspacePackagesBuilt() {',
         `  while (existsSync(${JSON.stringify(fixture.tmp)}) && !existsSync(${JSON.stringify(releasePath)})) await delay(10);`,
         `  await writeFile(${JSON.stringify(completedPath)}, 'ready\\n');`,
@@ -289,7 +416,7 @@ test('ensureDevExpoServer adopts an existing Expo process while canonical refres
         "import { existsSync } from 'node:fs';",
         "import { writeFile } from 'node:fs/promises';",
         "import { setTimeout as delay } from 'node:timers/promises';",
-        'export function hasUsableUiWorkspaceLastGreen() { return true; }',
+        `export function resolveUiWorkspaceStartupOutputs() { return [${JSON.stringify(join(fixture.tmp, 'retained-inventory.js'))}]; }`,
         'export async function ensureUiWorkspacePackagesBuilt() {',
         `  while (existsSync(${JSON.stringify(fixture.tmp)}) && !existsSync(${JSON.stringify(releasePath)})) await delay(10);`,
         `  await writeFile(${JSON.stringify(canonicalMarker)}, 'ready\\n');`,

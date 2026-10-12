@@ -173,7 +173,10 @@ async function main() {
     return;
   }
   if (process.argv[2] === '--write-command-policy') {
-    await writeFile(new URL('./native_command_policy.sh', import.meta.url), renderNativeCommandPolicy());
+    const destination = new URL('./native_command_policy.sh', import.meta.url);
+    const temporary = new URL(`./native_command_policy.sh.${process.pid}.tmp`, import.meta.url);
+    await writeFile(temporary, renderNativeCommandPolicy());
+    await rename(temporary, destination);
     return;
   }
   const [configPath, outputPath, repoRoot = ''] = process.argv.slice(2);

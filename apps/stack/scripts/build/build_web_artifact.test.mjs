@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 import {
   buildWebArtifact,
@@ -13,6 +14,7 @@ import {
 } from './build_web_artifact.mjs';
 import { readReusableArtifactManifest } from '../runtime/shared/artifact_manifest.mjs';
 import { resolveLatestComponentArtifact } from './resolve_latest_component_artifact.mjs';
+import { pruneComponentArtifacts } from './runtime_retention.mjs';
 
 test('web reuse requires a non-empty entrypoint and its local referenced assets', async (t) => {
   const root = createTempDir('stack-web-reuse-');
@@ -86,11 +88,20 @@ test('web publication compiles authored plugin inputs privately and records the 
     // export staging, payload validation, atomic publication and manifests stay real.
     ensureDepsInstalledImpl: async (_dir, _label, { onDependenciesReady }) => await onDependenciesReady(),
     runUiPostinstallImpl: () => {},
-    expoExecImpl: async ({ args, env }) => {
+    expoExecImpl: async ({ dir, args, env }) => {
       assert.equal(typeof env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'string', 'native export must consume its private authored-source inventory');
       const inventory = readFileSync(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8');
       assert.match(inventory, /happier\.channels/);
       assert.ok(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY.startsWith(root));
+      const inventoryBlocked = execFileSync(process.execPath, ['-e', `
+        const config = require(${JSON.stringify(join(dir, 'metro.config.js'))});
+        const blockList = config.resolver.blockList;
+        const patterns = Array.isArray(blockList) ? blockList : [blockList];
+        process.stdout.write(String(patterns.some(pattern => pattern?.test(process.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY))));
+      `], { env, encoding: 'utf8' });
+      assert.equal(inventoryBlocked, 'false', 'the real Metro file-map policy must admit the prepared inventory');
+      await pruneComponentArtifacts({ stackBaseDir: root, component: 'web', keepCount: 1 });
+      assert.equal(existsSync(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY), true, 'artifact retention must not reclaim inputs consumed by an active export');
       assert.equal(env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
       const output = args[args.indexOf('--output-dir') + 1];
       writeFileSync(join(output, 'index.html'), '<script src="./chunk.js"></script>');
@@ -101,6 +112,20 @@ test('web publication compiles authored plugin inputs privately and records the 
   assert.deepEqual(JSON.parse(readFileSync(join(artifactDir, 'manifest.json'), 'utf8')).target, target);
   assert.equal(readFileSync(join(artifactDir, 'payload', 'chunk.js'), 'utf8'), 'browser payload');
   assert.deepEqual(readdirSync(artifactDir).sort(), ['manifest.json', 'payload']);
+  assert.deepEqual(readdirSync(join(root, 'artifacts', 'web')), ['target-web'], 'private source inputs must not remain after publication');
+  assert.deepEqual(readdirSync(join(root, 'artifacts')), ['web']);
+  const exportFailure = new Error('external export failed');
+  await assert.rejects(buildWebArtifact({
+    rootDir: repoDir, artifactDir, artifactFingerprint: 'failed-web', target,
+    sourceMetadata: { repoDir, sourceFingerprint: 'changed-source', builtAt: '2026-10-05T00:00:01Z' },
+    env: { ...process.env, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
+    ensureDepsInstalledImpl: async (_dir, _label, { onDependenciesReady }) => await onDependenciesReady(),
+    runUiPostinstallImpl: () => {},
+    expoExecImpl: async () => { throw exportFailure; },
+  }), exportFailure);
+  assert.equal(readFileSync(join(artifactDir, 'payload', 'chunk.js'), 'utf8'), 'browser payload', 'a failed export preserves the existing artifact');
+  assert.deepEqual(readdirSync(join(root, 'artifacts', 'web')), ['target-web'], 'failed export must retire only its private inputs');
+  assert.deepEqual(readdirSync(join(root, 'artifacts')), ['web']);
 });
 
 test('web artifact dependencies run the canonical UI postinstall through the dependency-ready callback', async () => {

@@ -110,6 +110,64 @@ Doctor:
 hstack stack doctor exp1
 ```
 
+### Source stack reload (0.3 development)
+
+`hstack stack start exp1 --runtime=source --ui=export --restart` prepares the
+replacement server, daemon and web export while the incumbent keeps serving.
+The source selection owner checks the daemon command loader, boots the server
+against scratch SQLite or PGlite data on an available loopback port, and loads
+the export in an isolated browser. Preparation runs on each actual service
+host, under the existing resource admission policy. Compiler services are
+released before browser smoke; the live Stack database is never used by smoke.
+
+Only successful checks permit selection and the existing restart owner's
+cutover. Startup then reuses the checked bundles and export. Failed or cancelled
+preparation preserves the loaded runtime; build/smoke failures preserve its
+selection too. `stack info` reports `runtime.sourceReload`, including the failure
+and its `run.reload.*.log` path. Selection and loaded process identity remain
+separate facts.
+
+During preparation, source-stack health reports `runtime_preparing`; after
+selection it reports `runtime_identity_pending` until the replacement identity
+is loaded. A healthy response from the incumbent alone cannot confirm the
+replacement. Lost remote daemon transport reports `daemon_unknown` and retains
+the recorded loaded identity; its target lifecycle phase remains visible in
+`stack info` until readiness or retirement is confirmed.
+
+The daemon check runs `daemon --help` in an empty temporary CLI home: it takes no
+daemon lock and registers no second Machine. It detects broken imports and
+command loading, but cannot prove authenticated Machine registration or code
+executed only after daemon startup. The browser check covers initial rendering,
+script delivery and boot exceptions, not later authenticated routes or tooltip
+interactions. Full-server infrastructure and external Postgres/MySQL smoke
+databases are not provisioned by this path; such reloads fail before retirement.
+The complete named-Stack cutover remains a manual validation step for the
+operator applying these development tooling changes.
+
+### Daemon-only source reload (0.3 development)
+
+For a running source-snapshot stack, rebuild and reload only its daemon:
+
+```bash
+node ./apps/stack/scripts/repo_local.mjs stack daemon exp1 restart --runtime=source --json
+node ./apps/stack/scripts/repo_local.mjs stack info exp1 --json
+```
+
+This follows the observed daemon host, synchronizes its source mirror, selects the current daemon bundle, and uses authenticated `/restart` with an empty body to preserve Session runners. It does not restart the server or UI. Require the daemon's selected source identity to equal its loaded identity and actual readiness. The incumbent must already include the source-selection resolver; older loaded daemons need one owner-controlled initial load before this command can load newer source through `/restart`.
+
+Source startup with `--ui=borrowed` skips the web export and uses the configured `HAPPIER_STACK_EXPO_SOURCE_STACK`. Setting the producer reference alone does not select borrowed UI. UI-only changes need a deliberate browser reload.
+
+### Place QA browsers independently (0.3 development)
+
+Set a browser pool without changing the stack's daemon placement:
+
+```bash
+node ./apps/stack/scripts/repo_local.mjs stack env exp1 set HAPPIER_STACK_QA_BROWSER_TARGETS=linux3,linux2
+node ./apps/stack/scripts/repo_local.mjs dev-targets browser start qa1 --stack=exp1 --url=<qa-ui-url>
+```
+
+The browser selector compares current unreserved memory among those configured hosts for each browser lifetime. It writes no Machine pin and fails closed if no pool host is usable. When the browser setting is absent or empty, it retains the existing daemon-pool/default selection. Keep the foreground browser handle and interrupt it after QA to retire its browser, profile, and forwards.
+
 ## Edit a stack (interactive)
 
 To change server flavor, port, or repo worktree for an existing stack:

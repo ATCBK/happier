@@ -92,8 +92,12 @@ test('hstack happier source snapshot uses retained code and clears native proven
     ownerPid: process.pid, runtimeSnapshotId: null, sourceRuntimeIdentities: { daemon: { selected: 'code', loaded: 'code' } },
     sourceRuntimeLaunch: { cliDir, entrypoint },
   }));
-  for (const mode of ['--runtime=source', '--runtime']) {
-    const result = await runNode([join(rootDir, 'scripts/happier.mjs'), mode, '--version'], { cwd: rootDir,
+  for (const { mode, args } of [
+    { mode: '--runtime=source', args: ['--version'] },
+    { mode: '--runtime', args: ['--version'] },
+    { mode: '--runtime=source', args: ['server', 'list', '--json'] },
+  ]) {
+    const result = await runNode([join(rootDir, 'scripts/happier.mjs'), mode, ...args], { cwd: rootDir,
       env: { ...process.env, HAPPIER_STACK_STACK: fixture.stackName, HAPPIER_STACK_STORAGE_DIR: fixture.storageDir,
         HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'), HAPPIER_STACK_RUNTIME_MODE: 'require',
         HAPPIER_HOME_DIR: join(fixture.root, '.happy-home'), HAPPIER_CLI_SUBPROCESS_RUNTIME_BACKED: '1' },
@@ -101,7 +105,7 @@ test('hstack happier source snapshot uses retained code and clears native proven
     assert.equal(result.code, 0, result.stderr);
     assert.ok(result.stdout.includes(entrypoint), `${mode} must use the loaded source entrypoint; stdout=${result.stdout}`);
     const output = JSON.parse(result.stdout);
-    assert.deepEqual(output.args, ['--version']);
+    assert.deepEqual(output.args, args);
     assert.equal(output.root, cliDir);
     assert.equal(output.child, entrypoint);
     assert.equal(output.native, null);

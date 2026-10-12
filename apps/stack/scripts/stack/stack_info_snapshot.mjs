@@ -28,6 +28,8 @@ import { getProcessGroupId, isPidOwnedByStack } from '../utils/proc/ownership.mj
 import { resolveRuntimeRemoteServiceObservation } from '../utils/tui/runtime_placement_summary.mjs';
 import { buildBorrowedExpoUiUrl, isBorrowedExpoConsumer, resolveBorrowedExpoRuntime, resolveSourceQaUiMode } from '../runtime/shared/borrowed_expo.mjs';
 import { inspectWorkspaceQaStalePackagesForComponent } from '../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
+import { readJsonIfExists } from '../utils/fs/json.mjs';
+import { readPendingSourcePreparation } from '../runtime/shared/pending_source_start.mjs';
 
 const readExistingEnv = readTextOrEmpty;
 
@@ -242,6 +244,9 @@ export async function readStackInfoSnapshot({
     : {};
   const remoteDaemon = resolveRuntimeRemoteServiceObservation(runtimeState, 'daemon');
   const remoteDaemonRunning = remoteDaemon.running;
+  // The target lifecycle reports retry/preparation, not proof of native exit.
+  const remoteDaemonUnknown = Boolean(remoteDaemon.target
+    && !remoteDaemonRunning && !['stopped', 'not-running'].includes(remoteDaemon.status));
   const remoteExpo = resolveRuntimeRemoteServiceObservation(runtimeState, 'expo');
   const remoteServer = resolveRuntimeRemoteServiceObservation(runtimeState, 'server');
   const sourceUiLaunch = sourceUi === 'export'
@@ -348,13 +353,14 @@ export async function readStackInfoSnapshot({
         env: componentEnv,
       })
     : null;
-  const uiExpected = borrowedExpo ? true : uiEndpoint.expected;
-  const uiRunning = borrowedExpo ? borrowedExpo.running : (uiEndpoint.running || remoteExpo.running);
-  const uiPortListening = borrowedExpo ? borrowedExpo.running : uiEndpoint.running;
-  const uiPort = borrowedExpo?.running ? borrowedExpo.port : borrowedExpo ? null : uiEndpoint.port;
-  const mobilePort = borrowedExpo?.running ? borrowedExpo.mobilePort : borrowedExpo ? null : ownedMobilePort;
-  const uiPid = borrowedExpo ? null : runtimeBackedStart ? (serveUiWanted ? serverPid : null) : expoPid;
-  const uiPidAlive = borrowedExpo ? false : runtimeBackedStart ? (serveUiWanted ? serverPidAlive : false) : expoPidAlive;
+  const borrowedUi = sourceUi === 'borrowed' || Boolean(borrowedExpo);
+  const uiExpected = borrowedUi ? true : uiEndpoint.expected;
+  const uiRunning = borrowedUi ? borrowedExpo?.running === true : (uiEndpoint.running || remoteExpo.running);
+  const uiPortListening = borrowedUi ? uiRunning : uiEndpoint.running;
+  const uiPort = borrowedExpo?.running ? borrowedExpo.port : borrowedUi ? null : uiEndpoint.port;
+  const mobilePort = borrowedExpo?.running ? borrowedExpo.mobilePort : borrowedUi ? null : ownedMobilePort;
+  const uiPid = borrowedUi ? null : runtimeBackedStart ? (serveUiWanted ? serverPid : null) : expoPid;
+  const uiPidAlive = borrowedUi ? false : runtimeBackedStart ? (serveUiWanted ? serverPidAlive : false) : expoPidAlive;
   const runningPid =
     [
       { pid: ownerPid, running: ownerAlive },
@@ -382,7 +388,8 @@ export async function readStackInfoSnapshot({
 
   const healthIssues = [];
   const stopCleanupIncomplete = Boolean(runtimeState?.stopRequest)
-    || getStackRuntimePendingRemoteTargets(runtimeState).some(([, state]) => state.phase === 'stop' && state.status === 'failed');
+    || getStackRuntimePendingRemoteTargets(runtimeState).some(([, state]) => state.status === 'retirement-pending'
+      || (state.phase === 'stop' && state.status === 'failed'));
   if (stopCleanupIncomplete) healthIssues.push('stop_cleanup_incomplete');
   const proxyBackendUnavailable = Boolean(
     serverProxy?.mode === 'proxy'
@@ -401,10 +408,9 @@ export async function readStackInfoSnapshot({
   if (uiExpected && !uiRunning) {
     healthIssues.push('ui_down');
   }
-  if (daemonExpected && running && !daemonRunning && !remoteDaemonRunning) {
-    healthIssues.push('daemon_down');
+  if (daemonExpected && (running || remoteDaemonUnknown) && !daemonRunning && !remoteDaemonRunning) {
+    healthIssues.push(remoteDaemonUnknown ? 'daemon_unknown' : 'daemon_down');
   }
-  const healthStatus = stopCleanupIncomplete ? 'degraded' : !running ? 'stopped' : healthIssues.length > 0 ? 'degraded' : 'healthy';
 
   const host = resolveLocalhostHost({ stackMode: true, stackName });
   const internalServerUrl = endpoint.publicServerUrl
@@ -430,10 +436,29 @@ export async function readStackInfoSnapshot({
     runtimeStatusTrustOptions,
   );
   const loadedSnapshotId = !sourceSnapshot && runtimeLifecycleLive ? runtimeSnapshotId || null : null;
-  const sourceRuntimeIdentities = sourceSnapshot ? Object.fromEntries(Object.entries(runtimeState?.sourceRuntimeIdentities ?? {})
-    .map(([component, identity]) => [component, { selected: identity.selected,
-      loaded: runtimeLifecycleLive && (component === 'server' ? serverRunning : component === 'ui' ? uiRunning : daemonRunning || remoteDaemonRunning)
-        ? identity.loaded : null }])) : null;
+  const recordedSourceIdentities = { ...runtimeState?.sourceRuntimeIdentities };
+  for (const [component, observation] of [['server', remoteServer], ['daemon', remoteDaemon]]) {
+    const identity = remoteTargets[observation.target]?.sourceRuntimeIdentities?.[component];
+    if (identity) recordedSourceIdentities[component] = identity;
+  }
+  const sourceRuntimeIdentities = sourceSnapshot ? Object.fromEntries(Object.entries(recordedSourceIdentities)
+    .map(([component, identity]) => {
+      const observation = component === 'daemon' ? remoteDaemon : component === 'server' ? remoteServer : remoteExpo;
+      const remoteCustodyUnconfirmed = observation.target && !['stopped', 'not-running'].includes(observation.status);
+      const localRunning = component === 'server' ? serverRunning : component === 'ui' ? uiRunning : daemonRunning;
+      return [component, { selected: identity.selected,
+        loaded: remoteCustodyUnconfirmed || (runtimeLifecycleLive && localRunning) ? identity.loaded : null }];
+    })) : null;
+  const pendingSourceIdentity = sourceSnapshot && Object.values(sourceRuntimeIdentities ?? {})
+    .some(identity => identity.selected && identity.selected !== identity.loaded);
+  if (running && pendingSourceIdentity) healthIssues.push('runtime_identity_pending');
+  const sourceReload = await readJsonIfExists(join(baseDir, 'source-runtime/reload.json'));
+  const sourcePreparation = sourceSnapshot ? await readPendingSourcePreparation({ stackBaseDir: baseDir }) : null;
+  const preparing = Boolean(sourcePreparation) || (sourceSnapshot && sourceReload?.status === 'preparing');
+  if (running && preparing) healthIssues.push('runtime_preparing');
+  const healthStatus = stopCleanupIncomplete ? 'degraded' : !running
+    ? remoteDaemonUnknown ? 'unknown' : sourcePreparation ? 'preparing' : 'stopped'
+    : healthIssues.length > 0 ? 'degraded' : 'healthy';
   const pendingManualRestart = Boolean(
     running
     && loadedSnapshotId
@@ -481,7 +506,9 @@ export async function readStackInfoSnapshot({
           pid: Number.isFinite(daemonPid) && daemonPid > 1 ? daemonPid : null,
           running: daemonRunning || remoteDaemonRunning,
           pidAlive: daemonPidAlive,
-          status: remoteDaemon.target ? (remoteDaemon.status ?? 'unknown') : observedDaemon.status,
+          status: remoteDaemon.target ? (remoteDaemonUnknown ? 'unknown' : remoteDaemon.status) : observedDaemon.status,
+          ...(remoteDaemon.target ? { lifecycleStatus: remoteDaemon.status,
+            phase: remoteTargets[remoteDaemon.target]?.phase ?? null } : {}),
           source: remoteDaemon.target ? 'remote_target' : observedDaemon.source,
           remoteTarget: remoteDaemon.target,
         },
@@ -512,8 +539,9 @@ export async function readStackInfoSnapshot({
           running: uiRunning,
           pidAlive: uiPidAlive,
           portListening: uiPortListening,
-          source: borrowedExpo ? 'borrowed_expo' : remoteExpo.running || (sourceUi === 'export' && remoteServer.target) ? 'remote_target' : 'local',
-          ownership: borrowedExpo?.ownership ?? 'owned',
+          ...(borrowedUi ? { status: uiRunning ? 'running' : 'waiting for dev Expo' } : {}),
+          source: borrowedUi ? 'borrowed_expo' : remoteExpo.running || (sourceUi === 'export' && remoteServer.target) ? 'remote_target' : 'local',
+          ownership: borrowedUi ? 'borrowed' : 'owned',
           producerStackName: borrowedExpo?.producerStackName ?? null,
           remoteTarget: borrowedExpo?.remoteTarget ?? (sourceUi === 'export' ? remoteServer.target : remoteExpo.target),
         },
@@ -544,6 +572,8 @@ export async function readStackInfoSnapshot({
       selectedProducerStackName: runtimeInspection.producerStackName,
       loadedSnapshotId,
       pendingManualRestart,
+      sourceReload,
+      sourcePreparation,
       snapshotPath: runtimeInspection.snapshotPath,
       sourceFingerprint: runtimeInspection.sourceFingerprint,
       buildSourceFingerprint:

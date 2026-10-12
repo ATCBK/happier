@@ -28,7 +28,6 @@ import { waitForHappierHealthOk } from '../utils/server/server.mjs';
 import { resolveStackOwnedListenPid } from '../utils/server/listener_ownership.mjs';
 import { parseArgs } from '../utils/cli/args.mjs';
 import { resolveDevServerConnection } from '../utils/dev/resolveDevServerConnection.mjs';
-import { resolveDevWatchEnabled } from '../utils/dev/devStartupTopology.mjs';
 import { getCliHomeDirFromEnvOrDefault } from '../utils/stack/dirs.mjs';
 import { pruneStackRunnerLogs } from '../utils/stack/runner_log_retention.mjs';
 import { resolveVerifiedStackServerEndpoint, resolveVerifiedStackUiEndpoint } from '../utils/stack/verified_endpoints.mjs';
@@ -47,15 +46,11 @@ import { normalizeStackRuntimeOwnerStartedAt } from '../utils/stack/runtime_owne
 import { listAllStackNames } from '../utils/stack/stacks.mjs';
 import { completeInterruptedStackStopBeforeStart, stopStackWithEnv } from '../utils/stack/stop.mjs';
 import { openUrlInBrowser } from '../utils/ui/browser.mjs';
-import { preflightDevServerRestart } from '../utils/dev/server.mjs';
-import {
-  resolveDevPriorRuntimeServer,
-  shouldPreflightDevRestart,
-} from '../utils/dev/priorRuntimeServer.mjs';
 
 import { collectReservedStackPorts, getDefaultPortStart } from './port_reservation.mjs';
 import { withStackEnv } from './stack_environment.mjs';
 import { resolveStackRuntimeLaunchContext } from '../runtime/launch/resolveStackRuntimeLaunchContext.mjs';
+import { prepareSourceRuntimeReload } from '../runtime/launch/prepareSourceRuntimeReload.mjs';
 
 const DEFAULT_BACKGROUND_READY_TIMEOUT_MS = 600_000;
 
@@ -426,6 +421,11 @@ export function createOuterStackRuntimeStartPublication({
     ports,
     runtimeSnapshotId,
     serveUi: resolveRequestedStackServeUi({ args, env }),
+    // Recovery must carry the prior execution evidence through this outer
+    // claim so run.mjs can attest adoption through its normal health checks.
+    ...(scriptPath === 'run.mjs' && args.includes('--reuse-source-runtime')
+      ? { sourceRuntimeIdentities: {}, adoptedSourceRoles: ['daemon', 'server'] }
+      : {}),
     ...(logs ? { logs } : {}),
   };
 }
@@ -689,6 +689,12 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
       const isStartLike = scriptPath === 'dev.mjs' || scriptPath === 'run.mjs';
       const wantsRestart = args.includes('--restart');
       const wantsJson = args.includes('--json');
+      if (args.includes('--prepared-source-reload')) {
+        if (env.HAPPIER_DEV_TARGET_EXECUTION !== '1' || !args.includes('--reuse-source-runtime')) {
+          throw new Error('[reload] prepared activation is restricted to the remote source restart owner');
+        }
+        env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
+      }
       if (isStartLikeJsonDryRun) {
         // Dry-run JSON must never allocate ports, write runtime state, or wait for readiness.
         await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
@@ -700,52 +706,9 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
 
       let runtimeLaunchContext = { snapshot: null };
       if (scriptPath === 'run.mjs') {
-        try {
-          runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv: args, env, purpose: 'deployment' });
-        } catch (error) {
-          if (isStartLike && wantsRestart) {
-            let shouldCleanup = shouldReuseRuntimePortsOnRestart({
-              wantsRestart,
-              runtimeState,
-              wasRunning: false,
-            });
-
-            if (!shouldCleanup) {
-              try {
-                const existingRuntimeStatus = await inspectExistingStartLikeRuntime({
-                  stackName,
-                  envPath,
-                  baseDir,
-                  expectedUiDir,
-                  scriptPath,
-                  args,
-                  env,
-                  runtimeState,
-                });
-                shouldCleanup = shouldReuseRuntimePortsOnRestart({
-                  wantsRestart,
-                  runtimeState,
-                  wasRunning: existingRuntimeStatus.wasRunning,
-                });
-              } catch {
-                // Preserve the original launch-context failure; cleanup is best-effort.
-              }
-            }
-
-            if (shouldCleanup) {
-              await cleanupFailedRestartAttempt({
-                rootDir,
-                stackName,
-                baseDir,
-                env,
-                runtimeStatePath,
-                expectedRuntimeState: restartCleanupExpectedRuntimeState,
-                wantsJson,
-              });
-            }
-          }
-          throw error;
-        }
+        // No replacement has been dispatched yet. An admission error cannot
+        // authorize cleanup of the incumbent lifecycle.
+        runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv: args, env, purpose: 'deployment' });
       }
       const runtimeSnapshotId = runtimeLaunchContext.snapshot?.snapshotId ?? null;
       if (!isStartLike) {
@@ -788,43 +751,13 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
         // - Never kill arbitrary port listeners
         // - Preserve previous runtime ports in memory so a true restart can reuse them
         if (wantsRestart && !wantsJson) {
-          if (scriptPath === 'dev.mjs') {
-            const { flags, kv } = parseArgs(args);
-            const admitPriorBuildsImmediately = resolveDevWatchEnabled({
-              watchRequested: flags.has('--watch'),
-              noWatchRequested: flags.has('--no-watch'),
-              interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-            });
-            const serverConnection = resolveDevServerConnection({
-              flags,
-              kv,
-              env,
-              resolvedLocalUrls: {
-                internalServerUrl: '',
-                publicServerUrl: '',
-                defaultPublicUrl: '',
-              },
-            });
-            if (serverConnection.startServer) {
-              const priorRuntimeServer = await resolveDevPriorRuntimeServer({
-                stackBaseDir: baseDir,
-                serverComponentName: serverComponent,
-              });
-              if (shouldPreflightDevRestart({
-                startServer: true,
-                priorRuntimeServer,
-                admitPriorBuildsImmediately,
-              })) {
-                const serverDir = getComponentDir(rootDir, serverComponent, env);
-                await preflightDevServerRestart({
-                  serverDir,
-                  serverComponentName: serverComponent,
-                  serverEnv: env,
-                  consoleImpl: console,
-                });
-                env.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE = '1';
-              }
-            }
+          if (scriptPath === 'run.mjs' && runtimeLaunchContext.runtimeMode?.mode === 'source-snapshot'
+              && env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD !== '1') {
+            const prepared = await prepareSourceRuntimeReload({ stackName, stackBaseDir: baseDir,
+              repoDir: env.HAPPIER_STACK_REPO_DIR, args, env });
+            args = [...args, ...(!prepared.remote ? ['--reuse-source-runtime', '--no-dev-targets'] : []),
+              ...(prepared.ui ? [`--source-ui-dir=${prepared.ui.uiDir}`] : [])];
+            env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
           }
           if (isTrueRestart) {
             try {

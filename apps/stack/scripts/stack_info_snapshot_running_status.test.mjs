@@ -9,9 +9,10 @@ import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
 import { spawnDetachedInlineNodeTestProcess } from './testkit/core/spawn_test_process.mjs';
 import { readStackInfoSnapshot, resolveStackComponentRuntime } from './stack/stack_info_snapshot.mjs';
 import { createRuntimeSnapshotFixture } from './testkit/runtime_snapshot_testkit.mjs';
+import { beginPendingSourceStart } from './runtime/shared/pending_source_start.mjs';
 import { resolvePreferredStackDaemonStatePaths } from './utils/auth/credentials_paths.mjs';
 import { applyStackDaemonLifecycleScopeEnv } from './utils/auth/stable_scope_id.mjs';
-import { captureStackRuntimeStopSnapshot, finalizeStackRuntimeStop, recordStackRuntimeStart } from './utils/stack/runtime_state.mjs';
+import { captureStackRuntimeStopSnapshot, finalizeStackRuntimeStop, recordStackRuntimeStart, recordStackRuntimeStopRequest, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 
 test('Info reports retained native retirement as incomplete after successful local finalization', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-info-pending-retirement-'));
@@ -36,6 +37,14 @@ test('Info reports retained native retirement as incomplete after successful loc
   assert.equal(out.runtime.health.status, 'degraded');
   assert.ok(out.runtime.health.issues.includes('stop_cleanup_incomplete'));
   assert.equal(out.runtime.remoteTargets.linux3.status, 'retirement-pending');
+  await recordStackRuntimeUpdate(statePath, { remoteTargets: { linux3: {
+    status: 'stopped', phase: null, serviceStatus: { daemon: 'stopped' },
+  } } });
+  const settled = await recordStackRuntimeStopRequest(statePath);
+  assert.equal((await finalizeStackRuntimeStop(statePath, { expected: settled.expected })).finalized, true);
+  const after = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName });
+  assert.equal(after.runtime.health.status, 'stopped');
+  assert.equal(after.runtime.health.issues.includes('stop_cleanup_incomplete'), false);
 });
 
 test('stack info shares daemon transport observation within a snapshot and refreshes the next snapshot', async (t) => {
@@ -77,6 +86,101 @@ test('stack info shares daemon transport observation within a snapshot and refre
   await writeState(process.pid);
   await readStackInfoSnapshot({ rootDir: process.cwd(), stackName });
   assert.equal(requests, 2, 'foreign daemon state must not receive a control token or be sampled before ownership proof');
+});
+
+test('stack info preserves remote execution identity when transport is unknown and exposes preparation phase', async t => {
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'remote-truth' });
+  withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: fixture.storageDir });
+  await writeFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_RUNTIME_MODE=source-snapshot\nHAPPIER_STACK_DAEMON=1\nHAPPIER_STACK_SERVE_UI=0\n');
+  const runtimePath = join(fixture.stackDir, 'stack.runtime.json');
+  const identity = { selected: 'retained-daemon', loaded: 'retained-daemon' };
+  for (const phase of ['tunnel', 'bootstrap']) {
+    await writeFile(runtimePath, JSON.stringify({ stackName: fixture.stackName,
+      sourceRuntimeIdentities: {}, placement: { daemon: 'linux1' },
+      remoteTargets: { linux1: { services: { daemon: true }, status: 'retrying', phase,
+        serviceStatus: { daemon: 'retrying' }, sourceRuntimeIdentities: { daemon: identity } } },
+    }));
+    const out = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+    assert.equal(out.runtime.components.daemon.running, false);
+    assert.equal(out.runtime.components.daemon.status, 'unknown');
+    assert.equal(out.runtime.components.daemon.phase, phase);
+    assert.deepEqual(out.runtime.sourceRuntimeIdentities.daemon, identity);
+    assert.ok(out.runtime.health.issues.includes('daemon_unknown'));
+    assert.equal(out.runtime.health.issues.includes('daemon_down'), false);
+    assert.notEqual(out.runtime.health.status, 'stopped', 'transport loss cannot prove remote retirement');
+  }
+  await writeFile(runtimePath, JSON.stringify({ stackName: fixture.stackName,
+    sourceRuntimeIdentities: {}, placement: { daemon: 'linux1' },
+    remoteTargets: { linux1: { services: { daemon: true }, status: 'stopped', serviceStatus: { daemon: 'stopped' },
+      sourceRuntimeIdentities: { daemon: identity } } },
+  }));
+  const stopped = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(stopped.runtime.components.daemon.status, 'stopped');
+  assert.equal(stopped.runtime.sourceRuntimeIdentities.daemon.loaded, null);
+  assert.equal(stopped.runtime.health.status, 'stopped');
+});
+
+test('stack info refuses old healthy HTTP as replacement readiness until the selected source identity is loaded', async t => {
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'replacement-truth' });
+  const envPath = join(fixture.stackDir, 'env');
+  const server = await spawnStackOwnedHealthServer(t, { stackName: fixture.stackName, envPath,
+    cliHomeDir: join(fixture.stackDir, 'cli') });
+  withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: fixture.storageDir });
+  await writeFile(envPath, 'HAPPIER_STACK_RUNTIME_MODE=source-snapshot\nHAPPIER_STACK_DAEMON=0\nHAPPIER_STACK_SERVE_UI=0\n');
+  const state = { stackName: fixture.stackName, ownerPid: server.pid,
+    processes: { serverPid: server.pid }, ports: { server: server.port },
+    sourceRuntimeIdentities: { server: { selected: 'replacement', loaded: 'incumbent' } } };
+  const statePath = join(fixture.stackDir, 'stack.runtime.json');
+  await writeFile(statePath, JSON.stringify(state));
+  const pending = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(pending.runtime.components.server.running, true, 'the incumbent still serves healthy HTTP');
+  assert.equal(pending.runtime.health.status, 'degraded');
+  assert.ok(pending.runtime.health.issues.includes('runtime_identity_pending'));
+  state.sourceRuntimeIdentities.server.loaded = 'replacement';
+  await writeFile(statePath, JSON.stringify(state));
+  const ready = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(ready.runtime.health.status, 'healthy');
+  assert.equal(ready.runtime.health.issues.includes('runtime_identity_pending'), false);
+  await mkdir(join(fixture.stackDir, 'source-runtime'), { recursive: true });
+  await writeFile(join(fixture.stackDir, 'source-runtime/reload.json'), JSON.stringify({ status: 'preparing' }));
+  const preparing = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(preparing.runtime.health.status, 'degraded', 'old healthy HTTP cannot complete a pending replacement build');
+  assert.ok(preparing.runtime.health.issues.includes('runtime_preparing'));
+  for (const status of ['ready', 'failed']) {
+    await writeFile(join(fixture.stackDir, 'source-runtime/reload.json'), JSON.stringify({ status }));
+    const settled = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+    assert.equal(settled.runtime.sourceReload.status, status);
+    assert.equal(settled.runtime.health.status, 'healthy', 'a settled preparation must not degrade the verified loaded incumbent');
+    assert.equal(settled.runtime.health.issues.includes('runtime_preparing'), false);
+  }
+});
+
+test('stack info projects pending source queue and build phases and retires them with their request', async t => {
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'preparation-phase' });
+  withPatchedProcessEnv(t, { HAPPIER_STACK_STORAGE_DIR: fixture.storageDir });
+  await writeFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_RUNTIME_MODE=source-snapshot\nHAPPIER_STACK_DAEMON=0\nHAPPIER_STACK_SERVE_UI=0\n');
+  const pending = await beginPendingSourceStart({ stackBaseDir: fixture.stackDir });
+  t.after(() => pending.dispose());
+  const initial = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(initial.runtime.sourcePreparation?.phase, 'preparing');
+  assert.equal(initial.runtime.health.status, 'preparing', 'a live preparation is not a stopped stack');
+  for (const phase of ['queued', 'building', 'checking']) {
+    await pending.setPhase({ phase, component: 'server' });
+    const out = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+    assert.deepEqual(out.runtime.sourcePreparation, { phase, component: 'server' });
+  }
+  await pending.setPhase({ phase: 'building', component: 'server' }, 'server-host');
+  await pending.setPhase({ phase: 'queued', component: 'daemon' }, 'daemon-host');
+  const remote = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.deepEqual(remote.runtime.sourcePreparation.targets, { 'server-host': { phase: 'building', component: 'server' },
+    'daemon-host': { phase: 'queued', component: 'daemon' } });
+  await pending.publish(async () => {});
+  const settled = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(settled.runtime.sourcePreparation, null);
+  assert.equal(settled.runtime.health.status, 'stopped');
+  await writeFile(join(fixture.stackDir, 'source-runtime/start.pending.json'), JSON.stringify({ pid: 2147483647, phase: 'building' }));
+  const abandoned = await readStackInfoSnapshot({ rootDir: process.cwd(), stackName: fixture.stackName });
+  assert.equal(abandoned.runtime.sourcePreparation, null, 'an absent requester cannot claim active preparation');
 });
 
 test('status does not project a server endpoint when listener ownership discovery is inconclusive', async () => {

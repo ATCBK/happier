@@ -10,22 +10,82 @@ import test from 'node:test';
 
 import {
   planRequiresRemoteCliWorkspacePreparation,
+  resolvePreservedDaemonTargetPlans,
   resolveDefaultRemoteServerPort,
   resolveRemoteServerReadyTimeoutMs,
   startStackDevTargets as startStackDevTargetsImpl,
   startStackDevTargetsInBackground,
 } from './supervisor.mjs';
 import { resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
-import { prepareDevTargetOpenSsh } from './sync_project.mjs';
+import { prepareDevTargetOpenSsh, runDevTargetControlProcess } from './sync_project.mjs';
 import { renderMutagenProject, resolveMutagenSessionName } from './mutagen_project.mjs';
 import { resolveRemoteStackStatePaths } from './remote_commands.mjs';
 import { writeManagedRuntimeSnapshotLayout } from '../../testkit/core/runtime_snapshot_layout.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
-import { runDevTargetDependencyBootstrap } from './executor.mjs';
+import { inspectDevTargetSync, runDevTargetDependencyBootstrap } from './executor.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeStart, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 
 const successfulDependencyBootstrap = async () => ({ code: 0 });
 const repoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
+
+for (const failure of ['sync', 'flush', 'directory', 'bootstrap']) {
+test(`transient remote ${failure} failure uses target recovery without aborting the local Stack`, { timeout: 10_000 }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-transient-start-' });
+  const target = { name: 'linux', platform: 'posix', ssh: 'linux-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/cli' };
+  const states = [];
+  const children = [];
+  const delays = [];
+  let failures = 0;
+  let releaseRetry;
+  const retryGate = new Promise(resolve => { releaseRetry = resolve; });
+  let observeRunning;
+  const running = new Promise(resolve => { observeRunning = resolve; });
+  const unavailable = () => ++failures <= (failure === 'sync' ? 3 : 2);
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, localServerPort: 3005,
+    sourceSnapshot: failure !== 'bootstrap', credentialPath: join(root, 'credential'),
+    targetPlans: [{ target, services: { server: false, expo: false, daemon: true } }],
+    onTargetStateChange: state => { states.push(state); if (state.status === 'running') observeRunning(); }, env: {},
+  }, {
+    // Mutagen/SSH are process boundaries; sync parsing and dependency bootstrap stay real.
+    runProcess: async ({ command, args }) => {
+      if (command === 'mutagen' && args[0] === 'sync' && args[1] === 'list'
+        && failure === 'sync' && unavailable()) return { code: 1, err: 'beta scan EOF' };
+      if (command === 'mutagen' && args[1] === 'flush' && failure === 'flush' && unavailable()) {
+        return { code: 1, err: 'session is not currently able to synchronize' };
+      }
+      if (command === 'ssh' && failure === 'directory' && String(args.at(-1)).includes('mkdir -p') && unavailable()) {
+        return { code: 255, err: 'connection timed out' };
+      }
+      if (command === 'ssh' && String(args.at(-1)).includes('sourceRuntimeIdentities')) return { code: 0,
+        out: JSON.stringify({ sourceRuntimeIdentities: { daemon: { selected: 'current', loaded: 'current' } } }) };
+      return { code: 0 };
+    },
+    inspectSync: options => inspectDevTargetSync(options, { runCaptureResult: async () => ({ ok: !unavailable(),
+      out: JSON.stringify([{ name: resolveMutagenSessionName(target.name, repoDir), paused: false, status: 'watching',
+        successfulCycles: 1, alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } }]) }) }),
+    runDependencyBootstrap: options => runDevTargetDependencyBootstrap(options, {
+      runCommand: async () => ({ code: failure === 'bootstrap' && unavailable() ? 255 : 0 }),
+    }),
+    spawnProcess: input => { const child = { ...input, exitCode: null }; children.push(child); return child; },
+    stopProcess: async child => { child.exitCode = 0; },
+    waitForProcess: async () => new Promise(() => {}),
+    waitForDaemonReady: async () => {},
+    waitForRetry: async ({ delayMs }) => { delays.push(delayMs); await retryGate; }, logger: { error() {} },
+  });
+  try {
+    assert.equal(controller.workers.length, 0);
+    assert.ok(children.every(child => child.exitCode === null), 'a target failure must not close the controller');
+    const expectedPhase = failure === 'bootstrap' ? 'bootstrap' : failure === 'directory' ? 'prepare' : 'sync';
+    assert.ok(states.some(state => state.status === 'retrying' && state.phase === expectedPhase));
+    releaseRetry();
+    await running;
+    assert.equal(controller.workers.length, 1);
+    assert.deepEqual(delays, [5_000, 10_000]);
+    assert.equal(controller.targetFailures.length, 0);
+  } finally { releaseRetry(); await controller.close(); }
+});
+}
 
 // The sync service owns fixture mirrors before any supervisor consumes them.
 // Only the filesystem and external Mutagen process responses are fixture data;
@@ -45,6 +105,9 @@ async function startStackDevTargets(input, dependencies = {}) {
   }
   const runProcess = dependencies.runProcess;
   return await startStackDevTargetsImpl({ ...input, env }, {
+    // Network readiness is an external boundary; unrelated transport tests do
+    // not depend on a real server listening at their fixture port.
+    waitForServerReady: async () => {},
     ...dependencies,
     ...(runProcess ? { runProcess: async request => {
       const result = await runProcess(request);
@@ -57,6 +120,117 @@ async function startStackDevTargets(input, dependencies = {}) {
     } } : {}),
   });
 }
+
+for (const platform of ['posix', 'windows']) {
+test(`source daemon tunnel failure waits for the local server and retries without failing startup (${platform})`, { timeout: 10_000 }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-source-tunnel-server-' });
+  const target = { name: 'daemon', platform, ssh: 'daemon-ssh',
+    repoDir: platform === 'windows' ? 'C:/happier' : '/remote/repo',
+    cliHomeDir: platform === 'windows' ? 'C:/home/happier' : '/remote/home' };
+  const credentialPath = join(root, 'credential');
+  await writeFile(credentialPath, '{}');
+  const states = [];
+  const tunnels = [];
+  const retries = [];
+  let probes = 0;
+  let releaseServer;
+  const serverReady = new Promise(resolve => { releaseServer = resolve; });
+  let observeServerWait;
+  const waitingForServer = new Promise(resolve => { observeServerWait = resolve; });
+  let observeRunning;
+  const running = new Promise(resolve => { observeRunning = resolve; });
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir,
+    sourceSnapshot: true, credentialPath, localServerPort: 3005,
+    publicServerUrl: 'http://127.0.0.1:3005',
+    targetPlans: [{ target, services: { server: false, daemon: true, expo: false } }],
+    onTargetStateChange: state => {
+      states.push(state);
+      if (state.status === 'running') observeRunning();
+    }, env: {},
+  }, {
+    // SSH/processes and network readiness are the only substituted boundaries.
+    runProcess: async ({ command, args }) => {
+      const encoded = String(args.at(-1));
+      const remote = platform === 'windows'
+        ? Buffer.from(encoded.split(' -EncodedCommand ').at(-1), 'base64').toString('utf16le')
+        : encoded;
+      if (command === 'ssh' && (remote.includes('/dev/tcp/') || remote.includes('TcpClient'))) {
+        probes += 1;
+        if (probes === 1) tunnels[0].exitCode = 1;
+        return { code: probes < 3 ? 1 : 0 };
+      }
+      if (command === 'ssh' && remote.includes('sourceRuntimeIdentities')) return { code: 0,
+        out: JSON.stringify({ sourceRuntimeIdentities: { daemon: { selected: 'daemon-source', loaded: 'daemon-source' } } }) };
+      return { code: 0 };
+    },
+    spawnProcess: input => {
+      const child = { ...input, exitCode: null };
+      if (input.command === 'ssh' && input.args.includes('-N')) tunnels.push(child);
+      return child;
+    },
+    stopProcess: async child => { child.exitCode = 0; },
+    waitForProcess: async () => await new Promise(() => {}),
+    waitForRetry: async ({ attempt, delayMs }) => {
+      retries.push({ attempt, delayMs });
+      await new Promise(setImmediate);
+    },
+    waitForServerReady: async ({ url }) => {
+      assert.equal(url, 'http://127.0.0.1:3005');
+      observeServerWait();
+      await serverReady;
+    },
+    waitForDaemonReady: async () => {}, logger: { error() {} },
+  });
+  try {
+    await waitingForServer;
+    assert.equal(probes, 1, 'no tunnel recheck while the local server is preparing');
+    assert.equal(controller.workers.length, 0);
+    assert.ok(states.some(state => state.status === 'retrying' && state.phase === 'tunnel'));
+    releaseServer();
+    await running;
+    assert.equal(probes, 3, 'a subsequent live-tunnel refusal also uses target recovery');
+    assert.equal(controller.workers.length, 1);
+    assert.equal(tunnels.length, 2, 'replace the exited tunnel, but retain the live tunnel across refusal');
+    assert.deepEqual(retries.slice(0, 2), [{ attempt: 1, delayMs: 5_000 }, { attempt: 2, delayMs: 10_000 }]);
+  } finally { releaseServer(); await controller.close(); }
+});
+}
+
+test('closing source daemon recovery cancels local server readiness without dispatching a worker', { timeout: 10_000 }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-source-tunnel-close-' });
+  const target = { name: 'daemon', platform: 'posix', ssh: 'daemon-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
+  const tunnels = [];
+  let observeServerWait;
+  const waitingForServer = new Promise(resolve => { observeServerWait = resolve; });
+  let readinessSignal;
+  let probes = 0;
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true,
+    localServerPort: 3005, targetPlans: [{ target, services: { server: false, daemon: true, expo: false } }],
+    env: { HAPPIER_STACK_AUTH_FLOW: '1' },
+  }, {
+    runProcess: async ({ command, args }) => {
+      if (command === 'ssh' && String(args.at(-1)).includes('/dev/tcp/')) {
+        probes += 1; tunnels[0].exitCode = 1; return { code: 1 };
+      }
+      return { code: 0 };
+    },
+    spawnProcess: input => { const child = { ...input, exitCode: null }; if (input.command === 'ssh') tunnels.push(child); return child; },
+    stopProcess: async child => { child.exitCode = 0; },
+    waitForProcess: async () => await new Promise(() => {}),
+    waitForRetry: async () => { await new Promise(setImmediate); },
+    waitForServerReady: async ({ signal }) => {
+      readinessSignal = signal; observeServerWait();
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }, logger: { error() {} },
+  });
+  await waitingForServer;
+  await controller.close();
+  assert.equal(readinessSignal.aborted, true);
+  assert.equal(probes, 1);
+  assert.equal(controller.workers.length, 0);
+});
 
 test('source Expo retires its legacy remote Stack before dependency bootstrap and on close', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-expo-retire-' });
@@ -145,7 +319,55 @@ const remoteLightSqliteRuntimeConfig = Object.freeze({
   environment: {},
 });
 
-test('next source start settles retirement and preserve-daemon close retains the native daemon', async t => {
+test('preserved remote daemon reconnects its original endpoint to a moved local server without replacing native custody', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-preserved-daemon-forward-' });
+  const target = { name: 'linux3', platform: 'posix', ssh: 'linux3-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
+  const children = [];
+  const states = [];
+  const commands = [];
+  const statePath = join(root, 'stack.runtime.json');
+  await recordStackRuntimeStart(statePath, { stackName: 'agent-qa', ownerPid: null,
+    placement: { daemon: target.name }, remoteTargets: { [target.name]: {
+      services: { daemon: true }, status: 'running', serviceStatus: { daemon: 'running' },
+    } } });
+  const targetPlans = resolvePreservedDaemonTargetPlans({ targetPlans: [], targets: [target],
+    runtimeState: await readStackRuntimeStateFile(statePath), daemonRequested: false });
+  let running;
+  const ready = new Promise(resolve => { running = resolve; });
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true,
+    localServerPort: 41005, credentialPath: join(root, 'credential'),
+    targetPlans,
+    onTargetStateChange: state => { states.push(state); if (state.status === 'running') running(); }, env: {},
+  }, {
+    runProcess: async ({ command, args }) => {
+      if (command === 'ssh') {
+        const remote = String(args.at(-1)); commands.push(remote);
+        if (remote.includes('sourceRuntimeIdentities')) return { code: 0, out: JSON.stringify({
+          sourceRuntimeIdentities: { daemon: { selected: 'preserved', loaded: 'preserved' } },
+          daemonServerUrl: 'http://127.0.0.1:43001',
+        }) };
+      }
+      return { code: 0 };
+    },
+    spawnProcess: input => { const child = { ...input, pid: 123, exitCode: null }; children.push(child); return child; },
+    stopProcess: async child => { child.exitCode = 0; },
+    waitForProcess: async () => new Promise(() => {}), waitForDaemonReady: async () => {},
+    waitForRetry: async () => new Promise(() => {}), logger: { error() {} },
+  });
+  try {
+    await ready;
+    assert.equal(commands.some(command => command.includes('stack stop')), false, 'reconnect cannot retire the preserved daemon or its Sessions');
+    assert.equal(controller.workers.length, 0, 'transport adoption must not launch a replacement native runner');
+    const forward = children.find(child => child.command === 'ssh' && child.args.includes('-N'));
+    assert.ok(forward.args.includes('127.0.0.1:43001:127.0.0.1:41005'), 'the incumbent private URL must reach the new server port');
+    assert.deepEqual(states.at(-1).sourceRuntimeIdentities.daemon, { selected: 'preserved', loaded: 'preserved' });
+  } finally { await controller.close({ preserveDaemon: true }); }
+  assert.equal(commands.some(command => command.includes('stack stop')), false, 'preserving a transport-only adoption releases only the local forward');
+});
+
+for (const mode of ['foreground', 'background-ready', 'background-starting']) {
+test(`next source start settles retirement and preserve-daemon close retains the native daemon (${mode})`, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-deferred-retirement-start-' });
   const statePath = join(root, 'stack.runtime.json');
   const target = { name: 'linux3', platform: 'posix', ssh: 'linux3-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
@@ -158,7 +380,9 @@ test('next source start settles retirement and preserve-daemon close retains the
   let retirementConfirmed = false;
   let running;
   const ready = new Promise(resolve => { running = resolve; });
-  const controller = await startStackDevTargets({
+  let releaseStartup;
+  const startupReleased = new Promise(resolve => { releaseStartup = resolve; });
+  const options = {
     stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true, credentialPath,
     localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005', sourceUi: 'export',
     remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
@@ -167,7 +391,8 @@ test('next source start settles retirement and preserve-daemon close retains the
       await recordStackRuntimeUpdate(statePath, { remoteTargets: { [name]: state } });
       if (state.status === 'running') running();
     }, env: {},
-  }, {
+  };
+  const dependencies = {
     runProcess: async ({ command, args }) => {
       const remote = String(args.at(-1));
       if (command === 'ssh' && remote.includes('sourceRuntimeIdentities')) return { code: 0,
@@ -175,33 +400,54 @@ test('next source start settles retirement and preserve-daemon close retains the
           daemon: { selected: 'daemon', loaded: 'daemon' } } }) };
       if (command === 'ssh' && remote.includes('stack stop')) {
         assert.ok(remote.includes('/remote/home/stack-state/agent-qa/cli'), 'retirement uses the retained native scope');
-        nativeAlive = remote.includes('--preserve-daemon');
+        if (!remote.includes('--preserve-daemon')) nativeAlive = false;
         retirementConfirmed = true;
       } else if (command === 'ssh' && remote.includes('stack.runtime.json')) return { code: nativeAlive ? 1 : 0 };
       return { code: 0 };
     },
     runCommand: async () => ({ code: 0, out: JSON.stringify({ retainedRemoteData: true }) }),
     spawnProcess: input => {
-      if (input.command === 'ssh') assert.equal(retirementConfirmed, true, 'no replacement transport can reach the old daemon before retirement');
+      if (input.command === 'ssh') {
+        assert.equal(retirementConfirmed, true, 'no replacement transport can reach the old daemon before retirement');
+        nativeAlive = true;
+      }
       return { ...input, exitCode: null };
     },
     stopProcess: async child => { child.exitCode = 0; },
     waitForProcess: async () => await new Promise(() => {}),
     waitForServerReady: async () => {}, waitForDaemonReady: async () => {},
     waitForRetry: async () => await new Promise(() => {}), logger: { error() {} },
-  });
+  };
+  const controller = mode !== 'foreground' ? startStackDevTargetsInBackground(options, {
+    // Keep both supervisor owners real; only their process/network boundaries
+    // are fixtures. Hold completion to exercise close during source startup.
+    startStackDevTargetsImpl: async input => {
+      const started = await startStackDevTargets(input, dependencies);
+      await startupReleased;
+      return started;
+    },
+  }) : await startStackDevTargets(options, dependencies);
   try {
     await ready;
+    if (mode === 'background-ready') {
+      releaseStartup();
+      await controller.ready;
+    }
     const state = await readStackRuntimeStateFile(statePath);
     assert.equal(state.remoteTargets.linux3.status, 'running');
     assert.equal(state.remoteTargets.linux3.serviceStatus.daemon, 'running');
     assert.equal(retirementConfirmed, true);
-  } finally { await controller.close({ preserveDaemon: true }); }
+  } finally {
+    const closing = controller.close({ preserveDaemon: true });
+    releaseStartup();
+    await closing;
+  }
   assert.equal(nativeAlive, true, 'supervisor shutdown preserves the remote daemon');
   const retained = await readStackRuntimeStateFile(statePath);
   assert.equal(retained.remoteTargets.linux3.serviceStatus.daemon, 'running');
   assert.equal(retained.remoteTargets.linux3.serviceStatus.server, 'stopped');
 });
+}
 
 for (const runtimeState of ['absent', 'unreadable', 'unreachable']) {
 test(`failed fresh source launch retries only after remote runtime absence is verified (${runtimeState})`, async (t) => {
@@ -264,8 +510,8 @@ test(`failed fresh source launch retries only after remote runtime absence is ve
 });
 }
 
-for (const readinessObserved of [true, false]) {
-test(`source recovery preserves daemon custody and reuses selected server, daemon and UI after transport loss (${readinessObserved ? 'readiness observed' : 'before readiness observation'})`, async (t) => {
+for (const [readinessObserved, daemonReloaded] of [[true, false], [false, false], [true, true]]) {
+test(`source recovery preserves daemon custody and reuses selected server, daemon and UI after transport loss (${daemonReloaded ? 'explicit daemon reload' : readinessObserved ? 'readiness observed' : 'before readiness observation'})`, async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-reconnect-' });
   const target = { name: 'linux', platform: 'posix', ssh: 'linux-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/home' };
   const workers = [];
@@ -277,6 +523,8 @@ test(`source recovery preserves daemon custody and reuses selected server, daemo
   const recovery = new Promise(resolve => { recovered = resolve; });
   let ready;
   const running = new Promise(resolve => { ready = resolve; });
+  let observeRecoveredState;
+  const recoveredState = new Promise(resolve => { observeRecoveredState = resolve; });
   const identities = { server: { selected: 'server-frozen', loaded: 'server-frozen' }, daemon: { selected: 'daemon-frozen', loaded: 'daemon-frozen' } };
   const uiDir = '/remote/frozen web/ui';
   const credentialPath = join(root, 'credential');
@@ -286,7 +534,10 @@ test(`source recovery preserves daemon custody and reuses selected server, daemo
     localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005', sourceUi: 'export',
     remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
     targetPlans: [{ target, services: { server: true, daemon: true, expo: false } }],
-    onTargetStateChange: state => { if (state.status === 'running') ready(); }, env: {},
+    onTargetStateChange: state => {
+      if (state.status === 'running') ready();
+      if (workers.length === 2 && ['running', 'degraded'].includes(state.status)) observeRecoveredState(state);
+    }, env: {},
   }, {
     // SSH/network/process lifetimes are genuine system boundaries.
     runProcess: async ({ command, args }) => {
@@ -311,14 +562,21 @@ test(`source recovery preserves daemon custody and reuses selected server, daemo
     waitForServerReady: async () => {
       if (!readinessObserved && workers.length === 1) await new Promise(() => {});
     }, waitForDaemonReady: async () => {},
-    waitForRetry: async () => {}, logger: {error() {}},
+    waitForRetry: async () => { await new Promise(setImmediate); }, logger: {error() {}},
   });
   try {
     if (readinessObserved) await running;
+    if (daemonReloaded) identities.daemon = { selected: 'daemon-reloaded', loaded: 'daemon-reloaded' };
     const initialStops = stops.length;
     workers[0].exitCode = 255;
     drop({code:255});
     await recovery;
+    if (daemonReloaded) {
+      const state = await recoveredState;
+      assert.equal(state.status, 'running', state.error);
+      assert.deepEqual(state.sourceRuntimeIdentities.daemon, identities.daemon);
+      assert.deepEqual(state.sourceRuntimeIdentities.server, identities.server);
+    }
     assert.equal(stops.length, initialStops, 'SSH loss must not invoke full Stack stop against a surviving daemon');
     assert.doesNotMatch(workers[0].args.at(-1), /--reuse-source-runtime/);
     assert.match(workers[1].args.at(-1), /--reuse-source-runtime/);
@@ -388,6 +646,8 @@ test('source snapshot supervisor builds on each mirror without native transfer o
       const child = { ...input, pid: process.pid, exitCode: null }; spawned.push(child);
       if (input.command === 'ssh' && input.args.at(-1).includes('stack start')) {
         const target = targets.find(target => input.args.includes(target.ssh));
+        for (const phase of ['queued', 'building', 'prepared']) input.onLine?.({ stream: 'stdout',
+          line: 'HSTACK_SOURCE_PREPARATION_PHASE=' + JSON.stringify({ phase, component: target.name }) });
         const paths = resolveRemoteStackStatePaths(target, { stackName, runtimeMode: 'controlled' });
         writeFileSync(join(paths.stackBaseDir, 'stack.runtime.json'), JSON.stringify({ sourceRuntimeIdentities: observed[target.name],
           ...(target.name === 'server' ? { sourceUi: 'export', sourceUiLaunch: { uiDir: join(root, 'server-export', 'ui') } } : {}),
@@ -410,6 +670,9 @@ test('source snapshot supervisor builds on each mirror without native transfer o
       const running = states.find(state => state.name === target.name && state.status === 'running');
       assert.deepEqual(running?.sourceRuntimeIdentities, observed[target.name]);
       assert.equal(running.runtimeSnapshotId, undefined);
+      for (const phase of ['queued', 'building']) assert.ok(states.some(state => state.name === target.name
+        && state.phase === phase && state.sourcePreparation?.component === target.name));
+      assert.equal(running.sourcePreparation, null, 'readiness retires preparation diagnostics');
       assert.deepEqual(running.sourceUiLaunch, target.name === 'server' ? { uiDir: join(root, 'server-export', 'ui') } : undefined);
       assert.ok(spawned.some(child => child.command === 'ssh' && child.args.includes(target.ssh) && /--runtime=.*source/.test(child.args.at(-1))));
     }
@@ -663,20 +926,35 @@ test('remote daemon startup without an orchestrated auth flow still rejects miss
   }), /no daemon credential/);
 });
 
-test('attended remote services become ready before login and seed the daemon after credentials appear', async () => {
+test('attended remote services seed canonical-profile credentials after login without restarting services', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-auth-recovery-'));
   const cliHomeDir = join(root, 'cli');
   const processCalls = [];
   const targetStates = [];
   const spawned = [];
+  const authLogs = [];
+  const canonicalServerUrl = 'https://qa-home.example:3443';
+  const profileId = 'qa-canonical-profile';
+  const canonicalCredentialPath = join(cliHomeDir, 'servers', profileId, 'access.key');
   let controller;
   let daemonProbes = 0;
   const target = { name: 'mac', platform: 'posix', ssh: 'mac-ssh', repoDir: '/remote/repo', cliHomeDir: '/remote/cli' };
   try {
+    await mkdir(join(cliHomeDir, 'servers', 'unrelated-profile'), { recursive: true });
+    await writeFile(join(cliHomeDir, 'servers', 'unrelated-profile', 'access.key'), '{}');
+    await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({
+      schemaVersion: 6,
+      activeServerId: profileId,
+      servers: {
+        [profileId]: { id: profileId, serverUrl: canonicalServerUrl, webappUrl: canonicalServerUrl },
+        'unrelated-profile': { id: 'unrelated-profile', serverUrl: 'https://other.example', webappUrl: 'https://other.example' },
+      },
+    }));
     controller = await startStackDevTargets({
       stackName: 'repo-test', stackBaseDir: join(root, 'stack'), sourceDir: repoDir,
       localServerPort: 3005, localExpoPort: 8081, cliHomeDir, credentialPath: null,
       publicServerUrl: 'http://127.0.0.1:3005',
+      canonicalServerUrl,
       activeServerId: 'stack_repo-test__id_default', remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
       targetPlans: [{ target, services: { server: true, expo: true, daemon: true } }],
       onTargetStateChange: (state) => targetStates.push(state), env: { HAPPIER_STACK_TUI: '1' },
@@ -688,17 +966,23 @@ test('attended remote services become ready before login and seed the daemon aft
       runDependencyBootstrap: successfulDependencyBootstrap,
       waitForServerReady: async () => {}, waitForExpoReady: async () => {},
       waitForDaemonReady: async () => { daemonProbes += 1; },
+      logger: { error() {}, info(message) { authLogs.push(message); } },
     });
     await new Promise((resolve) => setImmediate(resolve));
     assert.ok(targetStates.some((state) => state.serviceStatus.server === 'running' && state.serviceStatus.expo === 'running'));
     assert.equal(daemonProbes, 0, 'remote daemon must not be probed as ready before credential transfer');
     assert.equal(processCalls.filter((call) => call.command === 'scp').length, 0);
     const workersBeforeLogin = spawned.length;
-    await mkdir(cliHomeDir, { recursive: true });
-    await writeFile(join(cliHomeDir, 'access.key'), '{"token":"test-credential"}\n');
+    await mkdir(dirname(canonicalCredentialPath), { recursive: true });
+    await writeFile(canonicalCredentialPath, '{}');
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     assert.equal(daemonProbes, 1);
     assert.equal(processCalls.filter((call) => call.command === 'scp').length, 1);
+    assert.ok(processCalls.find((call) => call.command === 'scp').args.includes(canonicalCredentialPath));
+    const waitingLogs = authLogs.filter(message => message.includes('waiting for CLI sign-in'));
+    assert.equal(waitingLogs.length, 1, 'missing auth must be visible without repeated log spam');
+    assert.ok(waitingLogs[0].includes(canonicalServerUrl));
+    assert.ok(waitingLogs[0].includes('stack auth repo-test login'));
     assert.ok(targetStates.some((state) => state.status === 'running' && state.serviceStatus.daemon === 'running'));
     assert.equal(spawned.length, workersBeforeLogin, 'login must not restart healthy remote services');
   } finally {
@@ -948,14 +1232,17 @@ test('remote service startup retires the prior Stack in a visible finite phase b
       },
       {
         runDependencyBootstrap: successfulDependencyBootstrap,
-        runProcess: async ({ label, command, args, env }) => {
-          calls.push({ kind: 'run', label, command, args, env });
-          // OpenSSH boundary: the saturated shared master refuses sessions,
-          // while a dedicated control connection remains usable.
-          if (command === 'ssh' && !args.includes('ControlPath=none')) return { code: 255 };
-          const remoteCommand = String(args?.at(-1) ?? '');
-          if (command === 'ssh' && remoteCommand.includes('stack.runtime.json')) return { code: 1 };
-          return { code: 0 };
+        runProcess: async input => {
+          calls.push({ kind: 'run', ...input });
+          // Mock the OpenSSH process, retaining the real control transport's
+          // refused-multiplex-session recovery instead of bypassing it.
+          return runDevTargetControlProcess(input, { capture: async (_command, args) => {
+            if (input.command === 'ssh' && !args.includes('ControlPath=none')) return {
+              exitCode: 255, err: 'mux_client_request_session: session request failed: Session open refused by peer',
+            };
+            const remoteCommand = String(args.at(-1) ?? '');
+            return { exitCode: input.command === 'ssh' && remoteCommand.includes('stack.runtime.json') ? 1 : 0 };
+          } });
         },
         spawnProcess: ({ label, command, args, env, silent, persistOutput }) => {
           const child = { label, command, args, env, silent, persistOutput, exitCode: null };
@@ -2671,7 +2958,8 @@ test('remote Expo ownership does not launch a competing local workspace publicat
   }
 });
 
-test('remote Expo keeps a newly started tunnel while its reverse forward becomes ready', async () => {
+for (const failedProbes of [1, 2]) {
+test(`remote Expo retains a new forward once and replaces a repeatedly missing listener (${failedProbes} failed probes)`, async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-tunnel-readiness-'));
   const spawnedProcesses = [];
   let forwardProbeAttempts = 0;
@@ -2714,7 +3002,7 @@ test('remote Expo keeps a newly started tunnel while its reverse forward becomes
         runProcess: async ({ command, args }) => {
           if (command === 'ssh' && String(args.at(-1)).includes('/dev/tcp/')) {
             forwardProbeAttempts += 1;
-            return { code: forwardProbeAttempts === 1 ? 1 : 0 };
+            return { code: forwardProbeAttempts <= failedProbes ? 1 : 0 };
           }
           return { code: 0 };
         },
@@ -2743,14 +3031,89 @@ test('remote Expo keeps a newly started tunnel while its reverse forward becomes
     const tunnels = spawnedProcesses.filter(
       (child) => child.command === 'ssh' && child.args.includes('-N'),
     );
-    assert.equal(forwardProbeAttempts, 2);
-    assert.equal(tunnels.length, 1, 'readiness retries must retain the live tunnel');
-    assert.equal(tunnels[0].exitCode, null);
+    assert.equal(forwardProbeAttempts, failedProbes + 1);
+    assert.equal(tunnels.length, failedProbes, 'a repeated missing listener must replace its live SSH process');
+    assert.equal(tunnels.at(-1).exitCode, null);
+    if (failedProbes === 2) assert.equal(tunnels[0].exitCode, 0, 'replacement follows retirement of the failed forward');
   } finally {
     await controller?.close?.();
     await rm(root, { recursive: true, force: true });
   }
 });
+}
+
+for (const platform of ['posix', 'windows']) {
+test(`daemon recovery replaces a live SSH process whose reverse listener disappeared (${platform})`, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-daemon-forward-recovery-' });
+  const target = { name: 'daemon', platform, ssh: 'daemon-ssh',
+    repoDir: platform === 'windows' ? 'C:/happier' : '/remote/repo',
+    cliHomeDir: platform === 'windows' ? 'C:/home/happier' : '/remote/home' };
+  const workers = [];
+  const tunnels = [];
+  const delays = [];
+  let transportDropped = false;
+  let observeRunning;
+  const running = new Promise(resolve => { observeRunning = resolve; });
+  let observeRecovery;
+  const recovery = new Promise(resolve => { observeRecovery = resolve; });
+  const controller = await startStackDevTargets({
+    stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir, sourceSnapshot: true,
+    credentialPath: join(root, 'credential'), localServerPort: 3005,
+    targetPlans: [{ target, services: { server: false, expo: false, daemon: true } }],
+    onTargetStateChange: state => {
+      if (state.status !== 'running') return;
+      if (workers.length === 1) observeRunning();
+      else observeRecovery(state);
+    }, env: {},
+  }, {
+    // SSH listener/process state is the system boundary; source selection,
+    // recovery backoff, forward construction and daemon admission stay real.
+    runProcess: async ({ command, args }) => {
+      const encoded = String(args.at(-1));
+      const remote = platform === 'windows'
+        ? Buffer.from(encoded.split(' -EncodedCommand ').at(-1), 'base64').toString('utf16le')
+        : encoded;
+      if (command === 'ssh' && remote.includes('sourceRuntimeIdentities')) return { code: 0,
+        out: JSON.stringify({ sourceRuntimeIdentities: { daemon: { selected: 'retained', loaded: 'retained' } } }) };
+      if (command === 'ssh' && (remote.includes('/dev/tcp/') || remote.includes('TcpClient'))) {
+        return { code: transportDropped && tunnels.length === 1 ? 1 : 0 };
+      }
+      return { code: 0 };
+    },
+    spawnProcess: input => {
+      let finish;
+      const child = { ...input, exitCode: null, completion: new Promise(resolve => { finish = resolve; }),
+        finish: result => { child.exitCode = result.code; finish(result); } };
+      if (input.command === 'ssh') (input.args.includes('-N') ? tunnels : workers).push(child);
+      return child;
+    },
+    stopProcess: async child => child.finish({ code: 0 }),
+    waitForDaemonReady: async () => {},
+    waitForRetry: async ({ delayMs }) => {
+      delays.push(delayMs);
+      if (delays.length === 3) { observeRecovery(null); await new Promise(() => {}); }
+    }, logger: { error() {}, info() {} },
+  });
+  try {
+    await running;
+    transportDropped = true;
+    workers[0].finish({ code: 255 });
+    const recovered = await recovery;
+    assert.ok(recovered, 'an alive SSH process cannot prove a failed reverse listener is usable');
+    assert.equal(recovered.serviceStatus.daemon, 'running');
+    assert.equal(tunnels.length, 2);
+    assert.deepEqual(tunnels[1].args, tunnels[0].args, 'recovery preserves the existing port and Home bindings');
+    assert.equal(tunnels[0].exitCode, 0, 'the failed forward must be retired before replacement');
+    assert.deepEqual(delays, [5_000, 10_000], 'the target lifecycle remains the only recovery backoff owner');
+    const replacementCommand = platform === 'windows'
+      ? Buffer.from(workers[1].args.at(-1).split(' -EncodedCommand ').at(-1), 'base64').toString('utf16le')
+      : workers[1].args.at(-1);
+    assert.match(replacementCommand, /--reuse-source-runtime/);
+    assert.match(replacementCommand, /--restart/);
+    assert.deepEqual(recovered.sourceRuntimeIdentities.daemon, { selected: 'retained', loaded: 'retained' });
+  } finally { await controller.close(); }
+});
+}
 
 test('remote Expo readiness failure keeps the worker and tunnel while retrying readiness', async () => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-dev-target-expo-readiness-retry-'));

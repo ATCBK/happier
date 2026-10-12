@@ -6,7 +6,7 @@ import { parseArgs } from '../utils/cli/args.mjs';
 import { printResult, wantsHelp } from '../utils/cli/cli.mjs';
 import { isTty, promptSelect, withRl } from '../utils/cli/wizard.mjs';
 import { checkDaemonState, daemonStatusSummary, startLocalDaemonWithAuth, stopLocalDaemon } from '../daemon.mjs';
-import { getComponentDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
+import { getComponentDir, getRepoDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
 import { run } from '../utils/proc/proc.mjs';
 import { resolveServerUrls } from '../utils/server/urls.mjs';
 import { parseCliIdentityOrThrow, resolveCliHomeDirForIdentity } from '../utils/stack/cli_identities.mjs';
@@ -22,6 +22,9 @@ import {
 } from '../runtime/launch/resolveCliRuntimeLaunchSpec.mjs';
 import { hasExplicitStackRuntimeModeArg } from '../runtime/shared/runtime_mode.mjs';
 import { applyStackActiveServerScopeEnv } from '../utils/auth/stable_scope_id.mjs';
+import { loadDevTargetsConfig } from '../utils/dev_targets/config.mjs';
+import { resolveObservedDevTargetService } from '../utils/dev_targets/service_placement.mjs';
+import { runRemoteStackOperation } from './remote_stack_operation.mjs';
 
 export async function resolveStackDaemonCommandContext({
   rootDir,
@@ -32,6 +35,14 @@ export async function resolveStackDaemonCommandContext({
   activeRuntimeState = null,
 }) {
   const runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv, env, activeRuntimeState });
+  let sourceRuntimeLaunchUpdate = null;
+  if (runtimeLaunchContext.runtimeMode.mode === 'source-snapshot' && argv.includes('restart')) {
+    const { buildSourceRuntimeBundle } = await import('../build/build_source_runtime.mjs');
+    const built = await buildSourceRuntimeBundle({ repoDir: getRepoDir(rootDir, env),
+      stackBaseDir: runtimeLaunchContext.stackBaseDir, component: 'daemon', env });
+    sourceRuntimeLaunchUpdate = { launch: { entrypoint: built.entrypoint, cliDir: built.cliDir, env: built.env ?? {} }, identity: built.identity };
+    runtimeLaunchContext.cliLaunchSpec = resolveCliRuntimeLaunchSpec({ sourceRuntimeLaunch: sourceRuntimeLaunchUpdate.launch });
+  }
   const runtimeSnapshot = runtimeLaunchContext.snapshot;
   const cliLaunchSpec = runtimeLaunchContext.cliLaunchSpec
     ?? (runtimeSnapshot ? resolveCliRuntimeLaunchSpec({ snapshot: runtimeSnapshot }) : null);
@@ -83,6 +94,7 @@ export async function resolveStackDaemonCommandContext({
     publicServerUrl,
     envForIdentity,
     scopedEnvForIdentity,
+    sourceRuntimeLaunchUpdate,
   };
 }
 
@@ -98,7 +110,7 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
   if (wantsHelpFlag || !action || action === 'help') {
     printResult({
       json,
-      data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'], flags: ['--identity=<name>'] },
+      data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'], flags: ['--identity=<name>', '--runtime=source'] },
       text: [
         banner('stack daemon', { subtitle: `Manage the happier-cli daemon for stack ${cyan(stackName || 'main')}.` }),
         '',
@@ -106,7 +118,8 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
         `  ${cyan('hstack stack daemon')} <name> status [--identity=<name>] [--json]`,
         `  ${cyan('hstack stack daemon')} <name> start [--identity=<name>] [--json]`,
         `  ${cyan('hstack stack daemon')} <name> stop [--identity=<name>] [--json]`,
-        `  ${cyan('hstack stack daemon')} <name> restart [--identity=<name>] [--json]`,
+        `  ${cyan('hstack stack daemon')} <name> restart [--runtime=source] [--identity=<name>] [--json]`,
+        '  Commands follow the observed daemon host. A source restart builds current daemon/plugin source and preserves Session runners without restarting the server or UI.',
         '',
         sectionTitle('example:'),
         `  ${cmdFmt(`hstack stack daemon ${stackName || 'main'} restart`)}`,
@@ -136,7 +149,15 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
       action === 'status' && !hasExplicitStackRuntimeModeArg(argv)
         ? { HAPPIER_STACK_RUNTIME_MODE: 'source' }
         : {},
-    fn: async ({ env }) => {
+    fn: async ({ env, runtimeState }) => {
+      if (env.HAPPIER_DEV_TARGET_EXECUTION !== '1') {
+        const { config } = await loadDevTargetsConfig({ stackName, env });
+        const placed = resolveObservedDevTargetService({ config, runtimeState, service: 'daemon' });
+        if (placed) {
+          await runRemoteStackOperation({ rootDir, stackName, placed, operation: 'daemon', passthrough: argv, env });
+          return { delegated: true };
+        }
+      }
       const {
         cliBin,
         cliEntrypoint,
@@ -150,7 +171,8 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
         publicServerUrl,
         envForIdentity,
         scopedEnvForIdentity,
-      } = await resolveStackDaemonCommandContext({ rootDir, stackName, env, identity, argv });
+        sourceRuntimeLaunchUpdate,
+      } = await resolveStackDaemonCommandContext({ rootDir, stackName, env, identity, argv, activeRuntimeState: runtimeState });
 
       if (action === 'start' || action === 'restart') {
         // UX: if this identity is not authenticated yet and we're in a real TTY, offer to run the
@@ -217,6 +239,8 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
           stackName,
           cliIdentity: identity,
           ...runtimeProvenance,
+          sourceRuntimeLaunchUpdate,
+          preserveSessionsOnRestart: action === 'restart' && Boolean(sourceRuntimeLaunchUpdate),
         });
         if (startResult?.ok === false) {
           return {
@@ -305,6 +329,8 @@ export async function runStackDaemonCommand({ rootDir, stackName, argv, json }) 
       return { ok: true, action, cliIdentity: identity, cliHomeDir, status: status.trim() };
     },
   });
+
+  if (res?.delegated) return;
 
   if (res?.ok === false) process.exitCode = 1;
 

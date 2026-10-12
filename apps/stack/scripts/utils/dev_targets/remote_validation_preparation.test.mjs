@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveYarnCommandInvocation } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
 
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
@@ -11,6 +11,123 @@ import { ensureWorkspacePackagesBuiltForComponent } from '../../../../../scripts
 
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { resolveCliBundledWorkspacePackageNames } from '../../../../cli/scripts/buildSharedDeps.mjs';
+import { ensureSourceServerWorkspacePackagesBuilt, spawnSourceServerScript } from '../server/source_server_workspace_deps.mjs';
+
+test('finite validation preparation retains coherent output after exhausted drift', async t => {
+  for (const scenario of ['typecheck', 'runtime', 'emit-only', 'dev-server', 'cold', 'damaged', 'compiler-error', 'release', 'artifact', 'strict-build']) await t.test(scenario, async t => {
+    const { root } = await createTempFixture(t, { prefix: 'hstack-finite-preparation-drift-' });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+    for (const app of ['cli', 'ui', 'server']) {
+      mkdirSync(join(root, 'apps', app), { recursive: true });
+      writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}`,
+        ...(app === 'server' ? { dependencies: { '@happier-dev/plugin-sdk': 'workspace:*' } } : {}) }));
+    }
+    const sdk = join(root, 'packages/plugin-sdk');
+    mkdirSync(join(sdk, 'src'), { recursive: true });
+    writeFileSync(join(sdk, 'package.json'), JSON.stringify({ name: '@happier-dev/plugin-sdk', type: 'module',
+      main: './dist/index.js', types: './dist/index.d.ts', scripts: { build: 'fixture-compiler' } }));
+    const source = join(sdk, 'src/index.ts');
+    const receipt = join(sdk, 'dist/.happier-build-inputs.json');
+    const output = join(sdk, 'dist/index.js');
+    writeFileSync(source, 'export const value = "green";\n');
+    let moving = false, attempts = 0;
+    // Replace only the compiler process. Real preparation, captures, trailing
+    // convergence, retained-output integrity and publication stay live.
+    const workspaceBuildBoundary = {
+      prepareEnv: async (_dir, env) => ({ ...env }),
+      runPackageBuild: async (dir, { env }) => {
+        attempts++;
+        if (moving && scenario === 'compiler-error') throw Object.assign(new Error('src/index.ts(1,1): error TS2322: incompatible value'), { code: 'EEXIT', exitCode: 1 });
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), readFileSync(join(dir, 'src/index.ts')));
+        writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), 'export declare const value: string;\n');
+        if (moving) writeFileSync(join(dir, 'src/index.ts'), `export const value = "moving-${attempts}";\n`);
+      },
+    };
+    const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict',
+      HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root };
+    if (scenario !== 'cold') await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps/server'), {
+      env, workspaceBuildBoundary, ...(scenario === 'emit-only' ? { buildMode: 'source-dev' } : {}),
+    });
+    const greenRecord = scenario === 'cold' ? null : JSON.parse(readFileSync(receipt, 'utf8'));
+    if (scenario === 'damaged') writeFileSync(output, 'damaged retained output');
+    writeFileSync(source, 'export const value = "next";\n');
+    moving = true;
+    attempts = 0;
+    const prepare = () => scenario === 'dev-server'
+      ? ensureSourceServerWorkspacePackagesBuilt({ serverDir: join(root, 'apps/server'), env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' } }, {
+        ensureWorkspacePackagesBuiltForComponentImpl: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, { ...options, workspaceBuildBoundary }),
+      }).then(value => value.result)
+      : scenario === 'strict-build'
+      ? ensureWorkspacePackagesBuiltForComponent(join(root, 'apps/server'), { env, workspaceBuildBoundary })
+      : prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/server',
+        validationKind: scenario === 'runtime' ? 'runtime' : 'typecheck',
+        env: { ...env, ...(scenario === 'release' ? { npm_lifecycle_event: 'prepack' } : {}) },
+        loadWorkspaceBuildOwner: async () => ({
+          ensureWorkspacePackagesBuiltForComponent: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, {
+            ...options, workspaceBuildBoundary, ...(scenario === 'artifact' ? { publicationMode: 'artifact' } : {}),
+          }),
+        }),
+      });
+    if (scenario !== 'typecheck' && scenario !== 'runtime' && scenario !== 'emit-only' && scenario !== 'dev-server') {
+      await assert.rejects(prepare(), scenario === 'compiler-error' ? { code: 'EEXIT' }
+        : { code: 'BUILD_INPUTS_CHANGED', trailingPassExhausted: true });
+      assert.equal(attempts, scenario === 'compiler-error' ? 1 : 2);
+      return;
+    }
+    const result = await prepare();
+    assert.equal(attempts, 2, 'retain output only after the existing trailing pass');
+    assert.deepEqual(result.built, []);
+    assert.equal(readFileSync(output, 'utf8'), 'export const value = "green";\n');
+    assert.equal(result.stalePackages.length, 1);
+    const retained = result.stalePackages[0];
+    assert.equal(retained.packageName, '@happier-dev/plugin-sdk');
+    assert.deepEqual(retained.lastGreenBuildRecord, greenRecord);
+    assert.equal(retained.lastGreenBuiltAt, greenRecord.builtAt);
+    assert.match(retained.outputIdentity, /^[a-f0-9]{64}$/);
+    assert.match(retained.diagnosticSummary, /inputs changed while building/);
+    if (scenario === 'dev-server') {
+      // The package-manager process is the boundary. Keep source admission
+      // real and start an isolated HTTP service importing the retained SDK.
+      let child;
+      t.after(async () => {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          const ended = new Promise(resolve => child.once('exit', resolve));
+          child.kill('SIGTERM');
+          await ended;
+        }
+      });
+      await spawnSourceServerScript({ serverDir: join(root, 'apps/server'), script: 'start',
+        env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' }, quiet: true }, {
+        // The watch/reload owner owns refresh during actual dev startup.
+        ensureWorkspacePackagesBuiltForComponentImpl: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, { ...options, refresh: null, workspaceBuildBoundary }),
+        pmSpawnScriptImpl: async () => {
+          child = spawn(process.execPath, ['--input-type=module', '-e',
+            `import {value} from ${JSON.stringify(pathToFileURL(output).href)}; import http from 'node:http'; const server=http.createServer((req,res)=>res.end(value)); server.listen(0,'127.0.0.1',()=>console.log(server.address().port));`],
+            { stdio: ['ignore', 'pipe', 'pipe'] });
+          return child;
+        },
+      });
+      const port = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', code => reject(new Error(`retained-output service exited before readiness: ${code}`)));
+        child.stdout.once('data', data => resolve(Number(data.toString().trim())));
+      });
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(response.status, 200);
+      assert.equal(await response.text(), 'green', 'initial service starts on retained output without another source edit');
+    }
+    if (scenario === 'typecheck') {
+      const repeated = await prepare();
+      assert.equal(repeated.stalePackages[0].outputIdentity, retained.outputIdentity);
+      assert.deepEqual(repeated.stalePackages[0].lastGreenBuildRecord, greenRecord);
+    }
+    moving = false;
+    const recovered = await prepare();
+    assert.deepEqual(recovered.built, ['@happier-dev/plugin-sdk']);
+    assert.equal(recovered.stalePackages?.length ?? 0, 0);
+    assert.equal(readFileSync(output, 'utf8'), 'export const value = "next";\n');
+  });
+});
 
 test('cold CLI artifact publication builds the selected plugin before invoking its artifact consumer', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-cold-plugin-dist-' });
@@ -148,10 +265,13 @@ test('remote typecheck preparation admits current component declarations without
   }));
   writeFileSync(join(cliRuntime, 'src', 'index.ts'), 'export declare const runtimeOnly: true;\n');
   let builds = 0;
+  let editDuringBuild = false;
   const prepare = () => prepareRemoteValidationWorkspace({
     repoDir: root,
     componentRelativeDir: 'apps/ui',
     validationKind: 'typecheck',
+    // The fixture is its own physical/identity checkout, not the executor's mirror.
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root },
     loadWorkspaceBuildOwner: async () => ({
       ensureWorkspacePackagesBuiltForComponent: (dir, options) => ensureWorkspacePackagesBuiltForComponent(dir, {
         ...options,
@@ -160,6 +280,7 @@ test('remote typecheck preparation admits current component declarations without
           prepareEnv: async (_dir, env) => ({ ...env }),
           runPackageBuild: async (packageDir, { env }) => {
             builds += 1;
+            if (editDuringBuild) writeFileSync(source, `export type Value = "later-${builds}";\n`);
             writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export {};\n');
             writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), readFileSync(join(packageDir, 'src', 'index.ts')));
           },
@@ -175,6 +296,11 @@ test('remote typecheck preparation admits current component declarations without
   await prepare();
   assert.equal(builds, 2);
   assert.equal(readFileSync(join(protocol, 'dist', 'index.d.ts'), 'utf8'), 'export type Value = "second";\n');
+  writeFileSync(source, 'export type Value = "captured";\n');
+  editDuringBuild = true;
+  await prepare();
+  assert.equal(builds, 3, 'moving source must not exhaust the trailing pass before the checker runs');
+  assert.equal(readFileSync(join(protocol, 'dist', 'index.d.ts'), 'utf8'), 'export type Value = "captured";\n');
   assert.throws(() => readFileSync(join(cliRuntime, 'dist', 'index.js')), { code: 'ENOENT' });
   assert.throws(() => readFileSync(join(cliRuntime, 'dist', 'index.d.ts')), { code: 'ENOENT' });
 });
@@ -196,7 +322,11 @@ test('artifact-consuming preparation publishes cold outputs, reuses current outp
   const count = join(root, 'builds');
   writeFileSync(join(protocol, 'compile.mjs'), `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'; const out = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR; mkdirSync(out, { recursive: true }); const source = readFileSync('src/index.ts', 'utf8'); writeFileSync(out + '/index.js', source); writeFileSync(out + '/index.d.ts', 'export declare const value: number;'); appendFileSync(${JSON.stringify(count)}, 'build\\n');`);
   const source = join(protocol, 'src/index.ts');
-  const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'packages/plugin-sdk', validationKind: 'runtime' });
+  const prepare = () => prepareRemoteValidationWorkspace({
+    repoDir: root, componentRelativeDir: 'packages/plugin-sdk', validationKind: 'runtime',
+    // The fixture owns both the physical inputs and canonical checkout identity.
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root },
+  });
   writeFileSync(source, 'export const value = 1;\n');
   await prepare();
   assert.equal(readFileSync(join(protocol, 'dist/index.js'), 'utf8'), 'export const value = 1;\n');
@@ -237,7 +367,7 @@ test('remote validation preparation delegates component dependency outputs to th
 
   assert.deepEqual(calls, [[
     '/remote/happier/apps/cli',
-    { env: { TEST_ENV: '1', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' }, isolatePluginFailures: true },
+    { env: { TEST_ENV: '1', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' }, isolatePluginFailures: true },
   ]]);
   assert.deepEqual(result, {
     ok: true,
@@ -247,7 +377,7 @@ test('remote validation preparation delegates component dependency outputs to th
   assert.deepEqual(publicationCalls, [{
     repoRoot: '/remote/happier',
     workspaceNames: ['protocol', 'agents', 'plugins-codex', 'plugins-claude'],
-    env: { TEST_ENV: '1', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+    env: { TEST_ENV: '1', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     publicationMode: 'live',
     bundledPluginArtifactPublication: { mode: 'write', targetOwnedOnly: true },
   }]);

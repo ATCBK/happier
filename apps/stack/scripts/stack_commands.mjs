@@ -49,6 +49,7 @@ import { resolveRequestedRepoCheckoutDir } from './stack/repo_checkout_resolutio
 import { resolveTransientRepoOverrides } from './stack/transient_repo_overrides.mjs';
 import { hasExplicitStackRuntimeModeArg } from './runtime/shared/runtime_mode.mjs';
 import { DEFAULT_QA_TARGET_NAMES } from './utils/dev_targets/service_placement.mjs';
+import { resolveRepoStackIdentity } from './utils/stack/repo_stack_identity.mjs';
 import { ensureEnvFileMutated, ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { listAllStackNames, stackExistsSync } from './utils/stack/stacks.mjs';
 import { writeDevAuthKey } from './utils/auth/dev_key.mjs';
@@ -433,6 +434,13 @@ async function cmdNew({ rootDir, argv, emit = true }) {
       );
     }
     stackEnv.HAPPIER_STACK_REPO_DIR = monoRoot;
+  }
+
+  if (flags.has('--qa') || stackName.startsWith('agent-qa-')) {
+    stackEnv.HAPPIER_STACK_EXPO_SOURCE_STACK = resolveRepoStackIdentity({
+      repoRoot: stackEnv.HAPPIER_STACK_REPO_DIR,
+      createIfMissing: true,
+    }).stackName;
   }
 
   if (copyAuth) {
@@ -1814,6 +1822,18 @@ async function cmdInfo({ rootDir, argv }) {
       ? ` (ownerPid=${ownerPid})`
       : '';
   console.log(`- running: ${out.runtime?.running ? 'yes' : 'no'}${runningPidSuffix}`);
+  if (out.runtime?.sourcePreparation) {
+    const { phase, component, targets } = out.runtime.sourcePreparation;
+    console.log(`- source preparation: ${phase}${component ? ` (${component})` : ''}`);
+    for (const [target, preparation] of Object.entries(targets ?? {})) {
+      console.log(`  ${target}: ${preparation.phase}${preparation.component ? ` (${preparation.component})` : ''}`);
+    }
+  }
+  if (out.runtime?.sourceReload) {
+    const reload = out.runtime.sourceReload;
+    console.log(`- source reload: ${reload.status}${reload.message ? `\n${reload.message}` : ''}`);
+    if (reload.logPath) console.log(`- reload log: ${reload.logPath}`);
+  }
   if (typeof out.runtime?.health?.status === 'string' && out.runtime.health.status) {
     const issues = Array.isArray(out.runtime.health.issues) ? out.runtime.health.issues : [];
     const issueSuffix = issues.length > 0 ? ` (${issues.join(',')})` : '';
@@ -1837,8 +1857,12 @@ async function cmdInfo({ rootDir, argv }) {
   }
   if (out.urls.uiUrl && out.runtime?.components?.ui?.running !== false) {
     console.log(`- ui: ${out.urls.uiUrl}`);
+  } else if (out.runtime?.components?.ui?.ownership === 'borrowed') {
+    console.log(`- ui: ${out.runtime.components.ui.status} (resume UI/QA-UI at Expo READY)`);
   } else if (out.ports.ui && out.runtime?.components?.ui?.running === false) {
-    console.log(`- ui: unavailable (re-run: hstack stack dev ${stackName} --restart)`);
+    console.log(out.runtime?.mode === 'source-snapshot'
+      ? `- ui: unavailable (inspect: hstack stack doctor ${stackName})`
+      : `- ui: unavailable (re-run: hstack stack dev ${stackName} --restart)`);
   }
   if (out.urls.internalServerUrl) console.log(`- internal: ${out.urls.internalServerUrl}`);
   if (out.pinned.serverPort) console.log(`- pinned: serverPort=${out.pinned.serverPort}`);

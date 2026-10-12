@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict';
 import { watch } from 'node:fs';
-import { access, chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { withDependencyRefreshLock } from './dependency_refresh.mjs';
 
 test('finite source preparation uses the native memory queue and releases it on completion and cancellation',
   { skip: process.platform !== 'linux', timeout: 20000 }, async (t) => {
     const fixture = await createTempFixture(t, { prefix: 'happier-source-admission-' });
     const native = await installNativeAdmissionFixture({ root: fixture.root });
     const adapter = join(fixture.root, 'native-owner/apps/stack/scripts/utils/proc/runSourceBuildCommand.mjs');
-    await copyFile(fileURLToPath(new URL('./runSourceBuildCommand.mjs', import.meta.url)), adapter);
+    const adapterSource = new URL('./runSourceBuildCommand.mjs', import.meta.url);
+    await writeFile(adapter, (await readFile(adapterSource, 'utf8')).replace(
+      "from '../dev/devReloadCoordinator.mjs'", `from ${JSON.stringify(new URL('../dev/devReloadCoordinator.mjs', adapterSource).href)}`));
     const { runSourceBuildCommand } = await import(pathToFileURL(adapter));
     await mkdir(fixture.path('bin'));
     const available = fixture.path('available-memory');
@@ -72,6 +75,7 @@ esac
     await pendingQueue;
     await pendingPressure;
     await assert.rejects(access(marker), { code: 'ENOENT' });
+    await withDependencyRefreshLock({ installDir: fixture.root, env, signal: t.signal }, async () => {});
     await writeFile(available, '16777216');
     assert.deepEqual(JSON.parse(await pending), { className: 'validation' });
     assert.deepEqual(await readdir(join(native.admissionRoot, 'owners')), []);

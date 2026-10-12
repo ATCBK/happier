@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { chmod, cp, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,12 +9,14 @@ import test from 'node:test';
 
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { ensureMinimalMonorepoLayout } from '../../testkit/core/minimal_monorepo_layout.mjs';
+import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 import { ensureDevExpoServer } from '../dev/expo_dev.mjs';
-import { withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
 import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
 import { killProcessTree } from '../proc/proc.mjs';
 import { getExpoStatePaths, writePidState } from './expo.mjs';
-import { expoSpawn } from './command.mjs';
+import { expoExec, expoSpawn } from './command.mjs';
+import { EXPO_DEPENDENCY_BARRIER_VERSION } from './dependency_barrier.mjs';
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 10_000;
@@ -23,7 +26,7 @@ async function waitFor(predicate) {
   }
 }
 
-async function fixtureFor(t) {
+async function fixtureFor(t, { baseEnv = process.env } = {}) {
   const fixture = await createTempFixture(t, {
     prefix: 'happier-dependency-metro-',
     parentDir: tmpdir(),
@@ -47,7 +50,7 @@ async function fixtureFor(t) {
   const baseDir = fixture.path('stacks', stackName);
   const envPath = join(baseDir, 'env');
   const env = {
-    ...process.env,
+    ...sanitizeStackTestRunnerEnv(baseEnv, { isolatedStackRoot: fixture.root }),
     npm_execpath: yarnEntrypoint,
     HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
     HAPPIER_STACK_HOME_DIR: fixture.path('stack-home'),
@@ -70,10 +73,11 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
   const sourceDir = fixture.path('apps', 'stack', 'scripts', 'utils');
   for (const source of [
     'proc/dependency_refresh.mjs', 'proc/jsonOwnerFileLock.mjs', 'proc/pids.mjs',
-    'proc/workspace_package_manifests.mjs', 'proc/ui_postinstall.mjs',
+    'proc/workspace_package_manifests.mjs', 'proc/ui_postinstall.mjs', 'proc/workspaceBuildWaitNotifier.mjs',
     'expo/dependency_barrier.mjs', 'fs/fs.mjs', 'fs/json.mjs',
     'paths/paths.mjs', 'paths/canonical_home.mjs',
     'dev_targets/stack_paths.mjs',
+    '../../../../packages/cli-common/fileChangeObserver.mjs',
   ]) {
     const target = join(sourceDir, source);
     await mkdir(join(target, '..'), { recursive: true });
@@ -84,10 +88,82 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
   await writeFile(join(installDir, 'package.json'), '{"private":true}\n');
   const { withDependencyRefresh: coldRefresh } = await import(pathToFileURL(join(sourceDir, 'proc', 'dependency_refresh.mjs')).href);
   const result = await coldRefresh({ installDir, env: {
-    ...process.env, HAPPIER_STACK_ENV_FILE: '',
+    ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }), HAPPIER_STACK_ENV_FILE: '',
     HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_HOME_DIR: fixture.path('stack-home'),
   } }, async () => {});
   assert.equal(result.refreshed, true);
+});
+
+for (const invocation of ['spawn', 'exec']) test(`Metro starts with dependency and patch drift without an implicit install or repair (${invocation})`, async t => {
+  const fixture = await fixtureFor(t);
+  const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  const marker = await readFile(markerPath, 'utf8');
+  await unlink(fixture.patchOutput);
+  await writeFile(join(fixture.uiDir, 'package.json'), JSON.stringify({
+    name: '@happier-dev/app', dependencies: { 'new-mid-edit-package': '1.0.0' },
+    scripts: { 'postinstall:real': 'node tools/postinstall.mjs' },
+  }));
+  const expoPath = fixture.path('node_modules', '.bin', 'expo');
+  await writeFile(expoPath, `#!${process.execPath}\nconsole.log('served');\n`);
+  await chmod(expoPath, 0o755);
+  const options = { dir: fixture.uiDir, projectDir: fixture.uiDir,
+    args: ['start', '--web'], workspacePrepared: true, env: fixture.env, quiet: true,
+    options: { silent: true } };
+  if (invocation === 'spawn') {
+    const child = await expoSpawn(options);
+    assert.equal((await child.completion).code, 0);
+  } else await expoExec(options);
+  assert.equal(await readFile(markerPath, 'utf8'), marker, 'startup must not withdraw or republish install admission');
+  await assert.rejects(readFile(fixture.patchOutput), { code: 'ENOENT' });
+});
+
+for (const cancel of [false, true]) test(`Metro keeps serving its last-good process while replacement waits for dependency custody (shutdown=${cancel})`, async t => {
+  const fixture = await fixtureFor(t);
+  const children = [];
+  let shuttingDown = false, original, replacement;
+  let releaseWriter;
+  let replacementStart;
+  const held = new Promise(resolve => { releaseWriter = resolve; });
+  t.after(async () => {
+    releaseWriter();
+    await replacementStart?.catch(() => {});
+    shuttingDown = true;
+    await original?.close?.();
+    await replacement?.close?.();
+    for (const child of children) await killProcessTree(child, 'SIGTERM');
+  });
+  const executable = fixture.path('node_modules', '.bin', 'expo');
+  await writeFile(executable, `#!${process.execPath}\nrequire('node:http').createServer((req,res)=>res.end('packager-status:running')).listen(Number(process.argv[process.argv.indexOf('--port')+1]), '127.0.0.1');\n`);
+  await chmod(executable, 0o755);
+  const options = { startUi: true, uiDir: fixture.uiDir, autostart: { baseDir: fixture.baseDir },
+    baseEnv: { ...fixture.env, HAPPIER_STACK_EXPO_SUPERVISE_RESTARTS: '0' },
+    apiServerUrl: 'http://127.0.0.1:1', stackMode: true, stackName: fixture.stackName,
+    runtimeStatePath: fixture.path('runtime.json'), envPath: fixture.envPath,
+    children, isShuttingDown: () => shuttingDown, quiet: true, spawnOptions: { silent: true } };
+  original = await ensureDevExpoServer(options);
+  const origin = `http://127.0.0.1:${original.port}`;
+  await waitFor(async () => fetch(`${origin}/status`).then(r => r.ok).catch(() => false));
+  let entered;
+  const admitted = new Promise(resolve => { entered = resolve; });
+  const writer = withDependencyRefreshLock({ installDir: fixture.root, env: fixture.env }, async () => { entered(); await held; });
+  await admitted;
+  replacementStart = ensureDevExpoServer({ ...options, restart: true,
+    baseEnv: { ...options.baseEnv, HAPPIER_STACK_EXPO_DEV_PORT: String(original.port), HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable' } });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(original.proc.exitCode ?? original.proc.signalCode, null, 'do not stop the incumbent before acquiring dependency custody');
+  assert.equal((await fetch(`${origin}/status`)).status, 200, 'last-good Metro must keep serving during the install-lock wait');
+  if (cancel) shuttingDown = true;
+  releaseWriter();
+  await writer;
+  if (cancel) {
+    await assert.rejects(replacementStart, { name: 'AbortError' });
+    assert.equal((await fetch(`${origin}/status`)).status, 200, 'cancelled replacement must not stop the incumbent');
+    return;
+  }
+  replacement = await replacementStart;
+  assert.notEqual(replacement.pid, original.pid);
+  assert.equal(replacement.port, original.port);
+  await waitFor(async () => fetch(`${origin}/status`).then(r => r.ok).catch(() => false));
 });
 
 test('bootstrap cache context discovers target-owned legacy Metro before changing its tree', async (t) => {
@@ -102,7 +178,7 @@ test('bootstrap cache context discovers target-owned legacy Metro before changin
   // Native and JavaScript remote bootstrap dispatch currently provide the
   // target-owned cache context, not the running Stack's environment keys.
   const bootstrapEnv = {
-    ...process.env, HAPPIER_STACK_HOME_DIR: '', HAPPIER_STACK_STORAGE_DIR: '',
+    ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }), HAPPIER_STACK_HOME_DIR: '', HAPPIER_STACK_STORAGE_DIR: '',
     HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_PM_CACHE_BASE_DIR: join(targetHome, 'cache'),
   };
   const child = spawn(process.execPath, ['--eval', 'setInterval(() => {}, 1000)'], {
@@ -134,7 +210,41 @@ test('bootstrap cache context discovers target-owned legacy Metro before changin
   assert.equal(child.exitCode, null);
 });
 
-test('managed Metro stops before dependency mutation and restarts only after readiness succeeds', async (t) => {
+for (const sameName of [false, true]) {
+test(`dependency mutation cannot borrow another stack identity to stop its serving Metro (same name: ${sameName})`, async (t) => {
+  const fixture = await fixtureFor(t);
+  const consumers = [];
+  for (const directory of [fixture.stackName, 'unrelated-serving-stack']) {
+    const stackName = sameName ? fixture.stackName : directory;
+    const baseDir = fixture.path('stacks', directory);
+    const envPath = join(baseDir, 'env');
+    const child = spawn(process.execPath, ['--eval', 'setInterval(() => {}, 1000)'], {
+      env: { ...fixture.env, HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_ENV_FILE: envPath },
+      detached: process.platform !== 'win32', stdio: 'ignore',
+    });
+    t.after(async () => await killProcessTree(child, 'SIGTERM', { graceMs: 500 }));
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    const paths = getExpoStatePaths({ baseDir, kind: 'expo-dev', projectDir: fixture.uiDir });
+    await writePidState(paths.statePath, {
+      pid: child.pid, projectDir: fixture.uiDir, uiDir: fixture.uiDir, stackName, envPath,
+      dependencyInstallBarrierVersion: EXPO_DEPENDENCY_BARRIER_VERSION,
+    });
+    consumers.push(child);
+  }
+  const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  const priorMarker = await readFile(markerPath, 'utf8');
+  await writeFile(fixture.path('yarn.lock'), '# changed\n');
+  let mutated = false;
+  await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env: fixture.env }, async () => {
+    mutated = true;
+  }), { code: 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED' });
+  assert.equal(mutated, false, 'shared installed bytes must remain unchanged while another stack is serving them');
+  assert.equal(await readFile(markerPath, 'utf8'), priorMarker, 'rejected refresh must retain existing admission');
+  for (const child of consumers) assert.equal(child.exitCode ?? child.signalCode, null, 'validate all consumers before stopping any');
+});
+}
+
+test('managed Metro stops during dependency mutation and resumes installed bytes after a failed refresh', async (t) => {
   const fixture = await fixtureFor(t);
   const children = [];
   let shuttingDown = false;
@@ -214,18 +324,25 @@ test('managed Metro stops before dependency mutation and restarts only after rea
       throw new Error('patch failed');
     },
   }, async () => {}), /patch failed/);
-  await assert.rejects(expoSpawn({
-    label: 'scratch-expo', dir: fixture.uiDir, projectDir: fixture.uiDir,
-    args: ['start', '--web'], env: fixture.env, workspacePrepared: true,
-    quiet: true, options: { silent: true },
-  }), { code: 'HAPPIER_EXPO_DEPENDENCIES_NOT_READY' });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(children.length, 3, 'failed patching must not expose the incomplete tree to a replacement');
-  assert.equal(await readFile(observationsPath, 'utf8').catch(() => ''), '');
+  await waitFor(async () => children.length === 4);
+  assert.equal(children[3].exitCode, null, 'a failed refresh must not leave the Metro runner permanently unavailable');
 });
 
 test('a child killed during its own admission publication still consumes the crash budget', async (t) => {
-  const fixture = await fixtureFor(t);
+  let supervisorOutput = '';
+  t.mock.method(process.stderr, 'write', chunk => { supervisorOutput += String(chunk); return true; });
+  const occupiedPortServer = createServer();
+  await new Promise((resolve, reject) => {
+    occupiedPortServer.once('error', reject);
+    occupiedPortServer.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(async () => await new Promise(resolve => occupiedPortServer.close(resolve)));
+  // A launching Stack's occupied pin must not become the scratch child's port.
+  const fixture = await fixtureFor(t, { baseEnv: {
+    ...process.env,
+    HAPPIER_STACK_EXPO_DEV_PORT: String(occupiedPortServer.address().port),
+    HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY: 'stable',
+  } });
   const children = [];
   let shuttingDown = false;
   t.after(async () => {
@@ -258,7 +375,7 @@ test('a child killed during its own admission publication still consumes the cra
       },
       apiServerUrl: 'http://127.0.0.1:1', restart: false, stackMode: true,
       runtimeStatePath, stackName: fixture.stackName, envPath: fixture.envPath,
-      children, spawnOptions: { silent: true }, quiet: true,
+      children, spawnOptions: { silent: true }, quiet: false,
       isShuttingDown: () => shuttingDown,
     });
     await waitFor(async () => children.length === 1 && children[0].signalCode !== null);
@@ -267,7 +384,9 @@ test('a child killed during its own admission publication still consumes the cra
   await withJsonOwnerFileLock(async () => {
     await waitFor(async () => children.length === 2 && children[1].signalCode !== null);
   }, publicationLock);
-  await new Promise(resolve => setTimeout(resolve, 350));
-  assert.equal((await readFile(runsPath, 'utf8')).trim().split('\n').length, 2,
+  await waitFor(async () => (await readFile(runsPath, 'utf8')).trim().split('\n').length >= 3);
+  assert.match(supervisorOutput, /attempt 2/,
     'own spawn-admission lock must not convert a rapid crash loop into planned install transitions');
+  assert.doesNotMatch(supervisorOutput, /stopped for dependency refresh/);
+  assert.equal(occupiedPortServer.listening, true, 'the invoking Stack port must remain untouched');
 });

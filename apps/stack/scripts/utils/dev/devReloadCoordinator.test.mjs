@@ -1,17 +1,259 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync, { writeFileSync, readFileSync, watch } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:net';
 import test from 'node:test';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { createMinimalMonorepoFixture } from '../../testkit/core/minimal_monorepo_layout.mjs';
+import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
+import { run } from '../proc/proc.mjs';
+import { BuildInputDriftError } from '../../../../../scripts/workspaces/buildInputConvergence.mjs';
 
 import {
+  isDevStartupSourceDrift,
+  prepareDevComponent,
+  prepareSourceComponent,
   requestInitialDevRefreshes,
   startDevReloadCoordinator,
 } from './devReloadCoordinator.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
 import { createHappyCliReloadDescriptors } from './daemon.mjs';
-import { createDevServerReloadDescriptors } from './server.mjs';
+import { createDevServerReloadDescriptors, createDevServerReloadExecutor } from './server.mjs';
+import { readHappyCliRuntimeInputFreshness } from '../proc/cli_runtime_inputs.mjs';
+
+test('no-watch startup refresh uses the reload owner without installing source watchers', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-once-refresh-' });
+  await fs.writeFile(fixture.path('package.json'), '{}');
+  let watching = false;
+  let builds = 0;
+  const failures = [];
+  const coordinator = startDevReloadCoordinator({
+    observeChanges: false,
+    descriptors: [{ id: 'daemon:cli', target: 'daemon', paths: [fixture.path('package.json')] }],
+    executors: [{ target: 'daemon', async build() { builds++; throw new Error('Missing bundled internal workspace dependencies: @happier-dev/email-transports-protocol'); } }],
+    logger: { log() {}, error(message) { failures.push(message); } },
+  }, { watchDebouncedImpl() { watching = true; return { close() {} }; } });
+  t.after(() => coordinator.close());
+  await coordinator.requestReload('daemon');
+  assert.equal(watching, false);
+  assert.equal(builds, 1);
+  assert.match(failures.join('\n'), /daemon reload build failed/);
+  assert.match(failures.join('\n'), /email-transports-protocol/);
+});
+
+test('source daemon preparation observes corrections to its UI compiler inputs', { timeout: 10000 }, async t => {
+  const activeWatchers = new Set();
+  const originalWatch = fsSync.watch;
+  t.mock.method(fsSync, 'watch', (...args) => {
+    const native = originalWatch(...args);
+    activeWatchers.add(native);
+    native.once('close', () => activeWatchers.delete(native));
+    return native;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const fixture = await createTempFixture(t, { prefix: 'hstack-daemon-ui-inputs-', registerCleanup: false });
+  const repoDir = fixture.path('repo');
+  const uiDir = join(repoDir, 'apps/ui');
+  const compiler = join(uiDir, 'scripts/prepareSourcePluginUiArtifacts.mjs');
+  const uiPackage = join(uiDir, 'package.json');
+  await fs.mkdir(join(uiDir, 'scripts'), { recursive: true });
+  await fs.mkdir(join(repoDir, 'apps/cli'), { recursive: true });
+  await fs.mkdir(join(repoDir, 'packages'));
+  await fs.writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+  await fs.writeFile(compiler, 'export const ready = ;');
+  await fs.writeFile(uiPackage, JSON.stringify({ name: '@happier-dev/ui', version: 'broken' }));
+  const abort = new AbortController();
+  let completion;
+  t.after(async () => { abort.abort(); await completion; await fs.rm(fixture.root, { recursive: true, force: true }); });
+  let reportFailure;
+  const failure = () => new Promise(resolve => { reportFailure = resolve; });
+  let failed = failure();
+  const preparing = prepareSourceComponent({ repoDir, target: 'daemon', signal: abort.signal,
+    logger: { log() {}, warn() {}, error() { reportFailure(); } },
+    async prepare() {
+      // The compiler process is the system boundary. Keep input discovery,
+      // source-drift admission and the actual filesystem watcher real.
+      await run(process.execPath, ['--check', compiler], { captureFailureDiagnostic: true, stdio: 'ignore' });
+      await run(process.execPath, ['--input-type=module', '-e',
+        'import {readFileSync} from "node:fs"; if (JSON.parse(readFileSync(process.argv[1], "utf8")).version !== "0.0.0") { console.error("compiler.ts(1,1): error TS2307: UI compiler package mismatch"); process.exit(1); }', uiPackage], { captureFailureDiagnostic: true, stdio: 'ignore' });
+      return { ready: true };
+    },
+  });
+  completion = preparing.then(result => ({ result }), error => ({ error }));
+  await failed;
+  assert.ok(activeWatchers.size > 0, 'pending daemon preparation owns native observations');
+  t.diagnostic('Observed compiler-process failure; correcting only its UI script input');
+  failed = failure();
+  await fs.writeFile(compiler, 'export const ready = true;');
+  await failed;
+  t.diagnostic('Observed package-input failure after script recovery; correcting only the UI package input');
+  await fs.writeFile(uiPackage, JSON.stringify({ name: '@happier-dev/ui', version: '0.0.0' }));
+  assert.deepEqual(await completion, { result: { ready: true } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activeWatchers.size, 0, 'a successful daemon snapshot retains no native watcher');
+});
+
+test('wrapped and unwrapped compiler exits recover, but environment and configuration exits fail fast', async () => {
+  for (const diagnostic of ['ENOSPC: no space left on device', 'Invalid build configuration']) {
+    let failure;
+    try {
+      await run(process.execPath, ['-e', `console.error(${JSON.stringify(diagnostic)}); process.exit(23)`], { captureFailureDiagnostic: true, stdio: 'ignore' });
+    } catch (error) { failure = error; }
+    assert.equal(failure.code, 'EEXIT');
+    const wrapped = Object.assign(new Error('UI preflight failed', { cause: failure }), {
+      code: 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED',
+    });
+    for (const target of ['expo', 'server', 'daemon']) {
+      assert.equal(isDevStartupSourceDrift(failure, target), false);
+      assert.equal(isDevStartupSourceDrift(wrapped, target), false);
+    }
+  }
+  for (const message of ['SyntaxError: Unexpected token', 'src/index.ts(1,1): error TS2307: Cannot find module']) {
+    const cause = Object.assign(new Error(message), { code: 'EEXIT' });
+    const wrapped = Object.assign(new Error('UI preflight failed', { cause }), {
+      code: 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED',
+    });
+    assert.equal(isDevStartupSourceDrift(cause, 'expo'), true);
+    assert.equal(isDevStartupSourceDrift(wrapped, 'expo'), true);
+  }
+});
+
+test('server startup recovery observes transitive workspace inputs, not unrelated packages', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-server-transitive-recovery-' });
+  const serverDir = fixture.path('apps/server');
+  await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  for (const [path, name, dependencies] of [
+    ['apps/server', '@fixture/server', { '@happier-dev/plugin-ui': 'workspace:*' }],
+    ['packages/plugin-ui', '@happier-dev/plugin-ui', { '@happier-dev/plugin-sdk': 'workspace:*' }],
+    ['packages/plugin-sdk', '@happier-dev/plugin-sdk', {}],
+    ['packages/unrelated', '@happier-dev/unrelated', {}],
+  ]) {
+    await fs.mkdir(fixture.path(path, 'src'), { recursive: true });
+    await fs.writeFile(fixture.path(path, 'package.json'), JSON.stringify({ name, dependencies }));
+  }
+  const source = fixture.path('packages/plugin-sdk/src/index.mjs');
+  await fs.writeFile(source, 'export const value = ;');
+  const abort = new AbortController();
+  let completion;
+  t.after(async () => { abort.abort(); await completion; });
+  let reportFailure;
+  const failed = new Promise(resolve => { reportFailure = resolve; });
+  let attempts = 0;
+  completion = prepareDevComponent({ enabled: true, target: 'server',
+    descriptors: await createDevServerReloadDescriptors({ serverDir }),
+    signal: abort.signal, debounceMs: 5,
+    logger: { log() {}, warn() {}, error() { reportFailure(); } },
+    async prepare() {
+      attempts += 1;
+      await run(process.execPath, ['--check', source], { captureFailureDiagnostic: true, stdio: 'ignore' });
+      return { ready: true };
+    },
+  }).then(result => ({ result }), error => ({ error }));
+  await failed;
+  await fs.writeFile(fixture.path('packages/unrelated/src/index.mjs'), 'export const unrelated = true;');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(attempts, 1);
+  const recovered = new Promise(resolve => {
+    const timer = setTimeout(() => resolve(null), 2000);
+    completion.then(result => { clearTimeout(timer); resolve(result); });
+  });
+  await fs.writeFile(source, 'export const value = true;');
+  assert.deepEqual(await recovered, { result: { ready: true } }, 'correcting a transitive SDK input must wake startup');
+});
+
+test('Metro losing a source file mid-bundle is startup source drift, unlike configuration failures', () => {
+  const sha = 'Error: Failed to get the SHA-1 for: /repo/packages/protocol/src/usage/usageCostFacts.ts.';
+  assert.equal(isDevStartupSourceDrift({ code: 1, message: sha }, 'expo'), true);
+  assert.equal(isDevStartupSourceDrift({ code: 1, message: 'Error: listen EADDRINUSE' }, 'expo'), false);
+  const exhausted = Object.assign(new Error('[workspace-build] inputs changed while building @happier-dev/plugin-sdk; retained the last coherent output; rerun the phase'), { code: 'BUILD_INPUTS_CHANGED', trailingPassExhausted: true });
+  assert.equal(isDevStartupSourceDrift(exhausted, 'server'), true);
+  const missingDeclaredExport = Object.assign(new Error('/bin/yarn failed (code=1, sig=null)\n\nChild output:\n[stderr]\nError: Staged TypeScript package build is missing declared package export files:\n- ./src/voice/modelPacks/artifactBindingV1.ts'), { code: 'EEXIT', exitCode: 1 });
+  assert.equal(isDevStartupSourceDrift(missingDeclaredExport, 'server'), true);
+  assert.equal(isDevStartupSourceDrift(missingDeclaredExport, 'expo'), true);
+});
+
+test('startup preparation survives a source build failure and retries only after affected inputs change', { timeout: 10_000 }, async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-startup-source-drift-' });
+  const source = fixture.path('input.mjs');
+  const unrelated = fixture.path('unrelated.mjs');
+  await fs.writeFile(source, 'export const value = ;');
+  await fs.writeFile(unrelated, 'export const unrelated = 1;');
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  let reportFailure;
+  const failureReported = new Promise((resolve) => { reportFailure = resolve; });
+  let attempts = 0;
+  let settled = false;
+  const startup = prepareDevComponent({
+    enabled: true,
+    target: 'expo',
+    descriptors: [{ id: 'expo:inputs', target: 'expo', paths: [source] }],
+    debounceMs: 5,
+    signal: abort.signal,
+    logger: { log() {}, warn() {}, error() { reportFailure(); } },
+    async prepare() {
+      attempts += 1;
+      try {
+        await run(process.execPath, ['--check', source], { captureFailureDiagnostic: true, stdio: 'ignore' });
+      } catch (cause) {
+        // The real Expo preflight preserves source-build failures under this envelope.
+        throw Object.assign(new Error('UI preflight failed', { cause }), {
+          code: 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED',
+        });
+      }
+      if (attempts === 2) await fs.writeFile(source, 'export const value = 2;');
+      return { ready: true };
+    },
+  });
+  const completion = startup.then((result) => { settled = true; return result; });
+  await Promise.race([failureReported, completion]);
+  assert.equal(settled, false, 'a broken source build must leave startup pending');
+  await fs.writeFile(unrelated, 'export const unrelated = 2;');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(attempts, 1, 'unrelated edits must not retry the failed component');
+  await fs.writeFile(source, 'export const value = 1;');
+  assert.deepEqual(await completion, { ready: true });
+  assert.equal(attempts, 2, 'a successful startup must not run twice when its inputs advance');
+
+  const environmentErrors = [
+    Object.assign(new Error('port occupied'), { code: 'EADDRINUSE' }),
+    Object.assign(new Error('dependency installation failed'), { code: 'EEXIT' }),
+    Object.assign(new Error('preflight failed', { cause: new Error('Invalid installFreshnessInputs') }), {
+      code: 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED',
+    }),
+    Object.assign(new Error('preflight failed', { cause: Object.assign(new Error('permission denied'), { code: 'EACCES' }) }), {
+      code: 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED',
+    }),
+  ];
+  for (const environmentError of environmentErrors) {
+    await assert.rejects(prepareDevComponent({
+      enabled: true, target: 'expo', descriptors: [{ id: 'expo:inputs', target: 'expo', paths: [source] }],
+      logger: { log() {}, warn() {}, error() {} },
+      prepare: async () => { throw environmentError; },
+    }), (error) => error === environmentError);
+  }
+  const sourceFailure = Object.assign(new Error('input.ts(1,1): error TS2307: Cannot find module'), { code: 'EEXIT' });
+  await assert.rejects(prepareDevComponent({
+    prepare: async () => { throw sourceFailure; },
+  }), (error) => error === sourceFailure, 'without watch mode, source failures remain fatal');
+  const cancelled = new AbortController();
+  let reportWaiting;
+  const waiting = new Promise((resolve) => { reportWaiting = resolve; });
+  const pending = prepareDevComponent({
+    enabled: true, target: 'server', descriptors: [{ id: 'server:inputs', target: 'server', paths: [source] }],
+    signal: cancelled.signal,
+    logger: { log() {}, warn() {}, error() { reportWaiting(); } },
+    prepare: async () => { throw sourceFailure; },
+  });
+  const rejection = assert.rejects(pending, { name: 'AbortError' });
+  await waiting;
+  cancelled.abort();
+  await rejection;
+});
 
 test('reload coordinator watches and samples only inputs with an active consumer', async (t) => {
   const root = await fs.mkdtemp(join(tmpdir(), 'dev-reload-active-inputs-'));
@@ -39,6 +281,7 @@ test('reload coordinator watches and samples only inputs with an active consumer
   await fs.writeFile(daemonSource, 'export const daemon = 2;');
   assert.equal(await watcherOptions.readSignature(), before);
   await fs.writeFile(serverSource, 'export const server = 2;');
+  watcherOptions.onObservation({ eventType: 'change', filename: 'server.ts', watchPath: serverSource });
   assert.notEqual(await watcherOptions.readSignature(), before);
 });
 
@@ -74,7 +317,7 @@ test('overlapping reload consumers share one filesystem sweep and observe subseq
   const coordinator = startDevReloadCoordinator({
     descriptors: [
       ...createHappyCliReloadDescriptors({ cliDir }),
-      ...createDevServerReloadDescriptors({ serverDir }),
+      ...await createDevServerReloadDescriptors({ serverDir }),
     ],
     executors: [executor('server', reloads), executor('daemon', reloads)],
     logger: { log() {}, warn() {}, error() {} },
@@ -89,12 +332,150 @@ test('overlapping reload consumers share one filesystem sweep and observe subseq
   assert.equal(sourceStats, 1, 'one consumed source must require one stat per sample, regardless of consumer count');
   sourceStats = 0;
   const before = await watcherOptions.readSignature();
-  assert.equal(sourceStats, 1, 'coalescing is per sample rather than a stale cross-tick cache');
+  assert.equal(sourceStats, 0, 'idle consumers share the event-indexed observation without another stat');
+  const fingerprintBefore = await readHappyCliRuntimeInputFreshness(cliDir);
+  assert.equal(sourceStats, 0, 'daemon build fingerprints consume the same observation owner');
   await fs.writeFile(source, 'export const value = 2;');
+  watcherOptions.onObservation({ eventType: 'change', filename: 'runtime.ts', watchPath: join(packageDir, 'src') });
   const after = await watcherOptions.readSignature();
+  const fingerprintAfter = await readHappyCliRuntimeInputFreshness(cliDir);
   assert.notEqual(after, before);
+  assert.notEqual(fingerprintAfter.fingerprint, fingerprintBefore.fingerprint);
   await watcherOptions.onChange({ eventType: 'change', filename: 'runtime.ts', watchPath: join(packageDir, 'src') });
   assert.deepEqual(reloads, ['server:build:1', 'server:restart:1', 'daemon:build:1', 'daemon:restart:1']);
+});
+
+test('a pending build suspends recovery scans and revalidates missed edits before activation', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-pending-build-scan-' });
+  const source = fixture.path('source.ts');
+  await fs.writeFile(source, 'export const value = 1;');
+  const originalLstat = fs.lstat;
+  let sourceStats = 0;
+  t.mock.method(fs, 'lstat', async (...args) => {
+    if (args[0] === source) sourceStats += 1;
+    return originalLstat(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  let poll;
+  let releaseBuild;
+  let markBuildStarted;
+  const buildStarted = new Promise((resolve) => { markBuildStarted = resolve; });
+  const buildBlocked = new Promise((resolve) => { releaseBuild = resolve; });
+  const builds = [];
+  const activations = [];
+  const coordinator = startDevReloadCoordinator({
+    descriptors: [{ id: 'server:source', target: 'server', paths: [source] }],
+    executors: [{
+      target: 'server',
+      async build(context) {
+        builds.push(context.generation);
+        if (context.generation === 1) {
+          markBuildStarted();
+          await buildBlocked;
+        }
+      },
+      restart(context) { activations.push(context.generation); },
+    }],
+    pollIntervalMs: 10_000,
+    debounceMs: 0,
+    logger: { log() {}, warn() {}, error() {} },
+  }, {
+    watchDebouncedImpl(options) {
+      return watchDebounced({
+        ...options,
+        // Clock and native notification are system boundaries. Signatures,
+        // drift classification and activation all use the real owner.
+        watchImpl: () => ({ close() {} }),
+        setIntervalImpl(callback) { poll = callback; return { unref() {} }; },
+        clearIntervalImpl() {},
+      });
+    },
+  });
+  t.after(async () => { releaseBuild(); await coordinator.close(); });
+  const preparing = coordinator.requestReload('server');
+  await buildStarted;
+  sourceStats = 0;
+  await poll();
+  await poll();
+  assert.equal(sourceStats, 0, 'admission/build waits must not traverse source on recovery ticks');
+  // Deliberately omit the native event: completion must still reject stale
+  // prepared inputs before activating, then build the current generation.
+  await fs.writeFile(source, 'export const value = 2;');
+  releaseBuild();
+  await preparing;
+  assert.deepEqual(builds, [1, 2]);
+  assert.deepEqual(activations, [2]);
+  sourceStats = 0;
+  await poll();
+  assert.equal(sourceStats, 1, 'idle missed-event recovery resumes after the build');
+});
+
+test('native queue loss in an ignored event burst recovers a missed source edit without periodic recrawl',
+  { skip: process.platform !== 'linux', timeout: 60_000 }, async t => {
+    const fixture = await createTempFixture(t, { prefix: 'hstack-source-overflow-' });
+    const source = fixture.path('source.ts');
+    const noise = [fixture.path('a.test.ts'), fixture.path('b.test.ts')];
+    await fs.writeFile(source, 'export const value = 1;');
+    for (const path of noise) await fs.writeFile(path, '0');
+    let ready;
+    const recovered = new Promise(resolve => { ready = resolve; });
+    let activated = 0;
+    let sourceEvents = 0;
+    const coordinator = startDevReloadCoordinator({
+      descriptors: [{ id: 'server:source', target: 'server', paths: [fixture.root] }],
+      executors: [{ target: 'server', build() {}, restart() { if (++activated === 2) ready(); } }],
+      debounceMs: 20, pollIntervalMs: 0,
+      logger: { log() {}, warn() {}, error() {} },
+    }, { watchDebouncedImpl(options) {
+      return watchDebounced({ ...options,
+        // Count events that the reload policy ignores at the OS boundary.
+        // Production avoids watching these leaves; an overflow from another
+        // watched input has the same raw-queue loss semantics.
+        watchImpl: (path, _options, callback) => watch(path, { recursive: true }, (kind, filename) => {
+          if (filename === 'source.ts') sourceEvents++;
+          callback(kind, filename);
+        }),
+      });
+    } });
+    t.after(() => coordinator.close());
+    await coordinator.requestReload('server');
+    const queueSize = Number(readFileSync('/proc/sys/fs/inotify/max_queued_events', 'utf8'));
+    // Block delivery until the real kernel queue is saturated. Alternating files
+    // prevents inotify's adjacent-event coalescing; the final source event is lost.
+    for (let n = 0; n < queueSize + 128; n++) writeFileSync(noise[n % 2], String(n % 10));
+    writeFileSync(source, 'export const value = 2;');
+    await recovered;
+    assert.equal(activated, 2);
+    assert.equal(sourceEvents, 0, 'the source event must actually be lost in this overflow probe');
+  });
+
+test('idle source recovery checks known metadata without recrawling directories', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-idle-source-index-' });
+  await fs.writeFile(fixture.path('source.ts'), 'export const value = 1;');
+  const originalReaddir = fs.readdir;
+  let directoryReads = 0;
+  t.mock.method(fs, 'readdir', async (...args) => { directoryReads++; return originalReaddir(...args); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  let poll;
+  let watcherOptions;
+  const coordinator = startDevReloadCoordinator({
+    descriptors: [{ id: 'server:source', target: 'server', paths: [fixture.root] }],
+    executors: [{ target: 'server', build() {}, restart() {} }],
+    pollIntervalMs: 300_000,
+    logger: { log() {}, warn() {}, error() {} },
+  }, { watchDebouncedImpl(options) {
+    watcherOptions = options;
+    return watchDebounced({ ...options, watchImpl: () => ({ close() {} }),
+      setIntervalImpl(callback) { poll = callback; return { unref() {} }; }, clearIntervalImpl() {} });
+  } });
+  t.after(() => coordinator.close());
+  await watcherOptions.readSignature();
+  directoryReads = 0;
+  await poll();
+  await poll();
+  assert.equal(directoryReads, 0, 'unchanged known paths must not re-enumerate source trees');
 });
 
 function descriptor({ id, target, signature = '0' }) {
@@ -275,7 +656,6 @@ async function observeComposedFilesystemThenPoll({ laterPollSignature = null } =
 
   if (laterPollSignature !== null) app.set(laterPollSignature);
   await poll();
-  const pollScheduledDebounce = debounceTimers.some((timer) => !timer.canceled);
   for (const timer of debounceTimers.splice(0)) {
     if (!timer.canceled) timer.callback();
   }
@@ -284,18 +664,12 @@ async function observeComposedFilesystemThenPoll({ laterPollSignature = null } =
     await new Promise((resolve) => setImmediate(resolve));
   }
   await coordinator.close();
-  return { activations, pollScheduledDebounce };
+  return activations;
 }
 
 test('filesystem admission and default poll correlation preserve exactly-once activation', async () => {
-  assert.deepEqual(await observeComposedFilesystemThenPoll(), {
-    activations: [1],
-    pollScheduledDebounce: false,
-  });
-  assert.deepEqual(await observeComposedFilesystemThenPoll({ laterPollSignature: '2' }), {
-    activations: [1, 2],
-    pollScheduledDebounce: true,
-  });
+  assert.deepEqual(await observeComposedFilesystemThenPoll(), [1]);
+  assert.deepEqual(await observeComposedFilesystemThenPoll({ laterPollSignature: '2' }), [1, 2]);
 });
 
 test('admits one generation-correlated source transition before preflight', async () => {
@@ -802,6 +1176,117 @@ test('a restart failure can request one bounded coordinator retry without anothe
 
   await scheduled[0].callback();
   assert.equal(attempts, 2, 'success must make the completed retry callback stale');
+});
+
+test('retained server build drift cold-starts through the coordinator and retries fresh output once', async t => {
+  const fixture = await createMinimalMonorepoFixture(t, { prefix: 'hstack-retained-server-reload-' });
+  await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  const serverDir = fixture.path('apps/server');
+  await fs.mkdir(serverDir, { recursive: true });
+  await fs.writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server' }));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const url = `http://127.0.0.1:${port}`;
+  const children = [];
+  const stopChild = async child => {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise(resolve => { child.once('exit', resolve); child.kill(); });
+  };
+  t.after(async () => { for (const child of children) await stopChild(child); });
+  const calls = [];
+  const scheduled = [];
+  const failures = [];
+  const server = descriptor({ id: 'server:app', target: 'server' });
+  const serverProcRef = { current: null };
+  let attempts = 0;
+  let starts = 0;
+  const serverExecutor = createDevServerReloadExecutor({
+    enabled: true, stackMode: false, serverComponentName: 'happier-server-light',
+    serverDir, serverPort: port, internalServerUrl: url,
+    serverScript: 'dev', serverEnv: {}, children, serverProcRef,
+    isShuttingDown: () => false,
+  }, {
+    // Compiler and process/listener adapters are the system boundaries; the
+    // coordinator, server executor and retained-closure inspector remain real.
+    preflightDevServerRestartImpl: async () => {
+      attempts++;
+      throw new BuildInputDriftError('[workspace-build] inputs changed while building @happier-dev/plugin-sdk; retained the last coherent output; rerun the phase');
+    },
+    pmSpawnScriptImpl: async ({ env }) => {
+      starts++;
+      return spawnTestProcess(process.execPath, ['-e',
+        'require("node:http").createServer((req,res) => {res.setHeader("content-type","application/json");res.end(JSON.stringify({service:"happier-server",status:"ok"}));}).listen(Number(process.env.PORT),"127.0.0.1");'],
+      { env: { ...process.env, ...env } });
+    },
+    listListenPidsWithStatusImpl: async () => ({ status: 'ok', supported: true, pids: [children.at(-1).pid] }),
+    getProcessGroupIdImpl: async pid => pid,
+    logger: { log() {}, warn() {}, error() {} },
+  });
+  const onChange = startCoordinator({
+    descriptors: [server], executors: [serverExecutor], calls,
+    logger: { log() {}, warn() {}, error(message) { failures.push(message); } },
+    coordinatorBoundary: {
+      setTimeoutImpl(callback, delayMs) {
+        const timer = { callback, delayMs, unref() {} };
+        scheduled.push(timer);
+        return timer;
+      },
+      clearTimeoutImpl() {},
+    },
+  });
+  t.after(() => onChange.watcher.close());
+  await onChange.watcher.requestReload('server');
+  assert.equal(starts, 1, 'retained coherent output must start the absent server despite build drift');
+  assert.ok(serverProcRef.current?.pid);
+  assert.equal((await fetch(`${url}/health`)).status, 200, 'retained activation serves real HTTP');
+  assert.equal(scheduled.length, 1, 'fresh output must get one retry without another edit');
+  assert.equal(scheduled[0].delayMs, 500, 'reuse the coordinator debounce interval');
+  assert.doesNotMatch(failures.join('\n'), /keeping existing services running/);
+
+  // The service exits before the retry, which still drifts. Activation remains
+  // possible, but the existing retry episode must terminate rather than spin.
+  serverExecutor.setUnexpectedExitHandler(null);
+  await stopChild(serverProcRef.current);
+  serverProcRef.current = null;
+  await scheduled[0].callback();
+  assert.equal(attempts, 2);
+  assert.equal(starts, 2);
+  assert.equal((await fetch(`${url}/health`)).status, 200);
+  assert.equal(scheduled.length, 1);
+  await onChange({ eventType: 'change', filename: 'duplicate.ts' });
+  assert.equal(attempts, 2, 'exhausted drift must wait for affected inputs');
+
+  // A drift code alone does not prove usable output. Missing declared output
+  // must fail closed through the same real component inspector.
+  await fs.mkdir(fixture.path('packages/sdk'), { recursive: true });
+  await fs.writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  await fs.writeFile(fixture.path('packages/sdk/package.json'), JSON.stringify({ name: '@fixture/sdk', main: './dist/index.js' }));
+  await fs.writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server', dependencies: { '@fixture/sdk': 'workspace:*' } }));
+  server.set('2');
+  await onChange({ eventType: 'change', filename: 'missing-output.ts' });
+  assert.equal(starts, 2);
+});
+
+test('cold server preparation retries build input drift without waiting for an edit', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-cold-server-drift-' });
+  const input = fixture.path('input.mjs');
+  await fs.writeFile(input, 'export const value = true;');
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  let attempts = 0;
+  const result = await prepareDevComponent({
+    enabled: true, target: 'server', signal: abort.signal, debounceMs: 5,
+    descriptors: [{ id: 'server:inputs', target: 'server', paths: [input] }],
+    logger: { log() {}, warn() {}, error() {} },
+    async prepare() {
+      if (++attempts === 1) throw new BuildInputDriftError('retained the last coherent output');
+      return { serverStarted: true };
+    },
+  });
+  assert.deepEqual(result, { serverStarted: true });
+  assert.equal(attempts, 2);
 });
 
 test('a retryable build rejection gets one bounded retry while ordinary build failures stay terminal for an unchanged signature', async () => {

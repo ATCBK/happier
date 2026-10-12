@@ -1,6 +1,6 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir, resolveStackBaseDir } from './utils/paths/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRepoDir, getRootDir, resolveStackBaseDir } from './utils/paths/paths.mjs';
 import {
   ensureDepsInstalled,
   pmExecBin,
@@ -9,7 +9,7 @@ import {
 import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, rm, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, resolveExpoTmpDir, wantsExpoClearCache } from './utils/expo/expo.mjs';
@@ -22,6 +22,11 @@ import { buildStackTauriExportEnv, buildStackWebExportEnv } from './utils/ui/ui_
 import { parseBuildSelection } from './build/build_targets.mjs';
 import { shouldBuildStackArtifacts } from './build/build_mode.mjs';
 import { resolveRuntimeBuildAuthority } from './runtime/shared/runtime_build_authority.mjs';
+import { readStackRuntimeStateFile, updateStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { beginPendingSourceStart } from './runtime/shared/pending_source_start.mjs';
+import { loadDevTargetsConfig } from './utils/dev_targets/config.mjs';
+import { resolveObservedDevTargetService } from './utils/dev_targets/service_placement.mjs';
+import { runRemoteStackOperation } from './stack/remote_stack_operation.mjs';
 
 async function prepareTauriSidecarForBuild({ env }) {
   const moduleUrl = new URL('../../ui/scripts/prepareTauriSidecar.mjs', import.meta.url);
@@ -44,11 +49,12 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--web', '--server', '--daemon', '--all', '--target', '--activate-runtime', '--force-rebuild', '--tauri', '--no-tauri', '--no-ui'], json: true },
+      data: { flags: ['--web', '--server', '--daemon', '--all', '--target', '--activate-runtime', '--force-rebuild', '--tauri', '--no-tauri', '--no-ui', '--runtime=source'], json: true },
       text: [
         '[build] usage:',
         '  hstack build [--tauri] [--json]',
         '  hstack stack build <name> [--web|--server|--daemon|--all] [--activate-runtime] [--force-rebuild] [--json]',
+        '  hstack stack build <name> --web --runtime=source [--json]  # reload the served source export',
         '  node scripts/build.mjs [--web|--server|--daemon|--all] [--activate-runtime] [--tauri|--no-tauri] [--no-ui] [--json]',
         '',
         'note:',
@@ -78,6 +84,51 @@ async function main() {
   }
 
   const selection = parseBuildSelection({ argv });
+  if (argv.includes('--runtime=source')) {
+    if (!selection.components.web || selection.components.server || selection.components.daemon || selection.components.tauri) {
+      throw new Error('[build] source reload supports only --web; use stack daemon restart --runtime=source for the daemon.');
+    }
+    const stackName = String(process.env.HAPPIER_STACK_STACK ?? '').trim() || 'main';
+    const { baseDir } = resolveStackBaseDir(stackName, process.env);
+    const runtimeStatePath = process.env.HAPPIER_STACK_RUNTIME_STATE_PATH || join(baseDir, 'stack.runtime.json');
+    const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+    if (runtimeState?.runtimeMode !== 'source-snapshot' || runtimeState?.sourceUi !== 'export') {
+      throw new Error('[build] web source reload requires an existing source Stack serving an export.');
+    }
+    if (process.env.HAPPIER_DEV_TARGET_EXECUTION !== '1') {
+      const { config } = await loadDevTargetsConfig({ stackName, env: process.env });
+      const placed = resolveObservedDevTargetService({ config, runtimeState, service: 'server' });
+      if (placed) {
+        await runRemoteStackOperation({ rootDir, stackName, placed, operation: 'build', passthrough: argv, env: process.env });
+        return;
+      }
+    }
+    const uiDir = runtimeState.sourceUiLaunch?.uiDir;
+    if (!uiDir || !await pathExists(uiDir)) throw new Error('[build] the served source web export is unavailable.');
+    const sourceRoot = join(baseDir, 'source-runtime');
+    await mkdir(sourceRoot, { recursive: true });
+    const { exportSourceWebUi, publishSourceWebUi } = await import('./build/build_source_web_ui.mjs');
+    const pending = await beginPendingSourceStart({ stackBaseDir: baseDir });
+    let result;
+    try {
+      // Older loaded Stacks retain a private directory. Preserve their
+      // path-based reload until an explicit restart adopts shared exports.
+      if (!runtimeState.sourceUiLaunch.exportDir) {
+        result = await exportSourceWebUi({ repoDir: getRepoDir(rootDir, process.env), baseDir: sourceRoot,
+          outputDir: join(await mkdtemp(join(sourceRoot, 'web-')), 'export'), replaceUiDir: uiDir,
+          env: process.env, signal: pending.signal });
+      } else {
+        const built = await exportSourceWebUi({ repoDir: getRepoDir(rootDir, process.env), baseDir: sourceRoot,
+          stackBaseDir: baseDir, pending, env: process.env });
+        result = await publishSourceWebUi({ built, uiDir, pending });
+      }
+      await pending.publish(() => updateStackRuntimeStateFile(runtimeStatePath, { sourceUiLaunch: {
+        uiDir: result.uiDir, ...(result.exportDir ? { exportDir: result.exportDir } : {}),
+      } }));
+    } finally { await pending.dispose(); }
+    printResult({ json, data: { ok: true, stackName, ...result }, text: `[build] source web export reloaded: ${result.uiDir}` });
+    return;
+  }
   const wantsArtifactBuild = shouldBuildStackArtifacts({ selection, argv, env: process.env });
   if (wantsArtifactBuild) {
     const stackName = String(process.env.HAPPIER_STACK_STACK ?? '').trim() || 'main';

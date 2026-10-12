@@ -2,10 +2,41 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, readFile, mkdir, writeFile, symlink, rm, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildSourceRuntimeBundle } from './build_source_runtime.mjs';
+import { buildSourceRuntimeBundle, captureSourceWebBuildInputs } from './build_source_runtime.mjs';
 import { resolveServerRuntimeLaunchSpec } from '../runtime/launch/resolveServerRuntimeLaunchSpec.mjs';
+import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { SOURCE_CONDITION, readCliSourceEntries, readWorkspacePackages, createWorkspaceSourceResolver } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+
+test('captured source daemon graph retains env-gated stack debug startup', async t => {
+  const sourceRepoDir = fileURLToPath(new URL('../../../../', import.meta.url));
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-daemon-debug-' });
+  const { repoDir } = await captureSourceWebBuildInputs({
+    repoDir: sourceRepoDir, outputDir: fixture.path('inputs'), component: 'daemon',
+  });
+  const projectDir = join(repoDir, 'apps/cli');
+  const requireFromProject = createRequire(join(projectDir, 'package.json'));
+  const esbuild = requireFromProject('esbuild');
+  t.after(() => esbuild.stop());
+  const manifest = JSON.parse(await readFile(join(projectDir, 'package.json'), 'utf8'));
+  const { entries } = await readCliSourceEntries({ repoDir, manifest, transform: esbuild.transform });
+  const result = await esbuild.build({
+    absWorkingDir: repoDir, entryPoints: entries, outdir: fixture.path('output'),
+    bundle: true, splitting: true, format: 'esm', platform: 'node', target: 'node20',
+    conditions: [SOURCE_CONDITION], tsconfig: join(projectDir, 'tsconfig.json'),
+    define: { __dirname: '__sourceDirname', __filename: '__sourceFilename' },
+    metafile: true, logLevel: 'silent', write: false,
+    plugins: [createWorkspaceSourceResolver({
+      workspacePackages: await readWorkspacePackages(repoDir), requireFromProject,
+    })],
+  });
+  const inputs = Object.keys(result.metafile.inputs);
+  assert.ok(inputs.some(path => path.endsWith('/startStackDebugDirectPeerTransferServer.ts')));
+  assert.ok(inputs.some(path => path.endsWith('/transferFinalizeRecoveryFault.ts')));
+  assert.equal(inputs.some(path => /(?:^|\/)testkit\//.test(path)), false);
+});
 
 test('installed source daemon bundles the real plugin, child-entry, sodium and Ink graph', async () => {
   const repoDir = resolve(fileURLToPath(new URL('../../../../', import.meta.url)));

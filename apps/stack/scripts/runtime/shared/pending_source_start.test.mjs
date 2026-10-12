@@ -8,6 +8,37 @@ import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../../testkit/core/run_node_capture.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
 
+test('a delegated process shares its parent start without superseding or retiring it', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-delegated-', registerCleanup: false });
+  const parent = await beginPendingSourceStart({ stackBaseDir: fixture.root });
+  let successor;
+  t.after(async () => { await parent.dispose(); await successor?.dispose(); await fixture.cleanup(); });
+  await parent.retainPreparation(fixture.path('prepared'));
+  const markerPath = fixture.path('source-runtime/start.pending.json');
+  const markerBefore = JSON.parse(await readFile(markerPath, 'utf8'));
+  const moduleUrl = new URL('./pending_source_start.mjs', import.meta.url).href;
+  const delegated = await runNodeCapture(['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { beginPendingSourceStart } from ${JSON.stringify(moduleUrl)};
+    const start = await beginPendingSourceStart({ stackBaseDir: ${JSON.stringify(fixture.root)},
+      requestId: ${JSON.stringify(parent.requestId)} });
+    try {
+      assert.equal(start.requestId, ${JSON.stringify(parent.requestId)});
+      await start.publish(async () => {});
+    } finally { await start.dispose(); }
+  `]);
+  assert.equal(delegated.code, 0, delegated.stderr);
+  assert.deepEqual(JSON.parse(await readFile(markerPath, 'utf8')), markerBefore,
+    'delegated publication and cleanup retain the parent marker and preparation');
+  await parent.publishPreparation(async () => writeFile(fixture.path('adopted'), 'yes'));
+  assert.equal(parent.signal.aborted, false);
+  successor = await beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: 'next-parent', replacePending: true });
+  await assert.rejects(beginPendingSourceStart({ stackBaseDir: fixture.root, requestId: parent.requestId }),
+    { code: 'ESOURCESTARTSUPERSEDED' }, 'a stale delegated half cannot overwrite a genuine successor');
+  await assert.rejects(parent.publish(async () => {}), { code: 'ESOURCESTARTSUPERSEDED' });
+  await successor.publish(async () => {});
+});
+
 test('a newer process cancels only its stack pending start and prevents stale publication', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-pending-source-start-', registerCleanup: false });
   const first = await beginPendingSourceStart({ stackBaseDir: fixture.path('same-stack') });
@@ -50,7 +81,20 @@ test('a newer process cancels only its stack pending start and prevents stale pu
   assert.equal(other.signal.aborted, false, 'a different stack remains pending');
   let stalePublished = false;
   await assert.rejects(first.publish(async () => { stalePublished = true; }), { code: 'ESOURCESTARTSUPERSEDED' });
+  await assert.rejects(first.publishPreparation(async () => { stalePublished = true; }), { code: 'ESOURCESTARTSUPERSEDED' });
+  await assert.rejects(first.setPhase({ phase: 'building', component: 'daemon' }), { code: 'ESOURCESTARTSUPERSEDED' });
   assert.equal(stalePublished, false);
+  await other.retainPreparation(fixture.path('other-preparation'));
+  await other.setPhase({ phase: 'building', component: 'server' }, 'server-host');
+  await other.setPhase({ phase: 'queued', component: 'daemon' }, 'daemon-host');
+  await other.publishPreparation(async () => writeFile(fixture.path('other-prepared'), 'ready'));
+  await other.retainPreparation(fixture.path('other-ui'));
+  const retained = JSON.parse(await readFile(fixture.path('other-stack/source-runtime/start.pending.json'), 'utf8'));
+  assert.deepEqual(retained.preparationDirs, [fixture.path('other-preparation'), fixture.path('other-ui')]);
+  assert.deepEqual(retained.targets, { 'server-host': { phase: 'building', component: 'server' },
+    'daemon-host': { phase: 'queued', component: 'daemon' } });
+  assert.equal(retained.preparationDir, fixture.path('other-preparation'),
+    'older loaded retainers keep the primary reload graph while a web product is pinned separately');
   await other.publish(async () => writeFile(fixture.path('other-published'), 'yes'));
   assert.equal(await readFile(fixture.path('other-published'), 'utf8'), 'yes');
 });

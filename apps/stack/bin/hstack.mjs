@@ -344,6 +344,7 @@ function normalizeStackShorthandForPreflight(argv) {
 }
 
 const STACK_LOCAL_ENV_SUBCOMMANDS = new Set(['set', 'unset', 'remove', 'rm', 'get', 'list', 'path', 'shared-db']);
+const COMPONENT_PREPARED_STARTUP_SCRIPTS = new Set(['scripts/dev.mjs', 'scripts/mobile.mjs', 'scripts/mobile_dev_client.mjs']);
 
 function shouldSkipBundledWorkspacePreflight(argv) {
   const args = Array.isArray(argv) ? argv : [];
@@ -364,6 +365,15 @@ function shouldSkipBundledWorkspacePreflight(argv) {
   if (isHelpInvocation(args)) return true;
 
   const resolvedCommand = command ? resolvehstackCommand(command) : null;
+  // Expo reads authored workspace exports. These startup owners admit their
+  // own dependencies; publishing the entire Stack closure here would prevent
+  // Expo from starting before independent server/daemon dist preparation.
+  if (COMPONENT_PREPARED_STARTUP_SCRIPTS.has(resolvedCommand?.scriptRelPath)) return true;
+  // Auth selects its admitted CLI entrypoint; the CLI owns missing runtime
+  // preparation. Publishing Stack's workspace closure before login adds an
+  // unrelated build lock before that owner can run.
+  if (resolvedCommand?.scriptRelPath === 'scripts/auth.mjs'
+    && preSeparatorArgs[preSeparatorArgs.indexOf(command) + 1] === 'login') return true;
   if (resolvedCommand?.scriptRelPath === 'scripts/setup.mjs' && hasJsonFlag(args)) {
     return true;
   }
@@ -398,6 +408,7 @@ function shouldSkipBundledWorkspacePreflight(argv) {
   const rest = commandIndex >= 0 ? args.slice(commandIndex + 1) : [];
   const positionals = rest.filter((arg) => arg !== '--' && !String(arg).startsWith('-'));
   const subcommand = positionals[0] ?? '';
+  if (COMPONENT_PREPARED_STARTUP_SCRIPTS.has(resolvehstackCommand(subcommand)?.scriptRelPath)) return true;
   const { envPath: selectedStackEnvPath } = resolveStackEnvPath(positionals[1] ?? '', process.env);
   const selectedStackRuntimeMode = dotenvGetQuick(selectedStackEnvPath, 'HAPPIER_STACK_RUNTIME_MODE');
   // Named-stack preflight reads the named stack's mode, not a caller's foreign stack selection.
@@ -444,9 +455,7 @@ function shouldSkipBundledWorkspacePreflight(argv) {
   if (subcommand === 'auth') {
     if (!positionals[1]) return false;
     if (positionals[2] === 'status') return true;
-    if (positionals[2] === 'login') {
-      return isBundledWorkspaceRuntimeInvocation(preSeparatorArgs, runtimeEnv);
-    }
+    if (positionals[2] === 'login') return true;
     return false;
   }
   // Stop owns only stack-recorded lifecycle cleanup. It must remain able to
@@ -494,11 +503,6 @@ function shouldSkipBundledWorkspacePreflight(argv) {
   // Stack control plane. Re-running the global wrapper preflight here serializes
   // startup before incumbent/last-green adoption can occur.
   if (isTuiManaged) return true;
-
-  // Explicit source watch starts use the same component-specific admission owners
-  // as TUI children. Let them validate/adopt retained outputs before a global
-  // workspace publication can fail on unrelated current-source errors.
-  if (subcommand === 'dev' && rest.includes('--watch')) return true;
 
   const hasBackground = rest.some((arg) => arg === '--background');
   return hasBackground && hasJsonFlag(rest);

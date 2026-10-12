@@ -74,19 +74,21 @@ for (const platform of ['posix', 'windows']) {
     let daemonAlive = true;
     let serverAlive = true;
     let uiAlive = true;
-    const stopped = await stopStackWithEnv({ ...f.input, preserveDaemon: true }, {
-      // Only SSH/native process effects are simulated; Stop and custody are real.
-      runCaptureResultImpl: async (_command, args) => {
+    // Only SSH/native process effects are simulated; Stop and custody are real.
+    const runCaptureResultImpl = async (_command, args) => {
         const raw = String(args.at(-1));
         const command = platform === 'windows' ? Buffer.from(raw.split(' ').at(-1), 'base64').toString('utf16le') : raw;
         if (command.includes('stack stop')) {
-          daemonAlive = command.includes('--preserve-daemon');
+          if (!command.includes('--preserve-daemon')) daemonAlive = false;
           serverAlive = false;
           uiAlive = false;
+        } else if (command.includes('stack.runtime.json')) {
+          const alive = serverAlive || uiAlive || (daemonAlive && !command.includes('"preserveDaemon":true'));
+          return { ok: !alive, exitCode: alive ? 1 : 0 };
         }
         return { ok: true, exitCode: 0 };
-      },
-    });
+    };
+    const stopped = await stopStackWithEnv({ ...f.input, preserveDaemon: true }, { runCaptureResultImpl });
     assert.equal(daemonAlive, true, 'native Stop must honor the preservation request');
     assert.equal(serverAlive, false);
     assert.equal(uiAlive, false);
@@ -99,6 +101,10 @@ for (const platform of ['posix', 'windows']) {
     assert.equal(retained.remoteTargets.linux1.serviceStatus.server, 'stopped');
     assert.equal(retained.remoteTargets.linux1.serviceStatus.expo, 'stopped');
     assert.equal(retained.remoteTargets.linux1.forwardPid, null);
+    const fullStop = await stopStackWithEnv(f.input, { runCaptureResultImpl });
+    assert.equal(daemonAlive, false, 'a later full Stop consumes preserved native custody');
+    assert.equal(fullStop.finalization.finalized, true);
+    assert.equal(await readStackRuntimeStateFile(f.statePath), null);
   });
 }
 
@@ -219,6 +225,22 @@ test('a refused remote SSH connection leaves retirement pending without blocking
   assert.equal(stopped.finalization.finalized, true);
   assert.deepEqual(stopped.errors, []);
   assert.equal((await readStackRuntimeStateFile(f.statePath)).remoteTargets.linux1.status, 'retirement-pending');
+});
+
+test('never-started unreachable target releases local stop but preserves unknown prior native custody', async t => {
+  const f = await fixture(t);
+  await recordStackRuntimeUpdate(f.statePath, { remoteTargets: { linux1: {
+    status: 'starting', phase: 'prepare', forwardPid: null, serviceStatus: { daemon: 'starting' },
+  } } });
+  const stopped = await stopStackWithEnv(f.input, { runCaptureResultImpl: async () => ({ ok: false,
+    exitCode: 255, err: 'ssh: connect to host linux1 port 22: No route to host' }) });
+  assert.equal(stopped.finalization.finalized, true, 'failure before worker dispatch must not strand the local controller');
+  assert.deepEqual(stopped.errors, []);
+  const retained = await readStackRuntimeStateFile(f.statePath);
+  assert.equal(retained.remoteTargets.linux1.status, 'retirement-pending', 'never launched here does not prove that a previous native daemon or Session is absent');
+  assert.equal(retained.remoteTargets.linux1.forwardPid, null);
+  assert.equal(retained.stopRequest, null);
+  assert.deepEqual(stopped.remoteRetirementPending.map(item => item.target), ['linux1']);
 });
 
 test('a retirement transport failure still blocks stop when the fresh probe reaches a surviving remote runtime', async t => {

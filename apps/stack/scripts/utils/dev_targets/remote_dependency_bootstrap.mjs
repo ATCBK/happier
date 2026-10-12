@@ -4,8 +4,8 @@ import { join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { execYarn } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
-import { resolveWorkspaceBuildMode, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
-import { SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { resolveRemoteValidationPreparationEnv } from './remote_validation_preparation.mjs';
+import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';
 
@@ -51,12 +51,12 @@ async function installInitialDependencies({ repoDir, env }) {
   });
 }
 
-async function prepareInitialUiOutputs({ repoDir, env }) {
+async function prepareInitialUiOutputs({ repoDir, env, force }) {
   const installEnv = resolveInitialInstallEnv(env);
-  const runYarn = args => execYarn(args, { cwd: repoDir, env: installEnv, preferCorepack: true, stdio: 'inherit' });
+  const runYarn = (args, postinstallEnv = installEnv) => execYarn(args, { cwd: repoDir, env: postinstallEnv, preferCorepack: true, stdio: 'inherit' });
   await ensureUiPostinstallOutputs(join(repoDir, 'apps', 'ui'), repoDir, {
-    force: true,
-    runPostinstall: async () => runYarn(['-s', 'workspace', '@happier-dev/app', 'postinstall:real']),
+    force, env: installEnv,
+    runPostinstall: async (postinstallEnv) => runYarn(['-s', 'workspace', '@happier-dev/app', 'postinstall:real'], postinstallEnv),
     restoreDependencies: async () => runYarn(['install', '--force', ...REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS.slice(1)]),
   });
 }
@@ -66,6 +66,7 @@ export async function bootstrapRemoteDependencies({
   validationKind = 'runtime',
   toolsOnly = false,
   componentRelativeDir = '.',
+  executionPlacement = 'local',
   env = process.env,
   packageExists = existsSync,
   installInitialDependencies: installInitialDependenciesImpl = installInitialDependencies,
@@ -75,32 +76,39 @@ export async function bootstrapRemoteDependencies({
 } = {}) {
   // Runtime preparation emits executable prerequisites. Semantic checking is
   // owned by explicit strict/publication callers and the separate check lane.
-  env = { ...env, [WORKSPACE_BUILD_MODE_ENV]: resolveWorkspaceBuildMode({
-    buildMode: env[WORKSPACE_BUILD_MODE_ENV] ?? (validationKind === 'runtime' ? 'source-dev' : 'strict'), env,
-  }) };
+  env = resolveRemoteValidationPreparationEnv(env, validationKind);
   const componentDir = join(repoDir, 'apps', 'stack');
   const componentPath = posix.normalize(String(componentRelativeDir).replaceAll('\\', '/'));
-  const sourceToolsOnly = toolsOnly || validationKind === 'source-test';
-  const needsUiPostinstallPreparation = sourceToolsOnly && /^apps\/ui(?:\/|$)/u.test(componentPath);
+  const sourceToolsOnly = toolsOnly || validationKind === 'source-test' || validationKind === 'typecheck';
+  if (String(env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES ?? '').trim() === '1') {
+    const { ensureDepsInstalled } = await loadDependencyOwner();
+    await ensureDepsInstalled(componentDir, 'remote Happier workspace', { env });
+    return;
+  }
+  // Only an affirmative worker placement permits dependency mutation.
+  if (executionPlacement !== 'remote') {
+    await assertDependenciesReady({ installDir: repoDir, componentDir, env,
+      ...(sourceToolsOnly ? { installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE } : {}) });
+    if (!sourceToolsOnly && /^apps\/stack(?:\/|$)/u.test(componentPath)) {
+      const { ensureWorkspacePackagesBuiltForComponent } = await loadDependencyOwner();
+      await ensureWorkspacePackagesBuiltForComponent(componentDir, { env });
+    }
+    return;
+  }
   let refreshed = false;
   const installAndPrepare = async () => {
     await installInitialDependenciesImpl({ repoDir, env });
     refreshed = true;
-    // UI source tooling prepares postinstall under the same freshness lock.
-    // Other installs still complete shared UI outputs before
-    // releasing their stage-zero dependency admission.
-    if (!needsUiPostinstallPreparation) await prepareInitialUiOutputs({ repoDir, env });
   };
+  // Every role reads the same installed tree. Complete the canonical UI
+  // postinstall under its mutation lock, including warm trees with lost patches.
+  // A healthy warm tree is inspected without rewriting dependency bytes.
+  const onDependenciesReady = async () => await prepareInitialUiOutputs({ repoDir, env, force: refreshed });
   if (sourceToolsOnly) {
-    // Source tests do not consume the Stack dependency owner's compiled closure.
+    // Source validation does not consume the Stack owner's compiled closure.
+    // Typecheck declarations are admitted by component preparation afterward.
     // The readiness verifier and postinstall tools resolve source directly;
     // retain patched dependency preparation without publishing workspace dist.
-    const onDependenciesReady = needsUiPostinstallPreparation
-      ? async () => {
-          const { ensureUiPostinstallOutputs } = await loadDependencyOwner();
-          await ensureUiPostinstallOutputs(join(repoDir, 'apps', 'ui'), repoDir, { env, force: refreshed });
-        }
-      : null;
     return await withDependencyRefreshImpl(
       { installDir: repoDir, componentDir, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE, onDependenciesReady },
       installAndPrepare,
@@ -117,7 +125,7 @@ export async function bootstrapRemoteDependencies({
   const dependencyOwnerReady = dependencyOwnerEntrypoints.every((entrypoint) => packageExists(entrypoint));
   if (!dependencyOwnerReady) {
     await withDependencyRefreshImpl(
-      { installDir: repoDir, componentDir, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE },
+      { installDir: repoDir, componentDir, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE, onDependenciesReady },
       installAndPrepare,
     );
     const { ensureWorkspacePackagesBuiltByName } = await loadWorkspaceBuildOwner();
@@ -152,10 +160,12 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
   const kind = process.argv.slice(2).find(value => value.startsWith('--validation-kind='));
   const component = process.argv.slice(2).find(value => value.startsWith('--component-relative-dir='));
   const repo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
+  const placement = process.argv.slice(2).find(value => value.startsWith('--execution-placement='));
   await bootstrapRemoteDependencies({
     ...(repo ? { repoDir: resolve(repo.slice('--repo-dir='.length)) } : {}),
     toolsOnly: process.argv.includes('--tools-only'),
     validationKind: kind?.slice('--validation-kind='.length) ?? 'runtime',
     componentRelativeDir: component?.slice('--component-relative-dir='.length) ?? '.',
+    executionPlacement: placement?.slice('--execution-placement='.length) ?? 'local',
   });
 }

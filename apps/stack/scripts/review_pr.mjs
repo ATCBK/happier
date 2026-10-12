@@ -470,14 +470,14 @@ async function main() {
           const depsLabel = 'warm cached workspace deps (yarn)';
           updateSteps.start(depsLabel);
           try {
-            await withYarnInstallGuard({ installDir: mainDir, componentDir: mainDir }, async () => {
-              const pmCacheBaseDir = resolvePmCacheBaseDirFromWorkspaceDir(workspaceCache.workspaceDir);
-              const env = await applyStackCacheEnv({
-                ...process.env,
-                HAPPIER_STACK_PM_CACHE_BASE_DIR: pmCacheBaseDir,
-                HAPPIER_STACK_PM_ISOLATE_HOME: '1',
-              });
-              const quiet = verbosity === 0 && !json;
+            const pmCacheBaseDir = resolvePmCacheBaseDirFromWorkspaceDir(workspaceCache.workspaceDir);
+            const env = await applyStackCacheEnv({
+              ...process.env,
+              HAPPIER_STACK_PM_CACHE_BASE_DIR: pmCacheBaseDir,
+              HAPPIER_STACK_PM_ISOLATE_HOME: '1',
+            });
+            const quiet = verbosity === 0 && !json;
+            await withYarnInstallGuard({ installDir: mainDir, componentDir: mainDir, env, quiet: quiet || json }, async () => {
               try {
                 await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env, stdio: quiet ? 'ignore' : 'inherit' });
               } catch (e) {

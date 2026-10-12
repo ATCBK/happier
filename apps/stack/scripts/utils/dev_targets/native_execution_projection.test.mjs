@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { resolveWorkspaceTypeScriptCompilerArgs, WORKSPACE_BUILD_MODE_ENV } from '../../../../../packages/cli-common/workspaceChildBuildEnv.mjs';
 import { resolveRepoStackIdentity } from '../stack/repo_stack_identity.mjs';
 
 import { prepareCommandRepository, renderNativeExecutionProjection, resolveCommandRepositoryConfig } from './native_execution_projection.mjs';
@@ -345,16 +346,17 @@ test('native command decision artifact is current and executes the canonical cla
     { args: ['corepack', 'yarn', '--cwd', 'packages/cli-common', '-s', 'build:unmeasured'], expectedHeavyClass: 'compilation' },
     { args: ['node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', '../../apps/ui/tsconfig.json'], cwd: 'packages/protocol', expectedHeavyClass: 'compilation' },
     { args: ['node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', '../../apps/ui/tsconfig.json', '-p', 'tsconfig.json'], cwd: 'packages/plugin-sdk', expectedHeavyClass: 'compilation' },
-    { args: ['node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', 'tsconfig.json', '--noCheck'], cwd: 'packages/protocol', expectedHeavyClass: 'package-dist' },
+    { args: ['node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', 'tsconfig.json', '--noCheck'], cwd: 'packages/protocol', buildMode: 'source-dev', expectedHeavyClass: 'package-dist' },
+    { args: ['node', '../../scripts/workspaces/buildTypeScriptPackageDist.mjs', '-p', 'tsconfig.json', '--noCheck'], cwd: 'packages/protocol', buildMode: 'strict', expectedHeavyClass: 'runtime-build' },
     { args: ['node', 'custom/build.mjs'], cwd: 'packages/cli-common', expectedHeavyClass: 'compilation' },
-    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', '--incremental'], cwd: '.', expectedHeavyClass: 'package-dist' },
-    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck=true'], cwd: 'apps/ui', expectedHeavyClass: 'package-dist' },
+    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', '--incremental'], cwd: '.', buildMode: 'source-dev', expectedHeavyClass: 'package-dist' },
+    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck=true'], cwd: 'apps/ui', buildMode: 'source-dev', expectedHeavyClass: 'package-dist' },
     { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck=false'], cwd: '.', expectedHeavyClass: 'compilation' },
     { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', 'false'], cwd: '.', expectedHeavyClass: 'compilation' },
     { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', '--noCheck', 'false'], cwd: '.', expectedHeavyClass: 'compilation' },
     { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck=true', '--noCheck=false'], cwd: '.', expectedHeavyClass: 'compilation' },
-    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', 'false', '--noCheck', 'true'], cwd: '.', expectedHeavyClass: 'package-dist' },
-    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', 'false', '--noCheck', '--incremental'], cwd: '.', expectedHeavyClass: 'package-dist' },
+    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', 'false', '--noCheck', 'true'], cwd: '.', buildMode: 'source-dev', expectedHeavyClass: 'package-dist' },
+    { args: ['node', 'scripts/workspaces/buildTypeScriptPackageDist.mjs', '--noCheck', 'false', '--noCheck', '--incremental'], cwd: '.', buildMode: 'source-dev', expectedHeavyClass: 'package-dist' },
     { args: ['node', 'scripts/workspaces/runTypeScriptCli.mjs', '--noCheck'], cwd: '.', expectedHeavyClass: 'compilation' },
     { args: ['yarn', '-s', 'lint'] },
     { args: ['--script=lint:local'] },
@@ -375,8 +377,16 @@ test('native command decision artifact is current and executes the canonical cla
     { args: ['yarn', 'install'] },
     { args: ['nodejs', 'node_modules\\vitest\\vitest.mjs', 'run'], cwd: 'apps/cli' },
   ];
-  for (const { args, cwd = '.', expectedHeavyClass, expectedPlacement } of cases) {
-    const policy = resolveRemoteCommandPolicy(args, { cwd });
+  for (const { args, cwd = '.', buildMode = 'strict', expectedHeavyClass, expectedPlacement } of cases) {
+    const env = { ...process.env, [WORKSPACE_BUILD_MODE_ENV]: buildMode, npm_lifecycle_event: '' };
+    const compilerIndex = args.findIndex(arg => arg.replaceAll('\\', '/').split('/').at(-1) === 'buildTypeScriptPackageDist.mjs');
+    // The dist owner selects checked vs emit-only arguments before admission.
+    // Compare the dispatchers on that same input, not ambient/raw flag intent.
+    const effectiveArgs = compilerIndex === -1 ? args : [
+      ...args.slice(0, compilerIndex + 1),
+      ...resolveWorkspaceTypeScriptCompilerArgs({ compilerArgs: args.slice(compilerIndex + 1), env }),
+    ];
+    const policy = resolveRemoteCommandPolicy(effectiveArgs, { cwd, env });
     if (expectedHeavyClass !== undefined) assert.equal(policy.heavyClass, expectedHeavyClass, args.join(' '));
     if (expectedPlacement) assert.equal(policy.placement, expectedPlacement, args.join(' '));
     const keys = Object.keys(policy);
@@ -384,7 +394,7 @@ test('native command decision artifact is current and executes the canonical cla
     const body = 'repo_root=$1; invoked_cwd="$1/$2"; shift 2; . ' + artifactWord
       + '; resolve_native_command_policy "$@"; printf "%s\\n" '
       + keys.map(key => '"$policy_' + key + '"').join(' ');
-    const result = spawnSync('/bin/sh', ['-c', body, 'policy-parity', root, cwd, ...args], { encoding: 'utf8' });
+    const result = spawnSync('/bin/sh', ['-c', body, 'policy-parity', root, cwd, ...effectiveArgs], { encoding: 'utf8', env });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trimEnd().split('\n'), keys.map(key => policy[key]), args.join(' ') + ' @ ' + cwd);
   }

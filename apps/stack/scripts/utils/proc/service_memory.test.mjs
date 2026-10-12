@@ -133,6 +133,29 @@ const policy = fileURLToPath(new URL('../dev_targets/native_command_policy.sh', 
 const identity = fileURLToPath(new URL('./native_process_identity.sh', import.meta.url));
 const hostState = fileURLToPath(new URL('./native_host_admission_state.sh', import.meta.url));
 
+test('admitted memory follows surviving workload custody rather than an unreaped terminal wrapper', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-terminal-tree-' });
+  const admissionRoot = fixture.path('admission');
+  const ownerPath = fixture.path('admission', 'owners', '99999999-12345');
+  await mkdir(ownerPath, { recursive: true });
+  await writeFile(`${ownerPath}/process`, '99999999 12345\n');
+  await writeFile(`${ownerPath}/class`, 'validation\n');
+  // OS process snapshot only: admission records, authentication and tree accounting are real.
+  const processes = new Map([[99999999, { pid: 99999999, parentPid: 1, state: 'Z',
+    fingerprint: 'linux-proc:12345', rssKiB: 0, cpuSeconds: 0, env: {} }]]);
+  const observe = () => readWorkerMemoryReservations({ admissionRoot, readProcesses: () => processes, includeAdmittedRss: true });
+  assert.deepEqual(observe().admittedOwners, [], 'a zombie alone is no remaining workload');
+  processes.set(99999998, { pid: 99999998, parentPid: 1, state: 'S', rssKiB: 1024, cpuSeconds: 0,
+    env: { HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: admissionRoot, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '99999999:12345' } });
+  assert.deepEqual(observe().admittedOwners, [{ pid: 99999999, token: '12345', rssKiB: 1024 }],
+    'a live reparented payload still owns the existing class envelope');
+  delete processes.get(99999998).rssKiB;
+  assert.deepEqual(observe().admittedOwners, [{ pid: 99999999, token: '12345', rssKiB: 0 }],
+    'unavailable resident memory retains live custody with no envelope credit');
+  processes.get(99999998).state = 'Z';
+  assert.deepEqual(observe().admittedOwners, [], 'terminal descendants cannot keep the envelope alive');
+});
+
 async function memoryBoundary(fixture, { availableKiB, totalKiB }) {
   await mkdir(fixture.path('bin'), { recursive: true });
   const awkPath = fixture.path('bin', 'awk');
@@ -353,6 +376,7 @@ test('a real waiting admission reports its live holder and recent CPU without te
   assert.equal(owner.child.exitCode, null);
 });
 
+
 test('native admission preserves available headroom already consumed by an admitted owner and its descendants', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-admitted-rss-' });
   const observedPidsPath = fixture.path('worker-pids.json');
@@ -416,7 +440,7 @@ test('native admission escalation credits the authenticated inherited owner resi
     'escalation replaces the inherited class envelope');
 });
 
-test('native admission rejects a compilation that cannot fit beside a recorded live service', { skip: process.platform !== 'linux' }, async t => {
+test('native admission uses OS available memory when a live service has an unreadable shared-page census', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-service-memory-' });
   const observedPidsPath = fixture.path('worker-pids.json');
   const { launcher } = await installNativeAdmissionFixture({ root: fixture.root, observedPidsPath });
@@ -449,6 +473,14 @@ test('native admission rejects a compilation that cannot fit beside a recorded l
   assert.ok(serviceMemoryKiB > 0);
   const compilationKiB = classFloor('compilation');
   const totalKiB = compilationKiB + Math.floor(serviceMemoryKiB / 2);
+  const observerPath = fixture.path('native-owner', 'apps', 'stack', 'scripts', 'utils', 'proc', 'service_memory.mjs');
+  const observer = await readFile(observerPath, 'utf8');
+  // Only the OS memory observation changes: unreadable PSS falls back to RSS,
+  // which can overcount shared mappings. MemAvailable is the physical authority.
+  await writeFile(observerPath, observer.replace('const argument =', `
+const serviceProcess = processes.get(${service.pid});
+processes.set(${service.pid}, { ...serviceProcess, pssKiB: null, rssKiB: ${totalKiB * 2} });
+const argument =`));
   // Only the OS resource boundary is replaced; process discovery, canonical
   // runtime PID recording, generation checks and native admission remain real.
   const env = await memoryBoundary(fixture, { availableKiB: totalKiB, totalKiB });
@@ -456,8 +488,7 @@ test('native admission rejects a compilation that cannot fit beside a recorded l
     '--class=compilation', '--machine=local', '--no-wait', '--', 'true'], {
     env, encoding: 'utf8',
   });
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /service-reserved-memory=[1-9]\d*/);
+  assert.equal(result.status, 0, result.stderr);
   const suiteKiB = classFloor('validation');
   const admitted = spawnSync('/bin/sh', [launcher, '--heavyweight-admission',
     '--class=validation', '--machine=local', '--no-wait', '--',
@@ -614,7 +645,8 @@ test('legacy observation validates the original owner, deduplicates inherited to
     'inherited authenticated custody is counted even after reparenting');
   const descendant = snapshot.get(owner.descendantPid);
   snapshot.set(owner.descendantPid, { ...descendant, rssKiB: undefined, pssKiB: null });
-  assert.deepEqual(observeRss(owner.root).admittedOwners, [], 'unavailable tree RSS must not release the reservation');
+  assert.deepEqual(observeRss(owner.root).admittedOwners, [{ pid: owner.child.pid, token: owner.token, rssKiB: 0 }],
+    'unavailable tree RSS retains live custody without crediting any resident memory');
   snapshot.set(owner.descendantPid, descendant);
   await writeFile(`${owner.ownerPath}/process`, `${owner.child.pid} 0\n`);
   assert.deepEqual(observe(fixture.path('current')).legacyOwners, [], 'a live inherited token cannot authorize a mismatched owner record');

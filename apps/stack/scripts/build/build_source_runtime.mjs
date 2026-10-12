@@ -2,20 +2,22 @@ import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { runSourceBuildCommand } from '../utils/proc/runSourceBuildCommand.mjs';
 import { runWorkspaceBuildAdmission } from '../utils/proc/workspace_build_admission.mjs';
-import { withWorkspaceBundleLock, isWorkspaceBundleLockActive } from '../../../../packages/cli-common/workspaceBundleLock.mjs';
+import { isWorkspaceBundleLockActive } from '../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { isPidAlive } from '../utils/proc/pids.mjs';
-import { readWorkspaceBuildInputs, resolveSourcePluginUiBuildInputPaths } from '../utils/fs/workspaceBuildInputs.mjs';
+import { readWorkspaceBuildInputs, readSourceComponentBuildInputs } from '../utils/fs/workspaceBuildInputs.mjs';
 import { readCachedFileDigestSync } from '../utils/fs/cached_file_digest.mjs';
 import { writeJsonAtomic } from '../utils/fs/json.mjs';
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { run, runCapture } from '../utils/proc/proc.mjs';
 import { isDevStartupSourceDrift, prepareSourceComponent } from '../utils/dev/devReloadCoordinator.mjs';
-import { captureBuildInputFiles, mountCapturedWorkspaceDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
+import { captureBuildInputFiles, mountCapturedWorkspaceDependencies, readBuildInputIdentity, withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
+import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
+import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 
 import { SOURCE_CONDITION, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -23,39 +25,47 @@ export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packa
 /** Finite web builds reuse workspace capture, not a second snapshot engine.
  * Capture authored inputs only; installed third-party tools retain their owner.
  * Later source edits belong to the next explicit build, never this Metro crawl. */
-export async function captureSourceWebBuildInputs({ repoDir, outputDir, signal }) {
+export async function captureSourceWebBuildInputs({ repoDir, outputDir, component = 'expo', signal }) {
   repoDir = resolve(repoDir);
-  const packages = await readWorkspacePackages(repoDir);
-  const owners = [...packages.values()].filter(({ root }) => {
-    const path = relative(repoDir, root).replaceAll('\\', '/');
-    return path.startsWith('packages/') || path === 'apps/ui' || path === 'apps/stack';
-  });
-  const workspaceDirs = owners.map(({ root }) => relative(repoDir, root));
+  const { workspaceDirs } = await readSourceComponentBuildInputs({ repoDir, component });
   signal?.throwIfAborted();
   const started = performance.now();
   const capture = await captureBuildInputFiles({ sourceDir: repoDir, captureDir: outputDir,
-    readPaths: () => {
+    readPaths: async () => {
       signal?.throwIfAborted();
-      const paths = [repoDir, ...owners.map(({ root }) => root)].flatMap(root =>
-        readWorkspaceBuildInputs(root, {
-          includeShippedFiles: root === join(repoDir, 'packages/plugin-sdk')
-            || relative(repoDir, root).replaceAll('\\', '/').startsWith('packages/plugins/'),
-          excludeGeneratedPluginArtifacts: relative(repoDir, root).replaceAll('\\', '/').startsWith('packages/plugins/'),
-          additionalInputPaths: root === repoDir
-            // Stack preparation imports the CLI publication policy, not its source tree.
-            ? ['apps/cli/scripts/buildPublication.mjs']
-            : root === join(repoDir, 'apps/ui')
-              ? ['index.ts', 'public', 'plugins', 'modules', 'sources/dev/testkit'] : [],
-        }).map(path => relative(repoDir, resolve(root, path))));
-      // Layout discovery needs app manifests, not unrelated app source trees.
-      for (const { root } of packages.values()) paths.push(relative(repoDir, join(root, 'package.json')));
-      if (existsSync(join(repoDir, 'yarn.lock'))) paths.push('yarn.lock');
-      return paths;
+      return (await readSourceComponentBuildInputs({ repoDir, component })).files;
     } });
   await mountCapturedWorkspaceDependencies({ sourceDir: repoDir, captureDir: outputDir, workspaceDirs });
+  if (component === 'expo') {
+    const uiManifest = JSON.parse(await readFile(join(outputDir, 'apps/ui/package.json'), 'utf8'));
+    const workspaces = await readWorkspacePackages(outputDir);
+    const fromSource = createRequire(join(repoDir, 'apps/ui/package.json'));
+    const fromCapture = createRequire(join(outputDir, 'apps/ui/package.json'));
+    for (const name of Object.keys(uiManifest.dependencies ?? {})) {
+      if (workspaces.has(name) || name.startsWith('@types/')) continue;
+      try {
+        let resolved;
+        try { resolved = fromSource.resolve(name); }
+        catch (error) {
+          // Subpath-only packages intentionally have no root runtime export.
+          if (error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') continue;
+          throw error;
+        }
+        await lstat(resolved);
+        await lstat(fromCapture.resolve(name));
+      } catch (cause) {
+        if (!['MODULE_NOT_FOUND', 'ENOENT', 'ENOTDIR'].includes(cause.code)) throw cause;
+        const error = new Error(`[source-ui] installed package input is missing: ${name}. Complete dependency refresh before capture.`, { cause });
+        error.code = 'HAPPIER_EXPO_DEPENDENCIES_NOT_READY';
+        throw error;
+      }
+    }
+  }
   signal?.throwIfAborted();
-  console.log(`[source-ui] phase=input-capture elapsedMs=${Math.round(performance.now() - started)} files=${capture.files.length}`);
-  return { repoDir: outputDir, uiProjectDir: join(outputDir, 'apps/ui') };
+  const log = component === 'expo' ? console.log : console.error;
+  log(`[source-${component === 'expo' ? 'ui' : 'bundle'}] phase=input-capture elapsedMs=${Math.round(performance.now() - started)} files=${capture.files.length}`);
+  return { repoDir: outputDir, uiProjectDir: join(outputDir, 'apps/ui'), files: capture.files,
+    inputIdentity: await readBuildInputIdentity({ sourceDir: outputDir, files: capture.files }) };
 }
 
 async function linkInstalledDirectory(from, to) {
@@ -64,50 +74,30 @@ async function linkInstalledDirectory(from, to) {
   await symlink(from, to, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
-async function sourceBundleFingerprint({ repoDir, component, serverComponent, dbProvider }) {
-  const hash = createHash('sha256');
-  const projectDir = join(repoDir, 'apps', component === 'daemon' ? 'cli' : 'server');
-  const esbuild = createRequire(pathToFileURL(join(projectDir, 'package.json')))('esbuild');
-  hash.update(JSON.stringify([repoDir, component, serverComponent, dbProvider, process.version, process.platform, process.arch, esbuild.version]));
-  const inputs = new Set([fileURLToPath(import.meta.url), join(repoDir, 'yarn.lock'),
-    join(repoDir, 'packages/cli-common/cliRuntimeSidecars.mjs'),
-    join(repoDir, 'scripts/workspaces/buildTypeScriptPackageDist.mjs'),
-    join(repoDir, 'scripts/workspaces/resolveTypeScriptCliInvocation.mjs')]);
-  if (component === 'daemon') {
-    for (const input of resolveSourcePluginUiBuildInputPaths(repoDir)) inputs.add(input);
-  }
-  for (const { root } of (await readWorkspacePackages(repoDir)).values()) {
-    if (root !== projectDir && !relative(repoDir, root).startsWith(`packages`)) continue;
-    for (const input of readWorkspaceBuildInputs(root)) inputs.add(join(root, input));
-  }
-  if (component === 'daemon') {
-    for (const input of readWorkspaceBuildInputs(projectDir, { additionalInputPaths: ['native/processcustody'] })) inputs.add(join(projectDir, input));
-  }
-  // Prisma assets are copied inputs; retained checkout databases are never inputs.
-  const visit = async directory => {
-    if (!existsSync(directory)) return;
-    for (const entry of await readdir(directory, {withFileTypes:true})) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(path);
-      else if (/\.(?:prisma|sql)$/.test(entry.name) || entry.name === 'migration_lock.toml') inputs.add(path);
-    }
-  };
-  if (component === 'server') await visit(join(projectDir, 'prisma'));
-  for (const path of [...inputs].sort()) {
-    if (!existsSync(path)) continue;
-    hash.update(relative(repoDir, path));
-    hash.update(readCachedFileDigestSync(path, statSync(path, {bigint:true})));
-  }
-  return hash.digest('hex');
+function isCompilerTracedSource(path) {
+  return /^apps\/(?:cli\/src|server\/sources)\/.*\.[cm]?[jt]sx?$/.test(path)
+    && !path.endsWith('/generatedBundledPluginManifests.ts');
 }
 
-async function readReusableSourceBundle({ bundleRoot, repoDir, fingerprint }) {
+async function sourceBundleFingerprint({ repoDir, identityRepoDir = repoDir, component, serverComponent, dbProvider, consumedPaths }) {
+  const projectDir = join(repoDir, 'apps', component === 'daemon' ? 'cli' : 'server');
+  const esbuild = createRequire(pathToFileURL(join(projectDir, 'package.json')))('esbuild');
+  const { files } = await readSourceComponentBuildInputs({ repoDir, component });
+  const consumed = consumedPaths && new Set(consumedPaths);
+  return await readBuildInputIdentity({ sourceDir: repoDir,
+    files: consumed ? files.filter(path => !isCompilerTracedSource(path) || consumed.has(path)) : files,
+    options: [identityRepoDir, component, serverComponent, dbProvider, process.version, process.platform, process.arch, esbuild.version, files] });
+}
+
+async function readReusableSourceBundle({ bundleRoot, repoDir, component, serverComponent, dbProvider }) {
   if (!existsSync(bundleRoot)) return null;
   for (const entry of await readdir(bundleRoot, {withFileTypes:true})) {
-    if (!entry.isDirectory() || !entry.name.startsWith('bundle-')) continue;
+    if (!entry.isDirectory() || (!entry.name.startsWith('bundle-') && !entry.name.startsWith('runtime-'))) continue;
     const outputDir = join(bundleRoot, entry.name);
     const record = await readOptionalJson(join(outputDir, 'source-bundle.json'));
-    if (record?.reuseFingerprint !== fingerprint || !record.sourceInputDigests) continue;
+    if (!record?.inputIdentity || !record.sourceInputDigests) continue;
+    if (record.inputIdentity !== await sourceBundleFingerprint({ repoDir, component, serverComponent, dbProvider,
+      consumedPaths: Object.keys(record.sourceInputDigests) })) continue;
     // A consumed file can change and be undone during preparation. The wide
     // membership fingerprint is only a cache hint; captured load bytes decide
     // whether this emitted graph is reusable for the current source.
@@ -117,17 +107,17 @@ async function readReusableSourceBundle({ bundleRoot, repoDir, fingerprint }) {
         && readCachedFileDigestSync(absolute, statSync(absolute, {bigint:true})) === digest;
     });
     if (!current) continue;
-    const {reuseFingerprint, sourceInputDigests, ...built} = record;
+    const {reuseFingerprint, sourceInputDigests, inputIdentity, ...built} = record;
     return {outputDir, built};
   }
   return null;
 }
 
-function sourceBundleBuildLockPath(bundleRoot, fingerprint) {
+export function sourceBundleBuildLockPath(bundleRoot, fingerprint) {
   return join(bundleRoot, `build-${fingerprint}.lock`);
 }
 
-async function setBundleReadOnly(directory, readOnly) {
+export async function setBundleReadOnly(directory, readOnly) {
   for (const entry of await readdir(directory, {withFileTypes:true})) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) continue; // Installed dependencies keep their own lifecycle.
@@ -158,8 +148,8 @@ function isFirstPartyBuiltInput(key, workspacePackages) {
   return /(?:^|\/)(?:dist|package-dist|\.happier-plugin)\//.test(installed);
 }
 
-async function emitSourceAuthorPackages({ repoDir, projectDir, runtimeDir, workspacePackages, build,
-  sourceInputDigests, readSourceInput }) {
+async function emitSourceAuthorPackages({ repoDir, sourceRepoDir, projectDir, runtimeDir, workspacePackages, build,
+  sourceInputDigests, readSourceInput, env, signal }) {
   const workDir = await mkdtemp(join(runtimeDir, '.author-emission-'));
   try {
     const { withDistProjectCompilerArgs } = await import('../../../../scripts/workspaces/buildTypeScriptPackageDist.mjs');
@@ -167,7 +157,7 @@ async function emitSourceAuthorPackages({ repoDir, projectDir, runtimeDir, works
     // Run the existing package classification, closure and physical copier
     // directly from source, not from a workspace dist prerequisite.
     const ownerPath = join(workDir, 'workspaces.mjs');
-    await build({entryPoints:[fileURLToPath(new URL('../../../../packages/cli-common/src/workspaces/index.ts', import.meta.url))],
+    await build({entryPoints:[join(repoDir, 'packages/cli-common/src/workspaces/index.ts')],
       outfile:ownerPath, bundle:true, platform:'node', format:'esm', logLevel:'silent'});
     const owner = await import(pathToFileURL(ownerPath).href);
     const bundles = owner.resolveWorkspaceBundlesFromPackageJson({repoRoot:repoDir,hostPackageDir:projectDir});
@@ -196,7 +186,7 @@ async function emitSourceAuthorPackages({ repoDir, projectDir, runtimeDir, works
         compilerOptions:{rootDir:repoDir,customConditions:[SOURCE_CONDITION],paths:sourcePaths,declaration:true,
           noEmit:false,emitDeclarationOnly:false}});
       const invocation = resolveTypeScriptCliInvocation({args,workspaceDir:repoDir,admissionClass:'source-bundle'});
-      await runCapture(invocation.command, [...invocation.argsPrefix,...args], {cwd:repoDir,ownedProcessGroup:true});
+      await runCapture(invocation.command, [...invocation.argsPrefix,...args], {cwd:repoDir,ownedProcessGroup:true,env,signal});
       const info = JSON.parse(await readFile(buildInfoPath, 'utf8'));
       for (const [index, file] of info.fileNames.entries()) {
         // Native TypeScript records its built-in libraries as bare logical
@@ -215,9 +205,11 @@ async function emitSourceAuthorPackages({ repoDir, projectDir, runtimeDir, works
         const version = typeof info.fileInfos[index] === 'string' ? info.fileInfos[index] : info.fileInfos[index].version;
         // The compiler's consumed input version is the authority. An editor
         // undo during emission cannot cache the graph under restored bytes.
-        if (!await matchesNativeTypeScriptInputVersion(contents, version)) sourceInputDigests[relative(repoDir,path)] = null;
+        if (!await matchesNativeTypeScriptInputVersion(contents, version)) sourceInputDigests[relative(repoDir,path).split(sep).join('/')] = null;
       }
       owner.bundleWorkspacePackageWithRuntimeDependencies({...bundle,destDir,
+        resolveFromPackageJsonPath: join(sourceRepoDir, relative(repoDir, bundle.srcDir), 'package.json'),
+        dereferenceRootDir: sourceRepoDir,
         distDir:join(outputDir, relative(repoDir,bundle.srcDir),'src')});
       // The closure is dependency-first. Later packages consume declarations
       // from this build's physical package, rather than re-inferring and
@@ -249,38 +241,52 @@ async function emitSourceAuthorPackages({ repoDir, projectDir, runtimeDir, works
 async function retainSourceBundles({ stacksRoot, bundleRoot, newest }) {
   const references = [newest];
   const candidates = [];
-  let newestBuilt;
+  const newestBuilt = new Map();
   // Completion and selection share publication custody. Allocation names bind
   // unfinished graphs to existing fingerprint custody, so cancellation leaves
   // no new ledger and a later publication can reclaim an abandoned allocation.
   for (const entry of await readdir(bundleRoot, {withFileTypes:true})) {
-    if (!entry.isDirectory() || !entry.name.startsWith('bundle-')) continue;
+    if (!entry.isDirectory() || !/^(?:bundle|runtime|web)-/.test(entry.name)) continue;
     const directory = join(bundleRoot, entry.name);
     const record = await readOptionalJson(join(directory, 'source-bundle.json'));
     if (!record) {
-      const fingerprint = /^bundle-([a-f0-9]{64})-/.exec(entry.name)?.[1];
+      const fingerprint = /^(?:bundle|runtime|web)-([a-f0-9]{64})-/.exec(entry.name)?.[1];
       // Old allocation names cannot prove unfinished-producer custody.
       if (!fingerprint || isWorkspaceBundleLockActive(sourceBundleBuildLockPath(bundleRoot, fingerprint), {staleAfterMs:Infinity})) continue;
       candidates.push(directory);
       continue;
     }
     const createdMs = (await lstat(directory)).mtimeMs;
-    if (!newestBuilt || createdMs > newestBuilt.createdMs) newestBuilt = {directory, createdMs};
+    const component = record.component ?? (record.cliDir ? 'daemon' : 'server');
+    if (!newestBuilt.has(component) || createdMs > newestBuilt.get(component).createdMs) {
+      newestBuilt.set(component, {directory, createdMs});
+    }
     if (record.reuseFingerprint && isWorkspaceBundleLockActive(sourceBundleBuildLockPath(bundleRoot, record.reuseFingerprint), {staleAfterMs:Infinity})) continue;
     candidates.push(directory);
   }
-  if (newestBuilt) references.push(newestBuilt.directory);
+  references.push(...[...newestBuilt.values()].map(({ directory }) => directory));
   for (const entry of await readdir(stacksRoot, {withFileTypes:true})) {
     if (!entry.isDirectory() || entry.name === 'source-bundles') continue;
     const stackBaseDir = join(stacksRoot, entry.name);
     const sourceRoot = join(stackBaseDir, 'source-runtime');
-    for (const component of ['daemon', 'server']) {
+    const pending = await readOptionalJson(join(sourceRoot, 'start.pending.json'));
+    if (pending && isPidAlive(pending.pid)) references.push(...(pending.preparationDirs ?? []), pending.preparationDir);
+    for (const component of ['daemon', 'server', 'ui']) {
       const selected = await readOptionalJson(join(sourceRoot, `selected-${component}.json`));
       if (selected?.entrypoint) references.push(selected.entrypoint);
+      if (selected?.uiDir) references.push(selected.uiDir);
     }
     const state = await readOptionalJson(join(stackBaseDir, 'stack.runtime.json'));
     if ([state?.ownerPid, state?.processes?.daemonPid, ...(state?.processes?.daemonPids ?? [])].some(isPidAlive)
         && state?.sourceRuntimeLaunch?.entrypoint) references.push(state.sourceRuntimeLaunch.entrypoint);
+    if ([state?.ownerPid, state?.processes?.serverPid].some(isPidAlive)
+        && state?.sourceUiLaunch?.uiDir) {
+      references.push(state.sourceUiLaunch.uiDir, state.sourceUiLaunch.exportDir);
+      // A web-only reload atomically changes this Stack's serving link while
+      // the server continues using its stable path. Follow the actual reader.
+      try { references.push(realpathSync(state.sourceUiLaunch.uiDir)); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
     if (existsSync(sourceRoot)) for (const bundle of await readdir(sourceRoot, {withFileTypes:true})) {
       if (bundle.isDirectory() && bundle.name.startsWith('bundle-')) candidates.push(join(sourceRoot, bundle.name));
     }
@@ -304,13 +310,55 @@ async function retainSourceBundles({ stacksRoot, bundleRoot, newest }) {
     console.error(`[source-bundle] retaining bundles: live process observation unavailable (${error.code ?? error.message})`);
     return;
   }
+  // Serving links and managed storage aliases can name the same retained
+  // product differently. Compare their actual filesystem authority before
+  // reclamation; missing references no longer retain a reader.
+  const canonicalReferences = references.filter(Boolean).flatMap(path => {
+    try { return [realpathSync(path)]; }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  });
   for (const directory of candidates) {
-    if (references.some(path => path === directory || path.startsWith(directory + '/'))
-        || references.some(path => path.startsWith(directory + '\\'))
-        || liveCommands.includes(directory + '/')) continue;
+    const canonicalDirectory = realpathSync(directory);
+    if (canonicalReferences.some(path => path === canonicalDirectory || path.startsWith(canonicalDirectory + sep))
+        || liveCommands.includes(directory + sep) || liveCommands.includes(canonicalDirectory + sep)) continue;
     await setBundleReadOnly(directory, false);
     await rm(directory, {recursive:true, force:true});
   }
+}
+
+/** Runtime and finite web products share completion and reclamation custody.
+ * The consumer pins/selects the completed product inside this short section. */
+export async function withSourceBundlePublication({ stackBaseDir, outputDir, record, signal }, publish) {
+  const bundleRoot = join(dirname(stackBaseDir), 'source-bundles');
+  return await withJsonOwnerFileLock(async () => {
+    let result;
+    try {
+      if (record) {
+        await writeJsonAtomic(join(outputDir, 'source-bundle.json'), record);
+        await setBundleReadOnly(outputDir, true);
+      }
+      result = await publish();
+    } catch (error) {
+      // Distinct admission hints can converge on the same captured inputs.
+      // Retire a failed new product before releasing publication custody, so
+      // another producer cannot adopt it during caller-side error cleanup.
+      if (record) {
+        try {
+          await setBundleReadOnly(outputDir, false);
+          await rm(outputDir, { recursive: true, force: true });
+        } catch (retirementError) {
+          throw new AggregateError([error, retirementError], '[source-bundle] publication and failed-product retirement both failed');
+        }
+      }
+      throw error;
+    }
+    try { await retainSourceBundles({ stacksRoot: dirname(stackBaseDir), bundleRoot, newest: outputDir }); }
+    catch (error) {
+      console.error(`[source-bundle] published graph retained; reclamation failed (${error.code ?? error.message})`);
+    }
+    return result;
+  }, { lockPath: join(bundleRoot, 'publication.lock'), timeoutMs: Infinity, staleAfterMs: Infinity,
+    signal, errorLabel: 'source-bundle publication lock' });
 }
 
 async function readSelectedSourceRuntimeBundle({ stackBaseDir, component, required = true }) {
@@ -321,54 +369,67 @@ async function readSelectedSourceRuntimeBundle({ stackBaseDir, component, requir
   if (!record?.identity || record.entrypoint !== selected?.entrypoint || !existsSync(record.entrypoint)) {
     throw new Error(`[source-bundle] selected source ${component} bundle is unavailable; explicitly restart the Stack to select current source`);
   }
-  const { reuseFingerprint, sourceInputDigests, ...built } = record;
+  const { reuseFingerprint, sourceInputDigests, inputIdentity, ...built } = record;
   return built;
 }
 
-async function publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, record, signal, reuseSelected}) {
+async function publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, record, signal, reuseSelected, pendingRequestId}) {
   // This is short output-metadata custody, not a workspace producer lease:
   // nobody compiles, acquires build leases or waits for admission underneath
   // it. The existing JSON publication owner can therefore finish an admitted
   // graph without reversing native workspace/admission ordering.
-  return await withJsonOwnerFileLock(async () => {
-    const outputDir = resolve(built.runtimeDir, '../..');
-    if (record) {
-      await writeJsonAtomic(join(outputDir, 'source-bundle.json'), record);
-      await setBundleReadOnly(outputDir, true);
-    }
-    const completed = await readOptionalJson(join(outputDir, 'source-bundle.json'));
-    if (completed?.identity !== built.identity || completed?.entrypoint !== built.entrypoint || !existsSync(built.entrypoint)) {
-      throw new Error('[source-bundle] cannot select an incomplete source runtime graph');
-    }
-    signal?.throwIfAborted();
-    // The only selection writer, after completion/read-only success. A failed
-    // construction, completion rename or selection rename preserves the prior
-    // coherent selection; unfinished output remains protected until cleanup.
-    // A CLI bootstrap may have started before startup selected its graph.
-    // Recheck under publication custody so it cannot replace that selection.
-    const selectedBundle = reuseSelected === 'if-available'
-      ? await readSelectedSourceRuntimeBundle({ stackBaseDir, component, required: false }) : null;
-    if (!selectedBundle) {
-      await writeJsonAtomic(join(stackBaseDir, 'source-runtime', `selected-${component}.json`), {entrypoint:built.entrypoint});
-    }
-    try {
-      await retainSourceBundles({stacksRoot:dirname(stackBaseDir), bundleRoot, newest:outputDir});
-    } catch (error) {
-      // Reclamation is maintenance after successful publication. Keep the
-      // coherent selected graph, report the failure, and retry retention at
-      // the next publication rather than deleting a successful launch.
-      console.error(`[source-bundle] published graph retained; reclamation failed (${error.code ?? error.message})`);
-    }
-    return selectedBundle ?? built;
-  }, {lockPath:join(bundleRoot, 'publication.lock'), timeoutMs:Infinity, staleAfterMs:Infinity, signal,
-    errorLabel:'source-bundle publication lock'});
+  const outputDir = resolve(built.runtimeDir, '../..');
+  return await withSourceBundlePublication({ stackBaseDir, outputDir, record, signal }, () =>
+    selectCompletedSourceRuntimeBundle({ stackBaseDir, component, built, signal, reuseSelected, pendingRequestId }));
+}
+
+async function selectCompletedSourceRuntimeBundle({ stackBaseDir, component, built, signal, reuseSelected, pendingRequestId }) {
+  const outputDir = resolve(built.runtimeDir, '../..');
+  const completed = await readOptionalJson(join(outputDir, 'source-bundle.json'));
+  if (completed?.identity !== built.identity || completed?.entrypoint !== built.entrypoint || !existsSync(built.entrypoint)) {
+    throw new Error('[source-bundle] cannot select an incomplete source runtime graph');
+  }
+  signal?.throwIfAborted();
+  if (pendingRequestId) {
+    await retainPendingSourcePreparation({ stackBaseDir, requestId: pendingRequestId, preparationDir: outputDir, signal });
+    return built;
+  }
+  // The only selection writer, after completion/read-only success. A failed
+  // construction, completion rename or selection rename preserves the prior
+  // coherent selection; unfinished output remains protected until cleanup.
+  // A CLI bootstrap may have started before startup selected its graph.
+  // Recheck under publication custody so it cannot replace that selection.
+  const selectedBundle = reuseSelected === 'if-available'
+    ? await readSelectedSourceRuntimeBundle({ stackBaseDir, component, required: false }) : null;
+  if (!selectedBundle) {
+    await writeJsonAtomic(join(stackBaseDir, 'source-runtime', `selected-${component}.json`), {entrypoint:built.entrypoint});
+  }
+  return selectedBundle ?? built;
+}
+
+async function adoptReusableSourceRuntimeBundle({ stackBaseDir, bundleRoot, component, repoDir,
+  serverComponent, dbProvider, env, signal, reuseSelected, pendingRequestId }) {
+  // Lookup, probe and adoption must exclude other fingerprints' reclamation.
+  // No compiler or admission wait runs inside this publication section.
+  return await withSourceBundlePublication({ stackBaseDir, signal }, async () => {
+    const reusable = await readReusableSourceBundle({ bundleRoot, repoDir, component, serverComponent, dbProvider });
+    if (!reusable) return null;
+    if (component === 'daemon') await probeCliDistRuntimeImport(reusable.built.entrypoint,
+      { cwd: reusable.built.cliDir, env, signal });
+    return await selectCompletedSourceRuntimeBundle({ stackBaseDir, component, built: reusable.built,
+      signal, reuseSelected, pendingRequestId });
+  });
 }
 
 /** Build from the execution host's installed source. Stack consumers share one
  * read-only result when source/tool inputs still match; explicit outputDir is the finite
- * producer boundary used by source-bundle tests and probes.
+ * producer boundary used by source-bundle tests and probes. A pending Stack
+ * request prepares and retains shared candidates; its activation selects them.
  */
 export async function buildSourceRuntimeBundle(options) {
+  if (options.pending && (!options.stackBaseDir || !options.pending.requestId || options.reuseSelected)) {
+    throw new Error('[source-bundle] pending preparation requires a Stack request and current-input lookup');
+  }
   if (options.stackBaseDir && options.reuseSelected) {
     const stackBaseDir = resolve(options.stackBaseDir);
     // Recovery and CLI commands read the pinned graph without consulting
@@ -377,35 +438,42 @@ export async function buildSourceRuntimeBundle(options) {
       stackBaseDir, component: options.component, required: options.reuseSelected !== 'if-available',
     }), { lockPath: join(dirname(stackBaseDir), 'source-bundles/publication.lock'),
       timeoutMs: Infinity, staleAfterMs: Infinity, signal: options.signal, errorLabel: 'source-bundle publication lock' });
-    if (selectedBundle) return selectedBundle;
+    if (selectedBundle) {
+      if (options.component === 'daemon') await probeCliDistRuntimeImport(selectedBundle.entrypoint,
+        { cwd: selectedBundle.cliDir, env: options.env, signal: options.signal });
+      return selectedBundle;
+    }
   }
   if (!options.stackBaseDir) return await buildSourceRuntimeBundleOnce(options);
-  return await prepareSourceComponent({ repoDir: resolve(options.repoDir), target: options.component,
+  const preparation = options.preparation ?? options.pending;
+  await preparation?.setPhase({ phase: 'preparing', component: options.component });
+  const built = await prepareSourceComponent({ repoDir: resolve(options.repoDir), target: options.component,
     env: options.env, signal: options.signal, logger: options.logger,
     prepare: () => buildSourceRuntimeBundleOnce(options) });
+  await preparation?.setPhase({ phase: 'prepared', component: options.component });
+  return built;
 }
 
 async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, component, reuseSelected = false, serverComponent = 'happier-server-light', dbProvider,
-  env = process.env, signal }) {
+  pending, preparation = pending, env = process.env, signal = pending?.signal }) {
   repoDir = resolve(repoDir);
   if (stackBaseDir) {
     stackBaseDir = resolve(stackBaseDir);
     const bundleRoot = join(dirname(stackBaseDir), 'source-bundles');
-    const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected};
+    const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected, pendingRequestId: pending?.requestId,
+      preparationRequestId: preparation?.requestId};
     const fingerprint = await sourceBundleFingerprint(inputs);
     const lockPath = sourceBundleBuildLockPath(bundleRoot, fingerprint);
-    // Reuse takes only short publication custody, never compiler admission.
-    // The fingerprint lease prevents reading a graph before its builder has
-    // completed read-only publication. Release both before a cold admission.
-    const cached = await withWorkspaceBundleLock(async () => {
-      const reusable = await readReusableSourceBundle({bundleRoot, repoDir, fingerprint});
-      return reusable ? await publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built:reusable.built, signal, reuseSelected}) : null;
-    }, {lockPath, timeoutMs:Infinity, env, signal, errorLabel:'source-bundle build lock'});
+    await preparation?.setPhase({ phase: 'queued', component });
+    // Completed lookup and adoption use the publication owner. A producer
+    // lease would only serialize these immutable reads with cold compilation
+    // and introduce another held resource before metadata acquisition.
+    const cached = await adoptReusableSourceRuntimeBundle({stackBaseDir, bundleRoot, ...inputs, env, signal});
     if (cached) return cached;
     // Only a cold fingerprint enters compiler admission. Its canonical lease
     // coalesces identical producers; the native owner releases it before
     // waiting on a busy host. Different fingerprints have independent outputs.
-    const prepare = () => runWorkspaceBuildAdmission({ repoDir,
+    const prepare = () => runWorkspaceBuildAdmission({ repoDir, dependencyInstallDir: repoDir,
       launcherPath:fileURLToPath(new URL('../../bin/hstack-exec', import.meta.url)),
       command:process.execPath, args:[fileURLToPath(import.meta.url), JSON.stringify({...inputs, stackBaseDir, fingerprint})],
       locks:[{path:lockPath, kind:'workspace', timeoutMs:null, errorLabel:'source-bundle build lock'}],
@@ -431,61 +499,108 @@ async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, 
       throw error;
     }
     const built = JSON.parse(result.stdout);
-    if (built.sourceInputsChanged) return await buildSourceRuntimeBundleOnce({ ...inputs, stackBaseDir, env, signal });
+    if (built.sourceInputsChanged) return await buildSourceRuntimeBundleOnce({ ...inputs, stackBaseDir, pending, preparation, env, signal });
     // The finite producer completed publication before releasing fingerprint
     // custody. No unselected completed graph crosses an unprotected handoff.
     return built;
   }
   outputDir = resolve(outputDir);
   const stdout = await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
-    args: [JSON.stringify({ repoDir, outputDir, component, serverComponent, dbProvider })], env, signal, admissionClass:'source-bundle' });
-  const {sourceInputDigests, ...built} = JSON.parse(stdout);
-  await writeJsonAtomic(join(outputDir, 'source-bundle.json'), {...built, sourceInputDigests});
+    args: [JSON.stringify({ repoDir, outputDir, component, serverComponent, dbProvider })], env, signal, captureStderr: true, admissionClass:'source-bundle' });
+  const {sourceInputDigests, inputIdentity, ...built} = JSON.parse(stdout);
+  signal?.throwIfAborted();
+  if (component === 'daemon') await probeCliDistRuntimeImport(built.entrypoint, { cwd: built.cliDir, env, signal });
+  await writeJsonAtomic(join(outputDir, 'source-bundle.json'), {...built, sourceInputDigests, inputIdentity});
   return built;
 }
 
 async function prepareSharedSourceRuntimeBundle({repoDir, stackBaseDir, component, serverComponent, dbProvider, reuseSelected, fingerprint:admittedFingerprint,
-  env = process.env, signal}) {
+  pendingRequestId, preparationRequestId, env = process.env, signal}) {
   const stacksRoot = dirname(stackBaseDir);
   const bundleRoot = join(stacksRoot, 'source-bundles');
-  const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected};
-  const fingerprint = await sourceBundleFingerprint(inputs);
-  // An already-parsed, queued launcher from before this lock contraction has
-  // no fingerprint in its payload. It still uses this canonical producer;
-  // current launchers additionally reselect if their queued inputs changed.
-  if (admittedFingerprint && admittedFingerprint !== fingerprint) return {sourceInputsChanged:true};
-  const reusable = await readReusableSourceBundle({bundleRoot, repoDir, fingerprint});
-  let built = reusable?.built;
-  let outputDir = reusable?.outputDir;
-  if (!built) {
-    await mkdir(bundleRoot, {recursive:true});
-    // This allocation is not a claim about checkout bytes. The existing
-    // emitted-code identity below describes what this finite build produced.
-    outputDir = await mkdtemp(join(bundleRoot, `bundle-${fingerprint}-`));
-    try {
-      // This worker already owns fingerprint custody and compiler admission.
-      // There is no second launch/admission for the same finite graph.
-      const {sourceInputDigests, ...runtime} = await buildSourceRuntimeBundleInProcess({...inputs, outputDir});
-      built = runtime;
-      const unchanged = fingerprint === await sourceBundleFingerprint(inputs);
-      signal?.throwIfAborted();
-      return await publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, signal, reuseSelected,
-        record:{...built, sourceInputDigests, reuseFingerprint:unchanged ? fingerprint : null}});
-    } catch (error) {
-      if (existsSync(outputDir)) { await setBundleReadOnly(outputDir, false); await rm(outputDir, {recursive:true, force:true}); }
-      throw error;
-    }
+  const inputs = {repoDir, component, serverComponent, dbProvider, reuseSelected, pendingRequestId};
+  // The admitted hint binds this allocation to its actual lease. Capture owns
+  // the input identity: source edits (or a loaded caller's earlier tooling)
+  // must not discard admission and recursively reselect before construction.
+  const fingerprint = admittedFingerprint ?? await sourceBundleFingerprint(inputs);
+  const cached = await adoptReusableSourceRuntimeBundle({stackBaseDir, bundleRoot, ...inputs, env, signal});
+  if (cached) return cached;
+  if (preparationRequestId) await updatePendingSourcePreparationPhase({ stackBaseDir, requestId: preparationRequestId,
+    phase: 'building', component, signal });
+  await mkdir(bundleRoot, {recursive:true});
+  // This allocation is not a claim about checkout bytes. The existing
+  // emitted-code identity below describes what this finite build produced.
+  // Typed allocation kinds stay in the same store. Already-loaded legacy
+  // retainers do not nominate these newly deferred shared candidates.
+  const outputDir = await mkdtemp(join(bundleRoot, `runtime-${fingerprint}-`));
+  try {
+    // This worker inherits dependency custody and owns fingerprint custody and compiler admission.
+    // There is no second launch/admission for the same finite graph.
+    const {sourceInputDigests, inputIdentity, ...built} = await buildSourceRuntimeBundleInProcess({...inputs, outputDir, env, signal});
+    signal?.throwIfAborted();
+    if (component === 'daemon') await probeCliDistRuntimeImport(built.entrypoint, { cwd: built.cliDir, env, signal });
+    return await publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, signal, reuseSelected, pendingRequestId,
+      record:{...built, sourceInputDigests, inputIdentity, reuseFingerprint:fingerprint}});
+  } catch (error) {
+    if (existsSync(outputDir)) { await setBundleReadOnly(outputDir, false); await rm(outputDir, {recursive:true, force:true}); }
+    throw error;
   }
-  signal?.throwIfAborted();
-  return await publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, signal, reuseSelected});
 }
 
-async function buildSourceRuntimeBundleInProcess({ repoDir, outputDir, component, serverComponent, dbProvider }) {
+/** The source selection owner admits a complete replacement, without claiming
+ * that its processes have loaded it. Preparation never writes these pointers.
+ */
+export async function admitSourceRuntimeReload({ stackBaseDir, components, ui = null, pending, env = process.env }) {
+  pending.signal.throwIfAborted();
+  if (components.daemon) await probeCliDistRuntimeImport(components.daemon.entrypoint,
+    { cwd: components.daemon.cliDir, env, signal: pending.signal });
+  if (components.server || ui) {
+    await runSourceBuildCommand({ repoDir: env.HAPPIER_STACK_REPO_DIR,
+      scriptPath: fileURLToPath(new URL('../runtime/launch/smokeSourceRuntimeReload.mjs', import.meta.url)),
+      args: [JSON.stringify({ components, ui })], env, signal: pending.signal, captureStdout: false, captureStderr: true });
+  }
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  return { activate: () => pending.publish(() => withJsonOwnerFileLock(async () => {
+    const previous = new Map();
+    try {
+      for (const [component, built] of Object.entries(components)) {
+        const record = await readOptionalJson(join(resolve(built.runtimeDir, '../..'), 'source-bundle.json'));
+        if (record?.identity !== built.identity || record?.entrypoint !== built.entrypoint || !existsSync(built.entrypoint)) {
+          throw new Error(`[source-bundle] cannot select an incomplete ${component} reload graph`);
+        }
+      }
+      const selections = { ...Object.fromEntries(Object.entries(components).map(([component, built]) => [component, { entrypoint: built.entrypoint }])),
+        ...(ui ? { ui } : {}) };
+      for (const [component, selection] of Object.entries(selections)) {
+        const path = join(sourceRoot, `selected-${component}.json`);
+        previous.set(path, await readOptionalJson(path));
+        await writeJsonAtomic(path, selection);
+      }
+    } catch (error) {
+      for (const [path, selection] of previous) {
+        if (selection) await writeJsonAtomic(path, selection);
+        else await rm(path, { force: true });
+      }
+      throw error;
+    }
+  }, { lockPath: join(dirname(stackBaseDir), 'source-bundles/publication.lock'), timeoutMs: Infinity,
+    staleAfterMs: Infinity, signal: pending.signal, errorLabel: 'source-bundle publication lock' })) };
+}
+
+async function buildSourceRuntimeBundleInProcess({ repoDir, outputDir, component, serverComponent, dbProvider, env = process.env, signal }) {
+  return await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, env =>
+    consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, env, signal }));
+}
+
+async function consumeSourceRuntimeBuildInputs({ repoDir, outputDir, component, serverComponent, dbProvider, env, signal }) {
   if (component !== 'daemon' && component !== 'server') throw new Error(`Unsupported source runtime component: ${component}`);
   repoDir = resolve(repoDir);
   outputDir = resolve(outputDir);
   await mkdir(outputDir, { recursive: true });
   if ((await readdir(outputDir)).length > 0) throw new Error(`Source runtime output directory must be empty: ${outputDir}`);
+  const sourceRepoDir = repoDir;
+  const captured = await captureSourceWebBuildInputs({ repoDir, component, outputDir: join(outputDir, 'workspace'), signal });
+  repoDir = captured.repoDir;
   const projectDir = join(repoDir, 'apps', component === 'daemon' ? 'cli' : 'server');
   const runtimeDir = join(outputDir, 'apps', component === 'daemon' ? 'cli' : 'server');
   await mkdir(runtimeDir, { recursive: true });
@@ -498,9 +613,13 @@ async function buildSourceRuntimeBundleInProcess({ repoDir, outputDir, component
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
   try {
-    return await emitSourceRuntimeBundle({ repoDir, outputDir, component, serverComponent, dbProvider,
-      projectDir, runtimeDir, manifest, requireFromProject, esbuild });
+    const built = await emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles: captured.files,
+      outputDir, component, serverComponent, dbProvider, projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal });
+    const inputIdentity = await sourceBundleFingerprint({ repoDir, identityRepoDir: sourceRepoDir,
+      component, serverComponent, dbProvider, consumedPaths: Object.keys(built.sourceInputDigests) });
+    return { ...built, inputIdentity };
   } finally {
+    await rm(repoDir, { recursive: true, force: true });
     esbuild.stop();
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
@@ -537,13 +656,22 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 }
 
-async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverComponent, dbProvider,
-  projectDir, runtimeDir, manifest, requireFromProject, esbuild }) {
+async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, outputDir, component, serverComponent, dbProvider,
+  projectDir, runtimeDir, manifest, requireFromProject, esbuild, env, signal }) {
   const { transform } = esbuild;
   const sourceInputDigests = {};
+  // Include separately compiled Plugin UI/collection migrations, compiler
+  // tooling and copied resources from this same view. Main-code neighbours
+  // participate only when the real loader consumes them; membership still
+  // invalidates additions/deletions that can alter resolution.
+  for (const path of capturedFiles.filter(path => !isCompilerTracedSource(path))) {
+    const absolute = join(repoDir, path);
+    if ((await lstat(absolute)).isFile()) sourceInputDigests[path] = createHash('sha256').update(await readFile(absolute)).digest('hex');
+  }
   const readSourceInput = async path => {
     const contents = await readFile(path);
-    const key = relative(repoDir, path);
+    const capturedKey = relative(repoDir, path);
+    const key = (capturedKey.startsWith('..' + sep) ? relative(sourceRepoDir, path) : capturedKey).split(sep).join('/');
     const digest = createHash('sha256').update(contents).digest('hex');
     const previous = sourceInputDigests[key];
     sourceInputDigests[key] = previous === undefined || previous === digest ? digest : null;
@@ -597,11 +725,23 @@ async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverCo
           loader: 'ts', resolveDir: dirname(args.path),
         };
       });
-      builder.onResolve({ filter: /generated\/(?:sqlite|mysql)-client/ }, (args) => ({ path: resolve(args.resolveDir, args.path), external: true }));
+      builder.onResolve({ filter: /generated\/(?:sqlite|mysql)-client/ }, (args) => {
+        const capturedPath = resolve(args.resolveDir, args.path);
+        const generatedPath = relative(join(projectDir, 'generated'), capturedPath);
+        if (component === 'server' && !isAbsolute(generatedPath) && generatedPath !== '..'
+          && !generatedPath.startsWith(`..${sep}`)) {
+          // Static and dynamic imports share the retained server's generated
+          // support root, never the finite input view or its original locator.
+          return { path: join(runtimeDir, 'generated', generatedPath), external: true };
+        }
+        const inputPath = relative(repoDir, capturedPath);
+        return { path: !isAbsolute(inputPath) && inputPath !== '..' && !inputPath.startsWith(`..${sep}`)
+          ? join(sourceRepoDir, inputPath) : capturedPath, external: true };
+      });
       // Native support has an existing deterministic package-root locator. Keep
       // that support root on the execution host; freeze all of its JS logic.
       builder.onLoad({ filter: /iroh-native[\\/]src[\\/]nodeNative\.ts$/ }, async (args) => ({
-        contents: (await readSourceInput(args.path)).toString('utf8').replaceAll('import.meta.url', JSON.stringify(pathToFileURL(args.path).href)),
+        contents: (await readSourceInput(args.path)).toString('utf8').replaceAll('import.meta.url', JSON.stringify(pathToFileURL(join(sourceRepoDir, relative(repoDir, args.path))).href)),
         loader: 'ts', resolveDir: dirname(args.path),
       }));
     },
@@ -637,9 +777,9 @@ async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverCo
       // The same source compiler used by native CLI construction owns these
       // graphs. Checkout dist can be republished while this daemon is serving.
       await run(process.execPath, ['--conditions=happier-source', '--import',
-        fileURLToPath(new URL('../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url)),
-        fileURLToPath(new URL('../../../ui/scripts/prepareSourcePluginUiArtifacts.mjs', import.meta.url))], {
-        cwd: repoDir, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
+        join(repoDir, 'packages/cli-common/registerSourceRuntime.mjs'),
+        join(repoDir, 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs')], {
+        cwd: repoDir, env, signal, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
         input: JSON.stringify({
           repoRoot: repoDir, outputDir: preparationDir,
           plugins: pluginMetadata.map(item => ({
@@ -667,25 +807,26 @@ async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverCo
     await writeFile(target, `export * from './${key.split('/').at(-1)}.js';\n`);
     retainedCodeFiles.push(target);
   }
-  await linkInstalledDirectory(join(repoDir, 'node_modules'), join(outputDir, 'node_modules'));
-  await linkInstalledDirectory(join(projectDir, 'node_modules'), join(runtimeDir, 'node_modules'));
+  await linkInstalledDirectory(join(sourceRepoDir, 'node_modules'), join(outputDir, 'node_modules'));
+  const installedProjectDir = join(sourceRepoDir, 'apps', component === 'daemon' ? 'cli' : 'server');
+  await linkInstalledDirectory(join(installedProjectDir, 'node_modules'), join(runtimeDir, 'node_modules'));
   if (component === 'daemon') {
     // Only hosts declaring public author packages need a physical author
     // closure; tiny source runtime fixtures have no such package inventory.
     if ((manifest.bundledDependencies ?? []).some(name => workspacePackages.get(name)?.manifest.happier?.publicSdkRelease)) {
-      retainedCodeFiles.push(...await emitSourceAuthorPackages({repoDir,projectDir,runtimeDir,workspacePackages,
-        build,sourceInputDigests,readSourceInput}));
+      retainedCodeFiles.push(...await emitSourceAuthorPackages({repoDir,sourceRepoDir,projectDir,runtimeDir,workspacePackages,
+        build,sourceInputDigests,readSourceInput,env,signal}));
     }
     const sidecars = await bundleCliSourceSidecars({repoDir,outputDir:join(runtimeDir,'scripts'),build,workspacePackages,requireFromProject});
     retainedCodeFiles.push(...sidecars.codeFiles);
     Object.assign(result.metafile.inputs,sidecars.metafile.inputs);
     Object.assign(result.metafile.outputs,sidecars.metafile.outputs);
-    await linkInstalledDirectory(join(projectDir, 'assets'), join(runtimeDir, 'assets'));
+    if (existsSync(join(projectDir, 'assets'))) await cp(join(projectDir, 'assets'), join(runtimeDir, 'assets'), { recursive: true });
     const nativeSource = join(projectDir, 'native/processcustody');
     if (existsSync(join(nativeSource, 'go.mod'))) {
       // Vendor tools retain their installed lifecycle; the first-party helper must
       // match the source daemon's command contract, never an old checkout output.
-      const sourceTools = join(projectDir, 'tools');
+      const sourceTools = join(installedProjectDir, 'tools');
       for (const entry of existsSync(sourceTools) ? await readdir(sourceTools, { withFileTypes: true }) : []) {
         if (entry.name !== 'unpacked') {
           if (entry.isDirectory()) await linkInstalledDirectory(join(sourceTools, entry.name), join(runtimeDir, 'tools', entry.name));
@@ -717,14 +858,14 @@ async function emitSourceRuntimeBundle({ repoDir, outputDir, component, serverCo
         const { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget } = await import(pathToFileURL(targetPath).href);
         const target = resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS });
         const { executablePath } = await stageProcessCustodyRuntime({ repoRoot: preparationDir, payloadDir: runtimeDir,
-          target, runCommand: (command, args, options) => runCapture(command, args, options) });
+          target, runCommand: (command, args, options) => runCapture(command, args, { ...options, env: { ...env, ...options?.env }, signal }) });
         retainedCodeFiles.push(executablePath);
       } finally { await rm(preparationDir, { recursive: true, force: true }); }
-    } else await linkInstalledDirectory(join(projectDir, 'tools'), join(runtimeDir, 'tools'));
+    } else await linkInstalledDirectory(join(installedProjectDir, 'tools'), join(runtimeDir, 'tools'));
     const assets = join(projectDir, 'src/plugins/projection/registry/static-assets');
     if (existsSync(assets)) await cp(assets, join(runtimeDir, 'package-dist/plugins/projection/registry/static-assets'), { recursive: true });
   } else {
-    for (const name of ['generated', 'assets']) await linkInstalledDirectory(join(projectDir, name), join(runtimeDir, name));
+    for (const name of ['generated', 'assets']) await linkInstalledDirectory(join(installedProjectDir, name), join(runtimeDir, name));
     const copyPrismaInputs = async (source, destination) => {
       await mkdir(destination, { recursive: true });
       for (const name of await readdir(source)) {

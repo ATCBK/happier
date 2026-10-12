@@ -1,5 +1,5 @@
 import { readdir } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { readJsonIfExists } from '../fs/json.mjs';
 import { getDefaultAutostartPaths, getStacksStorageRoot, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
@@ -42,6 +42,8 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
   baseDirs.add(getDefaultAutostartPaths(env).baseDir);
   const explicitEnvFile = resolveExplicitStackEnvFilePath(env);
   if (explicitEnvFile) baseDirs.add(dirname(explicitEnvFile));
+  const stackName = String(env.HAPPIER_STACK_STACK ?? '').trim();
+  const cliHomeDir = String(env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim();
   const consumers = [];
   const seen = new Set();
   const targetRoot = resolve(installDir);
@@ -62,6 +64,15 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
         const { readProcessInstanceFingerprintSync } = await import('@happier-dev/cli-common/processInstance');
         const fingerprint = readProcessInstanceFingerprintSync(pid, { expectedFingerprint: recordedFingerprint || null });
         if (recordedFingerprint && fingerprint && recordedFingerprint !== fingerprint) continue;
+        // Discovery is dependency-wide, but termination authority belongs to
+        // the caller's Stack. Borrowing each reader's recorded identity here
+        // lets any installer stop unrelated serving stacks in this checkout.
+        // Reject the shared mutation instead, before stopping any reader or
+        // withdrawing its admitted dependency tree.
+        if (!stackName || !explicitEnvFile || state.stackName !== stackName
+          || !state.envPath || resolve(state.envPath) !== resolve(explicitEnvFile)) {
+          throw restartRequired(`Dependency refresh cannot stop Expo pid=${pid} owned by another Stack (${state.stackName || 'unidentified'}).`);
+        }
         // Old supervisors have already loaded an unguarded restart closure.
         // Never stop one and assume changing files retrofits that live owner.
         if (state.dependencyInstallBarrierVersion !== EXPO_DEPENDENCY_BARRIER_VERSION
@@ -69,18 +80,18 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
           throw restartRequired(`Expo pid=${pid} has no verified dependency-safe restart owner.`);
         }
         seen.add(pid);
-        consumers.push({ pid, state, baseDir, fingerprint });
+        consumers.push({ pid, fingerprint });
       }
     }
   }
   // Validate every consumer before stopping any; a legacy sibling must reject
   // the whole mutation while every current reader still has its admitted tree.
-  for (const { pid, state, baseDir, fingerprint } of consumers) {
+  for (const { pid, fingerprint } of consumers) {
     const { killProcessGroupOwnedByStack } = await import('../proc/ownership.mjs');
     const stopped = await killProcessGroupOwnedByStack(pid, {
-      stackName: state.stackName || basename(baseDir),
-      envPath: state.envPath || join(baseDir, 'env'),
-      cliHomeDir: state.cliHomeDir || '',
+      stackName,
+      envPath: explicitEnvFile,
+      cliHomeDir,
       label: 'Expo dependency consumer', json: true,
       processInstanceFingerprint: fingerprint,
     });

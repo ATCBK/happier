@@ -84,11 +84,11 @@ export function writeRuntimeAdmissionPhase(phase, env = process.env) {
 /** One account-visible OS snapshot, never a persisted PID registry. */
 export function readLinuxWorkerProcesses({ readSmapsRollup = path => readFileSync(path, 'utf8') } = {}) {
   const processes = new Map();
-  const metadata = spawnSync('ps', ['-u', String(process.getuid()), '-o', 'pid=,ppid=,rss=,etimes=,times='], { encoding: 'utf8' });
+  const metadata = spawnSync('ps', ['-u', String(process.getuid()), '-o', 'pid=,ppid=,rss=,etimes=,times=,stat='], { encoding: 'utf8' });
   if (metadata.error || metadata.status !== 0) throw new Error('worker process memory observation is unavailable');
   const generationPids = new Set();
   for (const line of metadata.stdout.split('\n')) {
-    const row = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line);
+    const row = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
     if (!row) continue;
     const pid = Number(row[1]);
     if (pid <= 1) continue;
@@ -106,7 +106,7 @@ export function readLinuxWorkerProcesses({ readSmapsRollup = path => readFileSyn
     if (token) generationPids.add(Number(token[1]));
     if (env.HAPPIER_STACK_ENV_FILE && env.HAPPIER_STACK_STACK) generationPids.add(pid);
     let pssKiB;
-    processes.set(pid, { pid, parentPid: Number(row[2]), rssKiB: Number(row[3]), ageSeconds: Number(row[4]), cpuSeconds: Number(row[5]), fingerprint: null, env,
+    processes.set(pid, { pid, parentPid: Number(row[2]), rssKiB: Number(row[3]), ageSeconds: Number(row[4]), cpuSeconds: Number(row[5]), state: row[6][0], fingerprint: null, env,
       // Only accounted trees need smaps; identity/CPU observers and unrelated
       // host processes must not pay for a system-wide page-table walk.
       get pssKiB() {
@@ -293,7 +293,8 @@ function readAdmittedOwnerRss(processes, admissionRoot, legacyOwners, children, 
         if (recorded === `${owner.pid} ${owner.token}`) roots.add(record.pid);
       } catch { /* An environment token alone is not admission authority. */ }
     }
-    const pids = processTreePids(roots, children);
+    const pids = new Set([...processTreePids(roots, children)].filter(pid => !['Z', 'X', 'x'].includes(processes.get(pid)?.state)));
+    if (!pids.size) continue;
     let rssKiB = 0;
     let available = true;
     for (const pid of pids) {
@@ -312,8 +313,9 @@ function readAdmittedOwnerRss(processes, admissionRoot, legacyOwners, children, 
         ? (cpuSeconds - previous.cpuSeconds) * 100_000 / elapsedMs : null;
       progress.sample.owners.push({ ...owner, ageSeconds: processes.get(owner.pid)?.ageSeconds ?? null, cpuSeconds, recentCpuPercent });
     }
-    // Missing RSS retains the whole class reservation in the shell consumer.
-    if (available && Number.isSafeInteger(rssKiB)) result.push({ pid: owner.pid, token: owner.token, rssKiB });
+    // A live tree remains custody even when its resident memory is unavailable.
+    // Zero credit conservatively retains its full existing class envelope.
+    result.push({ pid: owner.pid, token: owner.token, rssKiB: available && Number.isSafeInteger(rssKiB) ? rssKiB : 0 });
   }
   return result;
 }

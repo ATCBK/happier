@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { prepareSourceRuntimeReload } from '../launch/prepareSourceRuntimeReload.mjs';
 import test from 'node:test';
 
 import {
@@ -30,24 +33,25 @@ async function resolveRemoteBorrowedExpoForTest(t, { metroRunning }) {
   );
 
   const probedPorts = [];
-  const projected = await resolveBorrowedExpoRuntime(
-    {
-      rootDir: process.cwd(),
-      producerStackName,
-      env: {
-        HAPPIER_STACK_STORAGE_DIR: storageDir,
-        HAPPIER_STACK_REPO_DIR: process.cwd(),
-      },
+  let reachable = metroRunning;
+  const query = {
+    rootDir: process.cwd(),
+    producerStackName,
+    env: {
+      HAPPIER_STACK_STORAGE_DIR: storageDir,
+      HAPPIER_STACK_REPO_DIR: process.cwd(),
     },
-    {
-      looksLikeExpoMetroImpl: async ({ port }) => {
-        probedPorts.push(port);
-        return metroRunning;
-      },
+  };
+  const boundary = {
+    looksLikeExpoMetroImpl: async ({ port }) => {
+      probedPorts.push(port);
+      return reachable;
     },
-  );
+  };
+  const projected = await resolveBorrowedExpoRuntime(query, boundary);
 
-  return { projected, probedPorts };
+  return { projected, probedPorts, setReachable(value) { reachable = value; },
+    refresh: () => resolveBorrowedExpoRuntime(query, boundary) };
 }
 
 async function mkdirTempStackStorage(t) {
@@ -60,6 +64,16 @@ test('isBorrowedExpoConsumer gives ownership only to a distinct producer stack',
   assert.equal(isBorrowedExpoConsumer({ consumerStackName: 'qa', producerStackName: 'repo-dev' }), true);
   assert.equal(isBorrowedExpoConsumer({ consumerStackName: 'qa', producerStackName: 'qa' }), false);
   assert.equal(isBorrowedExpoConsumer({ consumerStackName: 'qa', producerStackName: '' }), false);
+});
+
+test('source restart admits runtime work while borrowed Expo is unavailable', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-borrowed-reload-' });
+  const env = { ...process.env, HAPPIER_STACK_EXPO_SOURCE_STACK: 'missing-producer',
+    HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks') };
+  const prepared = await prepareSourceRuntimeReload({ stackName: 'qa', stackBaseDir: fixture.path('stacks/qa'),
+    repoDir: process.cwd(), args: ['--no-dev-targets', '--no-server', '--server-url=http://127.0.0.1:3005', '--no-daemon'], env });
+  assert.equal(prepared.ui, null);
+  assert.equal(prepared.remote, false);
 });
 
 test('borrowed Expo rejects non-canonical producer names before resolving managed paths', async () => {
@@ -91,6 +105,40 @@ test('buildBorrowedExpoUiUrl routes the consumer origin to its own server with H
   assert.deepEqual(url.searchParams.getAll('happier_hmr'), ['0']);
 });
 
+test('borrowers with distinct runtime server and Account URLs receive the same Expo web bundle path', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-borrowed-bundle-' });
+  const uiRequire = createRequire(new URL('../../../../ui/package.json', import.meta.url));
+  const sdkVersion = `${uiRequire('expo/package.json').version.split('.')[0]}.0.0`;
+  await writeFile(fixture.path('package.json'), JSON.stringify({ name: 'borrowed-ui', main: 'index.js' }));
+  await writeFile(fixture.path('app.json'), JSON.stringify({ expo: { name: 'Borrowed UI', slug: 'borrowed-ui', sdkVersion, platforms: ['web'] } }));
+  await writeFile(fixture.path('index.js'), 'export {};');
+  const { ManifestMiddleware } = uiRequire('@expo/cli/build/src/start/server/middleware/ManifestMiddleware.js');
+  // Only the HTTP request/response boundary is substituted; Expo's real HTML
+  // and bundle URL producers run without starting another Metro.
+  const middleware = new ManifestMiddleware(fixture.root, { mode: 'development', minify: false });
+  const bundlePaths = [];
+  for (const [host, port, account] of [['happier-qa-a.localhost', 3001, 'a'], ['happier-qa-b.localhost', 3002, 'b']]) {
+    const pageUrl = new URL(buildBorrowedExpoUiUrl({ consumerHost: host, expoPort: 19364, serverPort: port }));
+    pageUrl.searchParams.set('serverId', `account-${account}`);
+    pageUrl.searchParams.set('returnUrl', `http://${host}:${port}/account/${account}`);
+    assert.equal(pageUrl.searchParams.get('server'), `http://${host}:${port}`);
+    let html;
+    const handled = await middleware.checkBrowserRequestAsync(
+      { url: pageUrl.pathname + pageUrl.search, headers: { host: pageUrl.host, accept: 'text/html' } },
+      { setHeader() {}, end(value) { html = value; } },
+      () => assert.fail('Expo must serve the borrower page'),
+    );
+    assert.equal(handled, true);
+    const src = html.match(/<script[^>]+src="([^"]+\.bundle[^\"]*)"/)[1].replaceAll('&amp;', '&');
+    bundlePaths.push(src);
+    const bundle = new URL(src, pageUrl);
+    assert.equal(bundle.searchParams.get('platform'), 'web');
+    for (const key of ['server', 'serverId', 'returnUrl', 'happier_hmr']) assert.equal(bundle.searchParams.has(key), false);
+    assert.equal(src.includes(host), false);
+  }
+  assert.equal(bundlePaths[0], bundlePaths[1], 'borrowers share one producer bundle identity');
+});
+
 test('borrowed Expo projects a verified running remote tunnel as a borrowed consumer endpoint', async (t) => {
   const { projected, probedPorts } = await resolveRemoteBorrowedExpoForTest(t, {
     metroRunning: true,
@@ -111,8 +159,8 @@ test('borrowed Expo projects a verified running remote tunnel as a borrowed cons
   assert.deepEqual(probedPorts, [19364]);
 });
 
-test('borrowed Expo does not report a remote producer running when its forwarded Metro endpoint is unavailable', async (t) => {
-  const { projected, probedPorts } = await resolveRemoteBorrowedExpoForTest(t, {
+test('borrowed Expo discovers endpoint recovery without restarting its producer or consumer', async (t) => {
+  const { projected, probedPorts, setReachable, refresh } = await resolveRemoteBorrowedExpoForTest(t, {
     metroRunning: false,
   });
 
@@ -129,6 +177,11 @@ test('borrowed Expo does not report a remote producer running when its forwarded
     runtimeStartedAt: '2026-09-20T08:00:00.000Z',
   });
   assert.deepEqual(probedPorts, [19364]);
+  setReachable(true);
+  const recovered = await refresh();
+  assert.equal(recovered.running, true);
+  assert.equal(recovered.port, 19364);
+  assert.equal(recovered.runtimeStartedAt, projected.runtimeStartedAt);
 });
 
 test('borrowed Expo remains degraded after an owner process exit instead of claiming local fallback', () => {

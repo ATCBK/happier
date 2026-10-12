@@ -6,8 +6,10 @@ import { getComponentDir, getDefaultAutostartPaths, getRepoDir, getRootDir } fro
 import { killPortListeners, observeTcpPortAvailability } from './utils/net/ports.mjs';
 import { fetchHappierHealth, getServerComponentName } from './utils/server/server.mjs';
 import { resolveServerShutdownGraceMs } from './utils/server/shutdown_grace.mjs';
+import { ensureSourceServerWorkspacePackagesBuilt } from './utils/server/source_server_workspace_deps.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
 import { dirname, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { checkDaemonStatePingAware, getDaemonEnv, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
@@ -47,6 +49,7 @@ import {
   shouldExitAdoptedDevRuntime,
 } from './utils/dev/devStartupTopology.mjs';
 import {
+  prepareDevComponent,
   requestInitialDevRefreshes,
   resolveDevReloadPollIntervalMs,
   startDevReloadCoordinator,
@@ -96,6 +99,7 @@ import {
 import { resolveRemoteServerRuntimeConfig } from './utils/dev_targets/remote_commands.mjs';
 import {
   planRequiresRemoteCliWorkspacePreparation,
+  resolvePreservedDaemonTargetPlans,
   startStackDevTargetsInBackground,
 } from './utils/dev_targets/supervisor.mjs';
 import { findExistingStackCredentialPath } from './utils/auth/credentials_paths.mjs';
@@ -212,12 +216,6 @@ async function main() {
 
   // Convenience alias: allow `--server-flavor=light|full` for parity with `stack pr` and `tools setup-pr`.
   // `--server=...` always wins when both are specified.
-	  const serverFlavorFromArg = (kv.get('--server-flavor') ?? '').trim().toLowerCase();
-	  if (!kv.get('--server') && serverFlavorFromArg) {
-	    if (serverFlavorFromArg === 'light') kv.set('--server', 'happier-server-light');
-	    else if (serverFlavorFromArg === 'full') kv.set('--server', 'happier-server');
-	    else throw new Error(`[dev] invalid --server-flavor=${serverFlavorFromArg} (expected: light|full)`);
-	  }
 
 	  const serverComponentName = getServerComponentName({ kv });
 	  if (serverComponentName === 'both') {
@@ -246,6 +244,9 @@ async function main() {
 	  const cliBin = join(cliDir, 'bin', 'happier.mjs');
   const autostart = getDefaultAutostartPaths();
   const baseEnv = { ...process.env };
+  // Development startup observes the installed tree. Only the explicit PM
+  // refresh owner may install dependencies or repair third-party patches.
+  baseEnv.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES = '1';
   const repoDir = getRepoDir(rootDir, baseEnv);
   const parentServerRestartPreflightAlreadyDone = String(
     baseEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE ?? '',
@@ -361,6 +362,13 @@ async function main() {
       targets: preflightPlans.targets,
     };
   }
+  if (devTargetsEnabled) {
+    servicePlans = { ...servicePlans, targets: resolvePreservedDaemonTargetPlans({
+      targetPlans: servicePlans.targets, targets: devTargets,
+      runtimeState: !json && stackMode && !requestedStartDaemon ? await readStackRuntimeStateFile(runtimeStatePath) : null,
+      daemonRequested: requestedStartDaemon,
+    }) };
+  }
   const startServer = servicePlans.local.server;
   const startDaemon = servicePlans.local.daemon;
   const startExpo = servicePlans.local.expo;
@@ -396,26 +404,18 @@ async function main() {
     return;
   }
 
-  if (startServer) {
-    assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
-    assertServerPrismaProviderMatches({ serverComponentName, serverDir });
-    await requireDir(serverComponentName, serverDir);
-  }
-  await requireDir('happier-ui', uiDir);
-  if (startDaemon || devTargets.length > 0) {
-    await requireDir('happier-cli', cliDir);
-  }
-
   const children = [];
   let devTargetsController = null;
   let shuttingDown = false;
   let shutdown = null;
   let pendingShutdownSignal = null;
+  const startupAbort = new AbortController();
   let shutdownDispatchStarted = false;
   const dispatchShutdown = (signal) => {
     if (shutdownDispatchStarted) return;
     if (!shutdown) {
       pendingShutdownSignal = signal;
+      startupAbort.abort();
       return;
     }
     shutdownDispatchStarted = true;
@@ -488,7 +488,7 @@ async function main() {
     expoRunning: expoAlreadyRunning,
     restart,
   });
-  const priorRuntimeServer = startServer && startupDecision.startServer && watchEnabled
+  const priorRuntimeServer = startServer && startupDecision.startServer
     ? await resolveDevPriorRuntimeServer({
         stackBaseDir: autostart.baseDir,
         serverComponentName,
@@ -588,34 +588,62 @@ async function main() {
     (baseEnv.HAPPIER_STACK_AUTH_FLOW ?? '').toString().trim() === '1' ||
     (baseEnv.HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH ?? '').toString().trim() === '1';
 
-  // Expo has its own last-green admission owner and can serve the configured API
-  // origin before the source server proves a replacement is buildable. Keep that
+  // Expo can serve the configured API origin from its retained source inventory
+  // before the source server proves a replacement is buildable. Keep that
   // independently available boundary ahead of server and daemon source work.
   let expoResEarly = null;
+  const reportStartupFailure = (component, error) => {
+    console.error(`[local] ${component} startup failed; keeping other components running. `
+      + (error instanceof Error ? error.message : String(error)));
+    return { ok: false, skipped: true, reason: 'startup_failed' };
+  };
   const ensureExpoAvailable = async () => {
     if (expoResEarly) return expoResEarly;
-    expoResEarly = await ensureDevExpoServer({
-      startUi,
-      startMobile,
-      uiDir,
-      autostart,
-      baseEnv,
-      apiServerUrl: uiApiUrl,
-      restart,
-      stackMode,
-      runtimeStatePath,
-      stackName,
-      envPath,
-      children,
-      ...(wantsAuthFlow && startUi
-        ? { spawnOptions: { stdio: ['ignore', 'ignore', 'ignore'] } }
-        : {}),
-      expoTailscale,
-      isShuttingDown: () => shuttingDown,
+    await requireDir('happier-ui', uiDir);
+    expoResEarly = await prepareDevComponent({
+      enabled: watchEnabled,
+      target: 'expo',
+      descriptors: watchEnabled ? [
+        ...createHappyCliReloadDescriptors({ cliDir }),
+        {
+          id: 'expo:ui',
+          target: 'expo',
+          paths: [
+            'sources', 'scripts', 'tools', 'patches', 'package.json',
+            'metro.config.js', 'babel.config.js', 'tsconfig.json',
+          ].map((input) => join(uiDir, input)).filter((input) => existsSync(input)),
+        },
+      ] : [],
+      signal: startupAbort.signal,
+      pollIntervalMs: resolveDevReloadPollIntervalMs(baseEnv),
+      prepare: () => ensureDevExpoServer({
+        startUi,
+        startMobile,
+        uiDir,
+        autostart,
+        baseEnv,
+        apiServerUrl: uiApiUrl,
+        restart,
+        stackMode,
+        runtimeStatePath,
+        stackName,
+        envPath,
+        children,
+        ...(wantsAuthFlow && startUi
+          ? { spawnOptions: { stdio: ['ignore', 'ignore', 'ignore'] } }
+          : {}),
+        expoTailscale,
+        isShuttingDown: () => shuttingDown || startupAbort.signal.aborted,
+      }),
     });
     return expoResEarly;
   };
-  if (startExpo) await ensureExpoAvailable();
+  // A cold or broken component must not gate admission of another component's
+  // last-green output. Retain this single Expo operation for auth and UI readers.
+  const expoStartup = startExpo ? ensureExpoAvailable().catch(error => {
+    expoResEarly = reportStartupFailure('expo', error);
+    return expoResEarly;
+  }) : Promise.resolve(null);
 
   if (priorRuntimeServer.admitted) {
     console.log(
@@ -627,71 +655,69 @@ async function main() {
   let serverEnv = baseEnv;
   let serverScript = null;
   let serverProc = null;
-  let serverWorkspaceAdmissionFailure = null;
   if (startServer && startupDecision.startServer) {
-    try {
-      ({ serverEnv, serverScript, serverProc } = await startDevServer({
-        serverComponentName,
-        serverDir,
-        autostart,
-        baseEnv: parentServerRestartPreflightAlreadyDone
-          ? { ...baseEnv, HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE: '1' }
-          : baseEnv,
-        serverPort,
-        serverBindPort,
-        internalServerUrl: serverBackendInternalUrl,
-        canonicalServerUrl,
-        publicServerUrl,
-        envPath,
-        stackMode,
-        runtimeStatePath,
-        serverAlreadyRunning,
-        restart,
-        admitPriorBuildsImmediately: watchEnabled,
-        priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
-          ? priorRuntimeServer.launchSpec
-          : null,
-        children,
-        serverProxyRuntime: proxyPlan.mode === 'proxy'
+    ({ serverEnv, serverScript, serverProc } = await (async () => {
+      if (!priorRuntimeServer.admitted) {
+        assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
+        assertServerPrismaProviderMatches({ serverComponentName, serverDir });
+        await requireDir(serverComponentName, serverDir);
+      }
+      return await startDevServer({
+      serverComponentName,
+      serverDir,
+      autostart,
+      baseEnv: parentServerRestartPreflightAlreadyDone
+        ? { ...baseEnv, HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE: '1' }
+        : baseEnv,
+      serverPort,
+      serverBindPort,
+      internalServerUrl: serverBackendInternalUrl,
+      canonicalServerUrl,
+      publicServerUrl,
+      envPath,
+      stackMode,
+      runtimeStatePath,
+      serverAlreadyRunning,
+      restart,
+      admitPriorBuildsImmediately: true,
+      priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
+        ? priorRuntimeServer.launchSpec
+        : null,
+      children,
+      serverProxyRuntime: proxyPlan.mode === 'proxy'
+        ? {
+            enabled: true,
+            proxyPid: proxyPlan.proxyController?.pid,
+            mode: 'proxy',
+          }
+        : proxyPlan.mode === 'directFallback'
           ? {
               enabled: true,
-              proxyPid: proxyPlan.proxyController?.pid,
-              mode: 'proxy',
+              proxyPid: null,
+              mode: 'directFallback',
+              fallbackReason: proxyPlan.fallbackReason,
             }
-          : proxyPlan.mode === 'directFallback'
-            ? {
-                enabled: true,
-                proxyPid: null,
-                mode: 'directFallback',
-                fallbackReason: proxyPlan.fallbackReason,
-              }
-            : null,
-      }));
-    } catch (error) {
-      const workspaceAdmissionFailure = error?.devServerWorkspaceAdmissionFailure;
-      if (
-        !watchEnabled
-        || !workspaceAdmissionFailure?.serverEnv
-        || typeof workspaceAdmissionFailure.serverScript !== 'string'
-      ) {
-        throw error;
-      }
-      serverWorkspaceAdmissionFailure = error;
-      serverEnv = workspaceAdmissionFailure.serverEnv;
-      serverScript = workspaceAdmissionFailure.serverScript;
-      console.error(
-        '[local] server: source workspace admission failed; keeping available components running and retrying on source changes.\n'
-          + (error instanceof Error ? error.message : String(error)),
-      );
-    }
+          : null,
+    }, {
+      ensureSourceServerWorkspacePackagesBuiltImpl: async (options) => prepareDevComponent({
+        enabled: watchEnabled,
+        target: 'server',
+        descriptors: watchEnabled ? await createDevServerReloadDescriptors({ serverDir }) : [],
+        signal: startupAbort.signal,
+        pollIntervalMs: resolveDevReloadPollIntervalMs(baseEnv),
+        prepare: () => ensureSourceServerWorkspacePackagesBuilt({ ...options, signal: startupAbort.signal }),
+      }),
+    });
+    })().catch(error => {
+      reportStartupFailure('server', error);
+      return { serverEnv: baseEnv, serverScript: null, serverProc: null };
+    }));
   }
   if (!startServer) {
     console.log(`${green('✓')} server: external ${cyan(internalServerUrl)}`);
-  } else if (serverWorkspaceAdmissionFailure) {
-    console.warn('[local] server: unavailable while source workspace admission is degraded');
-  } else if (startupDecision.startServer) {
+  } else if (startupDecision.startServer && serverProc) {
     console.log(`${green('✓')} server: ready at ${cyan(internalServerUrl)}`);
-  } else {
+  } else if (!startupDecision.startServer) {
     console.log(`${green('✓')} server: already running at ${cyan(internalServerUrl)}`);
   }
   console.log(
@@ -711,7 +737,7 @@ async function main() {
   const accountProbeImpl = startupDecision.adoptedServer
     ? probeExistingAccountCountForServerComponent
     : getAccountCountForServerComponent;
-  const accountProbe = startServer && !serverWorkspaceAdmissionFailure
+  const accountProbe = startServer
     ? await accountProbeImpl({
         serverComponentName,
         serverDir,
@@ -720,12 +746,12 @@ async function main() {
       })
     : null;
   const accountCount =
-    startServer && !serverWorkspaceAdmissionFailure && typeof accountProbe?.accountCount === 'number'
+    startServer && typeof accountProbe?.accountCount === 'number'
       ? accountProbe.accountCount
       : null;
   const autoSeedEnabled = resolveAutoCopyFromMainEnabled({ env: baseEnv, stackName, isInteractive });
 
-  if (startServer && !serverWorkspaceAdmissionFailure) {
+  if (startServer) {
     await maybeRunInteractiveStackAuthSetup({
       rootDir,
       // In dev mode, guided login must target the Expo web UI origin (not the server port).
@@ -743,10 +769,10 @@ async function main() {
               `Re-run without --no-ui, or set HAPPIER_WEBAPP_URL to a reachable Happier UI for this stack.`
           );
         }
-        if (expoResEarly) return;
-        await ensureExpoAvailable();
+        const expo = await expoStartup;
+        if (expo?.ok === false) throw new Error('[local] auth: Expo is unavailable for guided login');
       },
-    });
+    }).catch(error => reportStartupFailure('auth', error));
     await prepareDaemonAuthSeed({
       rootDir,
       env: baseEnv,
@@ -758,10 +784,10 @@ async function main() {
       serverDir,
       serverEnv,
       quiet: false,
-    });
+    }).catch(error => reportStartupFailure('daemon auth seed', error));
   }
 
-  if (startupDecision.startDaemon && !serverWorkspaceAdmissionFailure) {
+  if (startupDecision.startDaemon) {
     const gate = daemonStartGate({ env: baseEnv, cliHomeDir, serverUrl: internalServerUrl });
     if (!gate.ok) {
       // In orchestrated auth flows (setup-pr/review-pr), we intentionally keep server/UI up
@@ -771,7 +797,7 @@ async function main() {
       } else {
         const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
         if (!isInteractive) {
-          throw new Error(formatDaemonAuthRequiredError({ stackName, cliHomeDir, serverUrl: internalServerUrl }));
+          reportStartupFailure('daemon', new Error(formatDaemonAuthRequiredError({ stackName, cliHomeDir, serverUrl: internalServerUrl })));
         }
       }
     } else if (localDaemonWaitsForRemoteServer && stackMode && runtimeStatePath) {
@@ -787,18 +813,16 @@ async function main() {
         publicServerUrl,
         runtimeStatePath,
         restart,
-        startLastGreen: watchEnabled,
+        startLastGreen: true,
         keepServerRunningOnFailure: baseEnv.HAPPIER_STACK_TUI === '1',
         isShuttingDown: () => shuttingDown,
         env: baseEnv,
         stackName,
       });
     }
-  } else if (startupDecision.startDaemon && serverWorkspaceAdmissionFailure) {
-    console.warn('[local] daemon: waiting for source server admission before starting');
   }
 
-  if (startDaemon && !serverWorkspaceAdmissionFailure && stackMode && runtimeStatePath) {
+  if (startDaemon && stackMode && runtimeStatePath) {
     const daemonRuntimeEnv = getDaemonEnv({
       baseEnv,
       cliHomeDir,
@@ -840,7 +864,7 @@ async function main() {
           publicServerUrl,
           runtimeStatePath,
           restart: false,
-          startLastGreen: watchEnabled,
+          startLastGreen: true,
           preserveExistingRunning: true,
           isShuttingDown: () => shuttingDown,
           env: baseEnv,
@@ -857,8 +881,7 @@ async function main() {
   const reloadDescriptors = [];
   const reloadExecutors = [];
   const daemonReloadEnabled =
-    !serverWorkspaceAdmissionFailure
-    && startDaemon
+    startDaemon
     && daemonStartGate({ env: baseEnv, cliHomeDir, serverUrl: internalServerUrl }).ok;
   const remoteCliWorkspacePreparationEnabled = servicePlans.targets.some(
     planRequiresRemoteCliWorkspacePreparation,
@@ -915,10 +938,9 @@ async function main() {
     }
   }
   const serverReloadEnabled = startServer
-    && watchEnabled
-    && (Boolean(serverProcRef.current?.pid) || Boolean(serverWorkspaceAdmissionFailure));
+    && Boolean(serverProcRef.current?.pid);
   if (serverReloadEnabled) {
-    reloadDescriptors.push(...createDevServerReloadDescriptors({ serverDir }));
+    reloadDescriptors.push(...await createDevServerReloadDescriptors({ serverDir }));
     const serverReloadExecutor = createDevServerReloadExecutor({
       enabled: true,
       stackMode,
@@ -943,7 +965,8 @@ async function main() {
     reloadExecutors.push(serverReloadExecutor);
   }
   const reloadWatcher = startDevReloadCoordinator({
-    enabled: watchEnabled,
+    enabled: true,
+    observeChanges: watchEnabled,
     descriptors: reloadDescriptors,
     executors: reloadExecutors,
     debounceMs: 500,
@@ -952,6 +975,14 @@ async function main() {
     logger: console,
   });
   if (reloadWatcher) watchers.push(reloadWatcher);
+  const initialRefreshes = requestInitialDevRefreshes({
+    reloadWatcher,
+    serverReloadEnabled,
+    daemonReloadEnabled: daemonRefreshEnabled,
+  });
+  if (!watchEnabled && reloadWatcher) {
+    void Promise.allSettled(initialRefreshes).then(() => reloadWatcher.close());
+  }
 
   if (startServer && watchEnabled && stackMode && serverComponentName === 'happier-server' && !serverReloadEnabled) {
     console.warn(
@@ -1063,7 +1094,7 @@ async function main() {
     };
   }
 
-  const expoRes = expoResEarly ?? {
+  const expoRes = await expoStartup ?? {
     ok: true,
     skipped: true,
     reason: 'remote_target',
@@ -1138,12 +1169,6 @@ async function main() {
     console.log(`[local] mobile: metro ${metroUrl}`);
   }
 
-  for (const refresh of requestInitialDevRefreshes({
-    reloadWatcher,
-    serverReloadEnabled,
-    daemonReloadEnabled: daemonRefreshEnabled,
-  })) void refresh;
-
   if (startTauri) {
     const invocation = resolveTauriPaneInvocation({ rootDir, env: baseEnv });
     const tauri = spawnProc('tauri', invocation.command, invocation.args, baseEnv, {
@@ -1171,7 +1196,7 @@ async function main() {
     console.log('\n[local] shutting down...');
 
     if (devTargetsController) {
-      await devTargetsController.close().catch(() => {});
+      await devTargetsController.close({ preserveDaemon: preserveDaemonOnShutdown }).catch(() => {});
     }
 
     for (const w of watchers) {
@@ -1221,6 +1246,7 @@ async function main() {
 }
 
 main().catch((err) => {
+  if (err?.name === 'AbortError') process.exit(0);
   console.error('[local] failed:', err);
   process.exit(1);
 });

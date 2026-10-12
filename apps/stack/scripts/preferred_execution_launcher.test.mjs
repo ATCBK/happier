@@ -515,7 +515,7 @@ async function memoryRoutingFixture(t, { availableKiB = 5242880, totalKiB = 2831
   await writeFile(configPath, JSON.stringify(config));
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot }));
   const samplePath = join(root, 'starved-sample');
-  await writeFile(samplePath, `8 0.1 ${availableKiB / totalKiB} 22000000 20 0 ${availableKiB} ${totalKiB} 0 0 0 0 0 0 0 linux\n`);
+  await writeFile(samplePath, `8 0.1 ${availableKiB / totalKiB} 22000000 20 0 ${availableKiB} ${totalKiB} 0 0 0 0 0 0 0 linux ${availableKiB}\n`);
   await executable(join(binDir, 'node'), '#!/bin/sh\ncase "$*" in *service_memory.mjs*) printf "service 0\\n"; exit 0 ;; esac\nprintf "node:%s\\n" "$*" >> "$FIXTURE_TRACE"\nexit 0\n');
   await executable(join(binDir, 'uname'), '#!/bin/sh\nprintf "Darwin\\n"\n');
   await executable(join(binDir, 'systemctl'), '#!/bin/sh\nexit 1\n');
@@ -527,7 +527,7 @@ async function memoryRoutingFixture(t, { availableKiB = 5242880, totalKiB = 2831
     '  *getconf*)',
     '    case "$*" in',
     '      *starved-host*) cat "$STARVED_SAMPLE" ;;',
-    `      *) printf "8 ${roomyLoad} ${roomyAvailableKiB / roomyTotalKiB} 22000000 20 0 ${roomyAvailableKiB} ${roomyTotalKiB} 0 0 0 0 0 0 0 linux\\n" ;;`,
+    `      *) printf "8 ${roomyLoad} ${roomyAvailableKiB / roomyTotalKiB} 22000000 20 0 ${roomyAvailableKiB} ${roomyTotalKiB} 0 0 0 0 0 0 0 linux ${roomyAvailableKiB}\\n" ;;`,
     '    esac ;;',
     '  *"&& command -v "*|*-O\\ check*|*-MNf*) exit 0 ;;',
     '  *)',
@@ -573,6 +573,21 @@ test('automatic placement excludes mac-host unless it is in the configured comma
   assert.match(configured.stderr, /selected mac-host /);
 });
 
+test('native launcher ranks reserved memory below the class floor behind a fitting worker', async (t) => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 80 });
+  // The transport supplies the admission owner's observed unreserved budget;
+  // classification, cached scoring and selection execute the real launcher.
+  await writeFile(fixture.samplePath, '8 0.1 0.99 22000000 20 0 28000000 28311552 0 0 0 0 0 0 0 linux 9437184\n');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = spawnSync('/bin/sh', [launcher, '--', 'node', 'apps/stack/scripts/build/remote_runtime_build.mjs', '--worker-request=/request.json'], fixture.invocation);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'remote:roomy\n', 'CPU-idle worker without room for the class must rank behind a fitting worker, including from cache');
+  }
+  const light = spawnSync('/bin/sh', [launcher, '--', 'rg', 'source'], fixture.invocation);
+  assert.equal(light.status, 0, light.stderr);
+  assert.equal(light.stdout, 'remote:starved\n', 'heavy reservations must not exclude lightweight work');
+});
+
 test('automatic placement flushes an eligible no-watch first-cycle worker before dispatch', async (t) => {
   const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
   const marker = join(fixture.root, 'flushed');
@@ -596,6 +611,32 @@ test('automatic placement flushes an eligible no-watch first-cycle worker before
   const trace = await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8');
   assert.ok(trace.indexOf('mutagen:sync flush') < trace.lastIndexOf('remote_execution_custody.sh'), trace);
   assert.equal((trace.match(/mutagen:sync flush/g) ?? []).length, 1);
+});
+
+test('automatic placement recovers and surfaces a transient staged-file collision before selecting the worker', async t => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
+  const marker = join(fixture.root, 'collision-cleared');
+  await executable(join(fixture.binDir, 'mutagen'), [
+    '#!/bin/sh',
+    'printf "mutagen:%s\\n" "$*" >> "$FIXTURE_TRACE"',
+    'case "$2" in',
+    '  flush) : > "$COLLISION_MARKER"; printf "\\rForcing synchronization cycle for session fixture\\r" ;;',
+    '  list)',
+    '    transition=0/0',
+    '    if [ "$3" = happier-starved ] && [ ! -e "$COLLISION_MARKER" ]; then transition=1/0; fi',
+    '    printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|%s|active|2|ok|0|0\\n" "$3" "$transition"',
+    '    [ "$transition" = 0/0 ] || printf "%s\\n" "unable to relocate staged file: file exists" ;;',
+    'esac',
+  ].join('\n'));
+  const result = spawnSync('/bin/sh', [launcher, '--', 'probe-command'], {
+    ...fixture.invocation, env: { ...fixture.invocation.env, COLLISION_MARKER: marker },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'remote:starved', 'a recoverable low-load worker must not be excluded');
+  assert.match(result.stderr, /requesting a fresh scan through the dispatch flush barrier/);
+  assert.match(result.stderr, /Forcing synchronization cycle/, 'flush progress must stay observable on the diagnostic stream');
+  const trace = await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8');
+  assert.ok(trace.indexOf('mutagen:sync flush') < trace.lastIndexOf('remote_execution_custody.sh'), trace);
 });
 
 test('remote admission state failure is typed before payload dispatch', async (t) => {
@@ -846,6 +887,7 @@ test('native dispatch consumes the shared source-test, generator, compiler and a
     assert.equal(result.stdout, 'remote:roomy\n', args.join(' '));
     const trace = await readFile(invocation.env.FIXTURE_TRACE, 'utf8');
     assert.match(trace, /remote_dependency_bootstrap\.mjs/);
+    assert.match(trace, /--execution-placement=remote/, 'only worker mirrors receive dependency mutation authority');
     assert.ok(trace.includes('--validation-kind=' + kind), trace);
     assert.ok(trace.includes('--component-relative-dir=' + component), trace);
     if (component) assert.match(trace, /remote_validation_preparation\.mjs/);
@@ -855,6 +897,20 @@ test('native dispatch consumes the shared source-test, generator, compiler and a
   assert.equal(control.status, 0, control.stderr);
   assert.equal(control.stdout, 'remote:starved\n');
   assert.doesNotMatch(await readFile(invocation.env.FIXTURE_TRACE, 'utf8'), /remote_dependency_bootstrap\.mjs|remote_validation_preparation\.mjs/);
+});
+
+test('native local fallback prepares dependencies through the local policy owner', async t => {
+  const fixture = await memoryRoutingFixture(t, { fallback: 'local' });
+  // Transport failure is external. The real launcher still classifies the
+  // payload and owns fallback/preparation before invoking the command.
+  await executable(join(fixture.binDir, 'ssh'), '#!/bin/sh\nexit 255\n');
+  await executable(join(fixture.binDir, 'vitest'), '#!/bin/sh\nprintf "local-test-started\\n"\n');
+  const result = spawnSync('/bin/sh', [launcher, '--', 'vitest', 'run', 'fixture.test.ts'], fixture.invocation);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'local-test-started\n');
+  const trace = await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8');
+  assert.match(trace, /remote_dependency_bootstrap\.mjs[^\n]*--execution-placement=local/,
+    'fallback must select read-only primary readiness instead of worker installation');
 });
 
 for (const dispatcher of ['native', 'javascript']) {
@@ -1175,6 +1231,9 @@ test(`memory-aware ${admissionClass} target admission${nested ? ' beneath focuse
   const { invocation, samplePath } = await memoryRoutingFixture(t, { availableKiB: belowFloorKiB, totalKiB });
   const { launcher } = await installNativeAdmissionFixture({ root: invocation.env.HOME });
   const binDir = invocation.env.PATH.split(':')[0];
+  // This case runs actual admission; its workspace worker and observer must
+  // execute real internal logic rather than the routing fixture's tool stub.
+  await executable(join(binDir, 'node'), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`);
   await executable(join(binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
   await executable(join(binDir, 'getconf'), '#!/bin/sh\nprintf "8\\n"\n');
   await executable(join(binDir, 'awk'), [
@@ -2610,6 +2669,92 @@ test('native launcher automatic placement remains compatible with GNU awk local 
   assert.match(result.stdout, /remote:/);
   assert.doesNotMatch(result.stdout, /wrong-local/);
   await assert.rejects(readFile(reservedLoadMarker), { code: 'ENOENT' });
+});
+
+test('AUTO ranks the controller admission floor above CPU preference when a worker fits', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-local-placement-floor-' });
+  const { launcher: native } = await installNativeAdmissionFixture({ root });
+  const checkout = join(root, 'native-owner');
+  const bin = join(root, 'bin'), stack = join(root, 'stack');
+  await mkdir(bin); await mkdir(stack);
+  const config = join(stack, 'dev-targets.json');
+  await writeFile(config, '{}\n');
+  await writeNativeProjectionFixture(join(stack, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection({
+    version: 3, targets: [{ name: 'worker', platform: 'posix', ssh: 'worker-host', repoDir: '/worker/repo', cliHomeDir: '/worker/home' }],
+    commandExecution: { mode: 'auto', targets: ['worker'], includeLocal: true, fallback: 'error' },
+  }, { repoRoot: checkout, stackBaseDir: stack }));
+  // Replace only OS telemetry and SSH. The real placement and admission
+  // owners distinguish 7 GiB on the controller from 6.5 GiB on a worker.
+  await executable(join(bin, 'node'), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`);
+  await executable(join(bin, 'getconf'), '#!/bin/sh\nprintf "8\\n"\n');
+  await executable(join(bin, 'sysctl'), '#!/bin/sh\nprintf "{ 0.0 0.0 0.0 }\\n"\n');
+  await executable(join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
+  await executable(join(bin, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "7340032 16777216\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
+  await executable(join(bin, 'mutagen'), '#!/bin/sh\n[ "$2" != list ] || printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"\n');
+  await executable(join(bin, 'probe-command'), '#!/bin/sh\nprintf "local\\n"\n');
+  await executable(join(bin, 'ssh'), '#!/bin/sh\ncase "$*" in *getconf*) printf "8 16 0.4 22000000 10 0 6815744 16777216 0 0 0 0 0 0 0 linux 6815744\\n" ;; *command\\ -v*) exit 0 ;; *) printf "remote\\n" ;; esac\n');
+  const child = spawn('/bin/sh', [native, '--', './apps/stack/bin/hstack-exec', '--heavyweight-admission', '--class=validation', '--machine=worker', '--', 'probe-command'], {
+    cwd: checkout, env: { ...executionNeutralEnv, HOME: root, HAPPIER_EXEC_CONFIG_PATH: config,
+      HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), PATH: `${bin}:/usr/bin:/bin`, TMPDIR: root },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => { if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM'); });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => {
+    stderr += chunk;
+    if (stderr.includes('waiting for heavyweight admission')) child.kill('SIGTERM');
+  });
+  const code = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', resolveExit); });
+  assert.equal(code, 0, stderr);
+  assert.equal(stdout, 'remote\n', 'the busy but fitting worker must precede a controller that cannot admit');
+});
+
+test('native launcher ranks live local admission waiters against idle remote capacity', { skip: process.platform !== 'linux' }, async (t) => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-placement-queue-' });
+  const { launcher: native, admissionRoot } = await installNativeAdmissionFixture({ root });
+  const checkout = join(root, 'native-owner');
+  const bin = join(root, 'bin');
+  const stack = join(root, 'stack');
+  const config = join(stack, 'dev-targets.json');
+  await mkdir(bin);
+  await mkdir(stack);
+  await mkdir(join(admissionRoot, 'waiters'), { recursive: true });
+  await writeFile(config, '{}\n');
+  await writeNativeProjectionFixture(join(stack, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection({
+    version: 3,
+    targets: [{ name: 'worker', platform: 'posix', ssh: 'worker-host', repoDir: '/worker/repo', cliHomeDir: '/worker/home' }],
+    commandExecution: { mode: 'auto', targets: ['worker'], includeLocal: true, fallback: 'error' },
+  }, { repoRoot: checkout, stackBaseDir: stack }));
+  // Only OS telemetry and remote transport are replaced; ranking and kernel
+  // process identity run through the real native launcher.
+  await executable(join(bin, 'node'), '#!/bin/sh\nexit 97\n');
+  await executable(join(bin, 'getconf'), '#!/bin/sh\nprintf "1\\n"\n');
+  await executable(join(bin, 'sysctl'), '#!/bin/sh\nprintf "{ 0.0 0.0 0.0 }\\n"\n');
+  await executable(join(bin, 'memory_pressure'), '#!/bin/sh\nprintf "System-wide memory free percentage: 90%%\\n"\n');
+  await executable(join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
+  await executable(join(bin, 'mutagen'), '#!/bin/sh\n[ "$2" != list ] || printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"\n');
+  await executable(join(bin, 'probe-command'), '#!/bin/sh\nprintf "local\\n"\n');
+  await executable(join(bin, 'ssh'), '#!/bin/sh\ncase "$*" in *getconf*) printf "1 0.25 0.9 22000000 10 0 16000000 24000000 0 0 0 0 0 0 0 linux\\n" ;; *command\\ -v*) exit 0 ;; *) printf "remote\\n" ;; esac\n');
+  const invoke = () => spawnSync('/bin/sh', [native, '--', 'probe-command'], {
+    cwd: checkout, encoding: 'utf8', env: { ...executionNeutralEnv, HOME: root,
+      HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'),
+      PATH: `${bin}:/usr/bin:/bin`, TMPDIR: root },
+  });
+  const empty = invoke();
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout, 'local\n');
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const token = stat.slice(stat.lastIndexOf(') ') + 2).split(/\s+/)[19];
+  const waiter = join(admissionRoot, 'waiters', `${process.pid}-${token}`);
+  await writeFile(waiter, `${process.pid} ${token} 1 validation 0\n`);
+  const queued = invoke();
+  assert.equal(queued.status, 0, queued.stderr);
+  assert.equal(queued.stdout, 'remote\n', 'a live waiter must increase local effective load');
+  await writeFile(waiter, `${process.pid} 0 1 validation 0\n`);
+  const stale = invoke();
+  assert.equal(stale.status, 0, stale.stderr);
+  assert.equal(stale.stdout, 'local\n', 'a stale process incarnation must not penalize local placement');
 });
 
 test('native launcher governs nested Vitest workers when automatic placement selects a pressured local Linux candidate', async (t) => {
@@ -4143,7 +4288,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   await executable(join(binDir, 'ssh'), [
     '#!/bin/sh',
     'case "$*" in',
-    '  *getconf*) if [ "$GOVERNOR_PLATFORM" = darwin ]; then printf "14 1 0.8 22000000 20 0 57600000 72000000 0 0 0 0 0 0 0 darwin\\n"; else case "${GOVERNOR_PRESSURE-}" in quiet) printf "14 1 0.8 22000000 20 2 48000000 72000000 0 0 0 0 0 0 0 linux\\n" ;; *) printf "14 360 0.8 22000000 20 420 48000000 72000000 0 0 90 0 0 0 0 linux\\n" ;; esac; fi ;;',
+    '  *getconf*) if [ "$GOVERNOR_PLATFORM" = darwin ]; then printf "14 1 0.8 22000000 20 0 57600000 72000000 0 0 0 0 0 0 0 darwin\\n"; else case "${GOVERNOR_PRESSURE-}" in quiet) printf "14 1 0.8 22000000 20 2 48000000 72000000 0 0 0 0 0 0 0 linux 48000000\\n" ;; *) printf "14 360 0.8 22000000 20 420 48000000 72000000 0 0 90 0 0 0 0 linux 48000000\\n" ;; esac; fi ;;',
     '  *"&& command -v "*) exit 0 ;;',
     '  *-MNf*|*-O\\ exit*) exit 0 ;;',
     '  *) remote_command=; for ssh_argument in "$@"; do remote_command=$ssh_argument; done; eval "set -- $remote_command"; /bin/bash -n -c "$3" || exit $?; printf "remote:%s\\n" "$*" ;;',

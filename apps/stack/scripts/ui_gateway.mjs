@@ -1,8 +1,5 @@
-import './utils/env/env.mjs';
 import http from 'node:http';
 import net from 'node:net';
-import { extname, resolve, sep } from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
@@ -10,12 +7,12 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 function usage() {
   return [
     '[ui-gateway] usage:',
-    '  node scripts/ui_gateway.mjs --port=<port> --backend-url=<url> --minio-port=<port> --bucket=<name> [--ui-dir=<path>] [--no-ui]',
+    '  node scripts/ui_gateway.mjs --port=<port> --backend-url=<url> --minio-port=<port> --bucket=<name>',
     '',
-    'Reverse-proxy gateway that can optionally serve the built Happier web UI at /.',
+    'Reverse-proxy gateway. Configure UI serving on the backend with HAPPIER_SERVER_UI_DIR and HAPPIER_SERVER_UI_PREFIX.',
     '',
     'Always proxies:',
-    '- /v1/* and /health to backend-url',
+    '- UI, API, health and metrics requests to backend-url, preserving paths and headers',
     '- /v1/updates websocket upgrades to backend-url (socket.io)',
     '- /files/* to local Minio (http://127.0.0.1:<minio-port>/<bucket>/...)',
   ].join('\n');
@@ -31,51 +28,6 @@ function normalizePublicPath(path) {
     throw new Error('Invalid path');
   }
   return parts.join('/');
-}
-
-function contentTypeForExt(ext) {
-  const e = ext.toLowerCase();
-  if (e === '.html') return 'text/html; charset=utf-8';
-  if (e === '.js') return 'text/javascript; charset=utf-8';
-  if (e === '.css') return 'text/css; charset=utf-8';
-  if (e === '.json') return 'application/json; charset=utf-8';
-  if (e === '.svg') return 'image/svg+xml';
-  if (e === '.ico') return 'image/x-icon';
-  if (e === '.wasm') return 'application/wasm';
-  if (e === '.ttf') return 'font/ttf';
-  if (e === '.woff') return 'font/woff';
-  if (e === '.woff2') return 'font/woff2';
-  if (e === '.png') return 'image/png';
-  if (e === '.jpg' || e === '.jpeg') return 'image/jpeg';
-  if (e === '.webp') return 'image/webp';
-  if (e === '.gif') return 'image/gif';
-  return 'application/octet-stream';
-}
-
-async function sendUiFile({ uiRoot, relPath, res }) {
-  const candidate = resolve(uiRoot, relPath);
-  if (!(candidate === uiRoot || candidate.startsWith(uiRoot + sep))) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Not found');
-    return;
-  }
-  const bytes = await readFile(candidate);
-  const ext = extname(candidate);
-  const isHtml = ext.toLowerCase() === '.html';
-  res.setHeader('content-type', contentTypeForExt(ext));
-  if (isHtml) {
-    res.setHeader('cache-control', 'no-cache');
-  } else {
-    res.setHeader('cache-control', 'public, max-age=31536000, immutable');
-  }
-  res.end(bytes);
-}
-
-async function sendIndex({ uiRoot, res }) {
-  const indexPath = resolve(uiRoot, 'index.html');
-  const html = (await readFile(indexPath, 'utf-8')) + '\n<!-- Welcome to Happier Server! -->\n';
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
-  res.end(html);
 }
 
 function proxyHttp({ target, req, res, rewritePath = (p) => p }) {
@@ -142,8 +94,6 @@ async function main() {
   const backendUrl = (kv.get('--backend-url') ?? '').trim();
   const minioPortRaw = (kv.get('--minio-port') ?? '').trim();
   const bucket = (kv.get('--bucket') ?? '').trim();
-  const serveUi = !flags.has('--no-ui') && (process.env.HAPPIER_STACK_SERVE_UI ?? '1') !== '0';
-  const uiDir = serveUi ? (kv.get('--ui-dir') ?? '').trim() : '';
 
   const port = portRaw ? Number(portRaw) : NaN;
   const minioPort = minioPortRaw ? Number(minioPortRaw) : NaN;
@@ -152,17 +102,9 @@ async function main() {
     throw new Error(usage());
   }
 
-  const uiRoot = uiDir ? resolve(uiDir) : '';
-
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer((req, res) => {
     try {
       const url = req.url || '/';
-
-      // API + health proxy
-      if (url.startsWith('/v1/') || url === '/health' || url === '/metrics' || url.startsWith('/v2/')) {
-        proxyHttp({ target: backendUrl, req, res });
-        return;
-      }
 
       // Public files proxy (Minio path-style)
       if (url.startsWith('/files/')) {
@@ -179,38 +121,8 @@ async function main() {
         return;
       }
 
-      // UI static
-      if (url === '/' || url === '/ui' || url === '/ui/') {
-        if (uiRoot) {
-          await sendIndex({ uiRoot, res });
-          return;
-        }
-        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache' });
-        res.end('Welcome to Happier Server!');
-        return;
-      }
-      if (url.startsWith('/ui/')) {
-        res.writeHead(302, { location: '/' });
-        res.end();
-        return;
-      }
-
-      if (uiRoot) {
-        const rel = normalizePublicPath(decodeURIComponent(url));
-        const candidate = resolve(uiRoot, rel);
-        const exists = candidate === uiRoot || candidate.startsWith(uiRoot + sep) ? await stat(candidate).then(() => true).catch(() => false) : false;
-        if (exists) {
-          await sendUiFile({ uiRoot, relPath: rel, res });
-          return;
-        }
-
-        // SPA fallback
-        await sendIndex({ uiRoot, res });
-        return;
-      }
-
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Not found');
+      // The backend's enableServeUi owns mounts, SPA readiness, sidecars and UI headers.
+      proxyHttp({ target: backendUrl, req, res });
     } catch {
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('Internal error');

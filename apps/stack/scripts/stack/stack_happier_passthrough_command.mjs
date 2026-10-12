@@ -10,6 +10,7 @@ import { loadDevTargetsConfig } from '../utils/dev_targets/config.mjs';
 import { buildRemoteStackHappierCommand, buildSshWorkerArgs } from '../utils/dev_targets/remote_commands.mjs';
 import { resolveDevTargetSshConfigFile } from '../utils/dev_targets/mutagen_runtime.mjs';
 import { resolveStackRuntimeMode } from '../runtime/shared/runtime_mode.mjs';
+import { resolveObservedDevTargetService } from '../utils/dev_targets/service_placement.mjs';
 
 import { withStackEnv } from './stack_environment.mjs';
 import { ensureStackDaemonPreflight, requiresStackDaemonPreflight } from './stack_happier_daemon_preflight.mjs';
@@ -80,13 +81,11 @@ export async function runStackHappierPassthroughCommand({ rootDir, stackName, pa
         const { config } = await loadDevTargetsConfig({ stackName, env });
         // Observed placement wins over the configured preference: lifecycle
         // may have selected a local fallback before this generation started.
-        const daemonPlacement = runtimeState?.placement?.daemon
-          ?? (config.runtimePlacement?.daemon?.mode === 'prefer-target' ? config.runtimePlacement.daemon.target : 'local');
-        if (!['local', 'disabled'].includes(daemonPlacement)) {
-          const target = config.targets.find(candidate => candidate.name === daemonPlacement);
-          if (!target) throw new Error(`[stack happier] daemon target ${daemonPlacement} is not configured for ${stackName}.`);
+        const placed = resolveObservedDevTargetService({ config, runtimeState, service: 'daemon' });
+        if (placed) {
+          const { target } = placed;
           const mode = resolveStackRuntimeMode({ env, activeRuntimeState: runtimeState }).mode;
-          const runtimeMode = runtimeState?.remoteTargets?.[daemonPlacement]?.runtimeMode
+          const runtimeMode = runtimeState?.remoteTargets?.[target.name]?.runtimeMode
             ?? (mode === 'source-snapshot' ? mode : mode === 'require' ? 'controlled' : 'source');
           const remoteCommand = buildRemoteStackHappierCommand(target, { stackName, runtimeMode, passthrough });
           const sshConfigFile = resolveDevTargetSshConfigFile(target, { stackBaseDir: resolveStackEnvPath(stackName).baseDir, env });

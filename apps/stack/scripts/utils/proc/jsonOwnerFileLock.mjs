@@ -1,8 +1,11 @@
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from '../../../../../packages/cli-common/fileChangeObserver.mjs';
 
 import { isPidAlive } from './pids.mjs';
+
+export const JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE = 'EJSONOWNERFILELOCKBUSY';
+const activeWriterWaiters = new Set();
 
 export function parseJsonOwnerLockRaw(raw) {
   try {
@@ -30,11 +33,12 @@ export function readJsonOwnerLockSnapshot(lockPath) {
   return { exists: true, raw, owner: parseJsonOwnerLockRaw(raw) };
 }
 
-function serializeJsonOwnerLock({ createdAtMs, updatedAtMs }) {
+function serializeJsonOwnerLock({ createdAtMs, updatedAtMs, priority }) {
   return JSON.stringify({
     pid: process.pid,
     createdAtMs,
     updatedAtMs,
+    ...(priority === 'writer' || priority === 'reader' ? { priority } : {}),
   });
 }
 
@@ -54,6 +58,9 @@ export function describeJsonOwnerLock(lockPath, nowMs) {
 export function shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, nowMs, fallbackMtimeMs = 0, options = {}) {
   if (!snapshot.exists) return true;
   const owner = snapshot.owner;
+  if (owner?.priority === 'reader' && Array.isArray(owner.readers)) {
+    return !owner.readers.some(reader => Number(reader.pid) > 1 && isPidAlive(Number(reader.pid)));
+  }
   const ownerPid = Number(owner?.pid);
   if (Number.isFinite(ownerPid) && ownerPid > 1) {
     if (!isPidAlive(ownerPid)) return true;
@@ -121,6 +128,13 @@ export function isJsonOwnerFileLockActive(lockPath, options = {}) {
 }
 
 export async function withJsonOwnerFileLock(fn, options = {}) {
+  return await withJsonOwnerFileLockInternal(fn, options, true);
+}
+
+// The short registration lock uses the same owner/reclaim protocol, but must
+// not recursively create a queue for itself. Only registration takes this lock;
+// long-running holders and already registered waiters never contend on it.
+async function withJsonOwnerFileLockInternal(fn, options, fair) {
   const lockPath = options.lockPath;
   if (!lockPath) {
     throw new Error('withJsonOwnerFileLock requires options.lockPath');
@@ -129,7 +143,11 @@ export async function withJsonOwnerFileLock(fn, options = {}) {
   mkdirSync(dirname(lockPath), { recursive: true });
 
   const timeoutMs = options.timeoutMs ?? 240_000;
-  const pollIntervalMs = options.pollIntervalMs ?? 250;
+  // Match workspace notifications: legacy poll intervals do not keep healthy
+  // owners on 125/250ms scans. The shared fallback catches death/missed events.
+  const configuredCatchUpMs = Number(options.watchFallbackMs);
+  const catchUpMs = Number.isFinite(configuredCatchUpMs) && configuredCatchUpMs > 0
+    ? configuredCatchUpMs : DEFAULT_FILE_CHANGE_CATCH_UP_MS;
   const staleAfterMs = options.staleAfterMs ?? timeoutMs;
   const startedAt = Date.now();
   const errorLabel = options.errorLabel ?? 'JSON owner file lock';
@@ -139,26 +157,197 @@ export async function withJsonOwnerFileLock(fn, options = {}) {
   let ownLockRaw = null;
   let acquiredAtMs = null;
   let waited = false;
+  const sharedReaders = fair && options.sharedReaders === true;
+  const ownReader = { pid: process.pid, createdAtMs: startedAt, readerId: Math.random().toString(36).slice(2) };
+  let sharedAcquired = false;
+  const waitersDir = `${lockPath}.waiters`;
+  const observer = createFileChangeObserver([dirname(lockPath), waitersDir]);
+  let waiterPath = null;
+  let ownWaiterRaw = null;
+  let waiterCreatedAtMs = startedAt;
+  let waiterHeartbeat = null;
+  const heartbeatIntervalMs = Math.max(500, Math.min(5_000, Math.floor(staleAfterMs / 4)));
 
-  while (true) {
-    options.signal?.throwIfAborted();
+  const readWaiters = () => {
+    let names;
+    try { names = readdirSync(waitersDir); }
+    catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+    return names.filter(name => /^\d+\.json$/.test(name)).flatMap(name => {
+      const path = join(waitersDir, name);
+      const snapshot = readJsonOwnerLockSnapshot(path);
+      let mtimeMs = 0;
+      try { mtimeMs = statSync(path).mtimeMs; } catch {}
+      if (!(path === waiterPath && snapshot.raw === ownWaiterRaw)
+          && shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), mtimeMs, options)
+          && reclaimJsonOwnerLockSnapshot(path, snapshot.raw)) return [];
+      // Predecessor waiters were all exclusive. Only an explicit reader ticket
+      // grants reader status; live untyped tickets still exclude new readers.
+      return [{path, ticket:BigInt(name.slice(0, -5)), writer:snapshot.owner?.priority !== 'reader',
+        owner:snapshot.owner}];
+    }).sort((a, b) => a.writer !== b.writer ? a.writer ? -1 : 1 : a.ticket < b.ticket ? -1 : a.ticket > b.ticket ? 1 : 0);
+  };
+
+  // Creation and heartbeats both publish complete records: killing a waiter
+  // during a heartbeat must not leave an ownerless head for an infinite wait.
+  const publishWaiter = (raw, expectedRaw) => {
+    const pendingPath = `${waiterPath}.pending-${process.pid}-${Math.random().toString(36).slice(2)}`;
     try {
-      acquiredAtMs = Date.now();
-      ownLockRaw = serializeJsonOwnerLock({ createdAtMs: acquiredAtMs, updatedAtMs: acquiredAtMs });
-      fd = openSync(lockPath, 'wx');
-      writeFileSync(fd, ownLockRaw, 'utf8');
-      break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      ownLockRaw = null;
+      writeFileSync(pendingPath, raw, {encoding:'utf8', flag:'wx'});
+      if (expectedRaw !== undefined && readJsonOwnerLockRaw(waiterPath) !== expectedRaw) return false;
+      renameSync(pendingPath, waiterPath);
+      return true;
+    } finally {
+      try { unlinkSync(pendingPath); } catch {}
+    }
+  };
+
+  const registerWaiter = (waiters, reuseOnly = false) => {
+    // A re-entering writer keeps its original queue identity. Do not adopt a
+    // ticket used by another active call in this process: those are separate
+    // exclusive operations, not retries of the same pending operation.
+    const previous = options.priority === 'writer' ? waiters.find(waiter => waiter.writer
+      && waiter.owner?.pid === process.pid && Number.isFinite(waiter.owner?.createdAtMs)
+      && !activeWriterWaiters.has(waiter.path)) : null;
+    if (reuseOnly && !previous) return;
+    mkdirSync(waitersDir, {recursive:true});
+    const ticket = waiters.reduce((maximum, waiter) => waiter.ticket > maximum ? waiter.ticket : maximum, 0n) + 1n;
+    waiterPath = previous?.path ?? join(waitersDir, `${ticket}.json`);
+    waiterCreatedAtMs = previous?.owner.createdAtMs ?? startedAt;
+    ownWaiterRaw = serializeJsonOwnerLock({createdAtMs:waiterCreatedAtMs, updatedAtMs:Date.now(), priority:options.priority});
+    publishWaiter(ownWaiterRaw);
+    if (options.priority === 'writer') activeWriterWaiters.add(waiterPath);
+    waiterHeartbeat = setInterval(() => {
+      try {
+        if (readJsonOwnerLockRaw(waiterPath) !== ownWaiterRaw) return;
+        const nextRaw = serializeJsonOwnerLock({createdAtMs:waiterCreatedAtMs, updatedAtMs:Date.now(), priority:options.priority});
+        if (publishWaiter(nextRaw, ownWaiterRaw)) ownWaiterRaw = nextRaw;
+      } catch {}
+    }, heartbeatIntervalMs);
+  };
+
+  const acquire = () => {
+    acquiredAtMs = Date.now();
+    ownLockRaw = serializeJsonOwnerLock({createdAtMs:acquiredAtMs, updatedAtMs:acquiredAtMs, priority:options.priority});
+    fd = openSync(lockPath, 'wx');
+    writeFileSync(fd, ownLockRaw, 'utf8');
+  };
+
+  const withQueueGate = fn => withJsonOwnerFileLockInternal(fn, {
+    ...options, sharedReaders: false, lockPath: `${lockPath}.queue.lock`, onWait: undefined,
+    timeoutMs: Math.max(0, timeoutMs - (Date.now() - startedAt)), staleAfterMs,
+  }, false);
+  const publishReaders = (readers, create = false) => {
+    const raw = JSON.stringify({ ...readers[0], priority: 'reader', updatedAtMs: Date.now(), readers });
+    if (create) { writeFileSync(lockPath, raw, { encoding: 'utf8', flag: 'wx' }); return; }
+    const pendingPath = `${lockPath}.pending-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    try {
+      writeFileSync(pendingPath, raw, { encoding: 'utf8', flag: 'wx' });
+      renameSync(pendingPath, lockPath);
+    } finally { try { unlinkSync(pendingPath); } catch {} }
+  };
+  const trySharedAcquire = () => {
+    let waiters = readWaiters();
+    if (!waiterPath && options.priority === 'writer') registerWaiter(waiters, true);
+    let snapshot = readJsonOwnerLockSnapshot(lockPath);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(lockPath).mtimeMs; } catch {}
+    if (snapshot.exists && shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), mtimeMs, options)) {
+      reclaimJsonOwnerLockSnapshot(lockPath, snapshot.raw);
+      snapshot = readJsonOwnerLockSnapshot(lockPath);
+    }
+    const reader = options.priority === 'reader';
+    const eligible = reader ? !waiters.some(waiter => waiter.writer)
+      : waiterPath ? waiters[0]?.path === waiterPath : waiters.length === 0;
+    if (eligible && reader && (!snapshot.exists || (snapshot.owner?.priority === 'reader' && Array.isArray(snapshot.owner.readers)))) {
+      const readers = (snapshot.owner?.readers ?? []).filter(owner => isPidAlive(Number(owner.pid)));
+      try { publishReaders([...readers, ownReader], !snapshot.exists); }
+      catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+        if (!waiterPath && options.wait !== false) registerWaiter(waiters);
+        return;
+      }
+      sharedAcquired = true;
+      return;
+    }
+    if (eligible && !reader && !snapshot.exists) {
+      try { acquire(); return; } catch (error) { if (error?.code !== 'EEXIST') throw error; ownLockRaw = null; }
+    }
+    if (!waiterPath && options.wait !== false) registerWaiter(waiters);
+  };
+
+  // Heartbeats establish recovery freshness, not changed exclusion or queue
+  // eligibility. Keep the JSON owner/reclaim contract separate from workspace
+  // leases while sharing their native notification mechanics.
+  const ownerIdentity = path => {
+    const snapshot = readJsonOwnerLockSnapshot(path);
+    if (!snapshot.owner) return snapshot.raw;
+    const { updatedAtMs, ...identity } = snapshot.owner;
+    return identity;
+  };
+  const readWaitSnapshot = () => {
+    let names = [];
+    try { names = readdirSync(waitersDir).filter(name => /^\d+\.json$/.test(name)).sort(); }
+    catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    return JSON.stringify([ownerIdentity(lockPath), names.filter(name => join(waitersDir, name) !== waiterPath)
+      .map(name => [name, ownerIdentity(join(waitersDir, name))])]);
+  };
+
+  try {
+    while (true) {
+      options.signal?.throwIfAborted();
+      if (waiterPath && readJsonOwnerLockRaw(waiterPath) !== ownWaiterRaw) {
+        // A caller opting into live stale reclaim can resume after its ticket
+        // was reclaimed. Join again rather than waiting on a missing head.
+        clearInterval(waiterHeartbeat);
+        waiterHeartbeat = null;
+        activeWriterWaiters.delete(waiterPath);
+        waiterPath = null;
+        ownWaiterRaw = null;
+      }
+      const waitSnapshot = observer.capture(readWaitSnapshot);
+      if (sharedReaders) {
+        // Both reader joins and writer decisions use the existing short ticket
+        // registration lock. No reader may race a newly registered writer.
+        await withQueueGate(trySharedAcquire);
+        if (sharedAcquired || fd !== null) break;
+      }
+      const head = fair ? readWaiters()[0] : null;
+      let eligible = !fair || (waiterPath ? head?.path === waiterPath : !head);
+      try {
+        if (eligible && !sharedReaders) acquire();
+        if (fd !== null) {
+          // Keep the existing wx fast path. A newcomer may reserve the file
+          // during a head's slow poll, but may not enter ahead of that head.
+          if (!fair || waiterPath || readWaiters().length === 0) break;
+          closeSync(fd);
+          fd = null;
+          if (readJsonOwnerLockRaw(lockPath) === ownLockRaw) unlinkSync(lockPath);
+          ownLockRaw = null;
+        }
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+        ownLockRaw = null;
+      }
+      if (fair && !sharedReaders && !waiterPath && options.wait !== false) {
+        await withJsonOwnerFileLockInternal(() => registerWaiter(readWaiters()), {
+          ...options, lockPath:`${lockPath}.queue.lock`, onWait:undefined,
+          timeoutMs:Math.max(0, timeoutMs - (Date.now() - startedAt)), staleAfterMs,
+        }, false);
+        eligible = readWaiters()[0]?.path === waiterPath;
+      }
       const snapshot = readJsonOwnerLockSnapshot(lockPath);
       let fallbackMtimeMs = 0;
       try {
         fallbackMtimeMs = statSync(lockPath).mtimeMs;
       } catch {}
-      if (shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), fallbackMtimeMs, options)) {
+      if (!sharedReaders && eligible && shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), fallbackMtimeMs, options)) {
         reclaimJsonOwnerLockSnapshot(lockPath, snapshot.raw);
         continue;
+      }
+      if (options.wait === false) {
+        const error = new Error(`${errorLabel} is busy: ${lockPath} (${describeJsonOwnerLock(lockPath)})`);
+        error.code = JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE;
+        throw error;
       }
       if (Date.now() - startedAt > timeoutMs) {
         throw new Error(`Timed out waiting for ${errorLabel}: ${lockPath} (${describeJsonOwnerLock(lockPath, Date.now())})`);
@@ -175,22 +364,36 @@ export async function withJsonOwnerFileLock(fn, options = {}) {
           });
         } catch {}
       }
-      await delay(pollIntervalMs, undefined, { signal: options.signal });
+      await observer.wait({ snapshot: waitSnapshot, readSnapshot: readWaitSnapshot,
+        maxWaitMs: Math.min(catchUpMs, Math.max(1, timeoutMs - (Date.now() - startedAt)), Math.max(1, staleAfterMs)),
+        signal: options.signal });
     }
-  }
 
-  try {
+    observer.close();
     options.signal?.throwIfAborted();
-    heartbeat = setInterval(() => {
+    if (!sharedAcquired) heartbeat = setInterval(() => {
       try {
         if (readJsonOwnerLockRaw(lockPath) !== ownLockRaw) return;
-        ownLockRaw = serializeJsonOwnerLock({ createdAtMs: acquiredAtMs, updatedAtMs: Date.now() });
+        ownLockRaw = serializeJsonOwnerLock({ createdAtMs: acquiredAtMs, updatedAtMs: Date.now(), priority:options.priority });
         writeFileSync(lockPath, ownLockRaw, 'utf8');
       } catch {}
-    }, Math.max(500, Math.min(5_000, Math.floor(staleAfterMs / 4))));
-    return await fn({ waited, lockPath });
+    }, heartbeatIntervalMs);
+    return await fn({ waited, lockPath, owner: sharedAcquired ? ownReader : readJsonOwnerLockSnapshot(lockPath).owner });
   } finally {
+    observer.close();
     if (heartbeat) clearInterval(heartbeat);
+    if (waiterHeartbeat) clearInterval(waiterHeartbeat);
+    if (sharedAcquired) {
+      // Release must finish even when the containing operation was cancelled.
+      await withJsonOwnerFileLockInternal(() => {
+        const owner = readJsonOwnerLockSnapshot(lockPath).owner;
+        if (owner?.priority !== 'reader' || !Array.isArray(owner.readers)) return;
+        const readers = owner.readers.filter(reader => reader.readerId !== ownReader.readerId && isPidAlive(Number(reader.pid)));
+        if (readers.length > 0) publishReaders(readers);
+        else unlinkSync(lockPath);
+      }, { ...options, signal: undefined, wait: true, sharedReaders: false,
+        lockPath: `${lockPath}.queue.lock`, timeoutMs: Infinity, onWait: undefined }, false);
+    }
     if (fd !== null) {
       try {
         closeSync(fd);
@@ -200,5 +403,9 @@ export async function withJsonOwnerFileLock(fn, options = {}) {
         if (readJsonOwnerLockRaw(lockPath) === ownLockRaw) unlinkSync(lockPath);
       } catch {}
     }
+    try {
+      if (waiterPath && readJsonOwnerLockRaw(waiterPath) === ownWaiterRaw) unlinkSync(waiterPath);
+    } catch {}
+    if (options.priority === 'writer') activeWriterWaiters.delete(waiterPath);
   }
 }

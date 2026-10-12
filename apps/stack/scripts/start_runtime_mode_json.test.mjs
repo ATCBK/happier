@@ -57,7 +57,7 @@ function stackRootDirFromMeta(metaUrl) {
   return dirname(scriptsDir);
 }
 
-test('source snapshot preview selects frozen export rather than implicitly borrowed Expo', async t => {
+test('source snapshot preview defaults to borrowed dev Expo without owning Metro or exporting UI', async t => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'direct-source-qa' });
   await appendFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_EXPO_SOURCE_STACK=producer\n');
@@ -69,16 +69,16 @@ test('source snapshot preview selects frozen export rather than implicitly borro
   const preview = JSON.parse(result.stdout);
   assert.equal(preview.launchMode, 'source-snapshot');
   assert.equal(preview.runtimeSnapshotId, null);
-  assert.equal(preview.serveUi, true);
-  assert.equal(preview.sourceUi, 'export');
+  assert.equal(preview.serveUi, false);
+  assert.equal(preview.sourceUi, 'borrowed');
   assert.equal(preview.startOwnedExpo, false);
-  assert.equal(preview.expoOwnership, 'disabled');
+  assert.equal(preview.expoOwnership, 'borrowed');
   assert.equal(preview.cliDir, join(rootDir, '..', 'cli'));
   assert.equal(preview.serverDir, join(rootDir, '..', 'server'));
   await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
 });
 
-test('source QA borrowed UI is explicit and headless source workers do not export UI', async t => {
+test('source QA frozen export is explicit and headless source workers do not need Expo', async t => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'source-ui-choice' });
   await appendFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_EXPO_SOURCE_STACK=producer\n');
@@ -91,12 +91,34 @@ test('source QA borrowed UI is explicit and headless source workers do not expor
   assert.equal(JSON.parse(borrowed.stdout).sourceUi, 'borrowed');
   assert.equal(JSON.parse(borrowed.stdout).serveUi, false);
   assert.equal(JSON.parse(borrowed.stdout).expoOwnership, 'borrowed');
-  const headless = await runNode([...args, '--no-ui'], { cwd: rootDir, env });
+  const frozen = await runNode([...args, '--ui=export'], { cwd: rootDir, env: { ...env, HAPPIER_STACK_EXPO_SOURCE_STACK: '' } });
+  assert.equal(frozen.code, 0, frozen.stderr);
+  assert.equal(JSON.parse(frozen.stdout).sourceUi, 'export');
+  assert.equal(JSON.parse(frozen.stdout).serveUi, true);
+  assert.equal(JSON.parse(frozen.stdout).expoOwnership, 'disabled');
+  const headless = await runNode([...args, '--no-ui'], { cwd: rootDir, env: { ...env, HAPPIER_STACK_EXPO_SOURCE_STACK: '' } });
   assert.equal(headless.code, 0, headless.stderr);
   assert.equal(JSON.parse(headless.stdout).sourceUi, 'disabled');
   assert.equal(JSON.parse(headless.stdout).serveUi, false);
   const invalid = await runNode([...args, '--ui=watch'], { cwd: rootDir, env });
   assert.notEqual(invalid.code, 0);
+  await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
+});
+
+test('source QA admits server and daemon without a configured Expo and leaves UI borrowed', async t => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'source-ui-unavailable' });
+  const env = { ...process.env, HAPPIER_STACK_STACK: fixture.stackName,
+    HAPPIER_STACK_STORAGE_DIR: fixture.storageDir, HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
+    HAPPIER_STACK_REPO_DIR: rootDir, HAPPIER_STACK_EXPO_SOURCE_STACK: '', HAPPIER_STACK_DAEMON: '1' };
+  await appendFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_DAEMON=1\n');
+  const result = await runNode([join(rootDir, 'scripts/run.mjs'), '--runtime=source', '--no-dev-targets', '--json'], { cwd: rootDir, env });
+  assert.equal(result.code, 0, result.stderr);
+  const preview = JSON.parse(result.stdout);
+  assert.equal(preview.sourceUi, 'borrowed');
+  assert.equal(preview.startDaemon, true);
+  assert.equal(preview.serveUi, false);
+  assert.equal(preview.startOwnedExpo, false);
   await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
 });
 
@@ -118,7 +140,7 @@ test('source QA with local server honors its pinned remote daemon instead of sta
   await writeFile(join(consumer, 'env'), 'HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK=producer\n');
   await writeFile(join(consumer, 'dev-targets.json'), JSON.stringify({ version: 3, targets,
     runtimePlacement: { qa: { mode: 'local' }, daemon: { mode: 'prefer-target', target: 'worker', fallback: 'local' } } }));
-  const result = await runNode([join(rootDir, 'scripts/run.mjs'), '--json', '--runtime=source'], { cwd: rootDir, env: {
+  const result = await runNode([join(rootDir, 'scripts/run.mjs'), '--json', '--runtime=source', '--no-ui'], { cwd: rootDir, env: {
     ...process.env, HAPPIER_STACK_STACK: 'qa', HAPPIER_STACK_STORAGE_DIR: storageDir,
     HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK: 'producer', HAPPIER_STACK_ENV_FILE: join(consumer, 'env'),
     HAPPIER_STACK_REPO_DIR: source, HAPPIER_STACK_DAEMON: '1',

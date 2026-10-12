@@ -59,6 +59,14 @@ esac
   // Explicit local execution shares the same gate, waits without starting
   // its payload, and resumes when the observed memory floor is available.
   writeFakeBin({ root: fixture.root, name: 'vitest', content: '#!/bin/sh\nprintf started\n' });
+  // This memory fixture has no package graph. Preparation executables are
+  // genuine child-process boundaries; the native admission path remains real.
+  writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
+case "$*" in
+  *remote_dependency_bootstrap.mjs*|*remote_validation_preparation.mjs*) exit 0 ;;
+  *) exec '${process.execPath}' "$@" ;;
+esac
+` });
   await writeFile(memory, '8388607 73400320\n');
   const child = spawn('/bin/sh', [launcher, '--local', '--', 'vitest', 'run'], { env });
   let stderr = '', stdout = '';
@@ -103,10 +111,20 @@ esac
     FIXTURE_MEMORY: memory, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
   };
-  const runSmall = (check = false) => spawnSync('/bin/sh', [launcher,
-    check ? '--heavyweight-admission-check' : '--heavyweight-admission',
-    '--class=validation', '--machine=fixture', ...(check ? [] : ['--no-wait', '--', '/bin/sh', '-c', 'printf small']),
-  ], { env, encoding: 'utf8' });
+  const runSmall = async (check = false) => {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const result = spawnSync('/bin/sh', [launcher,
+        check ? '--heavyweight-admission-check' : '--heavyweight-admission',
+        '--class=validation', '--machine=fixture', ...(check ? [] : ['--no-wait', '--', '/bin/sh', '-c', 'printf small']),
+      ], { env, encoding: 'utf8' });
+      // Registration now wakes the head immediately. A nonblocking kernel
+      // mutex denial is not a capacity/fairness decision; retry only that
+      // pre-dispatch outcome, never a head-priority or envelope denial.
+      if (!/admission busy|admission decision in progress/.test(result.stderr)) return result;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('backfill fixture could not observe a quiescent admission decision');
+  };
   let head, headExited, stderr;
   const startHead = async () => {
     stderr = '';
@@ -122,38 +140,38 @@ esac
   await startHead();
   await setMemory(smallKiB - 1);
   for (let retry = 0; retry < 4; retry++) {
-    const unavailable = runSmall();
+    const unavailable = await runSmall();
     assert.equal(unavailable.status, 75, unavailable.stderr);
     assert.equal(unavailable.stdout, '');
   }
   await setMemory(availableKiB);
-  const firstSmall = runSmall();
+  const firstSmall = await runSmall();
   assert.equal(firstSmall.status, 0, firstSmall.stderr);
   assert.equal(firstSmall.stdout, 'small');
   // Read-only probing must never spend a head's backfill envelope.
   for (let probe = 0; probe < 5; probe++) {
-    const ready = runSmall(true);
+    const ready = await runSmall(true);
     assert.equal(ready.status, 0, ready.stderr);
   }
   for (let admitted = 1; admitted < Math.floor(headKiB / smallKiB); admitted++) {
-    const small = runSmall();
+    const small = await runSmall();
     assert.equal(small.status, 0, small.stderr);
     assert.equal(small.stdout, 'small');
   }
-  const exhausted = runSmall();
+  const exhausted = await runSmall();
   assert.equal(exhausted.status, 75, exhausted.stderr);
   assert.equal(exhausted.stdout, '');
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   await setMemory(headKiB);
   assert.equal(await headExited, 0, stderr);
   await readFile(marker);
-  const afterHead = runSmall();
+  const afterHead = await runSmall();
   assert.equal(afterHead.status, 0, afterHead.stderr);
   // A fresh head has an unused backfill envelope, but approaching its floor
   // already protects enough capacity for it instead of starting another job.
   await setMemory(headKiB - smallKiB);
   await startHead();
-  const approaching = runSmall();
+  const approaching = await runSmall();
   assert.equal(approaching.status, 75, approaching.stderr);
   assert.equal(approaching.stdout, '');
   await setMemory(headKiB);
@@ -264,4 +282,75 @@ esac
     await exited;
     await contenderExited;
   }
+});
+
+test('heavyweight admission reclaims terminal owners and waiters but retains idle orphaned live owners', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-terminal-admission-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const identityPath = join(launcher, '../..', 'scripts/utils/proc/native_process_identity.sh');
+  const stat = fixture.path('owner.stat');
+  const identity = await readFile(identityPath, 'utf8');
+  // Replace only the kernel stat boundary; use real reservation, queue and memory decisions.
+  await writeFile(identityPath, identity.replaceAll('/proc/$heavyweight_token_pid/stat', stat)
+    .replaceAll('/proc/$heavyweight_current_pid/stat', stat));
+  const owner = join(admissionRoot, 'owners/99999999-12345');
+  const waiter = join(admissionRoot, 'waiters/99999999-12345');
+  const floor = resolveHeavyweightMemoryFloorKiB('validation');
+  writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
+case "$*" in
+  */proc/meminfo*) printf '${floor} ${floor * 3}\\n' ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+` });
+  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
+  const probe = () => spawnSync('/bin/sh', [launcher, '--heavyweight-admission-check',
+    '--class=validation', '--machine=fixture'], { env, encoding: 'utf8' });
+  const observer = new URL('./utils/proc/service_memory.mjs', import.meta.url).href;
+  const observerPath = join(launcher, '../..', 'scripts/utils/proc/service_memory.mjs');
+  const processSnapshot = new Map([[99999999, { pid: 99999999, parentPid: 1, state: 'Z',
+    fingerprint: 'linux-proc:12345', rssKiB: 0, env: {} }],
+  [99999998, { pid: 99999998, parentPid: 1, state: 'S', rssKiB: 1024,
+    env: { HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: admissionRoot, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '99999999:12345' } }]]);
+  await mkdir(owner, { recursive: true });
+  await writeFile(join(owner, 'process'), '99999999 12345\n');
+  await writeFile(join(owner, 'class'), 'validation\n');
+  await writeFile(stat, `99999999 (orphan owner) Z 1 ${Array(17).fill('0').join(' ')} 12345\n`);
+  const originalObserver = await readFile(observerPath, 'utf8');
+  // Replace the existing fixture's OS enumeration, preserving the real owner logic.
+  const writeProcessSnapshot = () => writeFile(observerPath, `import { readWorkerMemoryReservations, renderWorkerMemoryReservationRows } from ${JSON.stringify(observer)};
+const processes = new Map(${JSON.stringify([...processSnapshot])});
+process.stdout.write(renderWorkerMemoryReservationRows(readWorkerMemoryReservations({ admissionRoot: ${JSON.stringify(admissionRoot)}, readProcesses: () => processes, includeAdmittedRss: true, includeOwnerProgress: true })));
+`);
+  await writeProcessSnapshot();
+  const survivingWork = probe();
+  assert.equal(survivingWork.status, 1, 'a terminal wrapper must not release a live admitted payload');
+  assert.equal(await readFile(join(owner, 'process'), 'utf8'), '99999999 12345\n');
+  delete processSnapshot.get(99999998).rssKiB;
+  await writeProcessSnapshot();
+  const unknownMemory = probe();
+  assert.equal(unknownMemory.status, 1, 'unknown resident memory must not release the surviving workload');
+  assert.match(unknownMemory.stderr, new RegExp(`reserved-memory=${floor}`), 'unknown RSS retains the entire class envelope');
+  await writeFile(observerPath, originalObserver);
+  for (const state of ['S', 'D', 'T', 'Z', 'X']) {
+    await mkdir(owner, { recursive: true });
+    await writeFile(join(owner, 'process'), '99999999 12345\n');
+    await writeFile(join(owner, 'class'), 'validation\n');
+    await writeFile(stat, `99999999 (orphan owner) ${state} 1 ${Array(17).fill('0').join(' ')} 12345\n`);
+    const decision = probe();
+    if (['Z', 'X'].includes(state)) {
+      assert.equal(decision.status, 0, decision.stderr);
+      await assert.rejects(readFile(join(owner, 'process')), { code: 'ENOENT' });
+      assert.match(decision.stderr, /reclaimed heavyweight owner.*99999999/);
+    } else {
+      assert.equal(decision.status, 1, decision.stderr);
+      assert.match(decision.stderr, new RegExp(`reserved-memory=${floor}`));
+      assert.equal(await readFile(join(owner, 'process'), 'utf8'), '99999999 12345\n');
+    }
+  }
+  await mkdir(join(admissionRoot, 'waiters'), { recursive: true });
+  await writeFile(waiter, '99999999 12345 1 validation 0\n');
+  const afterTerminalWaiter = probe();
+  assert.equal(afterTerminalWaiter.status, 0, afterTerminalWaiter.stderr);
+  await assert.rejects(readFile(waiter), { code: 'ENOENT' });
 });

@@ -5,12 +5,91 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { inspectDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { run } from '../proc/proc.mjs';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { buildStackFixtureEnv } from '../../testkit/core/env_scope.mjs';
+import { buildStackHarnessEnv, writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { shouldRunYarnInstall, withYarnInstallGuard } from './yarn_install_guard.mjs';
 
 async function touch(path, ms) {
   const d = new Date(ms);
   await utimes(path, d, d);
 }
+
+test('workspace install guard restores UI patch and asset bytes before publishing dependency readiness', {
+  skip: process.platform === 'win32' ? 'fake package-manager executable uses a POSIX shebang' : false,
+}, async (t) => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-yarn-ui-postinstall-' });
+  for (const component of ['cli', 'server', 'ui']) {
+    await mkdir(join(root, 'apps', component), { recursive: true });
+    await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
+  }
+  const uiDir = join(root, 'apps', 'ui');
+  await mkdir(join(uiDir, 'patches'), { recursive: true });
+  await mkdir(join(uiDir, 'tools'), { recursive: true });
+  await writeFile(join(uiDir, 'package.json'), JSON.stringify({
+    name: '@happier-dev/app', scripts: { 'postinstall:real': 'node tools/postinstall.mjs' },
+    happier: { installFreshnessInputs: ['patches', 'tools'] },
+  }));
+  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(root, 'yarn.lock'), '# workspace fixture\n');
+  const patchPath = join(uiDir, 'patches', 'markdown.patch');
+  const workerSource = join(uiDir, 'tools', 'worker.js');
+  const patchedOutput = join(uiDir, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js');
+  const workerOutput = join(uiDir, 'public', 'worker.js');
+  await writeFile(patchPath, 'first patch\n');
+  await writeFile(workerSource, 'first worker\n');
+
+  // Yarn is the process boundary. It re-extracts dependency bytes but reuses
+  // lifecycle admission; the real guard and UI preparation owners remain live.
+  const { binDir } = writeFakeBin({ root, name: 'yarn', content: `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === '--version') process.exit(0);
+if (args[0] === 'install') {
+  fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
+  fs.mkdirSync(path.dirname(${JSON.stringify(patchedOutput)}), { recursive: true });
+  fs.writeFileSync(${JSON.stringify(patchedOutput)}, 'pristine dependency\\n');
+} else if (args.join(' ') === '-s workspace @happier-dev/app postinstall:real') {
+  if (!fs.existsSync(${JSON.stringify(join(root, '.project', 'tmp', 'dependency-install.lock'))})) process.exit(44);
+  if (process.env.HAPPIER_TEST_UI_POSTINSTALL_FAIL === '1') process.exit(43);
+  fs.copyFileSync(${JSON.stringify(patchPath)}, ${JSON.stringify(patchedOutput)});
+  fs.mkdirSync(path.dirname(${JSON.stringify(workerOutput)}), { recursive: true });
+  fs.copyFileSync(${JSON.stringify(workerSource)}, ${JSON.stringify(workerOutput)});
+} else process.exit(42);
+` });
+  const env = buildStackHarnessEnv({ binDirs: [binDir], baseEnv: buildStackFixtureEnv({
+    stripStackEnv: true, homeDir: join(root, 'home'),
+    extraEnv: { HAPPIER_STACK_STACKS_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '', npm_execpath: '' },
+  }) });
+  const install = (extraEnv = {}) => withYarnInstallGuard({
+    installDir: root, componentDir: root, quiet: true, env: { ...env, ...extraEnv },
+  }, () => run('yarn', ['install', '--frozen-lockfile'], { cwd: root, env, stdio: 'ignore' }));
+
+  await install();
+  assert.equal(await readFile(patchedOutput, 'utf8'), 'first patch\n');
+  assert.equal(await readFile(workerOutput, 'utf8'), 'first worker\n');
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
+  assert.equal((await install()).refreshed, false);
+  await unlink(patchedOutput);
+  assert.equal((await install()).refreshed, false);
+  assert.equal(await readFile(patchedOutput, 'utf8'), 'first patch\n',
+    'a warm installed tree repairs missing UI outputs without reinstalling dependencies');
+
+  await writeFile(patchPath, 'changed patch\n');
+  await writeFile(workerSource, 'changed worker\n');
+  await install();
+  assert.equal(await readFile(patchedOutput, 'utf8'), 'changed patch\n');
+  assert.equal(await readFile(workerOutput, 'utf8'), 'changed worker\n');
+
+  await writeFile(workerSource, 'recovered worker\n');
+  await assert.rejects(install({ HAPPIER_TEST_UI_POSTINSTALL_FAIL: '1' }));
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, true,
+    'failed UI preparation must not certify the re-extracted tree as ready');
+  await install();
+  assert.equal(await readFile(workerOutput, 'utf8'), 'recovered worker\n');
+});
 
 test('shouldRunYarnInstall returns true when node_modules is missing', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'hstack-yarn-guard-'));

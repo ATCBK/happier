@@ -13,12 +13,30 @@ import { spawnDaemonLikeProcess, killDetachedProcessGroup } from './testkit/core
 import { resolvePreferredStackDaemonStatePaths } from './utils/auth/credentials_paths.mjs';
 import { getDaemonEnv, checkDaemonStatePingAware } from './daemon.mjs';
 import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli_server_set.mjs';
+import { createOuterStackRuntimeStartPublication } from './stack/run_script_with_stack_env.mjs';
+import { withStackRuntimeStartClaim } from './utils/stack/runtime_state.mjs';
+import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(scriptsDir);
 const repoRoot = dirname(dirname(packageRoot));
 const runScript = join(packageRoot, 'scripts', 'run.mjs');
 const runServerReadyTimeoutMs = resolveServerReadyTimeoutMs();
+
+test('outer source replacement claim clears the previous loaded identity and launch custody', async (t) => {
+  const fixture = await createTempFixture(t, {prefix:'hstack-source-replacement-claim-'});
+  const statePath = fixture.path('stack.runtime.json');
+  const stackName = 'source-replacement';
+  await writeFile(statePath, JSON.stringify({stackName, ownerPid:null,
+    sourceRuntimeIdentities:{daemon:{selected:'previous',loaded:'previous'}},
+    sourceRuntimeLaunch:{entrypoint:'/previous/index.mjs',cliDir:'/previous',env:{}}}));
+  await withStackRuntimeStartClaim(statePath, {stackName}, ({recordStart}) => recordStart(
+    createOuterStackRuntimeStartPublication({stackName, scriptPath:'run.mjs', ephemeral:true,
+      ownerPid:null, ports:{}, runtimeSnapshotId:null, args:['--runtime=source', '--restart']})));
+  const claimed = JSON.parse(await readFile(statePath,'utf8'));
+  assert.equal(claimed.sourceRuntimeIdentities, null);
+  assert.equal(claimed.sourceRuntimeLaunch, null);
+});
 
 test('source runner recovery adopts a healthy daemon from its frozen selection without stopping or rebuilding it', async (t) => {
   const fixture = await createTempFixture(t, {prefix:'hstack-source-daemon-adoption-'});
@@ -77,7 +95,21 @@ test('source runner recovery adopts a healthy daemon from its frozen selection w
   }
   await writeFile(runtimeStatePath, JSON.stringify({stackName, ownerPid:null, sourceRuntimeIdentities:{daemon:{selected:'frozen-identity',loaded:'frozen-identity'}},
     sourceRuntimeLaunch:{entrypoint,cliDir,env:{}}, processes:{daemonPid:daemon.pid,daemonPids:[daemon.pid]}}));
-  runner = spawn(process.execPath, [runScript, '--runtime=source', '--reuse-source-runtime', '--restart', '--no-dev-targets', '--no-server', `--server-url=${serverUrl}`, '--no-ui', '--no-browser'], {cwd:repoRoot, env, stdio:['ignore','pipe','pipe'], detached:true});
+  const recoveryArgs = ['--runtime=source', '--reuse-source-runtime', '--restart', '--no-dev-targets', '--no-server', `--server-url=${serverUrl}`, '--no-ui', '--no-browser'];
+  // stack start claims the runtime before run.mjs publishes its own adoption.
+  // Exercise both real writers so the outer claim cannot erase that evidence.
+  const restoreEnv = withPatchedProcessEnv(null, {HAPPIER_STACK_STORAGE_DIR:env.HAPPIER_STACK_STORAGE_DIR});
+  try {
+    await withStackRuntimeStartClaim(runtimeStatePath, {stackName}, ({recordStart}) => recordStart(
+      createOuterStackRuntimeStartPublication({stackName, scriptPath:'run.mjs', ephemeral:true,
+        ownerPid:null, ports:{}, runtimeSnapshotId:null, args:recoveryArgs, env})));
+  } finally {
+    restoreEnv();
+  }
+  const claimed = JSON.parse(await readFile(runtimeStatePath,'utf8'));
+  assert.deepEqual(claimed.sourceRuntimeIdentities?.daemon, {selected:'frozen-identity',loaded:'frozen-identity'});
+  assert.deepEqual(claimed.sourceRuntimeLaunch, {entrypoint,cliDir,env:{}});
+  runner = spawn(process.execPath, [runScript, ...recoveryArgs], {cwd:repoRoot, env, stdio:['ignore','pipe','pipe'], detached:true});
   let output = '';
   runner.stdout.on('data', data => { output += String(data); });
   runner.stderr.on('data', data => { output += String(data); });
@@ -85,7 +117,7 @@ test('source runner recovery adopts a healthy daemon from its frozen selection w
     runServerReadyTimeoutMs, () => runner.exitCode !== null || runner.signalCode !== null);
   await assert.rejects(readFile(stopMarker), {code:'ENOENT'}, 'a healthy frozen daemon must not receive stop during runner recovery');
   const state = JSON.parse(await readFile(runtimeStatePath,'utf8'));
-  assert.equal(state.ownerPid, runner.pid);
+  assert.equal(state.ownerPid, runner.pid, output);
   assert.equal(state.processes.daemonPid, daemon.pid);
   assert.deepEqual(state.sourceRuntimeIdentities.daemon, {selected:'frozen-identity',loaded:'frozen-identity'});
   assert.equal((await checkDaemonStatePingAware(cliHomeDir,{serverUrl,env:daemonEnv})).status,'running');

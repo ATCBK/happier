@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ensureCliBuilt, ensureDepsInstalled, isCliDistFreshForInputs, pmExecBin, readUsableCliDistFreshness } from './pm.mjs';
 import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
 import { bootstrapRemoteDependencies } from '../dev_targets/remote_dependency_bootstrap.mjs';
 import { readHappyCliRuntimeInputFreshness } from './cli_runtime_inputs.mjs';
 import { resolveValidRuntimeSnapshot } from '../../../../cli/bin/_resolveRuntimeEntrypoint.mjs';
@@ -22,6 +22,57 @@ const CLI_DIST_BUILD_MANIFEST_MODULE_PATH = fileURLToPath(
 );
 const CLI_RUNTIME_INPUTS_MODULE_URL = new URL('./cli_runtime_inputs.mjs', import.meta.url).href;
 const { writeCliDistBuildManifest } = createRequire(import.meta.url)(CLI_DIST_BUILD_MANIFEST_MODULE_PATH);
+
+test('healthy stack startup verifies dependencies without requesting a refresh behind a finite reader', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-healthy-read-only-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const component of ['ui', 'cli', 'server']) {
+    await mkdir(join(root, 'apps', component), { recursive: true });
+    await writeFile(join(root, 'apps', component, 'package.json'), JSON.stringify({ name: `@fixture/${component}` }));
+  }
+  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  const binDir = join(root, 'bin');
+  const outputPath = join(root, 'argv.txt');
+  await writeYarnArgDumpStub({ binDir, outputPath });
+  const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
+    HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '' };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await withDependencyRefresh({ installDir: root, env }, async () => mkdir(join(root, 'node_modules'), { recursive: true }));
+  const marker = join(root, 'node_modules/.happier-stack-dependencies-ready');
+  const before = await readFile(marker, 'utf8');
+  let enter, release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const reader = withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => { enter(); await held; });
+  await entered;
+  const startup = ensureDepsInstalled(join(root, 'apps/ui'), 'happier-ui', { env, quiet: true });
+  try {
+    const result = await Promise.race([startup.then(() => 'verified'), new Promise(resolve => setTimeout(() => resolve('waited for writer'), 500))]);
+    assert.equal(result, 'verified');
+    assert.equal(await readFile(marker, 'utf8'), before, 'verification must not withdraw or republish admission');
+  } finally { release(); await Promise.allSettled([reader, startup]); }
+});
+
+test('read-only development startup leaves stale dependencies untouched and reports an explicit refresh', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-dev-read-only-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'node_modules'));
+  await writeFile(join(root, 'package.json'), '{"private":true}');
+  await writeFile(join(root, 'yarn.lock'), '# fixture\n');
+  const binDir = join(root, 'bin');
+  const outputPath = join(root, 'argv.txt');
+  await writeYarnArgDumpStub({ binDir, outputPath });
+  const env = { ...process.env, PATH: `${binDir}:/usr/bin:/bin`, OUTPUT_PATH: outputPath,
+    HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1' };
+  let warning = '';
+  t.mock.method(console, 'warn', message => { warning += message; });
+  await ensureDepsInstalled(root, 'fixture', { env });
+  const invocations = await readFile(outputPath, 'utf8').catch(() => '');
+  assert.equal(/install|postinstall/.test(invocations), false, 'dev start may only inspect dependencies');
+  await assert.rejects(readFile(join(root, 'node_modules/.happier-stack-dependencies-ready')), { code: 'ENOENT' });
+  assert.match(warning, /ensureDepsInstalled/);
+});
 
 test('CLI concurrent-build token follows verified closure bytes rather than manifest mtime', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-dist-closure-token-'));
@@ -540,7 +591,7 @@ async function writeYarnBuildCreatesDistStub({ binDir, outputPath, cliDir }) {
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath }) {
+async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput }) {
   await mkdir(binDir, { recursive: true });
   const yarnPath = join(binDir, 'yarn');
   await writeFile(
@@ -554,6 +605,11 @@ async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cl
       '  exit 0',
       'fi',
       'if [ "${1:-}" = "install" ] && [ "${2:-}" = "--force" ]; then',
+      ...(uiPatchOutput ? [
+        `  [[ -f ${shellSingleQuote(join(cliDir, '../..', '.project/tmp/dependency-install.lock'))} ]] || exit 44`,
+        `  [[ ! -f ${shellSingleQuote(join(cliDir, '../..', 'node_modules/.happier-stack-dependencies-ready'))} ]] || exit 45`,
+        `  rm -f ${shellSingleQuote(uiPatchOutput)}`,
+      ] : []),
       `  cat > ${JSON.stringify(pkgrollCliPath)} <<'EOF'`,
       '#!/usr/bin/env node',
       'console.log("pkgroll repaired");',
@@ -561,6 +617,15 @@ async function writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cl
       '  chmod 755 ' + JSON.stringify(pkgrollCliPath),
       '  exit 0',
       'fi',
+      ...(uiPatchOutput ? [
+        'if [[ "$*" == "-s workspace @happier-dev/app postinstall:real" ]]; then',
+        `  [[ -f ${shellSingleQuote(join(cliDir, '../..', '.project/tmp/dependency-install.lock'))} ]] || exit 44`,
+        `  [[ ! -f ${shellSingleQuote(join(cliDir, '../..', 'node_modules/.happier-stack-dependencies-ready'))} ]] || exit 45`,
+        `  mkdir -p ${shellSingleQuote(dirname(uiPatchOutput))}`,
+        `  echo 'patched module' > ${shellSingleQuote(uiPatchOutput)}`,
+        '  exit 0',
+        'fi',
+      ] : []),
       'if [ "${1:-}" = "build:prepared" ]; then',
       ...fakeAtomicCliDistBuildLines([
         '  echo "export const built = true;" > "$out/index.mjs"',
@@ -1262,7 +1327,7 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
   await withDependencyRefresh({ installDir: root, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE },
     async () => mkdir(join(root, 'node_modules'), { recursive: true }));
   const prepare = (componentRelativeDir, extraEnv = {}) => bootstrapRemoteDependencies({
-    repoDir: root, componentRelativeDir, env: { ...env, ...extraEnv },
+    repoDir: root, componentRelativeDir, executionPlacement: 'remote', env: { ...env, ...extraEnv },
   });
   await prepare('apps/ui');
   assert.equal(await readFile(requiredOutputPath, 'utf8'), await readFile(patchPath, 'utf8'));
@@ -1289,6 +1354,7 @@ test('remote runtime and source-test bootstrap complete UI postinstall under ins
   await rm(join(root, 'packages/cli-common/dist'), { recursive: true });
   const sourcePrepare = (extraEnv = {}) => bootstrapRemoteDependencies({
     repoDir: root, componentRelativeDir: 'apps/ui', validationKind: 'source-test',
+    executionPlacement: 'remote',
     env: { ...env, ...extraEnv },
   });
   await writeFile(join(root, 'yarn.lock'), '# source-test refresh\n');
@@ -2222,7 +2288,7 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
   await mkdir(cliDir, { recursive: true });
   await writeFile(join(root, 'package.json'), '{ "name": "repo", "private": true }\n', 'utf-8');
   await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
-  await writeFile(join(root, 'apps', 'ui', 'package.json'), '{ "name": "@happier-dev/ui", "private": true }\n', 'utf-8');
+  await writeFile(join(root, 'apps', 'ui', 'package.json'), JSON.stringify({ name: '@happier-dev/app', scripts: { 'postinstall:real': 'node tools/postinstall.mjs' } }));
   await writeFile(join(root, 'apps', 'server', 'package.json'), '{ "name": "@happier-dev/server", "private": true }\n', 'utf-8');
   await writeFile(join(cliDir, 'package.json'), '{ "name": "@happier-dev/cli", "private": true }\n', 'utf-8');
   await writeFile(pkgrollCliPath, '#!/bin/sh\nexec node "$0" "$@"\n', 'utf-8');
@@ -2234,7 +2300,10 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath });
+  const uiPatchOutput = join(root, 'apps/ui/node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js');
+  await mkdir(dirname(uiPatchOutput), { recursive: true });
+  await writeFile(uiPatchOutput, 'patched module\n');
+  await writeYarnForceRepairPkgrollThenBuildStub({ binDir, outputPath, cliDir, pkgrollCliPath, uiPatchOutput });
 
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -2249,6 +2318,7 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
   assert.match(argv, /\binstall --force --production=false\b/, `expected forced yarn reinstall, got:\n${argv}`);
   assert.match(argv, /(^|\n)build:prepared(\n|$)/, `expected prepared yarn build after repair, got:\n${argv}`);
   assert.match(await readFile(pkgrollCliPath, 'utf-8'), /pkgroll repaired/);
+  assert.equal(await readFile(uiPatchOutput, 'utf8'), 'patched module\n', 'forced package repair must complete UI postinstall before returning');
   assert.equal(await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8'), 'export const built = true;\n');
 });
 

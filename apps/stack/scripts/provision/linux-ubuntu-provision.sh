@@ -15,7 +15,7 @@ set -euo pipefail
 # - installer : minimal base tooling (curl/ca-certs) to test the official installer on a mostly-empty box
 # - bare      : do nothing (useful if you explicitly want an unprovisioned VM)
 # - qa        : browser runtime only; no user Codex configuration or build-tool setup
-# - toolchain : Node + Corepack/Yarn + Go + ripgrep; ready hosts require no changes
+# - toolchain : Node + Corepack/Yarn + Go + ripgrep + native build tools; ready hosts require no changes
 #
 # Env overrides:
 # - HAPPIER_PROVISION_NODE_MAJOR (default: 24)
@@ -177,16 +177,20 @@ provision_node_toolchain() {
 
 if [[ "${PROFILE}" == "toolchain" ]]; then
   provision_node_toolchain
-  # CLI test setup builds process-custody with Go; source retrieval uses rg.
+  # CLI test setup builds process-custody with Go; the pinned Iroh Rust build
+  # needs a native compiler/linker, archiver, make and package discovery.
   # Keep this profile narrow: full host provisioning also changes agent settings.
-  if ! go version >/dev/null 2>&1 || ! rg --version >/dev/null 2>&1; then
-    say "installing worker build tools (Go and ripgrep)"
+  if ! go version >/dev/null 2>&1 || ! rg --version >/dev/null 2>&1 \
+    || ! cc --version >/dev/null 2>&1 || ! c++ --version >/dev/null 2>&1 \
+    || ! make --version >/dev/null 2>&1 || ! ar --version >/dev/null 2>&1 \
+    || ! pkg-config --version >/dev/null 2>&1; then
+    say "installing worker build tools (Go, ripgrep and native prerequisites)"
     as_root apt-get update -y
-    as_root apt-get install -y --no-install-recommends ripgrep golang-go
+    as_root apt-get install -y --no-install-recommends ripgrep golang-go build-essential pkg-config
     hash -r
   fi
   go version
-  rg --version
+  for tool in rg cc c++ make ar pkg-config; do "$tool" --version; done
   say "toolchain ready"
   exit 0
 fi

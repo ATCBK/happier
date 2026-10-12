@@ -214,6 +214,7 @@ export function redactFailureDiagnostic(output, env = {}) {
       '$1<redacted>',
     )
     .replace(/\b(Bearer\s+)\S+/gi, '$1<redacted>')
+    .replace(/\b(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-[\w-]+|sk-[\w@.-]+)\s+[A-Za-z0-9+/=]+/g, '<redacted SSH public key>')
     .replace(/((?:[\w-]*(?:token|password|secret|credential|access[_-]?key|api[_-]?key)[\w-]*)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi, '$1<redacted>')
     .replace(/https?:\/\/[^\s"']+/gi, raw => {
       try {
@@ -695,6 +696,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
     timeoutMs,
     streamLabel,
     stdoutDiagnosticStream = process.stdout,
+    stderrDiagnosticStream = process.stderr,
     teeFile,
     teeLabel,
     teeMaxBytes = DEFAULT_TEE_MAX_BYTES,
@@ -748,7 +750,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
       resolved = true;
       if (shouldStream) {
         flushPrefixed(stdoutDiagnosticStream, prefix, outState);
-        flushPrefixed(process.stderr, prefix, errState);
+        flushPrefixed(stderrDiagnosticStream, prefix, errState);
       }
       if (shouldTee && teeStream) {
         flushPrefixed(teeStream, teePrefix, teeOutState);
@@ -781,7 +783,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
     });
     proc.stderr?.on('data', (d) => {
       err += d.toString();
-      if (shouldStream) writeWithPrefix(process.stderr, prefix, errState, d);
+      if (shouldStream) writeWithPrefix(stderrDiagnosticStream, prefix, errState, d);
       if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeErrState, d);
     });
 

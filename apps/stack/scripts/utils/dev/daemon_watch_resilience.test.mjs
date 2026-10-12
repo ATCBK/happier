@@ -12,6 +12,7 @@ import {
 } from './daemon.mjs';
 import { createDevServerReloadDescriptors } from './server.mjs';
 import cliDistBuildManifest from '../cli/cliDistBuildManifestLoader.mjs';
+import { readHappyCliRuntimeInputFreshness } from '../proc/cli_runtime_inputs.mjs';
 
 function writeDistBuildManifestForTest(distIndexPath, options = {}) {
   return cliDistBuildManifest.writeCliDistBuildManifest(distIndexPath, {
@@ -107,9 +108,16 @@ test('CLI reload descriptors own source inputs and exclude generated refresh out
   assert.ok(paths.includes(join(root, 'package.json')));
   assert.ok(paths.includes(join(root, 'yarn.lock')));
   assert.equal(descriptors.find((descriptor) => descriptor.id === 'shared:plugin-sdk')?.target, 'daemon');
-  const serverDescriptors = createDevServerReloadDescriptors({ serverDir: join(root, 'apps', 'server') });
+  const serverDir = join(root, 'apps', 'server');
+  await mkdir(serverDir, { recursive: true });
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@fixture/server', dependencies: {
+    '@happier-dev/agents': '0.0.0', '@happier-dev/plugins-codex': '0.0.0',
+  } }));
+  const serverDescriptors = await createDevServerReloadDescriptors({ serverDir });
   assert.equal(descriptors.find((descriptor) => descriptor.id === 'shared:agents')?.target, 'daemon');
   assert.equal(serverDescriptors.find((descriptor) => descriptor.id === 'shared:agents')?.target, 'shared');
+  assert.equal(serverDescriptors.find((descriptor) => descriptor.id === 'shared:plugins-codex')?.target, 'shared',
+    'nested workspace identity must match the daemon descriptor for the same package');
   assert.equal(serverDescriptors.some((descriptor) => descriptor.id === 'shared:plugin-sdk'), false);
   assert.deepEqual(
     descriptors.find((descriptor) => descriptor.id === 'daemon:cli-publication')?.paths,
@@ -121,6 +129,24 @@ test('CLI reload descriptors own source inputs and exclude generated refresh out
   );
   assert.ok(!paths.some((path) => path.includes('/node_modules')));
   assert.ok(!paths.some((path) => path.includes('/dist') && !path.endsWith('/dist/.build-manifest.json')));
+
+  const emailDir = join(root, 'packages', 'email-transports-protocol');
+  await mkdir(join(emailDir, 'src'), { recursive: true });
+  await writeFile(join(emailDir, 'package.json'), JSON.stringify({ name: '@happier-dev/email-transports-protocol' }));
+  await writeFile(join(root, 'packages', 'protocol', 'package.json'), JSON.stringify({
+    name: '@happier-dev/protocol', dependencies: { '@happier-dev/email-transports-protocol': '0.0.0' },
+  }));
+  const movingDescriptors = createHappyCliReloadDescriptors({ cliDir });
+  assert.ok(movingDescriptors.flatMap(descriptor => descriptor.paths).includes(join(emailDir, 'src')),
+    'observation must include undeclared bundled inputs without vetoing last-green startup');
+  await assert.rejects(() => readHappyCliRuntimeInputFreshness(cliDir), /Missing bundled internal workspace dependencies.*[\s\S]*email-transports-protocol/,
+    'the background build still reports the actionable validation failure');
+  await writeFile(join(root, 'packages', 'protocol', 'package.json'), '{');
+  assert.ok(createHappyCliReloadDescriptors({ cliDir }).flatMap(descriptor => descriptor.paths).includes(join(root, 'packages')),
+    'a partially edited manifest cannot kill a runner serving last-green output; package corrections remain observed');
+  await writeFile(join(serverDir, 'package.json'), '{');
+  assert.ok((await createDevServerReloadDescriptors({ serverDir })).flatMap(descriptor => descriptor.paths).includes(join(root, 'packages')));
+  await assert.rejects(() => readHappyCliRuntimeInputFreshness(cliDir), SyntaxError);
 });
 
 test('workspace preparation executor refreshes generated plugin inputs without owning daemon lifecycle', async () => {

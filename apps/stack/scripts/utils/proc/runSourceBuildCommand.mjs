@@ -1,5 +1,7 @@
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
+import { isDevStartupSourceDrift } from '../dev/devReloadCoordinator.mjs';
+import { runWorkspaceBuildAdmission } from './workspace_build_admission.mjs';
 
 /** Run finite source preparation in the existing host memory-admission tree.
  * Admission classes and measured envelopes, queueing, reservations and pressure
@@ -7,35 +9,34 @@ import { fileURLToPath } from 'node:url';
  * runtime bundle callers select source-bundle.
  */
 export async function runSourceBuildCommand({ repoDir, scriptPath, command, cwd = repoDir, args = [], env = process.env,
-  signal, captureStdout = true, admissionClass = 'validation' }) {
+  signal, captureStdout = true, captureStderr = false, admissionClass = 'validation', stdoutStream = process.stdout }) {
   const launcher = fileURLToPath(new URL('../../../bin/hstack-exec', import.meta.url));
   const payloadCommand = command ?? process.execPath;
   const payloadArgs = command ? args : [scriptPath, ...args];
-  // The existing native admission owner is Linux-only and explicitly passes
-  // non-Linux payloads through. Windows retains that policy without a POSIX spawn.
-  const invocation = process.platform === 'win32'
-    ? (await import('../process/resolveCommandInvocation.mjs')).resolveCommandInvocation({ command: payloadCommand, args: payloadArgs, env })
-    : { command: '/bin/sh', args: [launcher,
-    '--heavyweight-admission', `--class=${admissionClass}`,
-    `--machine=${env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? 'worker' : 'local'}`,
-    '--', payloadCommand, ...payloadArgs] };
-  return await new Promise((resolve, reject) => {
-    const child = spawn(invocation.command, invocation.args, { cwd, env, signal,
-      ...(invocation.windowsVerbatimArguments !== undefined
-        ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments } : {}),
-      stdio: ['ignore', captureStdout ? 'pipe' : 'inherit', 'inherit'] });
-    let stdout = '';
-    let spawnError;
-    child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (value) => { stdout += value; });
-    child.once('error', (error) => { spawnError = error; });
-    child.once('close', (code, terminalSignal) => {
-      if (spawnError) return reject(spawnError);
-      if (code === 0) return resolve(stdout);
-      const error = new Error(`Source preparation failed (${terminalSignal ? `signal ${terminalSignal}` : `exit ${code}`})`);
-      error.code = code;
-      error.signal = terminalSignal;
-      reject(error);
-    });
-  });
+  let sourceDrift = false;
+  const observe = () => {
+    const decoder = new StringDecoder('utf8');
+    let tail = '';
+    return value => {
+      const lines = (tail + decoder.write(value)).split('\n');
+      tail = lines.pop();
+      for (const message of lines) sourceDrift ||= isDevStartupSourceDrift({ code: 1, message }, 'expo');
+      // Also recognize a final diagnostic without a trailing newline.
+      sourceDrift ||= isDevStartupSourceDrift({ code: 1, message: tail }, 'expo');
+    };
+  };
+  const observeStdout = observe(), observeStderr = observe();
+  const result = await runWorkspaceBuildAdmission({ repoDir, launcherPath: launcher,
+    dependencyInstallDir: repoDir, command: payloadCommand, args: payloadArgs, cwd, env, signal,
+    admissionClass, stdio: ['ignore', 'pipe', 'pipe'], captureStdout, captureStderr,
+    onStdout: value => { observeStdout(value); if (!captureStdout) stdoutStream.write(value); },
+    onStderr: value => { observeStderr(value); process.stderr.write(value); } });
+  if (result.error) throw result.error;
+  if (result.status === 0) return captureStdout ? result.stdout : '';
+  const stderr = captureStderr ? result.stderr : '';
+  const error = new Error(`Source preparation failed (${result.signal ? `signal ${result.signal}` : `exit ${result.status}`})${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
+  error.code = result.status;
+  error.signal = result.signal;
+  error.sourceDrift = sourceDrift;
+  throw error;
 }

@@ -3,6 +3,7 @@
 heavyweight_read_process_token() {
   heavyweight_token_pid=$1
   heavyweight_process_token_value=-
+  heavyweight_process_state=-
   if [ -r "/proc/$heavyweight_token_pid/stat" ]; then
     # comm is parenthesized and can itself contain spaces or parentheses. The
     # state starts after its final closing delimiter; starttime is field 20
@@ -17,6 +18,7 @@ heavyweight_read_process_token() {
     # numeric/state fields. Function positional parameters do not affect callers.
     set -- $heavyweight_stat_fields
     [ "$#" -ge 20 ] || return 0
+    heavyweight_process_state=$1
     shift 19
     case "$1" in ''|*[!0-9]*) ;; *) heavyweight_process_token_value=$1 ;; esac
   fi
@@ -31,11 +33,15 @@ heavyweight_process_is_current() {
   heavyweight_current_pid=$1
   heavyweight_current_token=$2
   case "$heavyweight_current_pid" in ''|*[!0-9]*) return 1 ;; esac
+  heavyweight_read_process_token "$heavyweight_current_pid"
+  # PID existence and a matching start token also hold for an unreaped zombie.
+  # Terminal tasks cannot execute work or retain a future resource envelope;
+  # sleeping, blocked, stopped and orphaned live tasks still can.
+  case "$heavyweight_process_state" in Z|X|x) return 1 ;; esac
   if [ "$heavyweight_current_token" = - ]; then
     kill -0 "$heavyweight_current_pid" 2>/dev/null
     return
   fi
-  [ -r "/proc/$heavyweight_current_pid/stat" ] || return 1
-  heavyweight_read_process_token "$heavyweight_current_pid"
+  [ "$heavyweight_process_token_value" != - ] || return 1
   [ "$heavyweight_process_token_value" = "$heavyweight_current_token" ]
 }

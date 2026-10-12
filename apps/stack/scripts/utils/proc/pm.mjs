@@ -1,8 +1,8 @@
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
-import { chmod, cp, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 
 import { pathExists } from '../fs/fs.mjs';
 import { appendBoundedTail, formatFailureDiagnostic, run, spawnProc } from './proc.mjs';
@@ -11,9 +11,9 @@ import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStac
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
+import { assertDependenciesReady, inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyConsumption, withDependencyRefresh } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
-import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs } from './ui_postinstall.mjs';
+import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
 import { resolveWorkspaceToolBinDirs } from './workspace_tool_bins.mjs';
 import { resolvePackageManagerCachePaths } from './package_manager_cache.mjs';
@@ -25,6 +25,21 @@ export { isCliDistBuildLockActive } from './cliDistBuildLock.mjs';
 // dependencies without requiring a checkout beside the installation.
 function loadSourceWorkspaceModule(relativePath) {
   return import(new URL(`../../../../../scripts/workspaces/${relativePath}`, import.meta.url).href);
+}
+
+export async function prepareWorkspaceComponentStartup(options) {
+  const owner = await loadSourceWorkspaceModule('ensureWorkspacePackagesBuilt.mjs');
+  return await owner.prepareWorkspaceComponentStartup(options);
+}
+
+export async function hasUsableWorkspaceLastGreen(componentDir, options) {
+  const owner = await loadSourceWorkspaceModule('ensureWorkspacePackagesBuilt.mjs');
+  return await owner.hasUsableWorkspaceLastGreen(componentDir, options);
+}
+
+export async function readWorkspaceComponentDependencyGraph(componentDir, options) {
+  const owner = await loadSourceWorkspaceModule('ensureWorkspacePackagesBuilt.mjs');
+  return await owner.readWorkspaceComponentDependencyGraph(componentDir, options);
 }
 
 async function readJson(path) {
@@ -285,7 +300,14 @@ async function repairCorruptedCliPkgrollInstallIfNeeded(cliDir, { quiet = false,
     // eslint-disable-next-line no-console
     console.log(`[local] repairing corrupted pkgroll install at ${pkgrollCliPath}...`);
   }
-  await runPm(pm, repairArgs, { cwd: installDir, stdio, env });
+  await withDependencyRefresh({ installDir, componentDir: cliDir, env, force: true }, async () => {
+    // A concurrent repair may have finished while this caller waited.
+    if ((await readScriptEntrypointKind(pkgrollCliPath)) !== 'shell-wrapper') return;
+    await runPm(pm, repairArgs, { cwd: installDir, stdio, env });
+    const monorepoRoot = coerceHappyMonorepoRootFromPath(cliDir);
+    await ensureUiPostinstallOutputs(monorepoRoot ? join(monorepoRoot, 'apps', 'ui') : cliDir,
+      installDir, { quiet, env, pm, force: true });
+  });
 
   if ((await readScriptEntrypointKind(pkgrollCliPath)) !== 'node-module') {
     throw new Error(
@@ -481,14 +503,14 @@ export async function ensureUiPostinstallOutputs(componentDir, installDir, { qui
   };
   const stdio = quiet ? 'ignore' : 'inherit';
   await prepareUiPostinstallOutputs(componentDir, installDir, {
-    quiet, force,
-    runPostinstall: async () => {
+    quiet, force, env,
+    runPostinstall: async (postinstallEnv) => {
       await prepare();
       if (pm.name === 'yarn') {
         await ensureYarnReady({ dir: installDir, env, quiet, pm });
-        await runPm(pm, ['-s', 'workspace', '@happier-dev/app', 'postinstall:real'], { cwd: installDir, stdio, env });
+        await runPm(pm, ['-s', 'workspace', '@happier-dev/app', 'postinstall:real'], { cwd: installDir, stdio, env: postinstallEnv });
       } else {
-        await runPm(pm, ['run', '-s', 'postinstall:real'], { cwd: componentDir, stdio, env });
+        await runPm(pm, ['run', '-s', 'postinstall:real'], { cwd: componentDir, stdio, env: postinstallEnv });
       }
     },
     restoreDependencies: async () => {
@@ -632,6 +654,8 @@ export async function applyStackCacheEnv(baseEnv) {
   return env;
 }
 
+const reportedDevDependencyDrift = new Set();
+
 export async function ensureDepsInstalled(
   dir,
   label,
@@ -653,6 +677,19 @@ export async function ensureDepsInstalled(
   }
 
   const installDir = resolveDependencyInstallRoot(componentDir);
+  if (String(envIn.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES ?? '').trim() === '1') {
+    try {
+      return await assertDependenciesReady({ installDir, componentDir, env: envIn });
+    } catch (error) {
+      if (error?.code !== 'HAPPIER_DEPENDENCIES_NEED_REFRESH') throw error;
+      if (!reportedDevDependencyDrift.has(installDir)) {
+        reportedDevDependencyDrift.add(installDir);
+        const action = `import(${JSON.stringify(import.meta.url)}).then(({ensureDepsInstalled}) => ensureDepsInstalled(${JSON.stringify(componentDir)}, ${JSON.stringify(label)}, {env: {...process.env, HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: "0", HAPPIER_STACK_SKIP_REFRESH_DEPS: "0", HAPPIER_STACK_DISABLE_REFRESH_DEPS: "0", HAPPIER_STACK_ALLOW_REFRESH_DEPS: "1"}}))`;
+        console.warn(`[local] development dependencies/patches have drifted (${error.reason}); continuing with installed bytes.\nRefresh explicitly (reapplies and verifies patches): node --input-type=module -e '${action.replaceAll("'", "'\\''")}'`);
+      }
+      return { admitted: false, required: true, reason: error.reason };
+    }
+  }
   const nodeModules = join(installDir, 'node_modules');
   const stdio = quiet ? 'ignore' : 'inherit';
   const env = await preparePmEnv(installDir, envIn);
@@ -677,9 +714,16 @@ export async function ensureDepsInstalled(
       await ensureYarnReady({ dir: installDir, env, quiet, pm });
     }
   };
-  const guardedDependencyReadyAction = onDependenciesReady || prepareComponentOutputs
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+  const sharedUiDir = monorepoRoot && resolve(monorepoRoot) === resolve(installDir)
+    ? join(monorepoRoot, 'apps', 'ui') : null;
+  const needsSharedUiRepair = sharedUiDir && (await inspectUiPostinstallOutputs(sharedUiDir, installDir, { env })).length > 0;
+  const guardedDependencyReadyAction = onDependenciesReady || prepareComponentOutputs || needsSharedUiRepair
     ? async () => {
         await ensureCanonicalYarnReady();
+        // CLI, server and Stack callers share UI's installed dependencies too.
+        // Inspection is read-only when healthy; repairs remain under admission.
+        if (sharedUiDir) await ensureUiPostinstallOutputs(sharedUiDir, installDir, { quiet, env, pm });
         if (onDependenciesReady) await onDependenciesReady();
         if (prepareComponentOutputs) {
           await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
@@ -687,7 +731,7 @@ export async function ensureDepsInstalled(
       }
     : null;
   const prepareWithoutInstall = async () => {
-    if (!prepareComponentOutputs) return;
+    if (!guardedDependencyReadyAction) return;
     if (pm.name === 'yarn') {
       await withDependencyRefresh({ installDir, componentDir, env,
         refreshExisting: false, onDependenciesReady: guardedDependencyReadyAction }, async () => {});
@@ -702,10 +746,7 @@ export async function ensureDepsInstalled(
   });
   const installAndPrepare = async () => {
     await runPm(pm, installArgs, { cwd: installDir, stdio, env });
-    const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
-    const uiDir = monorepoRoot && resolve(monorepoRoot) === resolve(installDir)
-      ? join(monorepoRoot, 'apps', 'ui')
-      : componentDir;
+    const uiDir = sharedUiDir ?? componentDir;
     // The full installed tree belongs to every worker role. A markdown sentinel
     // cannot prove changed patches or generated worker/webview assets are current.
     await ensureUiPostinstallOutputs(uiDir, installDir, { quiet, env, pm, force: true });
@@ -736,6 +777,21 @@ export async function ensureDepsInstalled(
       }
       await prepareWithoutInstall();
       return;
+    }
+
+    if (pm.name === 'yarn' && !onDependenciesReady && !needsSharedUiRepair) {
+      const readiness = await inspectDependencyRefresh({ installDir, componentDir });
+      const componentUiFailures = await inspectUiPostinstallOutputs(componentDir, installDir, { env });
+      if (!readiness.required && componentUiFailures.length === 0) {
+        // Startup is not a dependency mutation merely because it also prepares
+        // first-party component outputs. Healthy installed bytes are verified
+        // read-only; the component's existing generation owner remains separate.
+        await withDependencyConsumption({ installDir, env }, async custody => {
+          await assertDependenciesReady({ installDir, componentDir, env: custody });
+        });
+        if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
+        return;
+      }
     }
 
     if (pm.name === 'yarn') {
@@ -798,7 +854,9 @@ async function runStackWorkspacePackageScript(packageDir, script, { env, quiet, 
   });
 }
 
-const stackWorkspaceBuildBoundary = {
+export const stackWorkspaceBuildBoundary = {
+  workerModule: import.meta.url,
+  workerExport: 'stackWorkspaceBuildBoundary',
   prepareEnv: preparePmEnv,
   runPackageBuild: (packageDir, options) => runStackWorkspacePackageScript(packageDir, 'build', options),
   runPackageScript: runStackWorkspacePackageScript,
@@ -941,7 +999,7 @@ export async function ensureCliBuilt(cliDir, {
   env: envIn = process.env,
   platform = process.platform,
 } = {}) {
-  const { happyCliRuntimeInputFreshnessEqual, readHappyCliRuntimeInputFreshness } = await import('./cli_runtime_inputs.mjs');
+  const { readHappyCliRuntimeInputFreshness } = await import('./cli_runtime_inputs.mjs');
   const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
   const invocationDistFreshness = await readUsableCliDistFreshness(distEntrypoint);
   const invocationInputFreshness = await readHappyCliRuntimeInputFreshness(cliDir);
@@ -964,7 +1022,63 @@ export async function ensureCliBuilt(cliDir, {
     return { sourceDevPreparation };
   };
   const preparation = await prepareWorkspaceOutputs();
+  const request = { cliDir, buildCli, quiet, platform, repoRoot, lockPath,
+    invocationDistFreshness, invocationInputFreshness, preparation };
+  if (repoRoot && buildCli) {
+    // A usable warm CLI requires no compiler envelope. Recheck that optimistic
+    // observation under the same owner; if compilation is needed, leave the
+    // lease before entering the finite transaction gate.
+    const mode = String(envIn.HAPPIER_STACK_CLI_BUILD_MODE ?? (isServiceMode(envIn) ? 'never' : 'auto')).trim().toLowerCase();
+    if ((mode === 'never' && invocationDistFreshness !== null)
+      || (mode !== 'always' && preparation.sourceDevPreparation?.synced !== true
+        && await isCliDistFreshForInputs(distEntrypoint, invocationInputFreshness))) {
+      const reused = await ensureCliBuiltUnderLock(request, envIn, false);
+      if (reused !== null) return reused;
+    }
+    const { runWorkspaceBuildAdmission } = await import('./workspace_build_admission.mjs');
+    const { requiresTypeScriptAdmission } = await loadSourceWorkspaceModule('resolveTypeScriptCliInvocation.mjs');
+    const resultDir = await mkdtemp(join(tmpdir(), 'happier-cli-readiness-result-'));
+    const resultPath = join(resultDir, 'result.json');
+    try {
+      const terminal = await runWorkspaceBuildAdmission({
+        command: process.execPath,
+        args: [fileURLToPath(import.meta.url), '--cli-build-worker', JSON.stringify({ ...request, resultPath,
+          invocationInputFreshness: invocationInputFreshness && {
+            ...invocationInputFreshness,
+            newestMtimeNs: invocationInputFreshness.newestMtimeNs?.toString() ?? null,
+          } })],
+        locks: [{ path: lockPath }], cwd: cliDir, env: envIn,
+        admissionClass: 'compilation', admissionRequired: requiresTypeScriptAdmission({ env: envIn }),
+        stdio: quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit',
+      });
+      if (!existsSync(resultPath)) {
+        if (terminal.error) throw terminal.error;
+        const error = new Error('[local] CLI readiness worker did not complete');
+        Object.assign(error, { code: 'EEXIT', exitCode: terminal.status, signal: terminal.signal });
+        throw error;
+      }
+      const response = JSON.parse(await readFile(resultPath, 'utf8'));
+      if (response.error) {
+        const error = new Error(response.error.message);
+        Object.assign(error, { name: response.error.name, code: response.error.code,
+          exitCode: response.error.exitCode, signal: response.error.signal });
+        throw error;
+      }
+      if (terminal.error || terminal.status !== 0 || terminal.signal) {
+        throw terminal.error ?? new Error('[local] CLI readiness worker did not complete successfully');
+      }
+      return response.result;
+    } finally {
+      await rm(resultDir, { recursive: true, force: true });
+    }
+  }
+  return await ensureCliBuiltUnderLock(request, envIn);
+}
 
+async function ensureCliBuiltUnderLock({ cliDir, buildCli, quiet, lockPath,
+  invocationDistFreshness, invocationInputFreshness, preparation }, envIn, allowCompilation = true) {
+  const { happyCliRuntimeInputFreshnessEqual, readHappyCliRuntimeInputFreshness } = await import('./cli_runtime_inputs.mjs');
+  const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
   return await withCliDistBuildLock(async ({ heldLockValue }) => {
     if (!buildCli) {
       return { built: false, reason: 'disabled' };
@@ -979,6 +1093,7 @@ export async function ensureCliBuilt(cliDir, {
     const modeRaw = (envIn.HAPPIER_STACK_CLI_BUILD_MODE ?? serviceDefaultMode).trim().toLowerCase();
     const mode = modeRaw === 'always' || modeRaw === 'auto' || modeRaw === 'never' ? modeRaw : 'auto';
     const distDir = join(cliDir, 'dist');
+    if (!allowCompilation && await readUsableCliDistFreshness(distEntrypoint) === null) return null;
     const releaseDistBackupDir = join(cliDir, '.dist.hstack-backup');
     const backupDistEntrypoint = join(releaseDistBackupDir, 'index.mjs');
     const inputFreshness = await readHappyCliRuntimeInputFreshness(cliDir);
@@ -1098,6 +1213,7 @@ export async function ensureCliBuilt(cliDir, {
       }
     }
 
+    if (!allowCompilation) return null;
     return await completeWithReleaseBackupRollback(async () => {
       const env = await preparePmEnv(cliDir, envIn);
       await repairCorruptedCliPkgrollInstallIfNeeded(cliDir, { quiet, env });
@@ -1147,6 +1263,40 @@ export async function ensureCliBuilt(cliDir, {
     lockPath,
     env: envIn,
     onWait: createWorkspaceBuildWaitNotifier({ env: envIn, label: 'happier-cli', kind: 'lock' }),
+  });
+}
+
+async function runCliBuildWorker(rawRequest) {
+  const request = JSON.parse(rawRequest);
+  if (request.invocationInputFreshness?.newestMtimeNs !== null
+    && request.invocationInputFreshness?.newestMtimeNs !== undefined) {
+    request.invocationInputFreshness.newestMtimeNs = BigInt(request.invocationInputFreshness.newestMtimeNs);
+  }
+  const { callerHoldsWorkspaceBundleLock } = await loadSourceWorkspaceModule('workspaceBundleLock.mjs');
+  let leases;
+  try { leases = JSON.parse(process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES ?? '[]'); }
+  catch { leases = []; }
+  const candidates = [process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
+    ...(Array.isArray(leases) ? leases : [])];
+  if (!candidates.some(value => typeof value === 'string'
+    && callerHoldsWorkspaceBundleLock(request.lockPath, value))) {
+    throw new Error('[local] CLI readiness worker requires its authenticated publication lease');
+  }
+  let response;
+  try { response = { result: await ensureCliBuiltUnderLock(request, process.env) }; }
+  catch (error) {
+    response = { error: { name: error.name, message: error.message,
+      code: error.code, exitCode: error.exitCode, signal: error.signal } };
+    process.exitCode = error.exitCode ?? 1;
+  }
+  await writeFile(request.resultPath, JSON.stringify(response));
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+  && process.argv[2] === '--cli-build-worker') {
+  runCliBuildWorker(process.argv[3]).catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   });
 }
 

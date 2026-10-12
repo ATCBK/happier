@@ -116,7 +116,7 @@ export async function resolveStackRuntimeLaunchContext({ argv = [], env = proces
     if (!sourceRuntimeLaunch?.entrypoint || !await pathExists(sourceRuntimeLaunch.entrypoint)) {
       const { buildSourceRuntimeBundle } = await import('../../build/build_source_runtime.mjs');
       const built = await buildSourceRuntimeBundle({ repoDir: getRepoDir(getRootDir(import.meta.url), env),
-        stackBaseDir, component: 'daemon', env });
+        stackBaseDir, component: 'daemon', env, reuseSelected: 'if-available' });
       sourceRuntimeLaunch = { entrypoint: built.entrypoint, cliDir: built.cliDir, env: built.env ?? {} };
       await recordStackRuntimeUpdate(statePath, { sourceRuntimeLaunch });
     }

@@ -2,7 +2,7 @@ import { killProcessTree, spawnProc, run, runCapture } from './utils/proc/proc.m
 import { resolveAuthSeedFromEnv, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
 import { coerceHappyMonorepoRootFromPath, getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { readLastLines } from './utils/fs/tail.mjs';
-import { ensureCliBuilt, isCliDistBuildLockActive } from './utils/proc/pm.mjs';
+import { ensureCliBuilt, isCliDistBuildLockActive, prepareWorkspaceComponentStartup } from './utils/proc/pm.mjs';
 import { resolveJavaScriptRuntimeCommand } from '@happier-dev/cli-common/agents/managedJavaScriptRuntime';
 import { parseDaemonLockSnapshot } from '@happier-dev/cli-common/process';
 import { readCliNodeWorkspaceRuntimeIdentityAsync } from '@happier-dev/cli-common/componentArtifacts/copyCliNodeRuntimePayload';
@@ -49,12 +49,14 @@ import {
   getStackRuntimeProcessInstanceFingerprint,
   mutateStackRuntimeDaemonMembership,
   readStackRuntimeStateFile,
+  recordStackRuntimeUpdate,
 } from './utils/stack/runtime_state.mjs';
 import { applyCliRuntimeLaunchProvenanceEnv, resolveCliRuntimeLaunchSpec } from './runtime/launch/resolveCliRuntimeLaunchSpec.mjs';
 import { killPidOwnedByStack, listPidsWithEnvNeedles } from './utils/proc/ownership.mjs';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import {
   pingDaemon,
+  restartDaemonViaControlServer,
   DEFAULT_RESTART_CONFIRM_TIMEOUT_MS as DEFAULT_STACK_DAEMON_START_VERIFY_TIMEOUT_MS,
 } from './utils/stack/daemonControlClient.mjs';
 
@@ -954,80 +956,63 @@ export async function ensureHappierCliDistExists(
     const priorFallbackIntegrity = priorIntegrity.ok
       ? priorIntegrity
       : priorReleaseBackupIntegrity;
-    const priorWorkspaceRuntimeReadiness = await readWorkspaceRuntimeReadiness();
-    const admitPinnedRunnerForWatchStartup = async () => {
-      const pinnedRunner = resolveNewestReadyPinnedSnapshotLocationImpl(distEntrypoint);
-      if (!pinnedRunner?.snapshotEntrypoint || !pinnedRunner?.fingerprint) return null;
-      try {
-        await probeCliDistRuntimeImportImpl(pinnedRunner.snapshotEntrypoint, {
-          cwd: cliDir,
-          env,
-          timeoutMs: resolveStackDaemonStartVerifyTimeoutMs(env),
-        });
-        return {
-          ok: true,
-          current: true,
-          degraded: true,
-          immutableRunner: true,
-          fallbackFingerprint: pinnedRunner.fingerprint,
-          fallbackRejectedReason: null,
-          generationAdmissionRequired: true,
-          distEntrypoint: pinnedRunner.snapshotEntrypoint,
-          built: false,
-          reason: 'admitted-pinned-runner-for-watch-startup',
-        };
-      } catch {
-        return null;
-      }
-    };
-    if (
-      admitPriorDistImmediately
-      && priorIntegrity.ok
-      && priorWorkspaceRuntimeReadiness.available
-      && !priorWorkspaceRuntimeReadiness.current
-    ) {
-      const pinnedAdmission = await admitPinnedRunnerForWatchStartup();
-      if (pinnedAdmission) return pinnedAdmission;
-    }
-    if (
-      admitPriorDistImmediately
-      && priorIntegrity.ok
-      && priorWorkspaceRuntimeReadiness.available
-    ) {
-      try {
-        await probeCliDistRuntimeImportImpl(distEntrypoint, {
-          cwd: cliDir,
-          env,
-          timeoutMs: resolveStackDaemonStartVerifyTimeoutMs(env),
-        });
-        const verifiedWorkspaceRuntimeReadiness = await readWorkspaceRuntimeReadiness();
-        if (
-          verifiedWorkspaceRuntimeReadiness.available
-          && verifiedWorkspaceRuntimeReadiness.actualFingerprint
-            === priorWorkspaceRuntimeReadiness.actualFingerprint
-        ) {
-          return {
-            ok: true,
-            current: true,
-            degraded: true,
-            fallbackFingerprint: priorIntegrity.fingerprint,
-            fallbackRejectedReason: null,
-            generationAdmissionRequired: true,
-            distEntrypoint,
-            built: false,
-            reason: 'admitted-prior-dist-for-watch-startup',
-          };
-        }
-        // The source workspace payload advanced while the asynchronous probe was running.
-        // Re-enter the canonical publisher rather than admitting a no-longer-current closure.
-      } catch {
-        // The prior publication is not runnable. Fall through to canonical freshness
-        // admission, which may repair it before the daemon is allowed to start.
-      }
-    }
     if (admitPriorDistImmediately) {
-      const pinnedAdmission = await admitPinnedRunnerForWatchStartup();
-      if (pinnedAdmission) return pinnedAdmission;
+      return await prepareWorkspaceComponentStartup({
+        readLastGreen: async () => {
+          const admitPinnedRunner = async () => {
+            const pinnedRunner = resolveNewestReadyPinnedSnapshotLocationImpl(distEntrypoint);
+            if (!pinnedRunner?.snapshotEntrypoint || !pinnedRunner?.fingerprint) return null;
+            try {
+              await probeCliDistRuntimeImportImpl(pinnedRunner.snapshotEntrypoint, {
+                cwd: cliDir, env, timeoutMs: resolveStackDaemonStartVerifyTimeoutMs(env),
+              });
+              return {
+                ok: true, current: true, degraded: true, immutableRunner: true,
+                fallbackFingerprint: pinnedRunner.fingerprint, fallbackRejectedReason: null,
+                generationAdmissionRequired: true, distEntrypoint: pinnedRunner.snapshotEntrypoint,
+                built: false, reason: 'admitted-pinned-runner-for-watch-startup',
+              };
+            } catch {
+              return null;
+            }
+          };
+          // This producer-validated closure is self-contained. New checkout
+          // inputs are a refresh concern and must not delay its launch.
+          const pinned = await admitPinnedRunner();
+          if (pinned) return pinned;
+          const priorWorkspaceRuntimeReadiness = await readWorkspaceRuntimeReadiness();
+          if (priorIntegrity.ok && priorWorkspaceRuntimeReadiness.available) {
+            try {
+              await probeCliDistRuntimeImportImpl(distEntrypoint, {
+                cwd: cliDir, env, timeoutMs: resolveStackDaemonStartVerifyTimeoutMs(env),
+              });
+              const verified = await readWorkspaceRuntimeReadiness();
+              if (verified.available && verified.actualFingerprint === priorWorkspaceRuntimeReadiness.actualFingerprint) {
+                return {
+                  ok: true, current: true, degraded: true,
+                  fallbackFingerprint: priorIntegrity.fingerprint, fallbackRejectedReason: null,
+                  generationAdmissionRequired: true, distEntrypoint, built: false,
+                  reason: 'admitted-prior-dist-for-watch-startup',
+                };
+              }
+              // Publication advanced during the probe; the pinned runner can
+              // still be runnable independently of the moving workspace graph.
+            } catch {
+              // Reject a broken retained import graph, then prepare cold output.
+            }
+          }
+          return await admitPinnedRunner();
+        },
+        prepare: () => ensureHappierCliDistExists({
+          cliBin, cliEntrypoint, cliNodeEntrypoint, cliCommand,
+          admittedDistClosureFingerprint, admitPriorDistImmediately: false, env,
+        }, {
+          ensureCliBuiltImpl, probeCliDistRuntimeImportImpl, sleepImpl,
+          readCliWorkspaceRuntimeIdentityImpl, resolveNewestReadyPinnedSnapshotLocationImpl,
+        }),
+        // The existing daemon reload coordinator owns refresh and replacement.
+        refresh: null,
+      });
     }
     let buildResult = null;
     let buildError = null;
@@ -2036,7 +2021,22 @@ export async function startLocalDaemonWithAuth({
   runtimeBacked = false,
   admittedDistClosureFingerprint = null,
   admitPriorDistImmediately = false,
+  sourceRuntimeLaunchUpdate = null,
+  preserveSessionsOnRestart = false,
 }) {
+  // Recovery consumes the same selected source launch as explicit reloads.
+  // A long-lived runner may still hold its original launch arguments.
+  const selectedSource = sourceRuntimeLaunchUpdate?.launch
+    ?? (runtimeStatePath ? (await readStackRuntimeStateFile(runtimeStatePath))?.sourceRuntimeLaunch : null);
+  if (selectedSource) {
+    const launch = resolveCliRuntimeLaunchSpec({ sourceRuntimeLaunch: selectedSource });
+    cliBin = join(launch.cliDir, 'bin', 'happier.mjs');
+    cliEntrypoint = launch.entrypoint;
+    cliNodeEntrypoint = launch.nodeEntrypoint;
+    cliCommand = launch.command;
+    cliCommandArgs = launch.args;
+    env = applyCliRuntimeLaunchProvenanceEnv({ env, cliLaunchSpec: launch });
+  }
   const resolvedStackName =
     (stackName ?? '').toString().trim() ||
     (env.HAPPIER_STACK_STACK ?? '').toString().trim() ||
@@ -2244,6 +2244,50 @@ export async function startLocalDaemonWithAuth({
   return await withStackDaemonLifecycleLock(
     { cliHomeDir, internalServerUrl, stackName: resolvedStackName },
     async () => {
+  if (preserveSessionsOnRestart) {
+    if (!forceRestart || !sourceRuntimeLaunchUpdate || !runtimeStatePath) {
+      throw new Error('[stack] session-preserving source restart requires a prepared source daemon launch and runtime state.');
+    }
+    const { launch, identity } = sourceRuntimeLaunchUpdate;
+    await recordStackRuntimeUpdate(runtimeStatePath, {
+      sourceRuntimeLaunch: launch,
+      sourceRuntimeIdentities: { daemon: { selected: identity, loaded: null } },
+    });
+    const replacement = await restartDaemonViaControlServer({
+      cliHomeDir, internalServerUrl, serverUrl: internalServerUrl,
+      stackName: resolvedStackName, env: daemonEnv,
+    });
+    const fingerprint = readProcessInstanceFingerprintSync(replacement.pid);
+    let selectedEntrypointLoaded = false;
+    if (process.platform === 'linux') {
+      const argv = readFileSync(`/proc/${replacement.pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+      const scriptIndex = argv.findIndex((arg, index) => index > 0 && !arg.startsWith('-'));
+      selectedEntrypointLoaded = argv[scriptIndex] === launch.entrypoint
+        && argv[scriptIndex + 1] === 'daemon' && argv[scriptIndex + 2] === 'start-sync'
+        && argv.length === scriptIndex + 3;
+    } else {
+      const command = process.platform === 'win32'
+        ? await runCapture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${replacement.pid}").CommandLine`])
+        : await runCapture('ps', ['-p', String(replacement.pid), '-o', 'command=']);
+      selectedEntrypointLoaded = [launch.entrypoint, `"${launch.entrypoint}"`, `'${launch.entrypoint}'`]
+        .some(entrypoint => command.trim().endsWith(`${entrypoint} daemon start-sync`));
+    }
+    if (!fingerprint || !selectedEntrypointLoaded
+      || readProcessInstanceFingerprintSync(replacement.pid, { expectedFingerprint: fingerprint }) !== fingerprint) {
+      throw new Error('[stack] selected source daemon is not loaded after /restart; the incumbent may need one initial load of the source-selection launch owner. Sessions were not stopped.');
+    }
+    const attestation = await mutateStackRuntimeDaemonMembership(runtimeStatePath, current => {
+      if (current.sourceRuntimeLaunch?.entrypoint !== launch.entrypoint
+        || current.sourceRuntimeIdentities?.daemon?.selected !== identity) return null;
+      return { patch: { sourceRuntimeIdentities: { daemon: { loaded: identity } } }, result: { loaded: true } };
+    });
+    if (!attestation.loaded) throw new Error('[stack] selected source daemon changed before its loaded identity could be confirmed.');
+    await recordStackRuntimeDaemonPid(runtimeStatePath, replacement.pid, {
+      daemonDistFingerprint: null, daemonProcessInstanceFingerprint: fingerprint,
+    });
+    return { ok: true, started: true, ...replacement };
+  }
   const reconcileServerProfile = async () => {
     if (existsSync(join(cliHomeDir, 'settings.json'))) {
       const serverId = String(daemonEnv.HAPPIER_ACTIVE_SERVER_ID ?? '').trim();
@@ -2624,6 +2668,16 @@ export async function startLocalDaemonWithAuth({
   // Never clear retained PID custody or spawn new code before it confirms stop.
   await stopLocalDaemon({ cliBin, cliCommand: daemonCommand.command, cliCommandArgs: daemonCommand.argsPrefix,
     cliHomeDir, internalServerUrl, publicServerUrl, runtimeStatePath, env: daemonEnv, stackName, cliIdentity });
+
+  if (sourceRuntimeLaunchUpdate && runtimeStatePath) {
+    // Retirement above still consumes the incumbent's retained launch. Only
+    // then select the prepared successor; the existing launch attestation
+    // below publishes its loaded identity after actual daemon readiness.
+    await recordStackRuntimeUpdate(runtimeStatePath, {
+      sourceRuntimeLaunch: sourceRuntimeLaunchUpdate.launch,
+      sourceRuntimeIdentities: { daemon: { selected: sourceRuntimeLaunchUpdate.identity, loaded: null } },
+    });
+  }
 
   await recordStackRuntimeDaemonPid(runtimeStatePath, null, { daemonDistFingerprint: null }).catch(() => {});
 

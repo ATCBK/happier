@@ -402,7 +402,7 @@ async function installDependencies({ dir }) {
   };
 
   if (pm.kind === 'yarn') {
-    const outcome = await withYarnInstallGuard({ installDir: dir, componentDir: dir }, async () => {
+    const outcome = await withYarnInstallGuard({ installDir: dir, componentDir: dir, env, quiet: jsonMode }, async () => {
       // Works for yarn classic; yarn berry will ignore/translate flags as needed.
       if (jsonMode) {
         await runForJson('yarn', ['install', '--frozen-lockfile']);

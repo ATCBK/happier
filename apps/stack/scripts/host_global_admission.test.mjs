@@ -1,11 +1,467 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
 import { installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { withWorkspaceBundleLock } from '../../../packages/cli-common/workspaceBundleLock.mjs';
+
+async function waitForJointAdmission(condition, child, diagnostic) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    if (await condition()) return;
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      throw new Error(`joint admission exited before the observed condition: ${diagnostic()}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`joint admission condition was not reached: ${diagnostic()}`);
+}
+
+async function createJointAdmissionFixture(t, available = 9437184, { realRetry = false } = {}) {
+  const fixture = await createTempFixture(t, { prefix: 'host-joint-workspace-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const memory = fixture.path('memory');
+  await writeFile(memory, `${available} 73400320\n`);
+  writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
+case "$*" in
+  */proc/meminfo*) /usr/bin/awk '{print $1, $2}' "$FIXTURE_MEMORY" ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+` });
+  writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  // Sleep is the OS boundary for capacity retry. Keep the production decision
+  // and FIFO accounting real while allowing this fixture's pressure to change.
+  writeFakeBin({ root: fixture.root, name: 'sleep', content: realRetry ? '#!/bin/sh\nexec /bin/sleep "$@"\n' : '#!/bin/sh\nexec /bin/sleep 0.02\n' });
+  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_MEMORY: memory,
+    HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '',
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
+    HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
+  const entries = async kind => {
+    try { return await readdir(`${admissionRoot}/${kind}`); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  };
+  const start = (locks, args = ['/bin/sh', '-c', 'printf payload'], admissionClass = 'package-dist') => {
+    const child = spawn('/bin/sh', [launcher, '--heavyweight-admission', `--class=${admissionClass}`, '--machine=worker',
+      ...(locks === null ? [] : [`--workspace-locks=${JSON.stringify(locks)}`]), '--', ...args], { env });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', value => { stdout += value; });
+    child.stderr.on('data', value => { stderr += value; });
+    const exited = new Promise(resolve => child.once('exit', (status, signal) => resolve({ status, signal })));
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
+    return { child, exited, stdout: () => stdout, stderr: () => stderr };
+  };
+  return { ...fixture, launcher, admissionRoot, memory, env, entries, start };
+}
+
+test('real mixed publisher/plain contention uses one custody worker and drains on release', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 9437184, { realRetry: true });
+  const launches = fixture.path('node-launches');
+  const cpu = fixture.path('waiter-cpu');
+  const probe = fixture.path('cpu.cjs');
+  await writeFile(probe, `const fs = require('node:fs');
+if (process.argv[1]?.endsWith('workspace_build_admission.mjs') && process.argv[3] !== '[]') {
+  const started = process.cpuUsage();
+  const sample = () => fs.appendFileSync(${JSON.stringify(cpu)}, JSON.stringify({pid:process.pid, ...process.cpuUsage(started)}) + '\\n');
+  process.on('exit', sample);
+  const timer = setInterval(sample, 250); timer.unref();
+}
+`);
+  fixture.env.NODE_OPTIONS = `${fixture.env.NODE_OPTIONS || ''} --require=${probe}`;
+  const realNode = process.execPath;
+  writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
+case "$1:$3" in */workspace_build_admission.mjs:[] | */workspace_build_admission.mjs:--*) ;; */workspace_build_admission.mjs:*) printf 'lease-worker\\n' >> '${launches}' ;; esac
+exec '${realNode}' "$@"
+` });
+  const lockPath = fixture.path('package.lock');
+  let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, { lockPath });
+  await ready;
+  const head = fixture.start([{ path: lockPath }]);
+  try {
+    await waitForJointAdmission(() => head.stderr().includes('workspace-lease-busy'), head.child, head.stderr);
+    const first = (await fixture.entries('waiters'))[0];
+    const identity = (await readFile(`${fixture.admissionRoot}/waiters/${first}`, 'utf8')).split(' ').slice(0, 3);
+    const plain = fixture.start(null);
+    assert.deepEqual(await plain.exited, { status: 0, signal: null }, plain.stderr());
+    await new Promise(resolve => setTimeout(resolve, 3_500));
+    const workerCount = (await readFile(launches, 'utf8')).trim().split('\n').length;
+    t.diagnostic(`waiter lease-worker starts over 3.5s: ${workerCount}`);
+    const samples = (await readFile(cpu, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const latest = new Map(samples.map(sample => [sample.pid, sample]));
+    t.diagnostic(`waiter lease-worker CPU: ${Math.round([...latest.values()].reduce((sum, sample) => sum + sample.user + sample.system, 0) / 1000)}ms`);
+    assert.deepEqual((await readFile(`${fixture.admissionRoot}/waiters/${first}`, 'utf8')).split(' ').slice(0, 3), identity);
+    const releasedAt = performance.now();
+    release(); await holder;
+    const outcome = await Promise.race([head.exited, new Promise(resolve => setTimeout(() => resolve('retry-sleep delay'), 1_000))]);
+    t.diagnostic(`release-to-exit: ${Math.round(performance.now() - releasedAt)}ms`);
+    assert.deepEqual(outcome, { status: 0, signal: null }, head.stderr());
+    assert.equal(workerCount, 1, 'publisher retries must reuse its custody worker');
+    assert.equal(head.stdout(), 'payload');
+    assert.deepEqual(await fixture.entries('waiters'), []);
+    assert.deepEqual(await fixture.entries('owners'), []);
+  } finally { release(); await holder; }
+});
+
+test('joint workspace admission does not reserve capacity while a foreign dist lease is held', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const lockPath = fixture.path('package.lock');
+  let release;
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const holder = withWorkspaceBundleLock(async () => {
+    entered();
+    await new Promise(resolve => { release = resolve; });
+  }, { lockPath });
+  await ready;
+  const run = fixture.start([{ path: lockPath }]);
+  try {
+    await waitForJointAdmission(async () => (await fixture.entries('waiters')).length === 1, run.child, run.stderr);
+    await waitForJointAdmission(() => run.stderr().includes(lockPath), run.child, run.stderr);
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.equal(run.stdout(), '');
+    release();
+    await holder;
+    assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+    assert.equal(run.stdout(), 'payload');
+    assert.deepEqual(await fixture.entries('owners'), []);
+  } finally { release(); await holder; }
+});
+
+test('joint workspace admission releases dist leases before waiting for capacity and preserves its waiter', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 1);
+  const lockPath = fixture.path('package.lock');
+  const run = fixture.start([{ path: lockPath }]);
+  await waitForJointAdmission(() => run.stderr().includes('waiting for heavyweight admission'), run.child, run.stderr);
+  const [waiter] = await fixture.entries('waiters');
+  assert.ok(waiter);
+  const firstWaiter = await readFile(`${fixture.admissionRoot}/waiters/${waiter}`, 'utf8');
+  assert.deepEqual(await fixture.entries('owners'), []);
+  await withWorkspaceBundleLock(async () => {
+    assert.equal(await readFile(`${fixture.admissionRoot}/waiters/${waiter}`, 'utf8'), firstWaiter);
+    assert.equal(run.stdout(), '');
+    await writeFile(fixture.memory, '9437184 73400320\n');
+  }, { lockPath });
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(run.stdout(), 'payload');
+});
+
+test('cancelling joint workspace preparation releases its acquired lease and waiter', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const first = fixture.path('bundle.lock');
+  const second = fixture.path('package.lock');
+  let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, { lockPath: second });
+  await ready;
+  const run = fixture.start([{ path: first }, { path: second }]);
+  try {
+    await waitForJointAdmission(() => run.stderr().includes('workspace-lease-busy'), run.child, run.stderr);
+    run.child.kill('SIGTERM');
+    assert.deepEqual(await run.exited, { status: 130, signal: null }, run.stderr());
+    await assert.rejects(access(first), { code: 'ENOENT' });
+    assert.deepEqual(await fixture.entries('waiters'), []);
+    assert.deepEqual(await fixture.entries('owners'), []);
+    await access(second);
+  } finally { release(); await holder; }
+});
+
+test('joint workspace admission queues on the native decision mutex before acquiring leases', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const observed = fixture.path('flock-attempt');
+  writeFakeBin({ root: fixture.root, name: 'flock', content: `#!/bin/sh
+printf '%s\\n' "$*" >> '${observed}'
+exec /usr/bin/flock "$@"
+` });
+  await mkdir(fixture.admissionRoot, { recursive: true });
+  const holder = spawn('/usr/bin/flock', [`${fixture.admissionRoot}/lock`, '/bin/sh', '-c', 'printf ready; read release']);
+  let ready = '';
+  holder.stdout.on('data', value => { ready += value; });
+  const holderExited = new Promise(resolve => holder.once('exit', resolve));
+  t.after(async () => { holder.stdin.end('release\n'); await holderExited; });
+  await waitForJointAdmission(() => ready === 'ready', holder, () => ready);
+  const lockPath = fixture.path('package.lock');
+  const run = fixture.start([{ path: lockPath }]);
+  await waitForJointAdmission(async () => { try { await access(observed); return true; } catch { return false; } }, run.child, run.stderr);
+  assert.equal((await readFile(observed, 'utf8')).split('\n')[0], '9', 'workspace and plain contenders must join the same blocking kernel queue');
+  await assert.rejects(access(lockPath), { code: 'ENOENT' });
+  await withWorkspaceBundleLock(async () => {
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.equal(run.stdout(), '');
+    holder.stdin.end('release\n');
+    await holderExited;
+  }, { lockPath });
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(run.stdout(), 'payload');
+});
+
+test('a lease-blocked workspace head allows the lease holder to obtain admission', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const lockPath = fixture.path('package.lock');
+  let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, { lockPath });
+  await ready;
+  const head = fixture.start([{ path: lockPath }]);
+  try {
+    await waitForJointAdmission(() => head.stderr().includes(lockPath), head.child, head.stderr);
+    const [name] = await fixture.entries('waiters');
+    const identity = (await readFile(`${fixture.admissionRoot}/waiters/${name}`, 'utf8')).split(' ').slice(0,3);
+    const successor = fixture.start(null);
+    await waitForJointAdmission(() => successor.stdout() === 'payload', successor.child, successor.stderr);
+    assert.deepEqual(await successor.exited, { status: 0, signal: null }, successor.stderr());
+    assert.deepEqual((await readFile(`${fixture.admissionRoot}/waiters/${name}`, 'utf8')).split(' ').slice(0,3), identity);
+    assert.equal(head.stdout(), '');
+    release(); await holder;
+    assert.deepEqual(await head.exited, { status: 0, signal: null }, head.stderr());
+    assert.equal(head.stdout(), 'payload');
+  } finally { release(); await holder; }
+});
+
+test('a workspace head admits promptly under contention from many plain contenders', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 31457280);
+  await mkdir(fixture.admissionRoot, { recursive: true });
+  const holder = spawn('/usr/bin/flock', [`${fixture.admissionRoot}/lock`, '/bin/sh', '-c', 'printf ready; read release']);
+  let ready = '';
+  holder.stdout.on('data', value => { ready += value; });
+  const holderExited = new Promise(resolve => holder.once('exit', resolve));
+  t.after(async () => { holder.stdin.end('release\n'); await holderExited; });
+  await waitForJointAdmission(() => ready === 'ready', holder, () => ready);
+  const head = fixture.start([{ path: fixture.path('package.lock') }], ['/bin/sh', '-c', 'printf head; read release'], 'source-bundle');
+  await waitForJointAdmission(async () => (await fixture.entries('waiters')).length === 1, head.child, head.stderr);
+  // Pin the OS-clock boundary to establish an unambiguous oldest waiter even
+  // when all contenders register during the same wall-clock second.
+  const [name] = await fixture.entries('waiters');
+  const path = `${fixture.admissionRoot}/waiters/${name}`;
+  const fields = (await readFile(path, 'utf8')).trim().split(' ');
+  fields[2] = '1';
+  await writeFile(path, fields.join(' ') + '\n');
+  const contenders = Array.from({ length: 24 }, () => fixture.start(null));
+  await waitForJointAdmission(async () => (await fixture.entries('waiters')).length === 25, head.child, head.stderr);
+  holder.stdin.end('release\n'); await holderExited;
+  await waitForJointAdmission(() => head.stdout() === 'head', head.child, () => head.stderr() + contenders.map(run => run.stderr()).join('\n'));
+  assert.equal((await fixture.entries('owners')).length > 0, true);
+  head.child.stdin.end('release\n');
+  assert.deepEqual(await head.exited, { status: 0, signal: null }, head.stderr());
+  for (const run of contenders) assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.deepEqual(await fixture.entries('waiters'), []);
+});
+
+test('joint workspace preparation rejects a foreign lease without charging an admitted ancestor lock wait or disturbing its sibling', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const lockPath = fixture.path('package.lock');
+  let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, { lockPath });
+  await ready;
+  const script = fixture.path('parent.mjs');
+  const ownerFile = fixture.path('owner.json');
+  const completedFile = fixture.path('completed');
+  await writeFile(script, `import { spawn } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+const [launcher, lock, ownerFile, completedFile] = process.argv.slice(2);
+const ownerPath = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT + '/owners/' + process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN.replace(':', '-');
+await writeFile(ownerFile, JSON.stringify({ ownerPath }));
+await once(process.stdin, 'data');
+const sibling = spawn('/bin/sh', ['-c', 'printf ready; read release']);
+await once(sibling.stdout, 'data');
+const siblingExit = once(sibling, 'exit');
+const nested = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=compilation', '--machine=worker', '--workspace-locks=' + JSON.stringify([{ path: lock }]), '--', '/bin/sh', '-c', 'printf nested'], { stdio: ['ignore', 'pipe', 'inherit'] });
+let output = '';
+nested.stdout.on('data', chunk => { output += chunk; });
+const [status] = await once(nested, 'exit');
+await writeFile(completedFile, JSON.stringify({status,output,siblingStatus:sibling.exitCode}));
+await once(process.stdin, 'data');
+sibling.stdin.end('release\\n');
+await siblingExit;
+`);
+  const parent = spawn('/bin/sh', [fixture.launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--',
+    process.execPath, script, fixture.launcher, lockPath, ownerFile, completedFile], { env: fixture.env });
+  let stderr = '';
+  parent.stderr.on('data', value => { stderr += value; });
+  const exited = new Promise(resolve => parent.once('exit', (status, signal) => resolve({ status, signal })));
+  t.after(async () => { if (parent.exitCode === null) parent.kill('SIGTERM'); await exited; });
+  try {
+    await waitForJointAdmission(async () => { try { await access(ownerFile); return true; } catch { return false; } }, parent, () => stderr);
+    const { ownerPath } = JSON.parse(await readFile(ownerFile, 'utf8'));
+    parent.stdin.write('start\n');
+    // A prior implementation starts waiting on the foreign lock while the
+    // ancestor's envelope remains charged. Drain that incorrect path for RED,
+    // but retain its observable successful payload as the counterexample.
+    await waitForJointAdmission(async () => {
+      try { await access(completedFile); return true; } catch {}
+      try { await access(`${lockPath}.priority-claim`); return true; } catch { return false; }
+    }, parent, () => stderr);
+    let improperlyWaited = false;
+    try { await access(completedFile); } catch { improperlyWaited = true; }
+    if (improperlyWaited) {
+      await writeFile(fixture.memory, '31457280 73400320\n');
+      release();
+      await holder;
+    }
+    await waitForJointAdmission(async () => { try { await access(completedFile); return true; } catch { return false; } }, parent, () => stderr);
+    assert.deepEqual(JSON.parse(await readFile(completedFile, 'utf8')), {status:1,output:'',siblingStatus:null}, stderr);
+    assert.equal(improperlyWaited, false, 'an admitted ancestor cannot wait for a foreign workspace lease');
+    assert.match(stderr, /HSTACK_WORKSPACE_ADMISSION_ORDER/);
+    assert.equal((await readFile(`${ownerPath}/class`, 'utf8')).trim(), 'validation');
+    assert.equal((await fixture.entries('owners')).length, 1);
+    await access(lockPath);
+    parent.stdin.end('release\n');
+    assert.deepEqual(await exited, { status: 0, signal: null }, stderr);
+  } finally { release(); await holder; }
+});
+
+test('inherited workspace leases reject capacity waiting in both joint and bare admission', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 1);
+  const lockPath = fixture.path('package.lock');
+  await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+    for (const workspaceFlags of [[], [`--workspace-locks=${JSON.stringify([{ path: lockPath }])}`]]) {
+      const child = spawn('/bin/sh', [fixture.launcher, '--heavyweight-admission', '--class=package-dist', '--machine=worker',
+        ...workspaceFlags, '--', '/bin/sh', '-c', 'printf forbidden'], { env: { ...fixture.env,
+          HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue } });
+      let stderr = '', stdout = '';
+      child.stderr.on('data', value => { stderr += value; });
+      child.stdout.on('data', value => { stdout += value; });
+      const exited = new Promise(resolve => child.once('exit', (status, signal) => resolve({ status, signal })));
+      t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
+      assert.deepEqual(await exited, { status: 1, signal: null }, stderr);
+      assert.match(stderr, /HSTACK_WORKSPACE_ADMISSION_ORDER/);
+      assert.equal(stdout, '');
+      assert.deepEqual(await fixture.entries('owners'), []);
+      assert.deepEqual(await fixture.entries('waiters'), []);
+      await access(lockPath); // The descendant must not release its caller's lease.
+    }
+  }, { lockPath });
+});
+
+test('joint workspace same-class inherited reentry does not wait for the native decision mutex', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  const lockPath = fixture.path('package.lock');
+  const script = fixture.path('same-class.mjs');
+  await writeFile(script, `import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+const [launcher, admissionRoot, lockPath] = process.argv.slice(2);
+const mutex = spawn('/usr/bin/flock', [admissionRoot + '/lock', '/bin/sh', '-c', 'printf ready; read release']);
+await once(mutex.stdout, 'data');
+const mutexExit = once(mutex, 'exit');
+const child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=package-dist', '--machine=worker', '--workspace-locks=' + JSON.stringify([{path:lockPath}]), '--', '/bin/sh', '-c', 'printf nested'], {stdio:['ignore','inherit','inherit']});
+const [status] = await once(child, 'exit');
+if (status !== 0) throw new Error('same-class child failed ' + status);
+mutex.stdin.end('release\\n');
+await mutexExit;
+`);
+  const run = fixture.start([{ path: lockPath }], [process.execPath, script, fixture.launcher, fixture.admissionRoot, lockPath]);
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(run.stdout(), 'nested');
+  assert.deepEqual(await fixture.entries('owners'), []);
+  assert.deepEqual(await fixture.entries('waiters'), []);
+});
+
+test('joint workspace immediately available escalation preserves its ancestor and running sibling', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 31457280);
+  const first = fixture.path('bundle.lock');
+  const second = fixture.path('package.lock');
+  const script = fixture.path('escalation.mjs');
+  await writeFile(script, `import { spawn } from 'node:child_process';
+import { readFile, readdir } from 'node:fs/promises';
+import { once } from 'node:events';
+const [launcher, first, second] = process.argv.slice(2);
+const sibling = spawn('/bin/sh', ['-c', 'printf ready; read release']);
+await once(sibling.stdout, 'data');
+const siblingExit = once(sibling, 'exit');
+const child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=compilation', '--machine=worker', '--workspace-locks=' + JSON.stringify([{path:first},{path:second}]), '--', '/usr/bin/true'], {stdio:['ignore','ignore','inherit']});
+const [status] = await once(child, 'exit');
+const root = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT;
+const identity = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN.replace(':','-');
+process.stdout.write(JSON.stringify({status,class:(await readFile(root+'/owners/'+identity+'/class','utf8')).trim(),owners:(await readdir(root+'/owners')).length,siblingStatus:sibling.exitCode}));
+sibling.stdin.end('release\\n');
+await siblingExit;
+`);
+  const run = fixture.start([{ path: first }], [process.execPath, script, fixture.launcher, first, second]);
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.deepEqual(JSON.parse(run.stdout()), { status: 0, class: 'compilation', owners: 1, siblingStatus: null });
+  assert.deepEqual(await fixture.entries('owners'), []);
+  await assert.rejects(access(first), { code: 'ENOENT' });
+  await assert.rejects(access(second), { code: 'ENOENT' });
+});
+
+for (const mode of ['async', 'sync']) {
+  test(`admitted lock-only ${mode} workspace consumers reject a foreign dist lease before waiting`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+    const fixture = await createJointAdmissionFixture(t);
+    const lockPath = fixture.path('bundle.lock');
+    const script = fixture.path('lock-only.mjs');
+    await writeFile(script, `import {withWorkspaceBundleLock,withWorkspaceBundleLockSync} from ${JSON.stringify(new URL('../../../packages/cli-common/workspaceBundleLock.mjs', import.meta.url).href)};
+const [lockPath,mode]=process.argv.slice(2);
+try {
+  const take=mode==='sync'?withWorkspaceBundleLockSync:withWorkspaceBundleLock;
+  await take(()=>process.stdout.write('forbidden'),{lockPath});
+} catch(error) {
+  process.stderr.write(String(error.code)+' '+error.message);
+  process.exitCode=1;
+}
+`);
+    let release, entered;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, { lockPath });
+    await ready;
+    const run = fixture.start([], [process.execPath, script, lockPath, mode]);
+    try {
+      await waitForJointAdmission(async () => {
+        if (run.child.exitCode !== null) return true;
+        try { await access(`${lockPath}.priority-claim`); return true; } catch { return false; }
+      }, null, run.stderr);
+      if (run.child.exitCode === null) { release(); await holder; }
+      assert.deepEqual(await run.exited, { status: 1, signal: null }, run.stderr());
+      assert.equal(run.stdout(), '');
+      assert.match(run.stderr(), /EWORKSPACEBUNDLELOCKBUSY/);
+      assert.match(run.stderr(), /HSTACK_WORKSPACE_ADMISSION_ORDER/);
+    } finally { release(); await holder; }
+  });
+}
+
+test('an old-format head cannot block current admission, whose head identity survives a renamed record', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'host-admission-version-' });
+  const { launcher } = await installNativeAdmissionFixture({ root: fixture.root });
+  // Remap only /tmp, retaining the production protocol revision in the path.
+  const state = await readFile(new URL('./utils/proc/native_host_admission_state.sh', import.meta.url), 'utf8');
+  await writeFile(fixture.path('native-owner/apps/stack/scripts/utils/proc/native_host_admission_state.sh'),
+    state.replace("'/tmp/", `'${fixture.root.replaceAll("'", "'\\''")}/`));
+  const oldRoot = fixture.path('happier-heavyweight-admission-v1');
+  const currentRoot = fixture.path('happier-heavyweight-admission-v3');
+  const token = readProcessInstanceFingerprintSync(process.pid).slice('linux-proc:'.length);
+  const oldHead = `${oldRoot}/waiters/${process.pid}-${token}`;
+  await mkdir(`${oldRoot}/waiters`, { recursive: true });
+  await writeFile(oldHead, `${process.pid} ${token} 1\n`);
+  const priorHead = fixture.path(`happier-heavyweight-admission-v2/waiters/${process.pid}-${token}`);
+  await mkdir(fixture.path('happier-heavyweight-admission-v2/waiters'), { recursive: true });
+  await writeFile(priorHead, `${process.pid} ${token} 1 source-bundle 0\n`);
+  // The memory-observation OS boundary renames the current waiter's file
+  // between the two real queue decisions; pid + kernel token stay unchanged.
+  writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
+case "$*" in
+  */proc/meminfo*)
+    for waiter in "$FIXTURE_CURRENT_ROOT/waiters/"*; do
+      [ -f "$waiter" ] || continue
+      mv -- "$waiter" "$FIXTURE_CURRENT_ROOT/waiters/head"
+    done
+    printf '9437184 20971520\\n' ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+` });
+  writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait', '--class=validation',
+    '--machine=worker', '--', '/bin/sh', '-c', 'printf "%s" "$HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT"'], {
+    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_CURRENT_ROOT: currentRoot,
+      HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, currentRoot);
+  assert.equal(await readFile(oldHead, 'utf8'), `${process.pid} ${token} 1\n`);
+  assert.equal(await readFile(priorHead, 'utf8'), `${process.pid} ${token} 1 source-bundle 0\n`);
+});
 
 test('queued equal-or-larger classes do not observe resources before the live FIFO head', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'host-admission-head-observation-' });
@@ -23,9 +479,11 @@ printf 'service 0\\n'
   const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_OBSERVED: marker,
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   for (let queued = 0; queued < 40; queued++) {
-    const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait',
-      `--class=${queued % 2 ? 'compilation' : 'validation'}`, '--machine=worker', '--', '/usr/bin/true'], { env, encoding: 'utf8' });
-    assert.equal(result.status, 75, result.stderr);
+    const check = queued % 4 < 2;
+    const result = spawnSync('/bin/sh', [launcher, check ? '--heavyweight-admission-check' : '--heavyweight-admission',
+      ...(!check ? ['--no-wait'] : []), `--class=${queued % 2 ? 'compilation' : 'validation'}`, '--machine=worker',
+      ...(!check ? ['--', '/usr/bin/true'] : [])], { env, encoding: 'utf8' });
+    assert.equal(result.status, check ? 1 : 75, result.stderr);
   }
   await assert.rejects(access(marker), { code: 'ENOENT' });
 });
@@ -70,6 +528,15 @@ test('a contended admission decision waits in the kernel instead of polling the 
   }
   assert.equal(kernelWait, true, 'contended decision should sleep on the existing kernel lock, not retry processes');
   await assert.rejects(access(polling), { code: 'ENOENT' });
+  // Cancel while the decision lock is still held. The wrapper owns its
+  // blocking flock child just as it owns the eventual payload child.
+  child.kill('SIGTERM');
+  assert.equal(await childExited, 130);
+  child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
+    env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
+      HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
+  });
+  childExited = new Promise(resolve => child.once('exit', resolve));
   holder.stdin.end('release\n');
   assert.equal(await childExited, 0);
 });
@@ -194,6 +661,60 @@ esac
   assert.equal(result.stdout, `${process.pid}:${token}|${admissionRoot}\n`);
   await access(`${admissionRoot}/owners/${process.pid}-${token}/class`);
 });
+
+for (const entry of ['bare', 'joint']) {
+  test(`${entry} legacy private-root adoption refuses mutex waiting while its ancestor holds a dist lease`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+    const fixture = await createJointAdmissionFixture(t);
+    const legacyRoot = fixture.path('legacy');
+    const token = readProcessInstanceFingerprintSync(process.pid).slice('linux-proc:'.length);
+    const owner = `${legacyRoot}/owners/${process.pid}-${token}`;
+    await mkdir(owner, { recursive: true });
+    await writeFile(`${owner}/process`, `${process.pid} ${token}\n`);
+    await writeFile(`${owner}/class`, 'package-dist\n');
+    await writeFile(`${owner}/machine`, 'old-private-alias\n');
+    const before = await readFile(`${owner}/process`, 'utf8');
+    const attempted = fixture.path('flock-attempt');
+    // Observe the genuine kernel mutex invocation. The old blocking path is
+    // drained after observation, so RED never strands the fixture ancestor.
+    writeFakeBin({ root: fixture.root, name: 'flock', content: `#!/bin/sh
+if [ "$1" != -u ]; then printf '%s' "$*" > "$FIXTURE_FLOCK_ATTEMPT"; fi
+exec /usr/bin/flock "$@"
+` });
+    await mkdir(fixture.admissionRoot, { recursive: true });
+    const mutex = spawn('/usr/bin/flock', [`${fixture.admissionRoot}/lock`, '/bin/sh', '-c', 'printf ready; read release']);
+    let ready = '';
+    mutex.stdout.on('data', value => { ready += value; });
+    const mutexExited = new Promise(resolve => mutex.once('exit', resolve));
+    t.after(async () => { mutex.stdin.end('release\n'); await mutexExited; });
+    await waitForJointAdmission(() => ready === 'ready', mutex, () => ready);
+    const lockPath = fixture.path('bundle.lock');
+    await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+      const child = spawn('/bin/sh', [fixture.launcher, '--heavyweight-admission', '--class=package-dist', '--machine=worker',
+        ...(entry === 'joint' ? [`--workspace-locks=${JSON.stringify([{ path: lockPath }])}`] : []),
+        '--', '/bin/sh', '-c', 'printf forbidden'], { env: { ...fixture.env,
+          FIXTURE_FLOCK_ATTEMPT: attempted, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
+          HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: `${process.pid}:${token}`,
+          HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: legacyRoot, HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: 'old-private-alias' } });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', value => { stdout += value; });
+      child.stderr.on('data', value => { stderr += value; });
+      const exited = new Promise(resolve => child.once('exit', (status, signal) => resolve({ status, signal })));
+      t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
+      await waitForJointAdmission(async () => { try { await access(attempted); return true; } catch { return false; } }, child, () => stderr);
+      if ((await readFile(attempted, 'utf8')) === '9') {
+        mutex.stdin.end('release\n');
+        await mutexExited;
+      }
+      assert.deepEqual(await exited, { status: 1, signal: null }, stderr);
+      assert.match(stderr, /HSTACK_WORKSPACE_ADMISSION_ORDER/);
+      assert.equal(stdout, '');
+      assert.equal(await readFile(`${owner}/process`, 'utf8'), before);
+      assert.equal((await readFile(`${owner}/class`, 'utf8')).trim(), 'package-dist');
+      assert.deepEqual(await fixture.entries('owners'), []);
+      await access(lockPath);
+    }, { lockPath });
+  });
+}
 
 test('a different execution account cannot replace an unavailable host authority with private admission', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'host-global-account-' });
