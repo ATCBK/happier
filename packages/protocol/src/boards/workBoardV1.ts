@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { SessionListFilterV1Schema, type SessionListFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
 import { WidgetInstanceRefV1Schema as InstanceRefSchema, WidgetInstanceV1Schema as InstanceSchema, WidgetInputBindingsV1Schema as BindingsSchema, resetWidgetInputBindingsV1, setWidgetInputBindingsV1, type WidgetInstanceRefV1 } from '../widgets/widgetInstanceV1.js';
 import { InputPathSchema } from '../inputs/inputFields.js';
+import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 const WidgetInstanceRefV1Schema = z.lazy(() => InstanceRefSchema);
 const WidgetInstanceV1Schema = z.lazy(() => InstanceSchema);
 const WidgetInputBindingsV1Schema = z.lazy(() => BindingsSchema);
@@ -428,6 +429,7 @@ export const WorkBoardWidgetIntentV1Schema = lazyZodSchema(() => z.discriminated
     z.object({ ...widgetTarget, kind: z.literal('widget_rename'), displayName: IdentifierSchema.nullable() }).strict(),
     z.object({ ...widgetTarget, kind: z.literal('widget_inputs'), bindings: WidgetInputBindingsV1Schema, paths: z.array(InputPathSchema).optional() }).strict(),
     z.object({ ...widgetTarget, kind: z.literal('widget_inputs_reset'), paths: z.array(InputPathSchema).optional() }).strict(),
+    z.object({ ...widgetTarget, kind: z.literal('widget_network'), network: UiSurfaceNetworkRequestV1Schema }).strict(),
 ]));
 export type WorkBoardWidgetIntentV1 = z.infer<typeof WorkBoardWidgetIntentV1Schema>;
 
@@ -590,6 +592,7 @@ function applyWorkBoardWidgetIntentV1(boards: WorkBoardsV1, intent: WorkBoardWid
                 const { displayName: _old, ...rest } = current.instance;
                 widgets[index] = { ...current, instance: { ...rest, ...(intent.displayName ? { displayName: intent.displayName } : {}) } }; break;
             }
+            case 'widget_network': widgets[index] = { ...current, instance: { ...current.instance, networkOverride: intent.network } }; break;
             case 'widget_inputs':
             case 'widget_inputs_reset': {
                 const instance = { ...current.instance, bindings: intent.kind === 'widget_inputs_reset'
