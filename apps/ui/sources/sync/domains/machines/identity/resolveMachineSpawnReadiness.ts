@@ -22,6 +22,7 @@ export type MachineSpawnReadinessMachine = Readonly<{
     activeAt?: number | null;
     revokedAt?: number | null;
     replacedByMachineId?: string | null;
+    availability?: Readonly<{ kind: 'available' | 'locked' }> | null;
 }>;
 
 export function resolveMachineSpawnReadiness(params: Readonly<{
@@ -53,6 +54,10 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
 
     if (!(params.machineReachable ?? isMachineOnline(machine, params.nowMs))) {
         return { status: 'offline', machineId: selectedMachineId };
+    }
+
+    if (machine.availability?.kind === 'locked') {
+        return { status: 'keyUnavailable', machineId: selectedMachineId };
     }
 
     if (params.requireExactSpawnReadiness === true && (

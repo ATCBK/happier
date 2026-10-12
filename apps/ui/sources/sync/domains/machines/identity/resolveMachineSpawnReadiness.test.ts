@@ -32,6 +32,23 @@ describe('resolveMachineSpawnReadiness', () => {
         })).toEqual({ status: 'unknown', machineId: 'machine-1' });
     });
 
+    it('distinguishes a reachable locked Machine from an offline Machine', () => {
+        const lockedMachine = {
+            ...onlineMachine,
+            availability: { kind: 'locked', reason: 'encryption_material_unavailable' } as const,
+        };
+        expect(resolveMachineSpawnReadiness({
+            selectedMachineId: lockedMachine.id,
+            machine: lockedMachine,
+            machineReachable: true,
+        })).toEqual({ status: 'keyUnavailable', machineId: lockedMachine.id });
+        expect(resolveMachineSpawnReadiness({
+            selectedMachineId: lockedMachine.id,
+            machine: lockedMachine,
+            machineReachable: false,
+        })).toEqual({ status: 'offline', machineId: lockedMachine.id });
+    });
+
     it('allows an online machine attempt while exact readiness is unknown or probing', () => {
         expect(canAttemptMachineSpawn({
             selectedMachineId: 'machine-1',
