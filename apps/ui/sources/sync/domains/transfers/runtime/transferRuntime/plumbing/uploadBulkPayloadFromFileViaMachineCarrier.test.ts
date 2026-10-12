@@ -45,6 +45,7 @@ vi.mock('./machineCarrierHttpLease', () => ({
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { isTransferFinalizeRecoveryFailure } from './directTransferFinalizeRecovery';
 import { uploadBulkPayloadFromFileViaMachineCarrier } from './uploadBulkPayloadFromFileViaMachineCarrier';
+import { callAdmittedFilesystemTransferActionRpc } from './filesystemTransferActionClient';
 
 type FileUploadResponse = Readonly<{
     success: true;
@@ -139,6 +140,8 @@ describe('uploadBulkPayloadFromFileViaMachineCarrier', () => {
         });
 
         const result = await uploadBulkPayloadFromFileViaMachineCarrier<FileUploadResponse>({
+            // This owner regression exercises an already admitted byte phase.
+            callAdmittedAction: callAdmittedFilesystemTransferActionRpc,
             machineId: 'machine-1',
             serverId: 'server-1',
             fileReader: {

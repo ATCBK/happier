@@ -23,6 +23,7 @@ type CopyParams = Readonly<{
     sourceAccount?: CopyAccount;
     destinationAccount?: CopyAccount;
     signal?: AbortSignal | null;
+    callAdmittedAction?: typeof callFilesystemTransferAction;
 }>;
 type OwnedCopyParams = CopyParams & Readonly<{
     acquireSourceCleanupCarrier: AcquireCopyCarrier;
@@ -103,6 +104,7 @@ async function copyPreparedFilesystemFileBytes(params: OwnedCopyParams): Promise
     };
     try {
         const copied = await downloadBulkPayloadViaDirectExportToDestination({ machineId: input.source.machineId,
+            callAdmittedAction: params.callAdmittedAction,
             serverId: input.source.serverId, accountId: params.sourceAccount?.accountId, request: { t: 'workspace_file_download_v1', workingDirectory: input.source.rootPath,
                 path: input.source.path, asZip: false }, signal: params.signal, acquirePreparedCarrier: params.acquireSourceCarrier,
             acquireCleanupCarrier: params.acquireSourceCleanupCarrier,
@@ -115,6 +117,7 @@ async function copyPreparedFilesystemFileBytes(params: OwnedCopyParams): Promise
                     sourceId, sizeBytes, sha256: manifestHash.slice('sha256:'.length) };
                 sourceId = source.sourceId;
                 const prepared = await prepareDirectImportSession({ machineId: input.destination.machineId, serverId: input.destination.serverId,
+                    callAdmittedAction: params.callAdmittedAction,
                     accountId: params.destinationAccount?.accountId,
                     request: { t: 'session_file_upload_v1', workingDirectory: input.destination.rootPath, path: input.destination.path,
                         sizeBytes, overwrite: input.overwrite, sha256: source.sha256 },
@@ -172,7 +175,7 @@ async function copyPreparedFilesystemEntry(params: OwnedCopyParams): Promise<Fil
     let sourceClosed = false;
     try {
         params.sourceAccount?.assertCurrent(); params.destinationAccount?.assertCurrent();
-        const receipt = FilesystemDownloadOutputSchema.parse(await callFilesystemTransferAction({ actionId: 'daemon.filesystem.download',
+        const receipt = FilesystemDownloadOutputSchema.parse(await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: 'daemon.filesystem.download',
             machineId: input.source.machineId, serverId: input.source.serverId, accountId: params.sourceAccount?.accountId, signal: params.signal,
             input: { rootPath: input.source.rootPath, path: input.source.path, asZip: false, format: 'entry_tree', destination: { destinationId } } }));
         if (!receipt.success || receipt.status !== 'accepted') return receipt;
@@ -186,7 +189,7 @@ async function copyPreparedFilesystemEntry(params: OwnedCopyParams): Promise<Fil
         const preparedSource = { ...input.source, kind: 'entry_tree' as const, sourceId: input.kind === 'prepared_transfer' ? input.source.sourceId : receipt.prepared.transferId,
             sizeBytes: receipt.prepared.sizeBytes, sha256: receipt.prepared.manifestHash.slice('sha256:'.length), entryTree: receipt.entryTree };
         params.destinationAccount?.assertCurrent();
-        const admission = FilesystemCopyOutputSchema.parse(await callFilesystemTransferAction({ actionId: 'daemon.filesystem.copy',
+        const admission = FilesystemCopyOutputSchema.parse(await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: 'daemon.filesystem.copy',
             machineId: input.destination.machineId, serverId: input.destination.serverId, accountId: params.destinationAccount?.accountId,
             signal: params.signal, input: { kind: 'prepared_transfer', source: preparedSource, destination: input.destination, overwrite: input.overwrite, recursive: input.recursive } }));
         if (!admission.success || !('status' in admission) || admission.status !== 'accepted') return admission;

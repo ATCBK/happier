@@ -196,6 +196,7 @@ async function prepareDirectTransferExport(params: Readonly<{
     machineId: string;
     serverId?: string | null;
     accountId?: string;
+    callAdmittedAction?: typeof callFilesystemTransferAction;
     request: DirectTransferExportPrepareRequest;
     timeoutMs?: number | null;
     signal?: AbortSignal | null;
@@ -208,7 +209,7 @@ async function prepareDirectTransferExport(params: Readonly<{
         let prepare: DirectTransferExportPrepareResponse;
         if (params.request.t === 'workspace_file_download_v1') {
             filesystemDestinationId = randomUUID();
-            const response = await callFilesystemTransferAction({ actionId: 'daemon.filesystem.download', machineId: params.machineId,
+            const response = await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: 'daemon.filesystem.download', machineId: params.machineId,
                 serverId: params.serverId, timeoutMs: requestTimeoutMs, signal: params.signal,
                 accountId: params.accountId,
                 input: { rootPath: params.request.workingDirectory, path: params.request.path, asZip: params.request.asZip,
@@ -427,6 +428,8 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     machineId: string;
     serverId?: string | null;
     accountId?: string;
+    /** Private transport of the containing admitted read/copy Action, when present. */
+    callAdmittedAction?: typeof callFilesystemTransferAction;
     /** Existing publication custody is held by the enclosing tree copy operation. */
     preparedExport?: Extract<FilesystemDownloadOutput, { success: true; status: 'accepted' }>['prepared'];
     request: DirectTransferExportPrepareRequest;

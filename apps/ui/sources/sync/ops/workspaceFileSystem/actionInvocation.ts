@@ -5,6 +5,8 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { WorkspaceFileSystemTarget } from './directoryBrowsing';
+import type { UiFilesystemActionDelivery } from '@/sync/ops/actions/filesystemActionDeps';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 export type WorkspaceFileSystemMutationResponse =
     | Readonly<{ success: true }>
@@ -15,7 +17,7 @@ export async function invokeWorkspaceFileSystemAction(
     target: WorkspaceFileSystemTarget,
     actionId: FilesystemActionId,
     input: unknown,
-    options?: Readonly<{ signal?: AbortSignal | null }>,
+    options?: Readonly<{ signal?: AbortSignal | null; accountId?: string; delivery?: UiFilesystemActionDelivery['execute'] }>,
 ): Promise<ActionExecuteResult> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     const serverId = target.serverId || lifetime?.scope.serverId;
@@ -25,12 +27,27 @@ export async function invokeWorkspaceFileSystemAction(
     if (activeTarget && !lifetime.isCurrent()) return {
         ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed',
     };
-    return await createFrontDoorActionExecute(createDefaultActionExecutor())(actionId, input, {
+    const retirement = options?.delivery ? new AbortController() : null;
+    const subscription = retirement && activeTarget ? lifetime.onRetire(() => retirement.abort()) : null;
+    const cancellation = retirement ? mergeAbortSignals([options?.signal ?? undefined, retirement.signal]) : null;
+    const signal = cancellation?.signal ?? options?.signal ?? undefined;
+    const execute = createFrontDoorActionExecute(createDefaultActionExecutor(options?.delivery && signal ? {
+        filesystemActionDelivery: { actionId, signal, execute: options.delivery },
+    } : undefined));
+    const context = {
         surface: 'ui', authority: 'present_user', serverId,
-        ...(activeTarget ? { expectedAccountId: lifetime.scope.accountId } : {}),
-        ...(options?.signal ? { signal: options.signal } : {}),
+        ...(options?.accountId ? { expectedAccountId: options.accountId }
+            : activeTarget ? { expectedAccountId: lifetime.scope.accountId } : {}),
+        ...(signal ? { signal } : {}),
         externalActionTarget: { kind: 'machine', machineId: target.machineId },
-    });
+    } as const;
+    try {
+        const prepared = await execute.prepare(actionId, input, context);
+        return prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
+    } finally {
+        subscription?.dispose();
+        cancellation?.dispose();
+    }
 }
 
 /** Admission owns policy and approval; its existing terminal owns the Machine RPC. */

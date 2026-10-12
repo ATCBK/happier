@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEncryptedTransferChunkEnvelope } from './transferChunkEncryption';
 import { createBufferedTransferDestination } from '../carriers/createBufferedTransferDestination';
-import { downloadBulkPayloadViaDirectExportToDestination } from './directTransferExportDownload';
-import { copyPreparedFilesystemFile } from './preparedFilesystemCopy';
+import { downloadBulkPayloadViaDirectExportToDestination as downloadAdmittedBytes } from './directTransferExportDownload';
+import { copyPreparedFilesystemFile as copyAdmittedBytes } from './preparedFilesystemCopy';
+import { callAdmittedFilesystemTransferActionRpc } from './filesystemTransferActionClient';
 import { createTransferRecipientKeyPair } from './transferChunkEncryption';
 import { decryptEncryptedTransferChunkEnvelope } from './transferChunkEncryption';
 
@@ -13,6 +14,13 @@ const callGuardedMachineRpcWithPolicyMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const convertedWorkspaceFixtures = vi.hoisted(() => new Set<string>());
 const workspaceCompletionRequests = vi.hoisted(() => new Map<string, unknown>());
+
+// These transport tests start after containing Action admission; UI policy is
+// exercised with real Home/Account composition in workspaceFileSystem/actionAdmission.test.ts.
+const downloadBulkPayloadViaDirectExportToDestination = (params: Parameters<typeof downloadAdmittedBytes>[0]) =>
+    downloadAdmittedBytes({ ...params, callAdmittedAction: callAdmittedFilesystemTransferActionRpc });
+const copyPreparedFilesystemFile = (params: Parameters<typeof copyAdmittedBytes>[0]) =>
+    copyAdmittedBytes({ ...params, callAdmittedAction: callAdmittedFilesystemTransferActionRpc });
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => ({
     callGuardedMachineRpcWithPolicy: async (params: { method: string; payload: { input?: { destination?: { destinationId: string } } } }) => {
@@ -780,7 +788,6 @@ describe('directTransferExportDownload', () => {
         });
 
         const writes: Uint8Array[] = [];
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -878,7 +885,6 @@ describe('directTransferExportDownload', () => {
             writes.length = 0;
         });
 
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         await expect(downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             request: {
@@ -929,7 +935,6 @@ describe('directTransferExportDownload', () => {
         let initializationFailed = false;
         const cleanupRequests: Readonly<{ destinationId: string; success: boolean; error: string }>[] = [];
 
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const resultPromise = downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1071,7 +1076,6 @@ describe('directTransferExportDownload', () => {
 
         const cleanup = vi.fn(async () => {});
         const close = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1106,7 +1110,6 @@ describe('directTransferExportDownload', () => {
 
         const cleanup = vi.fn(async () => {});
         const close = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1166,7 +1169,6 @@ describe('directTransferExportDownload', () => {
 
         const cleanup = vi.fn(async () => {});
         const close = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1207,7 +1209,6 @@ describe('directTransferExportDownload', () => {
 
         const cleanup = vi.fn(async () => {});
         const close = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const resultPromise = downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1249,7 +1250,6 @@ describe('directTransferExportDownload', () => {
 
             const cleanup = vi.fn(async () => {});
             const close = vi.fn(async () => {});
-            const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
             const result = await downloadBulkPayloadViaDirectExportToDestination({
                 machineId: 'machine-1',
                 serverId: 'server-a',
@@ -1374,7 +1374,6 @@ describe('directTransferExportDownload', () => {
                 writes.length = 0;
             });
             const close = vi.fn(async () => {});
-            const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
             const resultPromise = downloadBulkPayloadViaDirectExportToDestination({
                 machineId: 'machine-1',
                 serverId: 'server-a',
@@ -1446,7 +1445,6 @@ describe('directTransferExportDownload', () => {
 
         const cleanup = vi.fn(async () => {});
         const onInit = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1560,7 +1558,6 @@ describe('directTransferExportDownload', () => {
         const close = vi.fn(async () => {
             closed = true;
         });
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             serverId: 'server-a',
@@ -1657,7 +1654,6 @@ describe('directTransferExportDownload', () => {
 
         const writeBytes = vi.fn(async () => {});
         const cleanup = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             request: {
@@ -1774,7 +1770,6 @@ describe('directTransferExportDownload', () => {
         }));
 
         const cleanup = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             request: {
@@ -1904,7 +1899,6 @@ describe('directTransferExportDownload', () => {
 
         const writeBytes = vi.fn(async () => {});
         const cleanup = vi.fn(async () => {});
-        const { downloadBulkPayloadViaDirectExportToDestination } = await import('./directTransferExportDownload');
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: 'machine-1',
             request: {

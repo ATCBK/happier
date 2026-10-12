@@ -7,6 +7,7 @@ import { digest } from '@/platform/digest';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
     callDaemonWorkspaceStatFileRpc,
+    downloadDaemonWorkspaceFileToBase64,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
@@ -22,6 +23,7 @@ import {
     FilesystemWriteFileOutputSchema,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { invokeWorkspaceFileSystemAction } from './actionInvocation';
+import { callAdmittedFilesystemTransferActionRpc } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient';
 
 const WORKSPACE_FILE_INLINE_MAX_BYTES_ENV_KEY = 'EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES';
 const DEFAULT_WORKSPACE_FILE_INLINE_MAX_BYTES = 256 * 1024;
@@ -111,7 +113,17 @@ export async function workspaceReadFile(
             requestPath: path,
             pathKind: 'workspace_entry',
         }),
-    }, { signal: options?.signal });
+    }, { signal: options?.signal,
+        ...(maxBytes > inlineMaxBytes ? { delivery: async ({ context }) => {
+            const read = await downloadDaemonWorkspaceFileToBase64({ machineId: target.machineId,
+                serverId: context.serverId, rootPath: target.rootPath, agentRootPath: target.agentRootPath,
+                path, maxBytes, signal: context.signal,
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
+            });
+            return read.ok ? { success: true, content: read.contentBase64 }
+                : { success: false, error: read.error };
+        } } : {}),
+    });
     if (!result.ok) {
         return {
             success: false,
@@ -138,12 +150,6 @@ export async function workspaceReadFile(
         content: response.data.content,
     };
 }
-
-type WorkspaceWriteFileRequest = Readonly<{
-  path: string;
-  content: string;
-  expectedHash?: string | null;
-}>;
 
 export type WorkspaceWriteFileResponse =
   | Readonly<{ success: true; hash: string }>
@@ -175,88 +181,79 @@ export async function workspaceWriteFile(
         };
     }
 
-    if (contentBytes.byteLength <= inlineMaxBytes || guardedWrite) {
-        const request: WorkspaceWriteFileRequest =
-            expectedHash === undefined
-                ? { path, content: encodeBase64(contentBytes, 'base64') }
-                : { path, content: encodeBase64(contentBytes, 'base64'), expectedHash };
-
-        const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.writeFile', {
-            rootPath: target.rootPath,
-            ...request,
-            path: resolveMachineAbsolutePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath,
-                requestPath: path, pathKind: 'workspace_entry' }),
-        });
-        if (!result.ok) {
-            return {
-                success: false,
-                error: result.error,
-                errorCode: normalizeWorkspaceWriteFileErrorCode(result.errorCode),
-            };
-        }
-        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
-        if (approval.success) return { success: false, error: 'The Action awaits approval.', errorCode: 'approval_required', approvalArtifactId: approval.data.artifactId };
-        const response = FilesystemWriteFileOutputSchema.safeParse(result.result);
-        return response.success ? response.data : { success: false, error: 'The filesystem Action response could not be validated.', errorCode: 'invalid_action_output' };
-    }
-
-    try {
-        const sha256 = bytesToHex(await digest('SHA-256', contentBytes));
-        let upload = await uploadDaemonWorkspaceFileFromReader({
-            machineId: target.machineId,
-            serverId: target.serverId,
-            rootPath: target.rootPath,
-            agentRootPath: target.agentRootPath,
-            fileReader: {
-                sizeBytes: contentBytes.byteLength,
-                readBytes: async (offset, length) => contentBytes.slice(offset, offset + length),
-                close: async () => {},
-            },
-            request: {
-                path,
-                sizeBytes: contentBytes.byteLength,
-                overwrite: expectedHash === undefined,
-                sha256,
-            },
-        });
-
-        if (isTransferFinalizeRecoveryFailure<WorkspaceFileUploadFinalizeResponse>(upload)) {
-            const recoveryResult = await runTransferFinalizeRecovery({
-                recovery: upload.recovery,
-                title: t('transferRecovery.title'),
-                message: t('transferRecovery.message'),
+    const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.writeFile', {
+        rootPath: target.rootPath,
+        path: resolveMachineAbsolutePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath,
+            requestPath: path, pathKind: 'workspace_entry' }),
+        content: encodeBase64(contentBytes, 'base64'),
+        ...(expectedHash === undefined ? {} : { expectedHash }),
+    }, contentBytes.byteLength > inlineMaxBytes ? { delivery: async ({ context }) => {
+        try {
+            const sha256 = bytesToHex(await digest('SHA-256', contentBytes));
+            let upload = await uploadDaemonWorkspaceFileFromReader({
+                machineId: target.machineId,
+                serverId: target.serverId,
+                rootPath: target.rootPath,
+                agentRootPath: target.agentRootPath,
+                fileReader: {
+                    sizeBytes: contentBytes.byteLength,
+                    readBytes: async (offset, length) => contentBytes.slice(offset, offset + length),
+                    close: async () => {},
+                },
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
+                request: {
+                    path,
+                    sizeBytes: contentBytes.byteLength,
+                    overwrite: expectedHash === undefined,
+                    sha256,
+                },
+                signal: context.signal,
             });
-            if (recoveryResult?.status === 'finalized') {
-                upload = recoveryResult.response;
-            } else {
-                upload = {
+
+            if (isTransferFinalizeRecoveryFailure<WorkspaceFileUploadFinalizeResponse>(upload)) {
+                const recoveryResult = await runTransferFinalizeRecovery({
+                    recovery: upload.recovery,
+                    title: t('transferRecovery.title'),
+                    message: t('transferRecovery.message'),
+                });
+                if (recoveryResult?.status === 'finalized') {
+                    upload = recoveryResult.response;
+                } else {
+                    upload = {
+                        success: false,
+                        error: recoveryResult?.status === 'unavailable'
+                            ? t('transferRecovery.unavailable')
+                            : recoveryResult?.status === 'discarded'
+                                ? t('transferRecovery.discarded')
+                                : upload.error,
+                    };
+                }
+            }
+
+            if (upload.success !== true) {
+                return {
                     success: false,
-                    error: recoveryResult?.status === 'unavailable'
-                        ? t('transferRecovery.unavailable')
-                        : recoveryResult?.status === 'discarded'
-                            ? t('transferRecovery.discarded')
-                            : upload.error,
+                    error: upload.error,
+                    errorCode: normalizeWorkspaceWriteFileErrorCode(upload.errorCode),
                 };
             }
-        }
 
-        if (upload.success !== true) {
+            return {
+                success: true,
+                hash: upload.sha256,
+            };
+        } catch (error) {
             return {
                 success: false,
-                error: upload.error,
-                errorCode: normalizeWorkspaceWriteFileErrorCode(upload.errorCode),
+                error: error instanceof Error ? error.message : 'Unknown error',
+                errorCode: normalizeWorkspaceWriteFileErrorCode(readRpcErrorCode(error)),
             };
         }
-
-        return {
-            success: true,
-            hash: upload.sha256,
-        };
-    } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: normalizeWorkspaceWriteFileErrorCode(readRpcErrorCode(error)),
-        };
-    }
+    } } : undefined);
+    if (!result.ok) return { success: false, error: result.error,
+        errorCode: normalizeWorkspaceWriteFileErrorCode(result.errorCode) };
+    const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+    if (approval.success) return { success: false, error: 'The Action awaits approval.', errorCode: 'approval_required', approvalArtifactId: approval.data.artifactId };
+    const response = FilesystemWriteFileOutputSchema.safeParse(result.result);
+    return response.success ? response.data : { success: false, error: 'The filesystem Action response could not be validated.', errorCode: 'invalid_action_output' };
 }

@@ -403,6 +403,8 @@ export async function prepareDirectImportSession(params: Readonly<{
     machineId: string;
     serverId?: string | null;
     accountId?: string;
+    /** Byte phases of a containing admitted Action retain its custody. */
+    callAdmittedAction?: typeof callFilesystemTransferAction;
     request: DirectTransferImportOpenRequest;
     filesystemCopyInput?: FilesystemPreparedCopyInput;
     /** An actual accepted record; the enclosing copy owner prepared it once. */
@@ -421,7 +423,7 @@ export async function prepareDirectImportSession(params: Readonly<{
     if (params.preparedImport) prepare = { success: true, ...params.preparedImport };
     else if (params.request.t === 'session_file_upload_v1') {
         const sourceId = params.filesystemCopyInput?.source.sourceId ?? randomUUID();
-        const response = await callFilesystemTransferAction({ actionId: params.filesystemCopyInput ? 'daemon.filesystem.copy' : 'daemon.filesystem.upload', machineId: params.machineId,
+        const response = await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: params.filesystemCopyInput ? 'daemon.filesystem.copy' : 'daemon.filesystem.upload', machineId: params.machineId,
             serverId: params.serverId, timeoutMs, signal: params.signal,
             accountId: params.accountId,
             input: params.filesystemCopyInput ?? { rootPath: params.request.workingDirectory, path: params.request.path,

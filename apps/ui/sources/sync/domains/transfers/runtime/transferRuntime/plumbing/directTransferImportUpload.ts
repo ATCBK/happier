@@ -35,6 +35,7 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
     machineId: string;
     serverId?: string | null;
     accountId?: string;
+    callAdmittedAction?: Parameters<typeof prepareDirectImportSession>[0]['callAdmittedAction'];
     accountLifetime?: ServerAccountScopeLifetime;
     onRecoverySettled?: () => void;
     fileReader: BulkTransferFileReader;
@@ -57,6 +58,7 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
         ...(typeof params.serverId === 'string' ? { serverId: params.serverId } : {}),
         ...(params.accountId ? { accountId: params.accountId } : {}),
         request: params.request,
+        callAdmittedAction: params.callAdmittedAction,
         timeoutMs: params.timeoutMs ?? null,
         signal: params.signal ?? null,
         httpOriginOverride: params.httpOriginOverride ?? null,

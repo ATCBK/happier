@@ -127,6 +127,7 @@ export async function uploadDaemonWorkspaceFileFromReader(params: Readonly<{
     rootPath: string;
     agentRootPath?: string | null;
     fileReader: TransferFileReader;
+    callAdmittedAction?: Parameters<typeof uploadBulkPayloadFromFileViaMachineCarrier>[0]['callAdmittedAction'];
     request: WorkspaceFileUploadInitRequest;
     signal?: AbortSignal | null;
     onProgress?: ((progress: Readonly<{ uploadedBytes: number; totalBytes: number }>) => void) | null;
@@ -140,6 +141,7 @@ export async function uploadDaemonWorkspaceFileFromReader(params: Readonly<{
         machineId: params.machineId,
         ...(typeof params.serverId === 'string' ? { serverId: params.serverId } : {}),
         fileReader: params.fileReader,
+        callAdmittedAction: params.callAdmittedAction,
         directImportRequest: {
             t: 'session_file_upload_v1',
             workingDirectory: params.rootPath,
@@ -160,6 +162,7 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
     agentRootPath?: string | null;
     request: Readonly<{ path: string; asZip: boolean }>;
     destination: TransferFileDestination;
+    callAdmittedAction?: Parameters<typeof downloadBulkPayloadViaDirectExportToDestination>[0]['callAdmittedAction'];
     confinedToWorkingDirectory?: boolean;
     onInit?: ((init: Readonly<{ name: string; sizeBytes: number }>) => Promise<void | TransferFailureResponse>) | null;
     signal?: AbortSignal | null;
@@ -201,6 +204,7 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
             accountId: captured.accountId,
             request: directExportRequest,
             destination: params.destination,
+            callAdmittedAction: params.callAdmittedAction,
             onInit: params.onInit ?? null,
             signal: captured.signal,
             onProgress: params.onProgress ?? null,
@@ -234,6 +238,7 @@ export async function downloadDaemonWorkspaceFileToBase64(params: Readonly<{
     path: string;
     maxBytes: number;
     signal?: AbortSignal | null;
+    callAdmittedAction?: Parameters<typeof downloadBulkPayloadViaDirectExportToDestination>[0]['callAdmittedAction'];
 }>): Promise<Readonly<{ ok: true; contentBase64: string }> | Readonly<{ ok: false; error: string; errorCode?: string }>> {
     let account: Awaited<ReturnType<typeof captureFilesystemTransferAccountScope>> | undefined;
     try {
@@ -283,6 +288,7 @@ export async function downloadDaemonWorkspaceFileToBase64(params: Readonly<{
         agentRootPath: params.agentRootPath,
         request: { path: absolutePath, asZip: false },
         destination: directBufferedDestination.destination,
+        callAdmittedAction: params.callAdmittedAction,
         onInit: async (init) => {
             if (init.sizeBytes > params.maxBytes) {
                 return {

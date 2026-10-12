@@ -31,6 +31,8 @@ export async function uploadBulkPayloadFromFileViaMachineCarrier<
     machineId: string;
     serverId?: string | null;
     fileReader: BulkTransferFileReader;
+    /** Private byte transport supplied by a containing admitted write/copy. */
+    callAdmittedAction?: Parameters<typeof uploadBulkPayloadFromFileViaDirectImport>[0]['callAdmittedAction'];
     directImportRequest: DirectTransferImportOpenRequest;
     parseDirectFinalizeResponse?: ((response: Extract<DirectTransferImportFinalizeResponse, { success: true }>) => TResponse | null) | null;
     timeoutMs?: number | null;
@@ -70,6 +72,7 @@ export async function uploadBulkPayloadFromFileViaMachineCarrier<
                 accountLifetime: capturedAccount?.accountLifetime,
                 onRecoverySettled: capturedAccount?.dispose,
                 fileReader: params.fileReader,
+                callAdmittedAction: params.callAdmittedAction,
                 request: params.directImportRequest,
                 parseFinalizeResponse: params.parseDirectFinalizeResponse ?? null,
                 timeoutMs: params.timeoutMs ?? null,

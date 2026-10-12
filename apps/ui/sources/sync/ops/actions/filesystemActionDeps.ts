@@ -3,6 +3,14 @@ import { FilesystemCopyInputSchema } from '@happier-dev/protocol/actions/filesys
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import type { FilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
+
+/** Private mounted byte delivery; never serialized into Action input or approval custody. */
+export type UiFilesystemActionDelivery = Readonly<{
+    actionId: FilesystemActionId;
+    signal: AbortSignal;
+    execute: NonNullable<ActionExecutorDeps['filesystemActionExecute']>;
+}>;
 
 export function resolveUiFilesystemTransferCustodyFailure(actionId: string, input?: unknown) {
     const copy = actionId === 'daemon.filesystem.copy' ? FilesystemCopyInputSchema.safeParse(input) : null;
@@ -13,12 +21,17 @@ export function resolveUiFilesystemTransferCustodyFailure(actionId: string, inpu
 }
 
 /** Action admission owns the request; the machine filesystem owns all effects. */
-export function createUiFilesystemAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['filesystemActionExecute']> {
+export function createUiFilesystemAction(account?: LazyActionAccountContext, delivery?: UiFilesystemActionDelivery): NonNullable<ActionExecutorDeps['filesystemActionExecute']> {
     return async ({ actionId, input, context }) => {
         context.signal?.throwIfAborted();
         account?.assertCurrent();
         const target = context.externalActionTarget;
         if (target?.kind !== 'machine' || !target.machineId.trim()) return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
+        if (delivery?.actionId === actionId && context.signal === delivery.signal) {
+            const result = await delivery.execute({ actionId, input, context });
+            account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
+            return result;
+        }
         // The workspace transfer family owns the real reader/destination and
         // drives the accepted prepared operation. A generic JSON invocation
         // cannot manufacture that custody from a caller-chosen identifier.
@@ -35,10 +48,11 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext): No
                     return { ok: false, errorCode: 'target_unavailable', error: 'Copy destination differs from the admitted target' };
                 }
                 if (!account) return { ok: false, errorCode: 'target_unavailable', error: 'Copy requires captured Account custody' };
-                const [{ resolveMachineCarrierRoute }, { copyPreparedFilesystemFile }, { captureLazyActionAccountContext }] = await Promise.all([
+                const [{ resolveMachineCarrierRoute }, { copyPreparedFilesystemFile }, { captureLazyActionAccountContext }, { callAdmittedFilesystemTransferActionRpc }] = await Promise.all([
                     import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease'),
                     import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/preparedFilesystemCopy'),
                     import('./actionAccountContext'),
+                    import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient'),
                 ]);
                 const sourceAccount = copy.source.serverId === account.serverId ? account
                     : await captureLazyActionAccountContext(copy.source.serverId, context.signal);
@@ -55,6 +69,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext): No
                     // Both exact Home/Account routes are captured before either
                     // endpoint admits bytes; approval cannot reselect a requester.
                     const result = await copyPreparedFilesystemFile({ input: copy, sourceAccount, destinationAccount: account,
+                        callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
                         acquireSourceCarrier: sourceRoute.acquire, acquireDestinationCarrier: destinationRoute.acquire,
                         signal: context.signal });
                     account.assertResultCurrent(spec.sideEffectClass);

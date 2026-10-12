@@ -18,14 +18,63 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 }).module);
 const filesystem = vi.hoisted(() => ({ paths: new Set<string>(), calls: [] as unknown[],
     response: { success: true } as unknown, error: null as unknown, nativeAsk: false,
-    prompts: 0, promptValue: 'b', promptGate: null as Promise<void> | null }));
+    prompts: 0, promptValue: 'b', promptGate: null as Promise<void> | null,
+    mutationGate: null as Promise<void> | null,
+    fileBytes: null as Uint8Array | null, deliveredBytes: 0 }));
+// The finite carrier is the byte-network boundary. Real encryption, manifest
+// verification, buffering, bounds and destination completion stay in the driver.
+vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease', () => ({
+    MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR: 'The direct machine connection was interrupted. Retry the transfer.',
+    MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE: 'machine_carrier_transport_failed',
+    resolveMachineCarrierRoute: async (_machineId: string, serverId: string) => ({
+        kind: 'iroh_peer', serverId, carrierKind: 'browser_stream',
+        acquire: async () => {
+            return { kind: 'browser_stream', release: async () => {}, request: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const path = new URL(String(input)).pathname;
+                const bytes = filesystem.fileBytes;
+                if (!bytes) throw new Error('No fixture bytes');
+                const hash = Buffer.from(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)).toString('hex');
+                if (path.endsWith('/open')) {
+                    return Response.json({ transferId: 'bounded-read', totalChunks: Math.ceil(bytes.length / (512 * 1024)), sizeBytes: bytes.length, manifestHash: `sha256:${hash}` });
+                }
+                const chunkMatch = /\/chunks\/(\d+)$/u.exec(path);
+                if (chunkMatch) {
+                    const sequence = Number(chunkMatch[1]);
+                    const payload = bytes.slice(sequence * 512 * 1024, (sequence + 1) * 512 * 1024);
+                    const { createEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
+                    const chunk = await createEncryptedTransferChunkEnvelope({ transferId: 'bounded-read', sequence, payload,
+                        recipientPublicKeyBase64: new Headers(init?.headers).get('x-happier-transfer-recipient-public-key')! });
+                    filesystem.deliveredBytes += payload.length;
+                    return Response.json({ transferId: 'bounded-read', kind: 'chunk', sequence, ...chunk });
+                }
+                return Response.json({ success: true });
+            } };
+        },
+    }),
+    rebaseMachineCarrierHttpEndpoint: () => { throw new Error('Browser stream must retain its carrier'); },
+}));
 // The machine filesystem is a genuine cross-process boundary; policy, schemas,
 // captured Account custody and approval Artifact replay remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: async (request: { method: string; requestId?: string; serverId?: string; accountId?: string;
-        machineId: string; payload: { path?: string; from?: string; to?: string } }) => {
+        machineId: string; payload: { path?: string; from?: string; to?: string; input?: { destination?: { destinationId: string } } } }) => {
         filesystem.calls.push(request);
         if (filesystem.error) throw filesystem.error;
+        if (request.method === 'daemon.filesystem.writeFile' || request.method === 'daemon.filesystem.createDirectory') await filesystem.mutationGate;
+        if (filesystem.fileBytes) {
+            const bytes = filesystem.fileBytes;
+            if (request.method === 'statFile') return { success: true, exists: true, kind: 'file', sizeBytes: bytes.length };
+            if (request.method === 'daemon.filesystem.readFile') return bytes.length > 2_500_000
+                ? { success: false, error: 'File exceeds daemon inline read ceiling' }
+                : { success: true, content: Buffer.from(bytes).toString('base64') };
+            if (request.method === 'daemon.filesystem.download') {
+                const hash = Buffer.from(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)).toString('hex');
+                const expiresAt = Date.now() + 60_000;
+                return { success: true, status: 'accepted', operationId: 'bounded-read', destinationId: request.payload.input?.destination?.destinationId,
+                    prepared: { transferId: 'bounded-read', name: 'file', sizeBytes: bytes.length, manifestHash: `sha256:${hash}`, expiresAt,
+                        endpointCandidates: [{ kind: 'http', url: 'http://127.0.0.1:46001/machine-transfers/direct/Ym91bmRlZC1yZWFk', expiresAt }] } };
+            }
+        }
         if (filesystem.nativeAsk) {
             // This is the receiving Machine boundary. Keep its strict origin
             // admission real: an uncorrelated RPC cannot create approval custody.
@@ -69,6 +118,8 @@ beforeEach(async () => {
     filesystem.paths.clear(); filesystem.paths.add('/repo/a'); filesystem.calls.length = 0;
     filesystem.response = { success: true }; filesystem.error = null; filesystem.nativeAsk = false;
     filesystem.prompts = 0; filesystem.promptValue = 'b'; filesystem.promptGate = null;
+    filesystem.fileBytes = null; filesystem.deliveredBytes = 0;
+    filesystem.mutationGate = null;
 });
 afterEach(async () => {
     await standardCleanup();
@@ -77,6 +128,149 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it.each(['file', 'folder'] as const)('New %s does not reveal or navigate a retired host after its mutation acknowledgement', async kind => {
+        let release = () => {};
+        filesystem.mutationGate = new Promise<void>(resolve => { release = resolve; });
+        filesystem.promptValue = 'created';
+        filesystem.response = kind === 'file' ? { success: true, hash: 'written' } : { success: true };
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: target.machineId, activeAt: Date.now() })] } });
+        const opened: string[] = [];
+        const expanded = vi.fn();
+        const { WorkspaceRepositoryTreeBrowserView } = await import('@/components/projects/files/WorkspaceRepositoryTreeBrowserView');
+        const props = { onOpenFile: (path: string) => opened.push(path), onExpandedPathsChange: expanded,
+            scmSnapshot: null, transferEffectsEnabled: false };
+        const screen = await renderScreen(createElement(WorkspaceRepositoryTreeBrowserView, { ...props, scope: { ...target, serverId } }));
+        await act(async () => {
+            screen.findAllByTestId('repository-tree-create-menu').find(node => typeof node.props.onSelect === 'function')!
+                .props.onSelect(`repository-tree-create-${kind}`);
+            await vi.waitFor(() => expect(filesystem.calls.some(call => (call as { method: string }).method ===
+                (kind === 'file' ? 'daemon.filesystem.writeFile' : 'daemon.filesystem.createDirectory'))).toBe(true));
+        });
+        await screen.update(createElement(WorkspaceRepositoryTreeBrowserView, { ...props, scope: { ...target, serverId, rootPath: '/other' } }));
+        await act(async () => { release(); await new Promise(resolve => setTimeout(resolve, 100)); });
+        expect(opened).toEqual([]);
+        expect(expanded).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+    it('a large editor write keeps its byte delivery mounted through writeFile Require and rejection', async () => {
+        await homes.requireUiApproval(serverId, 'daemon.filesystem.writeFile');
+        const pending = workspaceWriteFile(target, 'large.txt', 'x'.repeat(256 * 1024 + 1));
+        await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+        expect(filesystem.calls).toEqual([]);
+        const artifactId = homes.artifacts(serverId).list()[0]!.id;
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'reject' },
+            { surface: 'ui', serverId })).toMatchObject({ ok: true });
+        expect(await pending).toMatchObject({ success: false, errorCode: 'approval_rejected' });
+        expect(filesystem.calls).toEqual([]);
+    });
+    it.each(['upload', 'download'] as const)('a mounted %s remains effect-free through UI Require with RPC allowed', async kind => {
+        const actionId = `daemon.filesystem.${kind}` as const;
+        await homes.requireUiApproval(serverId, actionId);
+        const controller = new AbortController();
+        const { callFilesystemTransferAction } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient');
+        const pending = callFilesystemTransferAction({ actionId, machineId: target.machineId, serverId, accountId: 'account-a', signal: controller.signal,
+            input: kind === 'upload' ? { rootPath: '/repo', path: '/repo/file', source: { sourceId: 'reader', sizeBytes: 1 }, overwrite: false }
+                : { rootPath: '/repo', path: '/repo/file', destination: { destinationId: 'destination' }, asZip: false },
+        });
+        try {
+            await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+            expect(filesystem.calls).toEqual([]);
+        } finally { controller.abort(); }
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        expect(filesystem.calls).toEqual([]);
+    });
+    it('keeps the admitted 4-MB read bound above the daemon inline ceiling and refuses its over-bound neighbor', async () => {
+        // RPC download is allowed to isolate the UI read contract from native
+        // policy. The UI front door and bounded byte driver remain real.
+        const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'daemon.filesystem.download': { disabledSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { 'daemon.filesystem.download': ['rpc'] },
+        }) };
+        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        filesystem.fileBytes = new Uint8Array(3_000_000).fill(120);
+        const read = await workspaceReadFile(target, 'file', { maxBytes: 4_000_000 });
+        expect(read.success, !read.success ? read.error : undefined).toBe(true);
+        if (read.success) expect(Buffer.from(read.content, 'base64').equals(Buffer.from(filesystem.fileBytes))).toBe(true);
+        expect(filesystem.deliveredBytes).toBe(3_000_000);
+        filesystem.deliveredBytes = 0;
+        expect(await workspaceReadFile(target, 'file', { maxBytes: 2_500_000 })).toMatchObject({ success: false });
+        expect(filesystem.deliveredBytes).toBe(0);
+        filesystem.fileBytes = new Uint8Array([0, 255, 128]);
+        expect(await workspaceReadFile(target, 'file')).toEqual({ success: true, content: 'AP+A' });
+    });
+    it.each(['upload', 'download'] as const)('the real %s preparation cannot reach RPC when disabled on UI', async kind => {
+        const actionId = `daemon.filesystem.${kind}` as const;
+        const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { [actionId]: ['rpc'] },
+        }) };
+        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        const { uploadDaemonWorkspaceFileFromReader, downloadDaemonWorkspaceFileToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers');
+        const readBytes = vi.fn(async () => new Uint8Array([1]));
+        const written: number[] = [];
+        const result = kind === 'upload'
+            ? await uploadDaemonWorkspaceFileFromReader({ ...target,
+                fileReader: { sizeBytes: 1, readBytes, close: async () => {} }, request: { path: 'file', sizeBytes: 1 } })
+            : await downloadDaemonWorkspaceFileToDestination({ ...target, request: { path: 'file', asZip: false },
+                destination: { writeBytes: async bytes => { written.push(...bytes); }, close: async () => {}, cleanup: async () => { written.length = 0; } } });
+        expect(result).toMatchObject({ errorCode: 'action_disabled' });
+        expect(readBytes).not.toHaveBeenCalled();
+        expect(written).toEqual([]);
+        expect(filesystem.calls).toEqual([]);
+    });
+
+    it('a large editor write retains writeFile admission before starting upload', async () => {
+        const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'daemon.filesystem.writeFile': { disabledSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { 'daemon.filesystem.upload': ['ui', 'rpc'] },
+        }) };
+        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        expect(await workspaceWriteFile(target, 'large.txt', 'x'.repeat(256 * 1024 + 1)))
+            .toMatchObject({ success: false, errorCode: 'action_disabled' });
+        expect(filesystem.calls).toEqual([]);
+    });
+
+    it.each((['file', 'folder'] as const).flatMap(kind => (['account', 'root', 'unmount'] as const).map(retirement => ({ kind, retirement }))))
+        ('retires the real New $kind prompt on $retirement retirement', async ({ kind, retirement }) => {
+        let release = () => {};
+        filesystem.promptGate = new Promise<void>(resolve => { release = resolve; });
+        filesystem.promptValue = 'created';
+        filesystem.response = { success: true, entries: [] };
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: target.machineId, activeAt: Date.now() })] } });
+        const opened: string[] = [];
+        const { WorkspaceRepositoryTreeBrowserView } = await import('@/components/projects/files/WorkspaceRepositoryTreeBrowserView');
+        const screen = await renderScreen(createElement(WorkspaceRepositoryTreeBrowserView, {
+            scope: { ...target, serverId }, onOpenFile: path => opened.push(path), scmSnapshot: null, transferEffectsEnabled: false,
+        }));
+        await act(async () => {
+            screen.findAllByTestId('repository-tree-create-menu').find(node => typeof node.props.onSelect === 'function')!
+                .props.onSelect(`repository-tree-create-${kind}`);
+            await vi.waitFor(() => expect(filesystem.prompts).toBe(1));
+        });
+        if (retirement === 'account') {
+            await act(async () => {
+                await homes.switchAccount(serverId, 'account-b');
+                storage.getState().activateProfileScope({ serverId, accountId: 'account-b' });
+            });
+        } else if (retirement === 'root') {
+                await screen.update(createElement(WorkspaceRepositoryTreeBrowserView, {
+                    scope: { ...target, serverId, rootPath: '/other' }, onOpenFile: path => opened.push(path), scmSnapshot: null, transferEffectsEnabled: false,
+                }));
+        } else await screen.unmount();
+        await act(async () => {
+            release();
+            await new Promise(resolve => setTimeout(resolve, 100));
+        });
+        expect(filesystem.calls.filter(call => ['daemon.filesystem.writeFile', 'daemon.filesystem.createDirectory']
+            .includes((call as { method: string }).method))).toEqual([]);
+        expect(opened).toEqual([]);
+        expect([...filesystem.paths]).toEqual(['/repo/a']);
+        if (retirement !== 'unmount') await screen.unmount();
+    });
     it('Project Open preserves native approval custody through its ordinary Machine RPC', async () => {
         filesystem.nativeAsk = true;
         homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: target.machineId, accountId: 'account-a' })] });
@@ -90,30 +284,34 @@ describe('shared workspace filesystem Action admission', () => {
         expect([...filesystem.paths]).toEqual(['/repo/a']);
     });
 
-    it('the real New file control presents its retained approval instead of an error', async () => {
-        await homes.requireUiApproval(serverId, 'daemon.filesystem.writeFile');
+    it.each(['file', 'folder'] as const)('the real New %s control presents approval and completes only after replay', async kind => {
+        const actionId = kind === 'file' ? 'daemon.filesystem.writeFile' : 'daemon.filesystem.createDirectory';
+        await homes.requireUiApproval(serverId, actionId);
         const machine = createMachineFixture({ id: target.machineId, activeAt: Date.now() });
         storage.setState({ machineListByServerId: { [serverId]: [machine] } });
         filesystem.promptValue = 'created.txt';
         filesystem.response = { success: true, entries: [] };
         const alerts = vi.spyOn((await import('@/modal')).Modal, 'alert');
         const opened: string[] = [];
+        const expanded = vi.fn();
         const { WorkspaceRepositoryTreeBrowserView } = await import('@/components/projects/files/WorkspaceRepositoryTreeBrowserView');
         const screen = await renderScreen(createElement(WorkspaceRepositoryTreeBrowserView, {
-            scope: { ...target, serverId }, onOpenFile: path => opened.push(path), scmSnapshot: null, transferEffectsEnabled: false,
+            scope: { ...target, serverId }, onOpenFile: path => opened.push(path), onExpandedPathsChange: expanded,
+            scmSnapshot: null, transferEffectsEnabled: false,
         }));
         await act(async () => {
             const menu = screen.findAllByTestId('repository-tree-create-menu').find(node => typeof node.props.onSelect === 'function');
             expect(menu).toBeDefined();
-            menu!.props.onSelect('repository-tree-create-file');
+            menu!.props.onSelect(`repository-tree-create-${kind}`);
             await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
         });
         expect(alerts).not.toHaveBeenCalled();
         expect(screen.findHostByTestId('repository-tree-action-approval')).not.toBeNull();
-        expect(filesystem.calls.filter(call => (call as { method: string }).method === 'daemon.filesystem.writeFile')).toEqual([]);
+        expect(filesystem.calls.filter(call => (call as { method: string }).method === actionId)).toEqual([]);
         expect(opened).toEqual([]);
+        expect(expanded).not.toHaveBeenCalled();
         const artifactId = homes.artifacts(serverId).list()[0]!.id;
-        filesystem.response = { success: true, hash: 'sha256:created' };
+        filesystem.response = kind === 'file' ? { success: true, hash: 'sha256:created' } : { success: true };
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         await act(async () => {
@@ -128,9 +326,11 @@ describe('shared workspace filesystem Action admission', () => {
                 storage.getState().updateArtifact(artifact);
             } finally { account.dispose(); }
         });
-        await vi.waitFor(() => expect(opened).toEqual(['created.txt']));
-        expect(filesystem.calls.filter(call => (call as { method: string }).method === 'daemon.filesystem.writeFile'))
-            .toEqual([expect.objectContaining({ payload: { rootPath: '/repo', path: '/repo/created.txt', content: '', expectedHash: null } })]);
+        await vi.waitFor(() => kind === 'file' ? expect(opened).toEqual(['created.txt']) : expect(expanded).toHaveBeenCalledWith(['created.txt']));
+        expect(filesystem.calls.filter(call => (call as { method: string }).method === actionId))
+            .toEqual([expect.objectContaining({ payload: kind === 'file'
+                ? { rootPath: '/repo', path: '/repo/created.txt', content: '', expectedHash: null }
+                : { rootPath: '/repo', path: '/repo/created.txt' } })]);
         await screen.unmount();
     });
 
