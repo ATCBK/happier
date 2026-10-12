@@ -145,7 +145,7 @@ describe('fetchAndApplyMachines error propagation', () => {
                     reason: 'encryption_material_unavailable',
                 },
             }),
-        ], false);
+        ], false, expect.any(Array));
     });
 
     it('keeps authoritative versions and reports a locked machine when E2EE content decryption fails', async () => {
@@ -207,7 +207,7 @@ describe('fetchAndApplyMachines error propagation', () => {
                     reason: 'decryption_failed',
                 },
             }),
-        ], false);
+        ], false, expect.any(Array));
     });
 
     it('still applies cached machine display rows when machine encryption initialization fails', async () => {

@@ -100,6 +100,17 @@ describe('useMachinePoolProjections', () => {
         vi.unstubAllGlobals();
     });
 
+    it('settles a failed background hydration as Pool state without a developer error toast', async () => {
+        boundary.poolFetchOverride = async () => new Response('Pool list unavailable', { status: 503 });
+        const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const hook = await renderHook(() => useMachinePoolProjections([{ serverId: boundary.serverId, machines: [] }]));
+
+        await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({ status: 'error', ready: false }));
+        await act(async () => { await Promise.resolve(); });
+        expect(report.mock.calls.filter(([message]) => String(message).startsWith('[fireAndForget] machinePools.'))).toEqual([]);
+        await hook.unmount();
+    });
+
     it('gives every consumer of the same scope one hydrated answer from the canonical route', async () => {
         const scopes: MachinePoolProjectionScope[] = [{ serverId: boundary.serverId, machines: [] }];
         const hook = await renderHook(() => ({

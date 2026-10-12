@@ -205,6 +205,17 @@ export class Encryption {
     private machineKeyFingerprints = new Map<string, string>();
     private machineEncryptionContexts = new Map<string, MachineEncryptionContext>();
     private machineEncryptionOpenings = new Map<string, object>();
+    // Only in-flight envelope work is shared. Row/key custody stays with its
+    // existing Machine/Session owner; failed or completed opens are not retained.
+    private dataKeyOpenings = new Map<string, {
+        entries: Map<string, {
+            result: Promise<Uint8Array | null>;
+            resolve: (value: Uint8Array | null) => void;
+            reject: (error: unknown) => void;
+        }>;
+        pending: string[];
+        scheduled: boolean;
+    }>();
     private cache: EncryptionCache;
     private aesBatchConcurrencyLimit = DEFAULT_AES_BATCH_CONCURRENCY_LIMIT;
     // Per-instance worker object. This is the cross-account fence: the queue registry
@@ -730,7 +741,8 @@ export class Encryption {
     async prepareMachineContentKey(params: Readonly<{
         machineId: string;
         custodianAccountId: string;
-        accountMode: 'plain' | 'e2ee';
+        /** Only predecessor rows without explicit resource mode need Account mode. */
+        readAccountMode: () => Promise<'plain' | 'e2ee'>;
         observe: (signal?: AbortSignal) => Promise<MachinePublishedRowV1>;
         transition: (input: MachineContentKeyTransitionInputV1, signal?: AbortSignal) => Promise<MachineContentKeyTransitionResultV1<MachinePublishedRowV1>>;
         isCurrent: () => boolean;
@@ -749,7 +761,7 @@ export class Encryption {
             open: async row => {
                 const openedKey = row.dataEncryptionKey ? await this.decryptEncryptionKey(row.dataEncryptionKey, scope) : null;
                 const resolution = resolvePublishedMachineDataEncryptionKeyV1({ machine: row, openedDataEncryptionKey: openedKey,
-                    expectedAccountMode: row.access?.resourceMode ?? row.storageMode ?? params.accountMode, viewerAccountId: params.custodianAccountId });
+                    expectedAccountMode: row.access?.resourceMode ?? row.storageMode ?? await params.readAccountMode(), viewerAccountId: params.custodianAccountId });
                 if (resolution.status === 'unavailable') throw new MachineContentKeyPreparationErrorV1('encryption_material_unavailable');
                 const opened: Opened = resolution.status === 'plain' ? { row, encryptionMode: 'plain' }
                     : { row, encryptionMode: 'e2ee', encryptionKey: resolution.status === 'e2ee' ? resolution.dataKey
@@ -765,6 +777,57 @@ export class Encryption {
     }
 
     async decryptEncryptionKeys(encryptedValues: readonly string[], scopeInput: EncryptionScopeInput = {}): Promise<Array<Uint8Array | null>> {
+        if (encryptedValues.length === 0) return [];
+        // Signal-bearing batches retain their native queue's cancellation custody.
+        // Ordinary Machine hydration/RPC opens share only their pure envelope work.
+        if (scopeInput.signal) {
+            return this.openDataKeyEnvelopes(encryptedValues, scopeInput);
+        }
+        const scope = this.getCurrentNativeCryptoWorkerScope(scopeInput);
+        const isCurrent = () => this.isCurrentNativeCryptoWorkerScope(scope)
+            && scopeInput.shouldContinue?.() !== false;
+        if (!isCurrent()) return encryptedValues.map(() => null);
+        const scopeKey = `${getScopeKey(scope)}\u0000${scope.generation}`;
+        let batch = this.dataKeyOpenings.get(scopeKey);
+        if (!batch) {
+            batch = { entries: new Map(), pending: [], scheduled: false };
+            this.dataKeyOpenings.set(scopeKey, batch);
+        }
+        const opening = batch;
+        const results = encryptedValues.map(value => {
+            let entry = opening.entries.get(value);
+            if (!entry) {
+                let resolve!: (key: Uint8Array | null) => void;
+                let reject!: (error: unknown) => void;
+                const result = new Promise<Uint8Array | null>((accept, refuse) => { resolve = accept; reject = refuse; });
+                entry = { result, resolve, reject };
+                opening.entries.set(value, entry);
+                opening.pending.push(value);
+            }
+            return entry.result;
+        });
+        if (!opening.scheduled && opening.pending.length > 0) {
+            opening.scheduled = true;
+            void Promise.resolve().then(async () => {
+                const values = opening.pending;
+                opening.pending = [];
+                opening.scheduled = false;
+                try {
+                    const keys = await this.openDataKeyEnvelopes(values, scope);
+                    values.forEach((value, index) => opening.entries.get(value)!.resolve(keys[index] ?? null));
+                } catch (error) {
+                    for (const value of values) opening.entries.get(value)!.reject(error);
+                } finally {
+                    for (const value of values) opening.entries.delete(value);
+                    if (opening.entries.size === 0) this.dataKeyOpenings.delete(scopeKey);
+                }
+            });
+        }
+        return (await Promise.all(results)).map(key =>
+            isCurrent() ? key?.slice() ?? null : null);
+    }
+
+    private async openDataKeyEnvelopes(encryptedValues: readonly string[], scopeInput: EncryptionScopeInput): Promise<Array<Uint8Array | null>> {
         // Nothing to open. Short-circuited before routing so an empty call is not
         // recorded as a routing decision it never made.
         if (encryptedValues.length === 0) return [];

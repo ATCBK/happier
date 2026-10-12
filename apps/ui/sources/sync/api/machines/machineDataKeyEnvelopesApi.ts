@@ -1,7 +1,7 @@
 import { MachineAccessRecipientCensusResponseV1Schema, MachineAccessRefusalV1Schema, MachineRecipientKeyEnvelopeCommitInputV1Schema, MachineRecipientKeyEnvelopeCommitResponseV1Schema, type MachineAccessRecipientCensusResponseV1, type MachineKeyPreparationResultV1 } from '@happier-dev/protocol/machines/machineAccessV1';
-import { MachineDataKeyPreparationErrorV1 } from '@happier-dev/protocol/machines/prepareMachineDataKeyEnvelopesV1';
-import { MachineContentKeyTransitionResultV1Schema, MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
-import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { isMachineRetiredForKeyPreparationV1, MachineDataKeyPreparationErrorV1 } from '@happier-dev/protocol/machines/prepareMachineDataKeyEnvelopesV1';
+import { MachineContentKeyTransitionResultV1Schema, MachinePublishedRowV1Schema, type MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { runSessionDataKeyPreparationDetached } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyPreparationPass';
@@ -10,11 +10,16 @@ import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryp
 import { prepareCurrentMachineDataKeyEnvelopes } from '@/sync/encryption/prepareCurrentMachineDataKeyEnvelopes';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import type { Machine } from '@/sync/domains/state/storageTypes';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 
 /** One captured Home/Account authority owns the entire physical continuation. */
 export async function prepareMachineDataKeyEnvelopesForScope(params: Readonly<{
     scope: ServerAccountScope;
     machineId: string;
+    /** First observation from this scope's authenticated list; never a warm display row. */
+    initialMachineRow?: MachinePublishedRowV1;
     isCurrent?: () => boolean;
     signal?: AbortSignal;
     /** Trusted lifecycle dependency, never a public grant/Action parameter. */
@@ -49,10 +54,22 @@ export async function prepareMachineDataKeyEnvelopesForScope(params: Readonly<{
                 return payload;
             };
             let preparedOwner: Awaited<ReturnType<NonNullable<typeof authority.context.encryption>['prepareMachineContentKey']>> | null = null;
+            let observedOwner: ReturnType<typeof MachinePublishedRowV1Schema.parse> | null = null;
+            let initialMachineRow = params.initialMachineRow;
             const observeMachine = async () => {
-                const payload = await request(`/v1/machines/${encodeURIComponent(params.machineId)}`);
+                guard.check();
+                if (!isCurrent()) throw new MachineDataKeyPreparationErrorV1('machine_key_changed');
+                // C40 admits the exact published basis and conditional transition;
+                // the fresh recipient census separately reauthorizes delivery.
+                // Consume the list observation once so conflict/unknown outcomes
+                // always read the Home again.
+                const payload = initialMachineRow === undefined
+                    ? await request(`/v1/machines/${encodeURIComponent(params.machineId)}`)
+                    : { machine: initialMachineRow };
+                initialMachineRow = undefined;
                 if (!payload || typeof payload !== 'object' || !('machine' in payload)) throw new MachineDataKeyPreparationErrorV1('machine_unavailable');
-                return payload.machine;
+                observedOwner = MachinePublishedRowV1Schema.parse(payload.machine);
+                return observedOwner;
             };
             const encryption = authority.context.encryption;
             return prepareCurrentMachineDataKeyEnvelopes({
@@ -63,10 +80,30 @@ export async function prepareMachineDataKeyEnvelopesForScope(params: Readonly<{
                         accountId: authority.scope.accountId,
                         observeMachine,
                         prepareContentKey: async () => {
-                            const accountMode = AccountEncryptionModeResponseSchema.parse(await request('/v1/account/encryption')).mode;
                             preparedOwner = await encryption.prepareMachineContentKey({ machineId: params.machineId,
-                                custodianAccountId: authority.scope.accountId, accountMode, isCurrent, signal: guard.signal,
-                                observe: async () => MachinePublishedRowV1Schema.parse(await observeMachine()),
+                                custodianAccountId: authority.scope.accountId, isCurrent, signal: guard.signal,
+                                readAccountMode: async () => {
+                                    guard.check();
+                                    const result = await fetchAccountEncryptionMode(authority.context.credentials ?? { token: authority.context.token }, {
+                                        request: (path, init) => authority.request(path, { ...init, signal: guard.signal }),
+                                    });
+                                    guard.check();
+                                    if (!isCurrent()) throw new MachineDataKeyPreparationErrorV1('machine_key_changed');
+                                    return result.mode;
+                                },
+                                observe: async () => {
+                                    // The owner lifecycle has just admitted this exact row.
+                                    // Consume it once; conflict/unknown-outcome observations
+                                    // still read the Home afresh before accepting a winner.
+                                    if (observedOwner) {
+                                        const row = observedOwner;
+                                        observedOwner = null;
+                                        return row;
+                                    }
+                                    const row = await observeMachine();
+                                    observedOwner = null;
+                                    return row;
+                                },
                                 transition: async input => MachineContentKeyTransitionResultV1Schema.parse(await request(`/v1/machines/${encodeURIComponent(params.machineId)}/content-key/transition`, {
                                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
                                 })),
@@ -119,4 +156,76 @@ export function prepareMachineDataKeyEnvelopesDetachedForScope(
         serverAccountScopedResourceKey(params.scope, 'machine-data-key-envelopes', params.machineId),
         () => prepareMachineDataKeyEnvelopesForScope(params),
     );
+}
+
+function recipientPreparationInputs(machine: Machine, recipientChangeCursor: number | undefined) {
+    return { dataEncryptionKey: machine.dataEncryptionKey, keyBasis: machine.keyBasis,
+        // Warm projections can retain older decrypted display versions. Recipient
+        // preparation follows the published authority, not that hydration progress.
+        metadataVersion: machine.keyBasis?.metadataVersion ?? machine.metadataVersion,
+        daemonStateVersion: machine.keyBasis?.daemonStateVersion ?? machine.daemonStateVersion,
+        custodianAccountId: machine.access?.custodian.accountId, role: machine.access?.role,
+        accessState: machine.access?.accessState, resourceMode: machine.access?.resourceMode,
+        storageMode: machine.storageMode, revokedAt: machine.revokedAt,
+        recipientChangeCursor: recipientChangeCursor ?? null };
+}
+
+const machineRecipientPreparations = new Map<string, Readonly<{
+    inputs: ReturnType<typeof recipientPreparationInputs>;
+    isCurrent: () => boolean;
+    result: Promise<void>;
+}> & { invalidated: boolean }>();
+
+/** Refresh admission is keyed by content/key/access inputs and canonical Machine change cursors,
+ * not presence or row sequence. Only successful preparation is retained; failed/pending work
+ * remains retryable (a recipient's missing Account binding can be repaired without a Machine edit).
+ * Explicit Actions still use the fresh scoped owner above. */
+export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly<{
+    scope: ServerAccountScope;
+    machines: readonly Machine[];
+    publishedRows?: readonly FetchedMachineRow[];
+    recipientChangeCursors: ReadonlyMap<string, number>;
+    isCurrent: () => boolean;
+}>): Promise<void> {
+    for (const [key, entry] of machineRecipientPreparations) {
+        if (!entry.isCurrent()) machineRecipientPreparations.delete(key);
+    }
+    const publishedRows = new Map(params.publishedRows?.map(row => [row.id, row]));
+    await Promise.all(params.machines.map(async machine => {
+        const key = serverAccountScopedResourceKey(params.scope, 'machine-data-key-envelopes', machine.id);
+        if (isMachineRetiredForKeyPreparationV1(machine)
+            || machine.access?.role !== 'manage' || machine.access.accessState !== 'ready' || machine.access.resourceMode !== 'e2ee') {
+            const previous = machineRecipientPreparations.get(key);
+            if (previous) previous.invalidated = true;
+            return;
+        }
+        const inputs = recipientPreparationInputs(machine, params.recipientChangeCursors.get(machine.id));
+        const previous = machineRecipientPreparations.get(key);
+        if (previous) {
+            if (!previous.invalidated && sameStrictJsonValue(previous.inputs, inputs)) return previous.result;
+            // A changed recipient input must not be mistaken for the old in-flight result.
+            await previous.result;
+            if (!params.isCurrent()) return;
+            if (machineRecipientPreparations.get(key) !== previous) {
+                return prepareMachineDataKeyEnvelopesForMachines({ ...params, machines: [machine] });
+            }
+        }
+        if (!params.isCurrent()) return;
+        const publishedRow = publishedRows.get(machine.id);
+        const initialMachineRow = publishedRow ? MachinePublishedRowV1Schema.parse({ ...publishedRow,
+            daemonState: publishedRow.daemonState ?? null, daemonStateVersion: publishedRow.daemonStateVersion ?? 0 }) : undefined;
+        const result: Promise<void> = prepareMachineDataKeyEnvelopesDetachedForScope({ scope: params.scope, machineId: machine.id,
+            ...(initialMachineRow ? { initialMachineRow } : {}),
+            isCurrent: params.isCurrent }).then(prepared => {
+            if (prepared.kind !== 'prepared' || entry.invalidated || !params.isCurrent()) {
+                if (machineRecipientPreparations.get(key) === entry) machineRecipientPreparations.delete(key);
+            }
+        }).catch((error: unknown) => {
+            if (machineRecipientPreparations.get(key) === entry) machineRecipientPreparations.delete(key);
+            throw error;
+        });
+        const entry = { inputs, isCurrent: params.isCurrent, result, invalidated: false };
+        machineRecipientPreparations.set(key, entry);
+        await result;
+    }));
 }

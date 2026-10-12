@@ -476,7 +476,7 @@ describe('fetchAndApplyMachines real selected-envelope hydration', () => {
             machineDataKeys: new Map(), request: async () => jsonResponse([machineRow('machine-1', oldEnvelope)]),
             getExistingMachine: () => current, applyMachines: applied, replace: true });
         expect(encryption.getMachineEncryption('machine-1')).toBe(currentCipher);
-        expect(applied).toHaveBeenCalledWith([], false);
+        expect(applied).toHaveBeenCalledWith([], false, []);
     });
     it('does not let delayed hydration overwrite the current Machine context and snapshot', async () => {
         const { Encryption } = await import('@/sync/encryption/encryption');

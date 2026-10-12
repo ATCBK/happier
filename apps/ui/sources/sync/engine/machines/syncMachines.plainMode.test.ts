@@ -251,7 +251,7 @@ describe('fetchAndApplyMachines plaintext account storage', () => {
                 daemonState: expect.objectContaining({ status: 'running' }),
                 storageMode: 'plain',
             }),
-        ], true);
+        ], true, expect.any(Array));
     });
 
     it('applies plain machine socket fields without constructing machine encryption', async () => {
@@ -369,7 +369,7 @@ describe('fetchAndApplyMachines plaintext account storage', () => {
                     reason: 'content_unreadable',
                 },
             }),
-        ], true);
+        ], true, expect.any(Array));
     });
 
     it('marks a malformed plain Machine unavailable in the immediate warm-display state', async () => {
@@ -417,7 +417,7 @@ describe('fetchAndApplyMachines plaintext account storage', () => {
                     reason: 'content_unreadable',
                 },
             }),
-        ], true);
+        ], true, expect.any(Array));
     });
 
     it('keeps prior plain Machine fields and reports unavailable when a socket envelope is malformed', async () => {

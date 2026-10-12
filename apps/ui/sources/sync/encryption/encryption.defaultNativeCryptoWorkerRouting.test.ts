@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { encodeBase64 } from '@/encryption/base64';
+import { createDeferred } from '@/dev/testkit';
 
 import { Encryption } from './encryption';
 import { createFakeCryptoWorker } from './nativeCryptoWorker/fakeCryptoWorker';
@@ -57,6 +58,92 @@ describe('Encryption native crypto worker routing default', () => {
         resetDefaultNativeCryptoWorkerRoutingForTests();
         resetNativeCryptoWorkerCapabilityCacheForTests();
         resetNativeCryptoWorkerQueueLifecycleForTests();
+    });
+
+    it('shares overlapping envelope opens while preserving ordering and independent key bytes', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(14));
+        const { worker, batches } = createRecordingCryptoWorker();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        encryption.configureNativeCryptoWorker({
+            worker: { ...worker, decryptDataKeyEnvelopeV1: async request => {
+                const result = await worker.decryptDataKeyEnvelopeV1(request);
+                entered.resolve();
+                await release.promise;
+                return result;
+            } },
+            routing: { mode: 'auto', minBatchSize: 1, minPayloadBytes: 0 },
+        });
+        const keys = [new Uint8Array(32).fill(25), new Uint8Array(32).fill(26)];
+        const [a, b] = await sealDataKeys(encryption, keys);
+        const first = encryption.decryptEncryptionKeys([a!, b!, a!]);
+        await entered.promise;
+        const second = encryption.decryptEncryptionKeys([b!, a!]);
+        release.resolve();
+        const [firstKeys, secondKeys] = await Promise.all([first, second]);
+        expect(firstKeys).toEqual([keys[0], keys[1], keys[0]]);
+        expect(secondKeys).toEqual([keys[1], keys[0]]);
+        expect(batches.flatMap(batch => batch.items.map(item => item.envelopeBase64))).toEqual([a, b]);
+        firstKeys[0]!.fill(0);
+        expect(firstKeys[2]).toEqual(keys[0]);
+        expect(secondKeys[1]).toEqual(keys[0]);
+    });
+
+    it('does not retain failed opens or reuse a flight across Home generations', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(15));
+        const { worker, batches } = createRecordingCryptoWorker();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let refuse = true;
+        encryption.configureNativeCryptoWorker({ worker: { ...worker,
+            decryptDataKeyEnvelopeV1: async request => {
+                const result = await worker.decryptDataKeyEnvelopeV1(request);
+                entered.resolve();
+                await release.promise;
+                return result.status === 'ok' && refuse ? { ...result, items: result.items.map(() => null) } : result;
+            },
+        }, routing: { mode: 'auto', minPayloadBytes: 0 },
+        scope: { accountId: 'account', serverId: 'home-a', generation: 0 } });
+        const key = new Uint8Array(32).fill(27);
+        const [envelope] = await sealDataKeys(encryption, [key]);
+        const first = encryption.decryptEncryptionKey(envelope!);
+        await entered.promise;
+        encryption.configureNativeCryptoWorker({ scope: { accountId: 'account', serverId: 'home-a', generation: 1 } });
+        const next = encryption.decryptEncryptionKey(envelope!);
+        release.resolve();
+        expect(await first).toBeNull();
+        expect(await next).toBeNull();
+        refuse = false;
+        expect(await encryption.decryptEncryptionKey(envelope!)).toEqual(key);
+        expect(batches).toHaveLength(3);
+    });
+
+    it('shares currentness-qualified opens without admitting a retired caller', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(16));
+        const { worker, batches } = createRecordingCryptoWorker();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        encryption.configureNativeCryptoWorker({ worker: { ...worker,
+            decryptDataKeyEnvelopeV1: async request => {
+                const result = await worker.decryptDataKeyEnvelopeV1(request);
+                entered.resolve();
+                await release.promise;
+                return result;
+            },
+        }, routing: { mode: 'auto', minPayloadBytes: 0 } });
+        const key = new Uint8Array(32).fill(28);
+        const [envelope] = await sealDataKeys(encryption, [key]);
+        const first = encryption.decryptEncryptionKey(envelope!);
+        await entered.promise;
+        const qualified = encryption.decryptEncryptionKey(envelope!, { shouldContinue: () => true });
+        let current = true;
+        const retired = encryption.decryptEncryptionKey(envelope!, { shouldContinue: () => current });
+        current = false;
+        release.resolve();
+        expect(await first).toEqual(key);
+        expect(await qualified).toEqual(key);
+        expect(await retired).toBeNull();
+        expect(batches.flatMap(batch => batch.items)).toHaveLength(1);
     });
 
     it('routes a batch through the worker on an instance nobody configured routing on', async () => {

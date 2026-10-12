@@ -42,7 +42,7 @@ describe('Machine current key preparation', () => {
             metadata: encodeBase64((await historical.encrypt([{ host: 'host', platform: 'linux', happyCliVersion: '0.3', homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier' }]))[0]!),
             daemonState: encodeBase64((await historical.encrypt([rawPrivate]))[0]!), storageMode: 'e2ee' };
         let transmissions = 0;
-        const prepared = await encryption.prepareMachineContentKey({ machineId: 'machine', custodianAccountId: 'owner', accountMode: 'e2ee',
+        const prepared = await encryption.prepareMachineContentKey({ machineId: 'machine', custodianAccountId: 'owner', readAccountMode: async () => 'e2ee',
             observe: async () => row,
             transition: async input => { transmissions++; row = { ...row, ...input.next, metadataVersion: 4, daemonStateVersion: 5 }; throw new Error('lost acknowledgement'); },
             isCurrent: () => true,
