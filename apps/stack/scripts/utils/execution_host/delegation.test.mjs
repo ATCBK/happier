@@ -9,6 +9,7 @@ import { resolveDevTargetMutagenRuntime } from '../dev_targets/mutagen_runtime.m
 import { runExecutionHostBridge } from './bridge.mjs';
 
 import { mapHostCwdToGuest, prepareManagedHost, runDelegatedHstackCommand } from './delegation.mjs';
+import { resolveExecutionHostWorkspaceMount } from './workspace_mount.mjs';
 
 const profile = {
   version: 1,
@@ -259,7 +260,7 @@ test('managed host preparation mounts an enabled guest workspace after the VM is
       calls.push(['forward', received.instance, workspaceId, receivedExecutor]);
     },
     mount: async ({ profile: received, mountDir, executor: receivedExecutor }) => {
-      calls.push(['mount', received.instance, mountDir, receivedExecutor]);
+      calls.push(['mount', received.instance, resolveExecutionHostWorkspaceMount(received, {}, mountDir).mountDir, receivedExecutor]);
     },
   });
 

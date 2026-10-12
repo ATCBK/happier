@@ -204,7 +204,7 @@ async function startExecutionHostVm({ argv, profile, executor }) {
     })
     : null;
   if (profile.autoMount === true) {
-    await mountExecutionHostWorkspace({ profile, env: process.env, mountDir: profile.hostMountDir || '', executor });
+    await mountExecutionHostWorkspace({ profile, env: process.env, executor });
   }
   return {
     ...result,
@@ -231,7 +231,7 @@ async function stopExecutionHostVm({ profile, executor, force }) {
   // Force-stop must remain independent of SSHFS health and its reconciliation lock.
   // A subsequent mount reconciles the stale mount after the guest is restarted.
   if (!force) {
-    await unmountExecutionHostWorkspace({ profile, env: process.env, mountDir: profile.hostMountDir || '' });
+    await unmountExecutionHostWorkspace({ profile, env: process.env });
   }
   const result = await stopManagedLimaInstance({ executor, instance: profile.instance, force });
   return { ...result, serviceTunnels };
@@ -401,7 +401,7 @@ async function main() {
       : null;
     const [mount, backup, serviceTunnels] = profile
       ? await Promise.all([
-        inspectExecutionHostWorkspaceMount({ profile, env: process.env, mountDir: profile.hostMountDir || '' }),
+        inspectExecutionHostWorkspaceMount({ profile, env: process.env }),
         inspectExecutionHostBackupSchedule({ profile, env: process.env }),
         inspectExecutionHostServiceTunnels({ profile, env: process.env }),
       ])
@@ -571,12 +571,11 @@ async function main() {
     if (mountAction && !['status', 'enable', 'disable'].includes(mountAction)) {
       throw new Error(`[dev-vm] unknown mount command: ${mountAction}`);
     }
-    const requestedMountDir = mountDir || profile.hostMountDir || '';
     const result = command === 'unmount' || mountAction === 'disable'
-      ? await unmountExecutionHostWorkspace({ profile, env: process.env, mountDir: requestedMountDir })
+      ? await unmountExecutionHostWorkspace({ profile, env: process.env, mountDir })
       : mountAction === 'status'
-        ? await inspectExecutionHostWorkspaceMount({ profile, env: process.env, mountDir: requestedMountDir })
-        : await mountExecutionHostWorkspace({ profile, env: process.env, mountDir: requestedMountDir, executor });
+        ? await inspectExecutionHostWorkspaceMount({ profile, env: process.env, mountDir })
+        : await mountExecutionHostWorkspace({ profile, env: process.env, mountDir, executor });
     if (mountAction === 'enable' || mountAction === 'disable') {
       await configureExecutionHostWorkspaceMount({
         enabled: mountAction === 'enable',

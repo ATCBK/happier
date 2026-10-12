@@ -27,13 +27,14 @@ function requireAbsolutePath(value, label) {
 }
 
 export function resolveExecutionHostWorkspaceMount(profile, env = process.env, explicitMountDir = '', connection = null) {
+  const requestedMountDir = explicitMountDir || profile?.hostMountDir || '';
   if (profile?.mode === 'ssh-dev-target') {
     const targetName = String(profile.sshPrimary?.targetName ?? '');
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(targetName) || !connection?.target) {
       throw new Error('[execution-host] enrolled SSH primary transport is required');
     }
     return {
-      mountDir: requireAbsolutePath(explicitMountDir || join(getHappyStacksHomeDir(env), `${targetName}-home`), 'mount directory'),
+      mountDir: requireAbsolutePath(requestedMountDir || join(getHappyStacksHomeDir(env), `${targetName}-home`), 'mount directory'),
       sshConfigFile: connection.sshConfigFile,
       sshHost: connection.target.ssh,
       remote: `${connection.target.ssh}:`,
@@ -41,7 +42,7 @@ export function resolveExecutionHostWorkspaceMount(profile, env = process.env, e
     };
   }
   const mountDir = requireAbsolutePath(
-    explicitMountDir || join(getHappyStacksHomeDir(env), 'vm-home'),
+    requestedMountDir || join(getHappyStacksHomeDir(env), 'vm-home'),
     'mount directory',
   );
   const sshConfigFile = join(
@@ -106,7 +107,7 @@ export function resolveExecutionHostGuestDevTargetsConfigPath({
   env = process.env,
   mountDir = '',
 } = {}) {
-  const mount = resolveExecutionHostWorkspaceMount(profile, env, mountDir || profile?.hostMountDir || '');
+  const mount = resolveExecutionHostWorkspaceMount(profile, env, mountDir);
   return resolveDevTargetsConfigPath({
     stackName,
     env: guestStorageEnv(mount.mountDir, env),
@@ -133,7 +134,7 @@ export async function loadExecutionHostGuestDevTargetsConfig({
   const mount = await inspectExecutionHostWorkspaceMount({
     profile,
     env,
-    mountDir: mountDir || profile?.hostMountDir || '',
+    mountDir,
     boundary,
     platform,
     fileExists,

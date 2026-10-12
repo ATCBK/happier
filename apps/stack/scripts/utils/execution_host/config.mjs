@@ -292,8 +292,16 @@ export async function configureExecutionHostPrimary(sshPrimary, env = process.en
   if (current?.version !== 2 || current.activation !== 'active') {
     throw new Error('[execution-host] primary assignment requires a named active profile');
   }
-  const { sshPrimary: previousSelection, ...retained } = current;
+  const { sshPrimary: previousSelection, hostMountDir, ...retained } = current;
+  const samePrimary = sshPrimary
+    ? current.mode === 'ssh-dev-target'
+      && previousSelection?.targetName === sshPrimary.targetName
+      && previousSelection?.stackName === sshPrimary.stackName
+    : current.mode === 'managed-lima';
+  // The saved directory belongs to this selection. Keep the automatic-mount
+  // preference, but let the mount owner derive the new primary's destination.
   return await writeExecutionHostProfile({ ...retained,
+    ...(samePrimary && hostMountDir != null ? { hostMountDir } : {}),
     mode: sshPrimary ? 'ssh-dev-target' : 'managed-lima', ...(sshPrimary ? { sshPrimary } : {}) }, env);
 }
 

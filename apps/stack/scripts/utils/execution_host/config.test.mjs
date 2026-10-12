@@ -6,11 +6,14 @@ import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import {
   activateExecutionHostProfile,
   configureExecutionHostCapacity,
+  configureExecutionHostPrimary,
+  configureExecutionHostWorkspaceMount,
   readExecutionHostProfile,
   resolveExecutionHostSetupConfiguration,
   resolveExecutionHostProfilePath,
   writeCandidateExecutionHostProfile,
 } from './config.mjs';
+import { resolveExecutionHostWorkspaceMount } from './workspace_mount.mjs';
 
 function candidate(overrides = {}) {
   return {
@@ -205,6 +208,40 @@ test('named SSH primary profiles retain workspace and Lima configuration and rej
   }
   await writeFile(path, JSON.stringify({ ...profile, version: 1 }));
   assert.throws(() => readExecutionHostProfile(env), /named active/);
+});
+
+test('primary assignment clears another primary mount directory and retains overrides for an unchanged selection', async t => {
+  const fixture = await createTempFixture(t);
+  const env = { HAPPIER_STACK_HOME_DIR: fixture.path('stack-home') };
+  await mkdir(env.HAPPIER_STACK_HOME_DIR, { recursive: true });
+  await writeFile(resolveExecutionHostProfilePath(env), JSON.stringify(namedCandidate({
+    activation: 'active', autoMount: true, hostMountDir: fixture.path('stack-home', 'vm-home'),
+  })));
+  const selection = { targetName: 'nl2', stackName: 'repo-dev' };
+  const connection = { target: { ssh: 'enrolled-nl2' }, sshConfigFile: fixture.path('ssh-config') };
+  const switched = await configureExecutionHostPrimary(selection, env);
+  assert.equal(switched.autoMount, true);
+  assert.equal(readExecutionHostProfile(env).hostMountDir, undefined);
+  assert.equal(resolveExecutionHostWorkspaceMount(switched, env, '', connection).mountDir,
+    fixture.path('stack-home', 'nl2-home'));
+
+  const custom = fixture.path('custom-nl2-home');
+  await configureExecutionHostWorkspaceMount({ enabled: true, mountDir: custom }, env);
+  const unchanged = await configureExecutionHostPrimary(selection, env);
+  assert.equal(readExecutionHostProfile(env).hostMountDir, custom);
+  assert.equal(resolveExecutionHostWorkspaceMount(unchanged, env, '', connection).mountDir, custom);
+
+  for (const next of [{ targetName: 'nl1', stackName: 'repo-dev' },
+    { targetName: 'nl1', stackName: 'other-stack' }, null]) {
+    await configureExecutionHostWorkspaceMount({ enabled: false, mountDir: custom }, env);
+    const reassigned = await configureExecutionHostPrimary(next, env);
+    assert.equal(reassigned.hostMountDir, undefined);
+    assert.equal(reassigned.autoMount, false);
+  }
+  const lima = readExecutionHostProfile(env);
+  assert.equal(resolveExecutionHostWorkspaceMount(lima, env).mountDir, fixture.path('stack-home', 'vm-home'));
+  await configureExecutionHostWorkspaceMount({ enabled: true, mountDir: fixture.path('custom-lima-home') }, env);
+  assert.equal((await configureExecutionHostPrimary(null, env)).hostMountDir, fixture.path('custom-lima-home'));
 });
 
 test('active execution host profiles persist shared and dedicated managed Lima capacity', async (t) => {

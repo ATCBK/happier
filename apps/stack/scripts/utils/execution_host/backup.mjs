@@ -169,7 +169,7 @@ export function resolveExecutionHostBackupPaths({ profile, env = process.env, st
     destination || join(stackHome, 'vm-backups', String(profile?.instance ?? '').trim(), normalizedStackName),
     'backup destination',
   );
-  const mountedGuestHome = requireAbsolutePath(profile?.hostMountDir || mount.mountDir, 'mounted guest home');
+  const mountedGuestHome = mount.mountDir;
   if (pathContains(mountedGuestHome, backupDestination)) {
     throw new Error('[dev-vm] backup destination must be outside the mounted guest home');
   }

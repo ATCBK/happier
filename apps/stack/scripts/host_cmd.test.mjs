@@ -16,6 +16,7 @@ test('primary assign selects an enrolled path-parity SSH target and restores Lim
   const bin = fixture.path('bin');
   await Promise.all([mkdir(home), mkdir(join(stacks, 'lane'), { recursive: true }), mkdir(bin)]);
   const profile = { version: 2, mode: 'managed-lima', activation: 'active', instance: 'retained-vm',
+    autoMount: true, hostMountDir: join(home, 'vm-home'),
     limaHome: '/controller/lima', profile: 'balanced', pressureProfile: 'none',
     guestWorkspaceDir: '/remote/workspace', mirrorWorkspaceDir: '/controller/mirror',
     controllerEntrypoint: '/controller/bridge.mjs', workspaces: [{ id: '0.3', stackName: 'lane',
@@ -41,7 +42,8 @@ test('primary assign selects an enrolled path-parity SSH target and restores Lim
   const assigned = await invoke('nl2');
   assert.equal(assigned.code, 0, assigned.stderr);
   assert.equal(JSON.parse(assigned.stdout).workloadMoved, false);
-  assert.deepEqual(JSON.parse(await readFile(profilePath, 'utf8')), { ...profile, mode: 'ssh-dev-target',
+  const { hostMountDir: previousMountDir, ...retained } = profile;
+  assert.deepEqual(JSON.parse(await readFile(profilePath, 'utf8')), { ...retained, mode: 'ssh-dev-target',
     sshPrimary: { targetName: 'nl2', stackName: 'lane' } });
   const status = await runNodeCapture([launcher, 'dev-vm', 'primary', 'status', '--stack=lane', '--json'], { env });
   assert.equal(status.code, 0, status.stderr);
@@ -49,7 +51,7 @@ test('primary assign selects an enrolled path-parity SSH target and restores Lim
   assert.equal(JSON.parse(status.stdout).configuration.state, 'available');
   const restored = await invoke('lima');
   assert.equal(restored.code, 0, restored.stderr);
-  assert.deepEqual(JSON.parse(await readFile(profilePath, 'utf8')), profile);
+  assert.deepEqual(JSON.parse(await readFile(profilePath, 'utf8')), retained);
   assert.equal(await readFile(configPath, 'utf8'), config);
 });
 

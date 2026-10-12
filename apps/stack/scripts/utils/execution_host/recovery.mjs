@@ -373,7 +373,6 @@ export async function runExecutionHostRecovery({
       async () => await mountExecutionHostWorkspace({
         profile,
         env,
-        mountDir: profile.hostMountDir || '',
         executor,
       }),
       { status: 'failed', health: { ok: false, code: 'failed' } },

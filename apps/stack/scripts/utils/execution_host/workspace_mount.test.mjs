@@ -31,6 +31,9 @@ test('workspace mount defaults to the Mac-side guest-home mount path', () => {
   );
 
   assert.equal(resolved.mountDir, '/Users/leeroy/.happier-stack/vm-home');
+  const configured = { ...profile('/Users/leeroy/.happier-stack/lima'), hostMountDir: '/custom/lima-home' };
+  assert.equal(resolveExecutionHostWorkspaceMount(configured).mountDir, configured.hostMountDir);
+  assert.equal(resolveExecutionHostWorkspaceMount(configured, {}, '/one-off/home').mountDir, '/one-off/home');
 });
 
 test('SSH primary mounts the enrolled home separately from Lima and adopts an existing manual mount', async t => {
@@ -38,21 +41,28 @@ test('SSH primary mounts the enrolled home separately from Lima and adopts an ex
   const env = { HAPPIER_STACK_HOME_DIR: fixture.path('home'), HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks') };
   const selected = { ...profile(fixture.path('lima')), version: 2, mode: 'ssh-dev-target',
     sshPrimary: { targetName: 'nl2', stackName: 'lane' },
+    hostMountDir: fixture.path('custom-nl2-home'),
     workspaces: [{ id: '0.3', guestDir: '/home/guest/workspace/0.3' }] };
   await mkdir(fixture.path('stacks', 'lane'), { recursive: true });
   await writeFile(fixture.path('stacks', 'lane', 'dev-targets.json'), JSON.stringify({ version: 3,
     targets: [{ name: 'nl2', platform: 'posix', ssh: 'enrolled-nl2', sshConfigFile: fixture.path('ssh-config'),
       repoDir: '/home/guest/workspace/0.3', cliHomeDir: '/home/guest/.happier/cli' }] }));
-  const mountDir = fixture.path('home', 'nl2-home');
+  const mountDir = selected.hostMountDir;
   let mounted = false;
+  let mountedDir = '';
   const launches = [];
   const boundary = {
     async capture(command) {
-      if (command === 'mount') return { exitCode: 0, out: mounted ? `enrolled-nl2:/home/guest on ${mountDir} (macfuse)` : '' };
+      if (command === 'mount') return { exitCode: 0, out: mounted ? `enrolled-nl2:/home/guest on ${mountedDir} (macfuse)` : '' };
       if (command === 'ls' || command === 'sshfs') return { exitCode: 0, out: '' };
       throw new Error(`must preserve manual mount: ${command}`);
     },
-    async start(command, args) { launches.push({ command, args }); mounted = true; return { exitCode: null }; },
+    async start(command, args) {
+      launches.push({ command, args });
+      mountedDir = args[args.indexOf('enrolled-nl2:/home/guest') + 1];
+      mounted = true;
+      return { exitCode: null };
+    },
   };
   const executor = { async capture(command, args) {
     assert.equal(command, 'ssh');

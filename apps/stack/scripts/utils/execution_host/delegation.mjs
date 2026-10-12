@@ -107,7 +107,6 @@ async function reconcileExecutionHostAfterStart({
   const mount = superviseExecutionHostWorkspaceMount({
     profile,
     env,
-    mountDir: sshPrimary ? '' : profile.hostMountDir || '',
     executor: selectedExecutor,
     signal,
   });
@@ -279,7 +278,6 @@ export async function prepareManagedHost(profile, dependencies = {}) {
     await mount({
       profile,
       env: process.env,
-      mountDir: profile.hostMountDir || '',
       executor,
     });
   }
