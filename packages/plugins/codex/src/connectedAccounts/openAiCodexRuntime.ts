@@ -273,6 +273,41 @@ async function readCurrentAccessToken(
 const openAiCodexRuntimeDefinition: PluginConnectedAccountRuntime = {
   authentication: {
     modes: {
+      'native-import': {
+        kind: 'manual',
+        async complete(input, context, options) {
+          if (input.fields.source !== 'native') {
+            return {
+              status: 'rejected',
+              diagnostic: diagnostic('openai_codex_import_source_unsupported', 'The Codex import source is unsupported.'),
+            };
+          }
+          const signal = options?.signal ?? context.signal;
+          const { readCodexNativeAuthCredentials, CodexNativeImportError } = await import('../agent/cli/auth/nativeImport.js');
+          let native: Awaited<ReturnType<typeof readCodexNativeAuthCredentials>>;
+          try {
+            native = await readCodexNativeAuthCredentials({ signal });
+          } catch (error) {
+            if (signal.aborted) throw new DOMException('Credential import cancelled', 'AbortError');
+            if (error instanceof CodexNativeImportError && error.code === 'reauthorization_required') {
+              return {
+                status: 'rejected',
+                diagnostic: diagnostic('openai_codex_import_reauthorization_required', 'Sign in to Codex again before importing.'),
+              };
+            }
+            return {
+              status: 'unavailable',
+              diagnostic: diagnostic('openai_codex_import_credentials_unavailable', 'Codex native credentials are unavailable.'),
+            };
+          }
+          const tokens: CodexTokens = {
+            accessToken: native.accessToken, refreshToken: native.refreshToken, idToken: native.idToken,
+            providerAccountId: native.accountId, expiresAtMs: native.expiresAt,
+          };
+          await writeTokens(context.attemptCredentials, tokens, { signal });
+          return connectedResult(tokens);
+        },
+      },
       oauth: {
         kind: 'oauthAuthorizationCode',
         async begin(input) {

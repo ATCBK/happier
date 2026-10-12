@@ -146,6 +146,7 @@ describe('OpenAI Codex Connected Account', () => {
     expect(descriptor?.authentication.modes).toEqual([
       expect.objectContaining({ id: 'oauth', outcomeReconciliation: 'none' }),
       expect.objectContaining({ id: 'device', outcomeReconciliation: 'none' }),
+      expect.objectContaining({ id: 'native-import', kind: 'manual', outcomeReconciliation: 'none' }),
     ]);
     expect(Object.keys(activateConnectedAccountRuntime().authentication.modes).sort()).toEqual(
       descriptor?.authentication.modes.map(({ id }) => id).sort(),
