@@ -16,6 +16,27 @@ function session(id: string, createdAt: number, path: string | null, machineId: 
 }
 
 describe('deriveHomeComposerSuggestions (session history)', () => {
+    it('uses current machine resource facts for a machine-bound fill without inventing session history', () => {
+        const suggestions = deriveHomeComposerSuggestions({
+            nowMs: NOW,
+            sessions: [session('a', NOW - DAY, '/w/app')],
+            machineResources: {
+                machine: { serverId: 'home-1', machineId: 'edge-1', name: 'Edge', directory: '/w' },
+                online: true,
+                memoryPressure: 'critical',
+                disk: { availableBytes: 0, totalBytes: 100_000_000_000, tone: 'crit' },
+                leftBehindCount: 4,
+                guardEnabled: false,
+            },
+        });
+        expect(suggestions.map((suggestion) => suggestion.source)).toEqual(['machineResources', 'machineResources', 'machineResources']);
+        expect(suggestions.map((suggestion) => suggestion.source === 'machineResources' ? suggestion.kind : null)).toEqual(['memory', 'disk', 'leftBehind']);
+        expect(suggestions[0]).toMatchObject({
+            machine: { machineId: 'edge-1' },
+            fill: { text: expect.any(String), placement: { serverId: 'home-1', machineId: 'edge-1', directory: '/w' } },
+        });
+    });
+
     it('suggests summarizing the busiest recent project since its first session, placed where that work happened', () => {
         const suggestions = deriveHomeComposerSuggestions({
             nowMs: NOW,
@@ -84,5 +105,12 @@ describe('deriveHomeComposerSuggestions (session history)', () => {
     it('offers automation authoring only when the Home supports Automations', () => {
         const suggestions = deriveHomeComposerSuggestions({ nowMs: NOW, sessions: [], automationsEnabled: true });
         expect(suggestions.map((entry) => entry.id)).toEqual(['starter:explain', 'starter:fixTest', 'starter:automation']);
+    });
+
+    it('uses the existing Automation starter slot for the weekly storage authoring prompt', () => {
+        const suggestions = deriveHomeComposerSuggestions({ nowMs: NOW,
+            sessions: [], automationsEnabled: true });
+        expect(suggestions).toContainEqual(expect.objectContaining({ id: 'starter:automation',
+            intent: 'automation', fill: { placement: null, text: expect.stringContaining('Move items to Trash') } }));
     });
 });

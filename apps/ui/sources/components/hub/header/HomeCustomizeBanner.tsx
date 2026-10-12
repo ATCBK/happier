@@ -25,11 +25,17 @@ export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
     onDone: () => void;
     sectionsAnchorRef?: React.RefObject<View | null>;
     addAnchorRef?: React.RefObject<View | null>;
+    /** The whole bar, which spans the content column: Add centres on it. */
+    barRef?: React.RefObject<View | null>;
+    /** Look (the atmosphere behind Home) opens the same panel as Home's Look chip; it is not a mode. */
+    lookOpen?: boolean;
+    onToggleLook?: () => void;
+    lookAnchorRef?: React.RefObject<View | null>;
   }>,
 ) {
   const { theme } = useUnistyles();
   return (
-    <View testID="home-hub.customizing" style={styles.bar}>
+    <View ref={props.barRef} collapsable={false} testID="home-hub.customizing" style={styles.bar}>
       <View style={styles.words}>
         <Icon
           name="sliders-horizontal"
@@ -40,12 +46,23 @@ export const HomeCustomizeBanner = React.memo(function HomeCustomizeBanner(
           {t('homeIndex.customizing')}
         </Text>
         {props.phone ? null : (
-          <Text style={styles.hint} numberOfLines={1}>
+          <Text style={styles.hint}>
             {t('homeIndex.customizingHint')}
           </Text>
         )}
       </View>
       <View style={styles.actions}>
+        {props.onToggleLook ? (
+          <View ref={props.lookAnchorRef} collapsable={false}>
+            <SectionActionButton
+              testID="home-hub.customizing.look"
+              title={t('settingsAppearance.glassControls.look')}
+              icon="palette"
+              expanded={props.lookOpen}
+              onPress={props.onToggleLook}
+            />
+          </View>
+        ) : null}
         <View ref={props.sectionsAnchorRef} collapsable={false}>
           <SectionActionButton
             testID="home-hub.customizing.sections"
@@ -89,10 +106,10 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
-    paddingVertical: 6,
-    paddingLeft: 12,
-    paddingRight: 6,
+    gap: theme.space.s8,
+    paddingVertical: theme.space.s6,
+    paddingLeft: theme.space.s12,
+    paddingRight: theme.space.s6,
     borderRadius: theme.borderRadius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.state.active.border,
@@ -101,10 +118,13 @@ const styles = StyleSheet.create((theme) => ({
   words: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    flexWrap: 'wrap',
+    columnGap: theme.space.s8,
+    rowGap: theme.space.s2,
     flexGrow: 1,
     flexShrink: 1,
-    // Takes the room the actions leave; the hint truncates before the actions wrap.
+    // Takes the room the actions leave. The hint is the one sentence that teaches the mode, so it is
+    // never cut: it moves under the title and wraps when the actions need the room.
     flexBasis: 0,
     minWidth: 160,
   },
@@ -119,11 +139,12 @@ const styles = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
     flexShrink: 1,
+    minWidth: 0,
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexShrink: 0,
   },
 }));

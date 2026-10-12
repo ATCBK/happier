@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { buildHomeHubArtifactIdV1, type HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 import { useOptionalAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -12,14 +13,17 @@ import { InvalidateSync } from '@/utils/sessions/sync';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createHomeHubAccountStore } from './homeHubAccountStore';
 import { executeHomeHubLayoutIntent } from './homeHubActionWriter';
+import { createActionApprovalContinuationObserver } from '@/components/approvals/actionApprovalContinuation';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type Store = ReturnType<typeof createHomeHubAccountStore> & { retain(): () => void; isCurrent(): boolean };
 const stores = new WeakMap<ActiveServerAccountScopeLifetime, WeakMap<AuthCredentials, Store>>();
 const refuse = async (): Promise<never> => { throw new Error('Home Account unavailable'); };
 const unavailable = createHomeHubAccountStore({ accountId: 'unavailable', transport: { read: refuse, create: refuse, update: refuse }, isCurrent: () => false, execute: refuse });
 
-/** Home and setup dismissals share the same captured Account projection and Action write path. */
-export function useHomeHubArtifactLayout() {
+function useHomeHubAccountStore() {
     const credentials = useOptionalAuth()?.credentials ?? null;
     const scope = useActiveServerAccountScope();
     const ready = useIsDataReady();
@@ -42,9 +46,10 @@ export function useHomeHubArtifactLayout() {
                     && current.carrier === server.carrier && getActiveServerHomeCarrier() === carrier;
             };
             let context: ReturnType<typeof captureLazyActionAccountContext> | null = null;
+            const controller = new AbortController();
             const getContext = async () => {
                 if (!isCurrent()) throw new Error('Home Account scope retired');
-                context ??= captureLazyActionAccountContext(server.serverId);
+                context ??= captureLazyActionAccountContext(server.serverId, controller.signal);
                 const account = await context;
                 account.assertCurrent();
                 if (account.credentials.token !== capturedCredentials.token || !isCurrent()) throw new Error('Home Account scope retired');
@@ -55,10 +60,36 @@ export function useHomeHubArtifactLayout() {
                 create: async input => (await getContext()).homeHubArtifactTransport.create(input),
                 update: async input => (await getContext()).workflowArtifacts.update(input),
             };
+            const approval = createActionApprovalContinuationObserver({ onExecuted: () => {} });
+            // Same exact-Home Artifact reader and content-free wake as mounted approvals.
+            // Read failures retain custody; only a typed terminal Artifact settles the queue.
+            const approvalRead = new InvalidateSync(async () => {
+                const registration = approval.getSnapshot().approval;
+                if (!registration || !isCurrent()) return;
+                try {
+                    const artifact = await (await getContext()).fetchArtifact(registration.artifactId);
+                    if (!isCurrent() || approval.getSnapshot().approval !== registration) return;
+                    const invalid = Boolean(artifact?.isDecrypted !== false && artifact && typeof artifact.body === 'string'
+                        && !approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body));
+                    approval.observeArtifact(artifact, invalid);
+                } catch {
+                    // A missing transport answer is not a terminal approval disposition.
+                }
+            });
+            const observeApproval = approval.subscribe(() => {
+                if (approval.getSnapshot().settlement) approval.deliverSettlement();
+                else approvalRead.invalidate();
+            });
+            const wakeApproval = subscribeHomeAccountChange(event => {
+                const artifactId = approval.getSnapshot().approval?.artifactId;
+                if (artifactId && areServerProfileIdentifiersEquivalent(event.serverId, scope.serverId)
+                    && (event.entityIds === undefined || event.entityIds.includes(artifactId) || event.entityIds.includes('self'))) approvalRead.invalidate();
+            });
             const domain = createHomeHubAccountStore({ accountId: scope.accountId, transport, isCurrent, execute: async intent => {
                 if (!isCurrent()) throw new Error('Home Account scope retired');
                 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-                return executeHomeHubLayoutIntent({ intent, scope, transport, execute: createDefaultActionExecutor().execute });
+                return executeHomeHubLayoutIntent({ intent, scope, transport, execute: createDefaultActionExecutor().execute,
+                    signal: controller.signal, onApprovalPending: approval.requestApproval });
             } });
             let references = 0;
             let detach: (() => void) | null = null;
@@ -74,12 +105,34 @@ export function useHomeHubArtifactLayout() {
                 }
                 return () => { if (references > 0 && --references === 0) { detach?.(); detach = null; } };
             } };
-            lifetime.onRetire(() => { detach?.(); detach = null; if (context) void context.then(account => account.dispose(), () => {}); });
+            lifetime.onRetire(() => {
+                domain.retire();
+                controller.abort(); approvalRead.stop(); observeApproval(); wakeApproval(); approval.dispose();
+                detach?.(); detach = null; if (context) void context.then(account => account.dispose(), () => {});
+            });
             byCredentials.set(credentials, mounted);
         }
         store = mounted;
     }
     React.useEffect(() => 'retain' in store ? store.retain() : undefined, [store]);
-    const snapshot = React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+    return store;
+}
+
+/** Home content and setup dismissals ignore write-only presentation changes. */
+export function useHomeHubArtifactLayout() {
+    const store = useHomeHubAccountStore();
+    const select = useShallow((state: ReturnType<typeof store.getSnapshot>) => ({
+        layout: state.layout, status: state.status, hasSnapshot: state.hasSnapshot,
+        errorCode: state.errorCode, failedIntent: state.failedIntent,
+    }));
+    const getSnapshot = React.useCallback(() => select(store.getSnapshot()), [select, store]);
+    const snapshot = React.useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
     return React.useMemo(() => ({ ...snapshot, dispatch: store.dispatch, retry: store.retry, cancelFailedIntent: store.cancelFailedIntent }), [snapshot, store]);
+}
+
+/** Only write feedback surfaces subscribe to the same Account queue's pending fact. */
+export function useHomeHubLayoutWritePending() {
+    const store = useHomeHubAccountStore();
+    const getSnapshot = React.useCallback(() => store.getSnapshot().isWriting, [store]);
+    return React.useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
 }

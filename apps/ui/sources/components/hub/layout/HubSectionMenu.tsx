@@ -1,9 +1,8 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { t } from '@/text';
@@ -16,6 +15,7 @@ import {
     buildWidgetMoveActions,
     buildWidgetSizeActions,
     orderWidgetMenu,
+    useWidgetMenuAlwaysShown,
     WIDGET_MENU_MAX_HEIGHT_PX,
 } from '@/components/widgets/frame/widgetFrameMenu';
 
@@ -49,6 +49,7 @@ export function HubSectionMenu(props: Readonly<{
     onRename?: () => void;
     /** About this widget, for a copy of one of the Account's own widgets (lab dagent G2). */
     onAbout?: () => void;
+    onAddTo?: () => void;
     /**
      * Inside a group (lab widget-groups C): no frame entry, movement steps within the group, and
      * Remove takes the widget off Home rather than hiding a section.
@@ -60,7 +61,7 @@ export function HubSectionMenu(props: Readonly<{
     sizeLimit?: WidgetSizeControl['unavailable'];
 }>) {
     // The shared reveal owner fades the ⋯ in, and shows it by itself while it has keyboard focus.
-    const revealed = Platform.OS !== 'web' || readCoarsePrimaryPointer() || props.hovered;
+    const revealed = useWidgetMenuAlwaysShown() || props.hovered;
     const { section, layout } = props;
     const title = homeHubSectionTitle(section);
     const surfaceDefault = useWidgetFrameSurfaceDefault('home');
@@ -113,7 +114,7 @@ export function HubSectionMenu(props: Readonly<{
                         })),
                         ...(props.groupActions ?? []),
                     ],
-                    definition: buildWidgetDefinitionActions({ onAbout: props.onAbout }),
+                    definition: buildWidgetDefinitionActions({ onAbout: props.onAbout, onAddTo: props.onAddTo }),
                     surface: [
                         ...(props.onOpen ? [{ id: 'open', title: t('common.open'), icon: 'arrow-square-out' as const, onPress: props.onOpen }] : []),
                         { id: 'customize', title: t('settingsOverview.homeCustomize'), icon: 'sliders-horizontal' as const, onPress: props.onCustomize },

@@ -1,44 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import { ActionsSettingsV1Schema, createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutor, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
 import { createHomeHubArtifactPortV1 } from '@happier-dev/protocol/home';
 import { createWidgetActionInputResolverV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createHomeHubAccountStore } from './homeHubAccountStore';
 import { executeHomeHubLayoutIntent } from './homeHubActionWriter';
-import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { createActionApprovalContinuationObserver } from '@/components/approvals/actionApprovalContinuation';
+
+// The ACK/recovery cases run under the user's persisted waiver, not an unwired
+// policy hook that must fail closed before reaching the Artifact transport.
+const actionsSettings = normalizeActionsSettingsV1({ v: 1,
+    approvalWaivedSurfaces: { 'widgets.item.size.set': ['ui'] },
+});
 
 describe('Home mounted size Action adapter', () => {
-    it('keeps the committed size and reports approval pending instead of acknowledging the requested size', async () => {
-        retirePresentationNotice();
+    it('retains a validated size acknowledgement when the subsequent Home layout read is unavailable without replaying it', async () => {
+        const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
         const scope = { serverId: 'home', accountId: 'one' };
-        const transport = createWorkBoardArtifactBoundary({ v: 1, boards: [] }).forAccount(scope.accountId);
+        const transport = boundary.forAccount(scope.accountId);
         const owner = createHomeHubArtifactPortV1(transport, { accountId: scope.accountId });
         await owner.apply({ kind: 'widget_add', instance: { v: 1, id: 'checks', definition: { kind: 'installed',
             surface: { pluginId: 'acme.checks', localId: 'summary' } }, bindings: {} } });
-        const previous = await owner.read();
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ homeHubArtifacts: owner, widgetAccountScope: () => scope,
             widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async () => ({
                 sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'medium' }, inputs: { fields: [] },
                 inputSchema: { type: 'object', additionalProperties: false } }), readContext: async () => ({}),
                 readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [] }),
-            // Approval persistence is a genuine transport boundary; no domain owner is replaced.
-            approvalsCreate: async () => ({ artifactId: 'size-approval' }),
         }));
-        // The mounted default executor enriches context with the Account's Actions policy.
-        // Supply that same public context here; the real shared policy decides approval.
-        const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
-            'widgets.item.size.set': { approvalRequiredSurfaces: ['ui'] },
-        } });
-        const execute: typeof executor.execute = (id, args, context) => executor.execute(id, args, {
-            ...context, actionsSettings, runtimeAccountId: scope.accountId, serverIdentityId: 'srv_home', actionRequestId: 'size-approval-request',
-        });
-        const layout = await executeHomeHubLayoutIntent({ scope, transport, execute,
-            intent: { kind: 'widget_size', instanceId: 'checks', size: 'tall' } });
-        expect(layout).toEqual(previous);
-        expect(await owner.read()).toEqual(previous);
-        expect(readPresentationNotice()).toMatchObject({ severity: 'info' });
-        retirePresentationNotice();
+        let executions = 0;
+        const execute: typeof executor.execute = async (id, args, context) => {
+            const result = await executor.execute(id, args, { ...context, actionsSettings });
+            if (id === 'widgets.item.size.set' && result.ok) { executions++; boundary.offline(true); }
+            return result;
+        };
+        const approval = createActionApprovalContinuationObserver({ onExecuted: () => {} });
+        const store = createHomeHubAccountStore({ accountId: scope.accountId, transport, isCurrent: () => true,
+            execute: intent => executeHomeHubLayoutIntent({ intent, scope, transport, execute, onApprovalPending: approval.requestApproval }) });
+        await store.refresh();
+        const previous = store.getSnapshot().layout;
+        await expect(store.dispatch({ kind: 'widget_size', instanceId: 'checks', size: 'tall' }, { rethrow: true })).resolves.toBeUndefined();
+        expect(store.getSnapshot()).toMatchObject({ status: 'error', layout: previous });
+        expect(store.getSnapshot().failedIntent).toBeUndefined();
+        boundary.offline(false);
+        await store.retry();
+        expect(executions).toBe(1);
+        expect(store.getSnapshot()).toMatchObject({ status: 'ready', layout: { items: expect.arrayContaining([{ kind: 'widget',
+            instance: expect.objectContaining({ id: 'checks' }), size: 'tall' }]) } });
+        expect(store.getSnapshot().layout).toEqual(await owner.read());
     });
     it('uses the universal Action and retains a failed size for retry before reconciling the committed layout', async () => {
         const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
@@ -57,10 +66,11 @@ describe('Home mounted size Action adapter', () => {
         // This observer delegates every request to the real executor; only Artifact I/O is simulated.
         const execute: typeof executor.execute = (id, args, context) => {
             requests.push(id);
-            return executor.execute(id, args, context);
+            return executor.execute(id, args, { ...context, actionsSettings });
         };
         const store = createHomeHubAccountStore({ accountId: scope.accountId, transport, isCurrent: () => true,
-            execute: intent => executeHomeHubLayoutIntent({ intent, scope, transport, execute }) });
+            execute: intent => executeHomeHubLayoutIntent({ intent, scope, transport, execute,
+                onApprovalPending: createActionApprovalContinuationObserver({ onExecuted: () => {} }).requestApproval }) });
         await store.refresh();
         const previous = store.getSnapshot().layout;
         const intent = { kind: 'widget_size', instanceId: 'checks', size: 'tall' } as const;
@@ -70,7 +80,7 @@ describe('Home mounted size Action adapter', () => {
         boundary.offline(false);
         await store.retry();
         expect(requests).toEqual(['widgets.item.size.set', 'widgets.item.size.set']);
-        expect(store.getSnapshot()).toMatchObject({ status: 'ready', layout: { items: [{ instance: { id: 'checks' }, size: 'tall' }] } });
+        expect(store.getSnapshot()).toMatchObject({ status: 'ready', layout: { items: expect.arrayContaining([{ kind: 'widget', instance: expect.objectContaining({ id: 'checks' }), size: 'tall' }]) } });
         expect(store.getSnapshot().failedIntent).toBeUndefined();
         expect(store.getSnapshot().layout).toEqual(await owner.read());
     });

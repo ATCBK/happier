@@ -5,6 +5,12 @@ import {
     sessionProjectGroupingIdentityKey,
 } from '@/sync/domains/session/listing/sessionListProjectGroupingKeys';
 import { inferProjectTitleFromPath } from '@/utils/path/browseSegments';
+import { WEEKLY_STORAGE_REVIEW_PROMPT } from '@/components/automations/storage/weeklyStorageReviewTemplate';
+import {
+    deriveMachineResourceSuggestions,
+    type MachineResourceComposerSuggestion,
+    type MachineResourceSuggestionFacts,
+} from '@/components/machines/resources/ask/machineResourceSuggestions';
 
 /**
  * What Home's composer suggests, using starter prompts and data the app already holds. Each suggestion
@@ -14,6 +20,8 @@ import { inferProjectTitleFromPath } from '@/utils/path/browseSegments';
  * Sources today:
  * - `sessionHistory`: the project with the most sessions this week → "Summarize what changed in
  *   <project> since <day>", started in that project's folder on its machine.
+ * - `machineResources`: the current report's reason and three prompts, placed on that machine;
+ *   offline prompts fill the global composer and the weekly prompt carries the Automation intent.
  *
  * Starter prompts name tasks without claiming any activity. Automation authoring is offered only
  * when the Home supports Automations (the workflow definition and trigger Actions own creation).
@@ -45,15 +53,15 @@ export type HomeComposerSuggestion = Readonly<{
     id: string;
     source: 'starter';
     intent: 'explain' | 'fixTest' | 'automation';
-    fill: Readonly<{ placement: null }>;
-}>;
+    fill: Readonly<{ placement: null; text?: string }>;
+}> | MachineResourceComposerSuggestion;
 
 const STARTER_SUGGESTIONS: readonly HomeComposerSuggestion[] = Object.freeze([
     { id: 'starter:explain', source: 'starter', intent: 'explain', fill: { placement: null } },
     { id: 'starter:fixTest', source: 'starter', intent: 'fixTest', fill: { placement: null } },
 ]);
 const AUTOMATION_STARTER: HomeComposerSuggestion = {
-    id: 'starter:automation', source: 'starter', intent: 'automation', fill: { placement: null },
+    id: 'starter:automation', source: 'starter', intent: 'automation', fill: { placement: null, text: WEEKLY_STORAGE_REVIEW_PROMPT },
 };
 
 /** "This week": today and the six days before it, whole days, so a weekday name is unambiguous. */
@@ -92,7 +100,9 @@ export function deriveHomeComposerSuggestions(input: Readonly<{
     sessions: Iterable<HomeComposerSuggestionSession>;
     nowMs: number;
     automationsEnabled?: boolean;
+    machineResources?: MachineResourceSuggestionFacts;
 }>): readonly HomeComposerSuggestion[] {
+    if (input.machineResources) return deriveMachineResourceSuggestions(input.machineResources);
     const windowStart = daysBefore(startOfLocalDay(input.nowMs), WINDOW_DAYS - 1);
     const groups = new Map<string, ProjectGroup>();
     for (const session of input.sessions) {

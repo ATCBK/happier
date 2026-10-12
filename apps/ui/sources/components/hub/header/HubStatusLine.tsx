@@ -18,7 +18,7 @@ export const HubStatusLine = React.memo(function HubStatusLine(props: Readonly<{
     home: (detail: 'full' | 'name') => React.ReactNode;
 }>) {
     const summary = useActivityOverviewSummary();
-    return <HubStatusLineView working={summary.workingCount} needsYou={summary.needsYouCount} home={props.home} />;
+    return <HubStatusLineView working={summary.workingCount} needsYou={summary.needsYouCount} isDataReady={summary.isDataReady} home={props.home} />;
 });
 
 /**
@@ -29,13 +29,14 @@ export const HubStatusLine = React.memo(function HubStatusLine(props: Readonly<{
 export function HubStatusLineView(props: Readonly<{
     working: number;
     needsYou: number;
+    isDataReady?: boolean;
     home: (detail: 'full' | 'name') => React.ReactNode;
 }>) {
     const { working, needsYou } = props;
     const idle = working === 0 && needsYou === 0;
     return (
         <View testID="home-hub.status" style={styles.line}>
-            {idle ? <Text style={styles.text} numberOfLines={1}>{t('homeIndex.nothingRunning')}</Text> : null}
+            {idle && props.isDataReady !== false ? <Text style={styles.text} numberOfLines={1}>{t('homeIndex.nothingRunning')}</Text> : null}
             {working > 0 ? (
                 <View testID="home-hub.status.working" style={styles.fact}>
                     <SessionRowAttentionIndicator
@@ -67,14 +68,14 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 8,
-        rowGap: 2,
+        columnGap: theme.space.s8,
+        rowGap: theme.space.s2,
         minHeight: 20,
     },
     fact: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     text: {
         color: theme.colors.text.secondary,

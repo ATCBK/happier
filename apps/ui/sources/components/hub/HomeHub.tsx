@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PAGE_ROW_TOUCH_MIN_HEIGHT_PX } from '@/components/ui/lists/pageRowMetrics';
 import { useWidgetFrameStyle } from '@/components/widgets/frame/useWidgetFrameStyle';
+import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { createNearViewportTracker, type NearViewportTracker } from '@/components/widgets/nearViewport';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
@@ -19,14 +20,18 @@ import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWi
 import { runWidgetSetupCommand, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { resolveWidgetSizeChoicesV1, type WidgetInputBindingsV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { WidgetGroupFrame } from '@/components/widgets/group/WidgetGroupFrame';
+import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 import { WidgetGroupMenuButton } from '@/components/widgets/group/WidgetGroupMenuButton';
 import { WidgetGroupBar } from '@/components/widgets/group/WidgetGroupBar';
-import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { buildWidgetGroupMembershipActions, describeWidgetGroup, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
+import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
 import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
 import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@/components/widgets/group/widgetGroupLayout';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetLayoutCardDropTarget, widgetLayoutEndDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
+import { PopoverScope } from '@/components/ui/popover';
 import { HomeWidgetAddPopover } from '@/components/widgets/add/HomeWidgetAddPopover';
+import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { useWidgetGroupMenu } from '@/components/widgets/group/useWidgetGroupMenu';
 import { WidgetGroupDropFeedback } from '@/components/widgets/group/WidgetGroupDropFeedback';
 import { WidgetGroupMembershipArrivalView, useWidgetGroupMembershipArrivals } from '@/components/widgets/group/widgetGroupMembershipArrival';
@@ -50,14 +55,34 @@ import { useHomeHubLayout, type HomeHubLayout } from './layout/useHomeHubLayout'
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
+import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityFeedback, SessionSurfaceEntityTargetFeedback, useSessionSurfaceCarriedStyle, useSessionSurfaceEntityDrag, useSessionSurfaceGeometryRefresh, type SessionSurfaceEntityBinding } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { useWidgetMovementAdmission } from '@/components/widgets/surface/useWidgetMovementAdmission';
 import { widgetEntitySourceRef, widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { t } from '@/text';
+import { useUnistyles } from 'react-native-unistyles';
+import { useAtmosphere } from '@/components/atmosphere/useAtmosphere';
+import { useAtmospherePictureShown, useAtmosphereSending } from '@/components/atmosphere/atmosphereStage';
+import { HomePlanet, homePlanetFootFade, useHomePlanetOptions } from '@/components/atmosphere/HomePlanet';
+import { homePlanetDrawnHeight, homePlanetGeometry, type HomePane } from '@/components/atmosphere/homePlanetPlacement';
+import { useHomeLoadingMoment } from '@/components/atmosphere/moments/homeLoadingMoment';
+import type { PlanetMomentTarget } from '@/components/atmosphere/moments/planetMomentTimeline';
+import { WelcomePlanet } from '@/components/atmosphere/moments/WelcomePlanet';
+import { useHomeWelcome } from '@/components/atmosphere/moments/useHomeWelcome';
+import { useActiveHomeUnavailable } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
+import { AtmosphereTopChips } from '@/components/atmosphere/AtmosphereCreditChip';
+import { isAtmosphereMomentOn } from '@/components/atmosphere/atmosphereMoments';
+import { HomeIdleResettle } from '@/components/atmosphere/HomeIdleResettle';
+import { HomeHero, useHomeHeroFrame } from './HomeHero';
+import { LookChip, type LookTarget } from '@/components/atmosphere/look/LookChip';
+import { subscribeHomeCustomizeRequest } from './header/homeCustomizeRequest';
 
 // The Home on the status line: its name, and where it lives while nothing is running (J1).
 const renderHomeLine = (detail: 'full' | 'name') => <HomeWhereLine detail={detail} separated />;
 
+
+/** Look on Home edits the Account's Home atmosphere. */
+const HOME_LOOK_TARGET: LookTarget = Object.freeze({ surface: 'home' });
 
 /** Home has no Session of its own: a Session input there is chosen, never borrowed from the page. */
 const HOME_CONTEXT: WidgetSurfaceContext = Object.freeze({});
@@ -179,8 +204,9 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
     // The whole group lifts by its grip (or, with a fine pointer, by its frame) and is a drop target:
     // into it, or beside it at its top or bottom edge (lab wgdnd B).
     const homeSurface = props.homeSurface;
+    const carried = useWidgetCarriedIdentity({ kind: 'group', mark: WIDGET_GROUP_ICON, childCount: group.children.length });
     const drop = useSessionSurfaceEntityDrag(props.widgetDrag && homeSurface ? {
-        ...props.widgetDrag, title: name,
+        ...props.widgetDrag, title: name, ...carried,
         getItem: () => layout.items.some(item => item.kind === 'group' && item.id === group.id)
             ? { kind: 'widget-layout-group', scope: props.widgetDrag!.scope, ref: { surface: homeSurface, instanceId: group.id } } : null,
         getWidgetAreaTarget: () => ({ surface: homeSurface, groupId: null, itemId: group.id, itemIds: widgetLayoutSiblingIds(layout.items, undefined, props.topLevelIds) }),
@@ -212,10 +238,10 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
                 columns={columns}
                 customizing={props.customizing}
                 // Customizing: the bar stands in the header's place (grip, name field, width, ⋯), for titled and untitled groups alike.
-                {...(props.customizing ? { bar: <WidgetGroupBar input={menu.menuInput} onRename={menu.commitName} anchorRef={menu.anchorRef} grip={grip} testID={`${testID}.bar`} /> } : {})}
+                {...(props.customizing ? { bar: <WidgetGroupBar input={menu.menuInput} serverId={props.homeSurface?.serverId} onRename={menu.commitName} anchorRef={menu.anchorRef} grip={grip} testID={`${testID}.bar`} /> } : {})}
                 onAddToGroup={openSlotAdd}
                 addAnchorRef={slotAnchorRef}
-                title={props.customizing ? null : group.title !== undefined || menu.renameField ? menu.renameField ?? group.title ?? null : null}
+                title={props.customizing ? null : menu.renameField ?? readWidgetGroupTitle(group) ?? null}
                 source={sourceValue ? widgetGroupPinnedSource(sourceValue) : undefined}
                 menu={props.customizing ? null : <WidgetGroupMenuButton input={menu.menuInput} visible={hover.isHovered} anchorRef={menu.anchorRef} testID={`${testID}.menu`} />}
                 accessibilityLabel={t('widgetFrame.groupA11y', { name })}
@@ -263,11 +289,12 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
     const inGroup = parent ? { index: parent.index, count: parent.group.children.length,
         onMove: (delta: -1 | 1) => props.groupOperations.move(instance.id, parent.index + delta, parent.group.id) } : undefined;
     // About this widget (lab dagent G2) for a copy of one of the Account's own widgets.
-    const definition = useWidgetDefinitionFlows({ instance, scope, anchorRef: edit.anchorRef, editInputs: edit.editInputs, testID });
+    const definition = useWidgetDefinitionFlows({ instance, scope, providedContext: widgetProvidedContext(context), anchorRef: edit.anchorRef, editInputs: edit.editInputs, testID });
     // Rename stays optional (lab dbind N1): an empty name, or the widget's own, goes back to it.
     const renaming = useWidgetFrameRename({
         title: instance.displayName ?? widget?.title ?? instance.id,
         testID,
+        serverId: scope?.serverId,
         onRename: (next) => {
             const displayName = next.length > 0 && next !== widget?.title ? next : undefined;
             if (displayName !== instance.displayName) return rename(instance.id, displayName);
@@ -285,6 +312,7 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
             {...(edit.editInputs ? { editInputs: edit.editInputs } : {})}
             {...(renaming.begin ? { onRename: renaming.begin } : {})}
             {...(definition.about ? { onAbout: definition.about } : {})}
+            {...(definition.addTo ? { onAddTo: definition.addTo } : {})}
             {...(inGroup ? { inGroup } : {})}
             groupActions={groupActions}
             {...(sizeLimit ? { sizeLimit } : {})}
@@ -303,10 +331,9 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
                 hoverProps={hover.hoverProps}
                 titleEditor={renaming.field}
                 grouped={parent !== undefined}
-                halfCell={parent !== undefined && !parent.wide}
                 showGrip={props.showGrips}
                 groupBindings={groupContext}
-                {...(followed ? { followSource: { value: followed, wide: parent?.wide ?? true } } : {})}
+                {...(followed ? { followSource: { value: followed, wide: parent?.wide ?? true, groupNamesValue: parent !== undefined && readWidgetGroupTitle(parent.group.group) !== undefined } } : {})}
                 {...(edit.onRepairInputs ? { onRepairInputs: edit.onRepairInputs } : {})}
                 {...(props.widgetDrag && props.homeSurface ? { entityDrag: { ...props.widgetDrag,
                     // The line between cards reorders here; inside a group, within that group (lab wgdnd B).
@@ -384,6 +411,8 @@ export const HomeHub = React.memo(function HomeHub() {
         listRef.current?.scrollTo({ y: 0, animated: false });
         setCustomizeOpen(true);
     }, []);
+    // Settings › Appearance asks Home to open its own Customize rather than mounting a second editor.
+    React.useEffect(() => subscribeHomeCustomizeRequest(openCustomize), [openCustomize]);
     // Where the page is scrolled, for the widgets' near-viewport rule. It is a store the widgets
     // subscribe to one by one; scrolling never re-renders the hub.
     const initialViewportHeight = useWindowDimensions().height;
@@ -395,6 +424,69 @@ export const HomeHub = React.memo(function HomeHub() {
     React.useEffect(() => { tracker.invalidateLayout(); }, [tracker, layout.sections]);
     const accountScope = useActiveServerAccountScope();
     const focused = useIsFocused();
+    const closeCustomize = React.useCallback(() => setCustomizeOpen(false), []);
+    useCurrentUiContextLocalCommands(focused && accountScope && guidance.kind !== 'loading'
+        && guidance.kind !== 'connect_machine' && guidance.kind !== 'start_daemon' ? [{
+        key: `${accountScope.serverId}:${accountScope.accountId}:home-customize`,
+        title: `${t(customizeOpen ? 'common.done' : 'homeIndex.customize')}: ${t('common.home')}`,
+        invoke: customizeOpen ? closeCustomize : openCustomize,
+    }] : []);
+    // Home's atmosphere (plan R-1/R-2): any source but None gives Home its hero on berthd's seam.
+    const { theme } = useUnistyles();
+    const atmosphere = useAtmosphere('home');
+    const heroActive = atmosphere.source !== 'none';
+    const heroFrame = useHomeHeroFrame({ active: heroActive, focused, phone });
+    const sending = useAtmosphereSending() && atmosphere.moments.send !== false;
+    const pictureShown = useAtmospherePictureShown();
+    // The planet stays drawn until a picture that replaces it is on screen, then hands over.
+    const planetSource = atmosphere.source === 'planet';
+    const [planetDrawn, setPlanetDrawn] = React.useState(planetSource);
+    if (planetSource && !planetDrawn) setPlanetDrawn(true);
+    // The planet moments (plan R-11): Loading while Home's model is still coming on a cold start, and
+    // Welcome once on the first arrival. Both land exactly on the planet Home itself draws.
+    const homeTheme = theme.dark ? 'dark' as const : 'light' as const;
+    const placement = atmosphere.planet.placement;
+    const [hubPane, setHubPane] = React.useState<HomePane>({ width: 0, height: 0 });
+    const onHubLayout = React.useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
+        const { width, height } = event.nativeEvent.layout;
+        setHubPane(current => current.width === width && current.height === height ? current : { width, height });
+    }, []);
+    const planetLook = { pane: heroFrame.pane, placement, style: atmosphere.planet.style, digits: atmosphere.planet.digits,
+        theme: homeTheme, phone, hero: heroFrame.hero };
+    const planetOptions = useHomePlanetOptions(planetLook);
+    const planetFade = homePlanetFootFade(planetLook);
+    const homeLoading = guidance.kind === 'loading';
+    const momentTarget = React.useMemo<PlanetMomentTarget | null>(() => homeLoading ? null
+        : heroActive && planetSource ? planetOptions ? { kind: 'planet', options: planetOptions, fade: planetFade } : null
+            : { kind: 'none' }, [heroActive, homeLoading, planetFade, planetOptions, planetSource]);
+    const [homePlanetDrawn, setHomePlanetDrawn] = React.useState(false);
+    const onHomePlanetDrawn = React.useCallback(() => setHomePlanetDrawn(true), []);
+    const momentOrientation = React.useMemo(() => ({
+        rotate: homePlanetGeometry(planetSource ? placement : 'corner', { width: 1, height: 1 }, { phone }).rotate, mirror: false,
+    }), [phone, placement, planetSource]);
+    const homeReport = React.useMemo(() => ({ waiting: homeLoading, target: momentTarget, drawn: homePlanetDrawn, orientation: momentOrientation }),
+        [homeLoading, homePlanetDrawn, momentOrientation, momentTarget]);
+    const homeUnavailable = useActiveHomeUnavailable();
+    const loadingMoment = useHomeLoadingMoment({
+        waiting: homeLoading && isAtmosphereMomentOn(atmosphere.moments, 'loading'), start: 'mount', abort: homeUnavailable, paused: false,
+        reducedMotion: atmosphere.reducedMotion, theme: homeTheme, pane: hubPane,
+        home: homeReport, cover: <ItemList testID="home-hub.loading-cover">{null}</ItemList>,
+    });
+    const welcome = useHomeWelcome({
+        eligible: heroActive && planetSource && focused && planetOptions !== null && !loadingMoment.playing && !sending
+            && isAtmosphereMomentOn(atmosphere.moments, 'welcome'),
+        loadingShown: loadingMoment.shown, reducedMotion: atmosphere.reducedMotion, writing: heroFrame.isWriting,
+    });
+    // Home's menus and its Add surface float inside this column, never over the sidebar or the title bar.
+    const paneBoundaryRef = React.useRef<View>(null);
+    const framed = (content: React.ReactNode) => (
+        <View ref={paneBoundaryRef} style={styles.pane} onLayout={onHubLayout}>
+            <PopoverScope boundaryRef={paneBoundaryRef}>
+                {content}
+            </PopoverScope>
+            {loadingMoment.layer}
+        </View>
+    );
     useVoiceBriefHomeRequest({
         available: focused && guidance.kind !== 'loading' && guidance.kind !== 'connect_machine' && guidance.kind !== 'start_daemon',
         onOpen: () => setBriefOpen(true),
@@ -428,21 +520,116 @@ export const HomeHub = React.memo(function HomeHub() {
     // guidance) nor the guidance's mark draws before the answer, so nothing moves on arrival.
     if (guidance.kind === 'loading') {
         // A Home that does not answer turns this into "Can't reach {Home}" with Retry, not an endless wait.
-        return (
+        return framed(
             <HomeReachabilityGate variant="pane">
                 <ItemList testID="home-hub.loading">{null}</ItemList>
             </HomeReachabilityGate>
         );
     }
     if (guidance.kind === 'connect_machine' || guidance.kind === 'start_daemon') {
-        return <SessionGettingStartedGuidance variant="primaryPane" />;
+        return framed(<SessionGettingStartedGuidance variant="primaryPane" />);
     }
 
-    const closeCustomize = () => setCustomizeOpen(false);
     const slotProps = { layout, topLevelIds, onCustomize: openCustomize, placeholder: greeting.subtitle, tracker, widgetDrag,
         customizing: customizeOpen, showGrips: customizeOpen, groupOperations, movementSourceItem: movement.sourceItem, homeSurface: surface };
+    // Under the atmosphere the composer leads Home unless the person moved it lower. While the layout is
+    // still loading the hero keeps the composer's room (the default places it first), so the status line
+    // and everything under it do not drop ~170 px when the layout arrives.
+    const heroComposer = heroActive && (layout.status === 'loading'
+        || layout.sections.find(section => !section.hidden)?.id === 'start');
+    const headerActions = (
+        <View style={styles.headerActions}>
+            {!heroActive ? <LookChip target={HOME_LOOK_TARGET} /> : null}
+            {phone ? null : <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} />}
+            <HubCustomizeButton open={customizeOpen} onOpenChange={next => next ? openCustomize() : closeCustomize()} />
+        </View>
+    );
+    const sections = (
+        <>
+            {customizeOpen ? <HomeCustomizeBar onDone={closeCustomize} interactionBoundaryRef={contentRef} /> : null}
+            {phone && !briefOpen ? (
+                // Phone (lab B0p): the brief's entry spans the page under the greeting.
+                <ItemGroup surface="none">
+                    <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} block />
+                </ItemGroup>
+            ) : null}
+            {briefOpen ? <VoiceBriefBlock onClose={() => setBriefOpen(false)} /> : null}
+            <SessionSurfaceEntityFeedback kind="home-section" scope={accountScope} address={null} testID="home-hub.widget-move" />
+            <SessionSurfaceEntityTargetFeedback drag={homeDrop} testID="home-hub.widget-move" />
+            {layout.status === 'loading' ? (
+                <WidgetFrame
+                    testID="home-hub.layout.loading"
+                    title={null}
+                    frameStyle="card"
+                    placement="home"
+                    body={{ kind: 'loading', accessibilityLabel: t('common.loading') }}
+                />
+            ) : <HomeHubSectionList
+                // Under the atmosphere a composer that leads Home stands in the hero; moved lower, it stays where it was put.
+                sections={heroComposer ? layout.sections.filter(section => section.id !== 'start') : layout.sections}
+                renderSection={(section, index) => section.kind === 'builtin' ? (
+                    <HubSectionSlot key={section.id} section={section} index={index} {...slotProps} />
+                ) : (
+                    // Ungroup fans its widgets out to their own cards; Group with merges cards into one.
+                    <WidgetGroupMembershipArrivalView key={section.id} arrival={arrivals.get(section.id)} style={styles.card}>
+                        <HubSectionSlot section={section} index={index} {...slotProps} />
+                    </WidgetGroupMembershipArrivalView>
+                )}
+            />}
+            {customizeOpen && widgetDrag && surface ? (
+                <HomeNewRowTarget widgetDrag={widgetDrag} surface={surface} layout={layout} topLevelIds={topLevelIds} sourceItem={movement.sourceItem} />
+            ) : null}
+        </>
+    );
 
-    return (
+    if (heroActive) {
+        const wallpaper = atmosphere.source === 'picture' && atmosphere.picture.layout === 'wallpaper';
+        return framed(
+            <View ref={heroFrame.paneRef} style={styles.pane} onLayout={heroFrame.measure} collapsable={false}>
+                <ItemList
+                    ref={homeListRef}
+                    innerViewRef={contentRef as React.RefObject<View>}
+                    testID="home-hub"
+                    onScroll={event => { tracker.onScroll(event); heroFrame.onScroll(event); }}
+                    onLayout={event => { tracker.onLayout(event); homeDrop.onLayout(event); }}
+                    onContentSizeChange={tracker.onContentSizeChange}
+                    scrollEventThrottle={16}
+                >
+                    {planetDrawn ? (
+                        <HomePlanet pane={heroFrame.pane} placement={placement} style={atmosphere.planet.style} digits={atmosphere.planet.digits}
+                            theme={homeTheme} phone={phone} hero={heroFrame.hero}
+                            hidden={sending || (!planetSource && pictureShown) || loadingMoment.hold.held || welcome.playing}
+                            arrive={loadingMoment.hold.arrive === 'instant' || welcome.arrive === 'instant' ? 'instant' : 'fade'}
+                            retype={welcome.retype} writing={heroFrame.isWriting} onDrawn={onHomePlanetDrawn}
+                            leave={sending ? 'climb' : 'fade'} reducedMotion={atmosphere.reducedMotion}
+                            answerFinishes={planetSource && isAtmosphereMomentOn(atmosphere.moments, 'sessionFinished')} focused={focused} />
+                    ) : null}
+                    {welcome.playing && planetOptions ? (
+                        // Welcome lands on Home's planet where it stands: under Home's content, scrolling with it.
+                        <WelcomePlanet pane={{ width: heroFrame.pane.width, height: homePlanetDrawnHeight(heroFrame.pane.height, planetFade) }} options={planetOptions} fade={planetFade}
+                            visible={focused && !sending && isAtmosphereMomentOn(atmosphere.moments, 'welcome')}
+                            writing={heroFrame.isWriting} reducedMotion={atmosphere.reducedMotion} onLanded={welcome.onLanded} />
+                    ) : null}
+                    <HomeIdleResettle picture={atmosphere.source === 'picture' ? atmosphere.builtinPicture?.id ?? null : null}
+                        focused={focused} writing={heroFrame.isWriting} sending={sending} />
+                    <AtmosphereTopChips picture={atmosphere.source === 'picture' ? atmosphere.builtinPicture : null}
+                        lookTarget={HOME_LOOK_TARGET} />
+                    <HomeHero title={title} phone={phone} paneHeight={heroFrame.pane.height} frame={heroFrame}
+                        rise={planetSource && placement === 'rise'} suggestions={wallpaper || (planetSource && placement === 'rise') ? 'pills' : 'links'}
+                        showComposer={heroComposer} />
+                    <ItemGroup surface="none">
+                        <View ref={heroFrame.nextRef} onLayout={heroFrame.measure} style={styles.statusRow}>
+                            <View style={styles.statusLine}><HubStatusLine home={renderHomeLine} /></View>
+                            {headerActions}
+                        </View>
+                    </ItemGroup>
+                    {sections}
+                </ItemList>
+            </View>
+        );
+    }
+
+    return framed(
         // RN's innerViewRef declaration omits the null lifecycle supported by its native forwarder.
         <ItemList
             ref={homeListRef}
@@ -458,37 +645,9 @@ export const HomeHub = React.memo(function HomeHub() {
                 titleProminence={phone ? 'hero' : 'page'}
                 alwaysShowTitle
                 details={<HubStatusLine home={renderHomeLine} />}
-                actions={(
-                    <View style={styles.headerActions}>
-                        {phone ? null : <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} />}
-                        <HubCustomizeButton open={customizeOpen} onOpenChange={setCustomizeOpen} />
-                    </View>
-                )}
+                actions={headerActions}
             />
-            {customizeOpen ? <HomeCustomizeBar onDone={closeCustomize} interactionBoundaryRef={contentRef} /> : null}
-            {phone && !briefOpen ? (
-                // Phone (lab B0p): the brief's entry spans the page under the greeting.
-                <ItemGroup surface="none">
-                    <VoiceBriefButton open={briefOpen} onOpen={() => setBriefOpen(true)} block />
-                </ItemGroup>
-            ) : null}
-            {briefOpen ? <VoiceBriefBlock onClose={() => setBriefOpen(false)} /> : null}
-            <SessionSurfaceEntityFeedback kind="home-section" scope={accountScope} address={null} testID="home-hub.widget-move" />
-            <SessionSurfaceEntityTargetFeedback drag={homeDrop} testID="home-hub.widget-move" />
-            <HomeHubSectionList
-                sections={layout.sections}
-                renderSection={(section, index) => section.kind === 'builtin' ? (
-                    <HubSectionSlot key={section.id} section={section} index={index} {...slotProps} />
-                ) : (
-                    // Ungroup fans its widgets out to their own cards; Group with merges cards into one.
-                    <WidgetGroupMembershipArrivalView key={section.id} arrival={arrivals.get(section.id)} style={styles.card}>
-                        <HubSectionSlot section={section} index={index} {...slotProps} />
-                    </WidgetGroupMembershipArrivalView>
-                )}
-            />
-            {customizeOpen && widgetDrag && surface ? (
-                <HomeNewRowTarget widgetDrag={widgetDrag} surface={surface} layout={layout} topLevelIds={topLevelIds} sourceItem={movement.sourceItem} />
-            ) : null}
+            {sections}
         </ItemList>
     );
 });
@@ -496,4 +655,8 @@ export const HomeHub = React.memo(function HomeHub() {
 const styles = {
     card: { flexGrow: 1 },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    pane: { flex: 1, minWidth: 0, minHeight: 0 },
+    // Lab `at-wsh`: the present on one line, Customize at its end, above the widgets.
+    statusRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 36 },
+    statusLine: { flex: 1, minWidth: 0 },
 } as const;

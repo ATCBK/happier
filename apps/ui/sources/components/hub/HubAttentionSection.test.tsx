@@ -79,7 +79,8 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 
 // Plugin-contributed service descriptors arrive through the app-shell projection.
 vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => {
-    const registry = { status: 'ready', entries: [SERVICE_ENTRY] };
+    // Read when rendered: the mock may be loaded before this file's fixtures initialise.
+    const registry = { status: 'ready', get entries() { return [SERVICE_ENTRY]; } };
     const localize = (_pluginId: string, value: unknown) => (typeof value === 'string' ? value : null);
     return { useProjectedConnectedServicesRegistry: () => registry, useProjectedPluginLocalizedTextResolver: () => localize };
 });

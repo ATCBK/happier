@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { NavigationContext, useNavigation } from '@react-navigation/native';
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { HomeHub } from './HomeHub';
@@ -13,7 +13,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import type { HomeHubLayoutValue } from '@happier-dev/protocol/home';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { HOME_HUB_DEFAULT_LAYOUT, type HomeHubLayoutValue } from '@happier-dev/protocol/home';
 import type { WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { CardGridCell } from '@/components/ui/cardGrid/CardGrid';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
@@ -34,8 +35,6 @@ const placed = (...instances: WidgetInstanceV1[]) => instances.map(instance => (
 const settings = vi.hoisted(() => ({
     layout: { order: [], hidden: [] } as Layout,
     guidanceKind: 'select_session' as string,
-    machineCount: 0,
-    machineMounts: 0,
     viewport: { width: 800, height: 600 },
     positions: {} as Record<string, number>,
     scrollOffset: 0,
@@ -44,6 +43,7 @@ installDisconnectedServerSocketBoundary();
 let artifact = createHomeHubArtifactHttpBoundary('account-home');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let restoreActionLoader: (() => void) | undefined;
+let restoreSyncLoader: (() => void) | undefined;
 
 // Plugin widgets: the app shell's projection, each widget's own data (inside the plugin, behind the
 // surface host boundary), and how often the hub and its sections render.
@@ -150,16 +150,6 @@ vi.mock('./HubSetupSection', () => ({
         return 'section:setup';
     },
 }));
-vi.mock('./HubMachinesSection', async () => {
-    const ReactModule = await import('react');
-    return {
-        HubMachinesSection: () => {
-            ReactModule.useEffect(() => { settings.machineMounts += 1; }, []);
-            return 'section:machines';
-        },
-    };
-});
-vi.mock('@/components/settings/usage/UsageCapacitySection', () => ({ UsageCapacitySection: () => 'section:usage' }));
 vi.mock('@/components/automations/home/AutomationsLatestRunsSection', () => ({ AutomationsLatestRunsSection: () => 'section:automations' }));
 // The status line is its own owner (it reads the Activity summary, tested there).
 vi.mock('./header/HubStatusLine', () => ({ HubStatusLine: () => 'status-line' }));
@@ -197,11 +187,11 @@ afterEach(async () => {
     connection = undefined;
     restoreActionLoader?.();
     restoreActionLoader = undefined;
+    restoreSyncLoader?.();
+    restoreSyncLoader = undefined;
     artifact = createHomeHubArtifactHttpBoundary('account-home');
     settings.layout = { order: [], hidden: [] };
     settings.guidanceKind = 'select_session';
-    settings.machineCount = 0;
-    settings.machineMounts = 0;
     settings.viewport = { width: 800, height: 600 };
     settings.positions = {};
     settings.scrollOffset = 0;
@@ -222,12 +212,12 @@ function RoutedHomeBoundary({ children }: React.PropsWithChildren) {
     return <NavigationContext.Provider value={useNavigation()}>{children}</NavigationContext.Provider>;
 }
 
-async function renderHome() {
+async function renderHome(request = artifact.request, initial: 'stored' | 'missing' = 'stored') {
     if (!connection) {
-        artifact.seed({ v: 1, items: [], ...settings.layout });
-        await import('@/sync/syncEngine');
+        if (initial === 'stored') artifact.seed({ v: 1, items: [], ...settings.layout });
+        restoreSyncLoader = (await loadSyncSingletonForTests()).dispose;
         restoreActionLoader = await installRealActionExecutorModuleLoader();
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-layout.test', accountId: 'account-home', request: artifact.request });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-layout.test', accountId: 'account-home', request });
         const scope = { serverId: connection.home.id, accountId: 'account-home' };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
     }
@@ -294,11 +284,35 @@ async function openSections(screen: Awaited<ReturnType<typeof renderHome>>) {
     await flushHookEffects({ cycles: 2 });
 }
 
+/** Whether a rendered subtree draws this text (a stubbed section renders its id as text). */
+function holdsText(node: { findAll: (match: (candidate: { children: readonly unknown[] }) => boolean) => readonly unknown[] }, text: string): boolean {
+    return node.findAll(candidate => candidate.children.includes(text)).length > 0;
+}
+
 function shownSections(text: string): string[] {
     return [...text.matchAll(/section:([a-z]+)/g)].map((match) => match[1]!);
 }
 
 describe('HomeHub', () => {
+    it('reserves the phone sections while its acknowledged layout is unknown, then replaces the placeholder', async () => {
+        settings.viewport = { width: 390, height: 900 };
+        const read = createDeferred<void>();
+        let pending = true;
+        const screen = await renderHome(async (input, init) => {
+            if (pending && new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}`) await read.promise;
+            return artifact.request(input, init);
+        });
+        try {
+            expect(screen.findByTestId('home-hub.layout.loading')).not.toBeNull();
+            // Only the composer holds its room in the hero (it always exists and leads by default), so
+            // nothing under it drops when the layout arrives; every other section waits for the layout.
+            expect(shownSections(screen.getTextContent()).filter(id => id !== 'start')).toEqual([]);
+            await act(async () => { pending = false; read.resolve(); });
+            await flushHookEffects({ cycles: 20 });
+            expect(screen.findByTestId('home-hub.layout.loading')).toBeNull();
+            expect(shownSections(screen.getTextContent()).length).toBeGreaterThan(0);
+        } finally { read.resolve(); }
+    });
     it('holds a quiet page while it is not known yet whether a machine can run a session', async () => {
         settings.guidanceKind = 'loading';
         const loading = await renderHome();
@@ -314,48 +328,84 @@ describe('HomeHub', () => {
     });
 
     it('shows the Account\'s sections in its order, never hiding "Start a session" or "Needs your attention"', async () => {
-        settings.layout = { order: ['usage', 'start'], hidden: ['setup', 'start', 'attention'] };
+        settings.layout = { order: ['automations', 'start'], hidden: ['setup', 'start', 'attention'] };
         const screen = await renderHome();
 
-        // Machines is off until the person turns it on.
-        expect(shownSections(screen.getTextContent())).toEqual(['usage', 'start', 'attention', 'automations']);
+        expect(shownSections(screen.getTextContent())).toEqual(['automations', 'start', 'attention']);
+    });
+
+    it('leads Home with the atmosphere hero: the greeting and a leading composer on the seam', async () => {
+        const leading = await renderHome();
+        const hero = leading.findByTestId('home-hero');
+        expect(hero).toBeTruthy();
+        // The composer leads Home by default, so it stands in the hero under the greeting, once.
+        expect(shownSections(leading.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
+        expect(holdsText(hero!, 'section:start')).toBe(true);
+    });
+
+    it('keeps the Home Look entry after selecting None and can reopen it to restore Planet', async () => {
+        const screen = await renderHome();
+        await screen.pressByTestIdAsync('look-chip');
+        await screen.pressByTestIdAsync('look-source:none');
+        expect(storage.getState().settings.homeAtmosphere.source).toBe('none');
+        expect(screen.findByTestId('home-hero')).toBeNull();
+        // Closing and reopening exercises the actual Home entry, without Customize.
+        if (screen.findByTestId('look-panel')) await screen.pressByTestIdAsync('look-chip');
+        expect(screen.findByTestId('look-chip')).toBeTruthy();
+        await screen.pressByTestIdAsync('look-chip');
+        await screen.pressByTestIdAsync('look-source:planet');
+        expect(storage.getState().settings.homeAtmosphere.source).toBe('planet');
+        expect(screen.findByTestId('home-hero')).toBeTruthy();
+    });
+
+    it('keeps a composer moved below other sections where it was put, under the atmosphere hero', async () => {
+        settings.layout = { order: ['automations', 'start'], hidden: [] };
+        const moved = await renderHome();
+        expect(moved.findByTestId('home-hero')).toBeTruthy();
+        expect(shownSections(moved.getTextContent())).toEqual(['automations', 'start', 'attention', 'setup']);
+        expect(holdsText(moved.findByTestId('home-hero')!, 'section:start')).toBe(false);
     });
 
     it('opens Customize over the live page: switches, keyboard moves and reset write the Account layout', async () => {
         const screen = await renderHome();
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'usage']);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
 
         await openSections(screen);
         expect(screen.findByTestId('home-hub.customize.popover')).toBeTruthy();
         // Always shown: no switch.
         expect(screen.findByTestId('home-layout.attention.shown')).toBeNull();
         await act(async () => {
-            await screen.findByTestId('home-layout.machines.shown')!.props.onValueChange(true);
+            await screen.findByTestId('home-layout.automations.shown')!.props.onValueChange(false);
         });
         await flushHookEffects({ cycles: 2 });
         // The page behind updates at once.
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'machines', 'usage']);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup']);
+        await act(async () => {
+            await screen.findByTestId('home-layout.automations.shown')!.props.onValueChange(true);
+        });
+        await flushHookEffects({ cycles: 2 });
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
 
         // Keyboard reordering stages a move on the real shared Entity drag owner.
         await act(async () => {
-            screen.findByTestId('home-layout.usage.grip')!.props.onKeyDown({ key: 'Enter', preventDefault() {} });
+            screen.findByTestId('home-layout.automations.grip')!.props.onKeyDown({ key: 'Enter', preventDefault() {} });
         });
         await act(async () => {
-            screen.findByTestId('home-layout.usage.grip')!.props.onKeyDown({ key: 'ArrowUp', preventDefault() {} });
+            screen.findByTestId('home-layout.automations.grip')!.props.onKeyDown({ key: 'ArrowUp', preventDefault() {} });
         });
         await act(async () => {
-            screen.findByTestId('home-layout.usage.grip')!.props.onKeyDown({ key: 'Enter', preventDefault() {} });
+            screen.findByTestId('home-layout.automations.grip')!.props.onKeyDown({ key: 'Enter', preventDefault() {} });
         });
         await flushHookEffects({ cycles: 2 });
         await vi.waitFor(() => expect(artifact.writes.at(-1)).toMatchObject({
-            order: ['start', 'attention', 'setup', 'automations', 'usage', 'machines'],
+            order: ['start', 'attention', 'automations', 'setup'],
             hidden: [],
         }));
 
         screen.pressByTestId('home-layout.reset');
         await flushHookEffects({ cycles: 2 });
-        expect(artifact.layout()).toEqual({ v: 1, items: [], order: [], hidden: [] });
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'usage']);
+        expect(artifact.layout()).toEqual(HOME_HUB_DEFAULT_LAYOUT);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
 
         // The header button closes it again.
         screen.pressByTestId('home-hub.customize');
@@ -386,39 +436,48 @@ describe('HomeHub', () => {
         const { ModalCardFrame } = await import('@/modal/components/card/ModalCardFrame');
         expect(screen.findByType(ModalCardFrame).props.presentation).toBe('sheet');
         await act(async () => {
-            await screen.findByTestId('home-layout.machines.shown')!.props.onValueChange(true);
+            await screen.findByTestId('home-layout.automations.shown')!.props.onValueChange(false);
         });
         await flushHookEffects({ cycles: 2 });
-        expect(shownSections(screen.getTextContent())).toContain('machines');
-        expect(artifact.layout().hidden).not.toContain('machines');
+        expect(shownSections(screen.getTextContent())).not.toContain('automations');
+        expect(artifact.layout().hidden).toContain('automations');
 
         await act(async () => modal.props.onClose());
         await flushHookEffects({ cycles: 2 });
-        expect(screen.findByTestId('home-layout.machines.shown')).toBeNull();
-        expect(shownSections(screen.getTextContent())).toContain('machines');
+        expect(screen.findByTestId('home-layout.automations.shown')).toBeNull();
+        expect(shownSections(screen.getTextContent())).not.toContain('automations');
         // Home is still being customized: the sheet reopens from the same bar.
         await act(async () => screen.pressByTestId('home-hub.customizing.sections'));
         await flushHookEffects({ cycles: 2 });
         expect(screen.findByType('BaseModal').props.placement).toBe('bottom');
     });
 
-    it('keeps the Machines section mounted while usage arrives and goes away', async () => {
-        settings.machineCount = 1;
-        settings.layout = { order: ['start', 'attention', 'setup', 'automations', 'machines', 'usage'], hidden: [] };
+    it('keeps the Home section structure stable while usage arrives and goes away', async () => {
+        settings.layout = { order: ['start', 'attention', 'setup', 'automations'], hidden: [] };
         const screen = await renderHome();
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'machines', 'usage']);
-        expect(settings.machineMounts).toBe(1);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
 
         await setUsage([{ key: 'claude' }]);
         await setUsage([]);
 
         // Usage arriving changes the Usage section's content, never the page's structure.
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'machines', 'usage']);
-        expect(settings.machineMounts).toBe(1);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
     });
 });
 
 describe('HomeHub plugin widgets', () => {
+    it('shows Capacity through the canonical widget frame only for a missing layout, without writing it on mount', async () => {
+        const screen = await renderHome(artifact.request, 'missing');
+        expect(screen.findByTestId('home-hub.section.default:builtin:usage_capacity')).toBeTruthy();
+        expect(screen.findByTestId('home-hub.section.usage')).toBeNull();
+        expect(artifact.writes).toEqual([]);
+    });
+
+    it('keeps a present-empty layout empty rather than adding the missing-Home Capacity preset', async () => {
+        const screen = await renderHome();
+        expect(screen.findByTestId('home-hub.section.default:builtin:usage_capacity')).toBeNull();
+        expect(artifact.writes).toEqual([]);
+    });
     const LATEST = 'default:acme.review/latest';
     const CHECKS = 'default:acme.ci/checks';
 
@@ -539,8 +598,8 @@ describe('HomeHub plugin widgets', () => {
         const copy = (id: string): WidgetInstanceV1 => ({ v: 1, id, definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'checks' } }, bindings: {} });
         // Resume 13's live stored order retains five unresolved ids before the groups.
         const unresolved = retainedSlots ? ['55249652', '95e264e9', '9bc23fb9', 'b3785069', 'b5c03de6'] : [];
-        const preceding = ['start', 'attention', 'daily', 'setup', 'triage', 'automations', 'machines', 'usage'];
-        settings.layout = { order: [...preceding, ...unresolved, '53ab', '0389'], hidden: ['machines'], items: [
+        const preceding = ['start', 'attention', 'daily', 'setup', 'triage', 'automations'];
+        settings.layout = { order: [...preceding, ...unresolved, '53ab', '0389'], hidden: [], items: [
             ...placed(copy('daily'), copy('triage')),
             { kind: 'group', id: '53ab', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [
                 { kind: 'widget', instance: copy('c1ea'), size: 'small' }, { kind: 'widget', instance: copy('fb086'), size: 'small' }] },
@@ -799,7 +858,7 @@ describe('HomeHub plugin widgets', () => {
         installWidgets();
         const screen = await renderHome();
 
-        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations', 'usage']);
+        expect(shownSections(screen.getTextContent())).toEqual(['start', 'attention', 'setup', 'automations']);
         expect(screen.findByTestId(`home-hub.section.${LATEST}`)).toBeTruthy();
         expect(screen.findByTestId(`home-hub.section.${CHECKS}`)).toBeTruthy();
         expect(screen.findByTestId('home-hub.section.default:acme.ci/runs')).toBeNull();
@@ -813,7 +872,7 @@ describe('HomeHub plugin widgets', () => {
             await screen.findByTestId(`home-layout.${LATEST}.shown`)!.props.onValueChange(false);
         });
         await flushHookEffects({ cycles: 2 });
-        expect(artifact.layout().hidden).toEqual(['machines', LATEST]);
+        expect(artifact.layout().hidden).toEqual([LATEST]);
         expect(screen.findByTestId(`home-layout.${LATEST}.shown`)).toBeNull();
         expect(screen.findByTestId(`home-hub.section.${LATEST}`)).toBeNull();
         expect(screen.findByTestId(`home-hub.section.${CHECKS}`)).toBeTruthy();

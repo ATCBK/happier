@@ -11,6 +11,74 @@ function fixture() {
 }
 
 describe('mounted Home Account Artifact projection', () => {
+    it('publishes a group title to a newly loaded client only after its Artifact acknowledgement', async () => {
+        const { transport, owner } = fixture();
+        await owner.apply({ kind: 'widget_add', instance: { v: 1, id: 'checks',
+            definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} } });
+        await owner.apply({ kind: 'group_create', groupId: 'group', instanceIds: ['checks'] });
+        let release!: () => void;
+        let started!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const issued = new Promise<void>(resolve => { started = resolve; });
+        const writer = createHomeHubArtifactPortV1({ ...transport, update: async update => {
+            started(); await held; return transport.update(update);
+        } }, { accountId: 'one' });
+        const first = createHomeHubAccountStore({ accountId: 'one', transport, isCurrent: () => true,
+            execute: async intent => (await writer.apply(intent)).layout });
+        await first.refresh();
+        const write = first.dispatch({ kind: 'rename', instanceId: 'group', displayName: 'Release room' }, { rethrow: true });
+        try {
+            await issued;
+            expect(first.getSnapshot().isWriting).toBe(true);
+            const before = (await owner.read()).items.find(item => item.kind === 'group' && item.id === 'group');
+            expect(before).toMatchObject({ kind: 'group', id: 'group' });
+            expect(before).not.toHaveProperty('title', 'Release room');
+            release(); await write;
+            const reloaded = createHomeHubAccountStore({ accountId: 'one', transport, isCurrent: () => true,
+                execute: async intent => (await owner.apply(intent)).layout });
+            await reloaded.refresh();
+            expect(reloaded.getSnapshot().status).toBe('ready');
+            expect(reloaded.getSnapshot().layout.items.find(item => item.kind === 'group' && item.id === 'group'))
+                .toMatchObject({ kind: 'group', id: 'group', title: 'Release room' });
+            expect(first.getSnapshot().layout).toEqual(reloaded.getSnapshot().layout);
+        } finally { release(); await write; }
+    });
+    it('keeps write presentation pending across reads and neighboring queued writes until both database acknowledgements arrive', async () => {
+        const { transport, owner } = fixture();
+        await owner.apply({ kind: 'visibility', sectionId: 'setup', hidden: true });
+        let releaseFirst!: () => void;
+        let releaseSecond!: () => void;
+        let startedFirst!: () => void;
+        let startedSecond!: () => void;
+        const firstStarted = new Promise<void>(resolve => { startedFirst = resolve; });
+        const secondStarted = new Promise<void>(resolve => { startedSecond = resolve; });
+        const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
+        const secondHeld = new Promise<void>(resolve => { releaseSecond = resolve; });
+        let writes = 0;
+        const heldTransport = { ...transport, update: async (input: Parameters<typeof transport.update>[0]) => {
+            if (++writes === 1) { startedFirst(); await firstHeld; }
+            else { startedSecond(); await secondHeld; }
+            return transport.update(input);
+        } };
+        const writer = createHomeHubArtifactPortV1(heldTransport, { accountId: 'one' });
+        const store = createHomeHubAccountStore({ accountId: 'one', transport: heldTransport, isCurrent: () => true,
+            execute: async intent => (await writer.apply(intent)).layout });
+        await store.refresh();
+        const first = store.dispatch({ kind: 'setup_visibility', stepId: 'askHappier', hidden: true });
+        const second = store.dispatch({ kind: 'setup_visibility', stepId: 'addPhone', hidden: true });
+        try {
+            await firstStarted;
+            expect(store.getSnapshot().isWriting).toBe(true);
+            await store.refresh();
+            expect(store.getSnapshot().isWriting).toBe(true);
+            releaseFirst(); await first; await secondStarted;
+            expect(store.getSnapshot().isWriting).toBe(true);
+            releaseSecond(); await second;
+            expect(store.getSnapshot().isWriting).toBe(false);
+            expect(store.getSnapshot()).toMatchObject({ status: 'ready', layout: { hidden: expect.arrayContaining(['setup:askHappier', 'setup:addPhone']) } });
+            expect(store.getSnapshot().layout).toEqual(await owner.read());
+        } finally { releaseFirst(); releaseSecond(); await Promise.all([first, second]); }
+    });
     it('persists Ask Happier offer dismissal and restoration across clients', async () => {
         const { transport, owner } = fixture();
         const first = createHomeHubAccountStore({ accountId: 'one', transport, isCurrent: () => true, execute: async intent => (await owner.apply(intent)).layout });

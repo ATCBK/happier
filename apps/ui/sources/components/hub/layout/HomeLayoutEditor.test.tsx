@@ -13,7 +13,7 @@ import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/act
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-installSettingsViewCommonModuleMocks({ storage: (importOriginal) => importOriginal() });
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native-gesture-handler', async () => {
     const { createGestureHandlerMock } = await import('@/dev/testkit/mocks/gestureHandler');
@@ -30,9 +30,10 @@ const { EntityFlatReorderList } = await import('@/components/ui/treeDragDrop/ui/
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useHomeHubArtifactLayout } = await import('./useHomeHubArtifactLayout');
 const { useHomeHubLayout } = await import('./useHomeHubLayout');
+const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 const { buildHomeWidgetAddSections } = await import('@/components/widgets/add/HomeWidgetAddPopover');
 const { runWidgetSetupCommand } = await import('@/components/widgets/surface/widgetSurfaceSetup');
-const { useWidgetFrameRename } = await import('@/components/widgets/frame/useWidgetFrameRename');
+const { useWidgetFrameRename, WidgetFrameNameField } = await import('@/components/widgets/frame/useWidgetFrameRename');
 const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const initial = storage.getState();
@@ -51,6 +52,7 @@ function AccountShell({ children }: React.PropsWithChildren) {
 beforeEach(async () => { restoreGlobals = withPopoverWebGlobals(); await loadSyncSingletonForTests(); });
 afterEach(async () => {
     standardCleanup();
+    retirePresentationNotice();
     restoreGlobals?.();
     await connection?.dispose();
     connection = undefined;
@@ -64,6 +66,85 @@ function storedInstances(artifact: Readonly<{ layout(): { items?: HomeHubLayoutV
 }
 
 describe('Home Customize entity reorder binding', () => {
+    it.each([{ kind: 'group', pending: false }, { kind: 'widget', pending: false },
+        { kind: 'group', pending: true }, { kind: 'widget', pending: true }] as const)
+    ('explains a cold Home failure from the $kind frame rename and retains its draft (pending: $pending)', async ({ kind, pending }) => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'session_summary' as const }, bindings: {} };
+        artifact.seed({ v: 1, items: kind === 'group'
+            ? [{ kind: 'group', id: 'g', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget', instance }] }]
+            : [{ kind: 'widget', instance }], order: [], hidden: [] });
+        let unreachable = false;
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        restoreActionLoader = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl: `https://home-frame-${kind}.test`, accountId: 'account-a', request: async (url, init) => {
+            if (unreachable && new URL(String(url)).pathname === '/v2/account/settings') {
+                if (pending) await held;
+                else throw new TypeError('Failed to fetch');
+            }
+            return artifact.request(url, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        let rename: ReturnType<typeof useWidgetFrameRename> | undefined;
+        let write: Promise<void> | undefined;
+        function Probe() {
+            const layout = useHomeHubLayout();
+            rename = useWidgetFrameRename({ title: 'Checks', testID: 'frame', serverId: scope.serverId,
+                onRename: next => write = layout.rename('copy', next) });
+            return kind === 'group' ? <WidgetFrameNameField value="" placeholder="Name" accessibilityLabel="Group name"
+                testID="frame-title-input" serverId={scope.serverId} onRename={next => write = layout.rename('g', next)} /> : rename.field;
+        }
+        const screen = await renderScreen(<AccountShell><Probe /></AccountShell>);
+        await flushHookEffects({ cycles: 3 });
+        if (kind === 'widget') await act(async () => { rename!.begin!(); });
+        const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+        const { accountSettingsScopeKeySuffix } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+        const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        getPersistenceStorage().delete(`account-settings:v2:${accountSettingsScopeKeySuffix(scope)}`);
+        storage.setState({ settingsScope: null });
+        expect(loadAccountSettings(scope).version).toBeNull();
+        unreachable = true;
+        const { Modal } = await import('@/modal');
+        const alert = vi.spyOn(Modal, 'alert');
+        const runtime = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previousApplied = runtime.getAppliedActiveServerSnapshot();
+        const previousAvailable = runtime.isAppliedActiveServerRuntimeAvailable();
+        const previousHealth = storage.getState();
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        runtime.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ endpointStatus: 'online', endpointReason: null, socketStatus: 'connected', syncError: null });
+        try {
+        await act(async () => { screen.findByTestId('frame-title-input')!.props.onChangeText('Unsaved checks'); });
+        await act(async () => { screen.findByTestId('frame-title-input')!.props.onSubmitEditing(); });
+        const { t } = await import('@/text');
+        if (pending) {
+            await act(async () => { storage.setState({ endpointStatus: 'connecting', socketStatus: 'connecting', syncError: null }); });
+            expect(screen.findByTestId('frame-title-input')!.props.accessibilityState).toMatchObject({ busy: true });
+            expect(screen.findByTestId('home-unreachable')).toBeNull();
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(screen.findByTestId('home-unreachable')).not.toBeNull();
+            expect(screen.findByTestId('frame-title-input')!.props.accessibilityState).toMatchObject({ busy: false });
+            expect(screen.findByTestId('frame-title-input')!.props.editable).toBe(false);
+            expect(screen.findByTestId('frame-title-input')!.props.value).toBe('Unsaved checks');
+            expect(artifact.writes).toHaveLength(0);
+            await act(async () => { storage.setState({ endpointStatus: 'online' }); release(); await write; });
+            expect(artifact.writes).toHaveLength(1);
+            expect(alert).not.toHaveBeenCalled();
+            return;
+        }
+        expect(alert).toHaveBeenCalledWith(t('common.error'), t('settingsPlugins.targetSelection.unreachableThisHome'));
+        expect(artifact.writes).toHaveLength(0);
+        expect(screen.findByTestId('frame-title-input')!.props.value).toBe('Unsaved checks');
+        expect(screen.findByTestId('frame-title-input')!.props.editable).toBe(true);
+        } finally {
+            release(); await write?.catch(() => {}); alert.mockRestore();
+            storage.setState({ endpointStatus: previousHealth.endpointStatus, endpointReason: previousHealth.endpointReason,
+                socketStatus: previousHealth.socketStatus, syncError: previousHealth.syncError });
+            runtime.publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        }
+    });
     it.each([
         { sizes: ['wide'], defaultSize: 'wide' },
         { sizes: ['medium', 'tall'], defaultSize: 'tall' },
@@ -110,34 +191,70 @@ describe('Home Customize entity reorder binding', () => {
         expect(screen.root.findAll(node => node.props.testIDPrefix === 'home-layout.g.group.width')).toHaveLength(0);
         expect(artifact.writes).toHaveLength(0);
     });
-    it('rejects failed Customize writes through the real queue and keeps mounted recovery available', async () => {
+    it('names an unreachable Home when a preparatory read prevents a Customize write', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
         artifact.seed({ v: 1, items: [], order: ['setup'], hidden: ['setup'] });
-        let failWrite = true;
+        let unreachable = false;
+        restoreActionLoader = await installRealActionExecutorModuleLoader();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-customize-unreachable.test', accountId: 'account-a', request: async (url, init) => {
+            if (unreachable && new URL(String(url)).pathname === '/v2/account/settings') throw new TypeError('Failed to fetch');
+            return artifact.request(url, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        let layout: ReturnType<typeof useHomeHubLayout> | undefined;
+        function Probe() { layout = useHomeHubLayout(); return <HomeLayoutEditor presentation="popover" />; }
+        const screen = await renderScreen(<AccountShell><Probe /></AccountShell>);
+        await flushHookEffects({ cycles: 3 });
+        // Both mounted and device-persisted Settings are real warm read sources.
+        // Retire only this test Account's fake MMKV entry to exercise a cold read.
+        const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+        const { accountSettingsScopeKeySuffix } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+        const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        getPersistenceStorage().delete(`account-settings:v2:${accountSettingsScopeKeySuffix(scope)}`);
+        storage.setState({ settingsScope: null });
+        expect(loadAccountSettings(scope).version).toBeNull();
+        unreachable = true;
+        await act(async () => { await expect(layout!.reset()).rejects.toBeInstanceOf(Error); });
+        const { t } = await import('@/text');
+        expect(screen.getTextContent()).toContain(t('settingsPlugins.targetSelection.unreachableThisHome'));
+        expect(artifact.writes).toHaveLength(0);
+        expect(artifact.layout()).toMatchObject({ order: ['setup'], hidden: ['setup'] });
+    });
+    it('persists a group title through the real Action and exposes a refused rename without acknowledging it', async () => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        artifact.seed({ v: 1, items: [{ kind: 'group', id: 'g', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget',
+            instance: { v: 1, id: 'child', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} } }] }], order: [], hidden: [] });
+        let failWrite = false;
         await import('@/sync/syncEngine');
         restoreActionLoader = await installRealActionExecutorModuleLoader();
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-customize-write.test', accountId: 'account-a', request: async (url, init) => {
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-group-title.test', accountId: 'account-a', request: async (url, init) => {
             if (failWrite && init?.method === 'POST' && new URL(String(url)).pathname.startsWith('/v1/artifacts')) return Response.json({ error: 'forbidden' }, { status: 403 });
             return artifact.request(url, init);
         } });
         const scope = { serverId: connection.home.id, accountId: 'account-a' };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
         let layout: ReturnType<typeof useHomeHubLayout> | undefined;
-        function Probe() { layout = useHomeHubLayout(); return null; }
+        function Probe() {
+            layout = useHomeHubLayout();
+            const group = layout.items.find(item => item.kind === 'group' && item.id === 'g');
+            return <WidgetFrameNameField value={group?.kind === 'group' ? group.title ?? '' : ''}
+                placeholder="Name" accessibilityLabel="Group name" testID="group-name" onRename={next => layout!.rename('g', next)} />;
+        }
         const screen = await renderScreen(<AccountShell><HomeLayoutEditor presentation="popover" /><Probe /></AccountShell>);
         await flushHookEffects({ cycles: 3 });
-        await act(async () => { await expect(layout!.reset()).rejects.toBeInstanceOf(Error); });
-        expect(artifact.layout()).toMatchObject({ order: ['setup'], hidden: ['setup'] });
+        await act(async () => { screen.findByTestId('group-name')!.props.onChangeText('Release room'); });
+        await act(async () => { screen.findByTestId('group-name')!.props.onSubmitEditing(); });
+        expect(artifact.layout().items).toMatchObject([{ kind: 'group', id: 'g', title: 'Release room' }]);
+        await act(async () => { await layout!.retry(); });
+        expect(layout!.items).toMatchObject([{ kind: 'group', id: 'g', title: 'Release room' }]);
+        failWrite = true;
+        await act(async () => { screen.findByTestId('group-name')!.props.onChangeText('Unsaved room'); });
+        await act(async () => { screen.findByTestId('group-name')!.props.onSubmitEditing(); });
         expect(screen.findByTestId('home-layout.save-error')).not.toBeNull();
-        await act(async () => { await expect(layout!.setHidden('setup', false)).rejects.toBeInstanceOf(Error); });
-        expect(artifact.layout().hidden).toEqual(['setup']);
-        await screen.pressByTestIdAsync('home-layout.reset');
         expect(layout!.status).toBe('error');
-        expect(screen.findByTestId('home-layout.retry')).not.toBeNull();
-        failWrite = false;
-        await screen.pressByTestIdAsync('home-layout.retry');
-        expect(artifact.layout()).toMatchObject({ order: [], hidden: [] });
-        expect(layout!.status).toBe('ready');
+        expect(artifact.layout().items).toMatchObject([{ kind: 'group', id: 'g', title: 'Release room' }]);
+        expect(screen.findByTestId('group-name')!.props.value).toBe('Unsaved room');
     });
     it('keeps failed Home setup and input edits unsaved through the real Action queue, then retries them', async () => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
@@ -194,6 +311,10 @@ describe('Home Customize entity reorder binding', () => {
         const screen = await renderScreen(<AccountShell><Probe /></AccountShell>);
         await flushHookEffects({ cycles: 3 });
         const definition = { kind: 'builtin' as const, id: 'agent_plan' as const };
+        const { sync } = await import('@/sync/sync');
+        await expect(sync.withSessionSystemRecordRuntime({ serverId: scope.serverId, sessionId: 'session-1' },
+            async runtime => ({ canRead: runtime.session.access?.capabilities.readTranscript, current: runtime.isCurrent() })))
+            .resolves.toEqual({ status: 'ok', value: { canRead: true, current: true } });
         const candidate = readWidgetDescriptor(null, definition)!;
         const setup = buildHomeWidgetAddSections({ candidates: [candidate], instances: [instance], addInstance: layout!.addInstance, scope })[0]!.entries[0]!.setup!();
         const draft = { bindings: { session: { kind: 'value' as const, value: { serverId: scope.serverId, sessionId: 'session-1' } } } };

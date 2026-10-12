@@ -12,13 +12,15 @@ import {
     type NearViewportSpan,
     type NearViewportTracker,
 } from '@/components/widgets/nearViewport';
-import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { isBuiltinWidgetSwitchedOff, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { useAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 import { t } from '@/text';
 
 import { useActivateAppDestination, useCompactAppDestinations, type CompactAppPluginDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WidgetFrame, type WidgetFrameFooter, type WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
 import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
-import { WidgetFrameBodyCaptionContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
+import { WidgetFrameBodyCaptionContext, WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { widgetGroupFollowSource } from '@/components/widgets/group/widgetGroupInputs';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useSessionSurfaceEntityDrag, useSessionSurfaceCarriedStyle, SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback, type SessionSurfaceEntityBinding } from '@/components/sessions/board/SessionSurfaceEntityDrag';
@@ -42,7 +44,8 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     menu: React.ReactNode;
     /** Card or plain: this section's override, else Home's Appearance default (resolved by the slot). */
     frameStyle: WidgetFrameStyle;
-    tracker: NearViewportTracker;
+    /** The page's scroll host; without one the body is always built. */
+    tracker: Pick<NearViewportTracker, 'subscribe' | 'getWindow' | 'measureSpan' | 'getLayoutRevision'> | null;
     testID: string;
     hoverProps?: Readonly<Record<string, unknown>>;
     /** While renaming, the field takes the title's place. */
@@ -52,17 +55,40 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     entityDrag?: SessionSurfaceEntityBinding;
     /** Inside a group: drawn plain with no hairline of its own; the group draws the dividers. */
     grouped?: boolean;
-    /** In a half-width cell of a group: the title keeps its room; source and activity take their short forms. */
-    halfCell?: boolean;
+    /**
+     * A page section hosts this widget (Settings › Overview): the section draws the title, the sheet
+     * and any link row, so the frame draws no header, mark, source or footer of its own, sizes to its
+     * body (a page is content height: no reserved empty rows) and keeps its content on the rows' edge.
+     */
+    sectionHost?: boolean;
     /** The move handle shows (Home is being customized); in view mode a hover pointer drags the card itself. */
     showGrip?: boolean;
     groupBindings?: WidgetInputBindingsV1;
     /** It follows its group's value: the source line says so instead of naming the plugin. */
-    followSource?: Readonly<{ value: string; wide: boolean }>;
+    followSource?: Readonly<{ value: string; wide: boolean; /** The group's own header names the value: this widget does not repeat it. */ groupNamesValue: boolean }>;
 }>) {
     const focused = useIsFocused();
     const phone = !useIsTablet();
-    const drag = useSessionSurfaceEntityDrag(focused ? props.entityDrag ?? null : null);
+    const descriptor = props.widget ?? null;
+    const pluginName = descriptor?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
+    // Copies are named by what they are bound to, in the source slot (lab dbind H, N1).
+    const bindingLabel = useWidgetInstanceBindingLabel(props.instance, descriptor);
+    // The body may name what it shows ("Tokens by agent · last 7 days"), as it does in every area.
+    const [bodyCaption, setBodyCaption] = React.useState<string | null>(null);
+    // …and may say its one live fact in the header's meta slot ("1 needs you").
+    const [bodyMeta, setBodyMeta] = React.useState<React.ReactNode>(null);
+    // A built-in withdrawn by its own switch (Your Home's atmosphere moment) keeps its place in the layout, undrawn.
+    const switchedOff = isBuiltinWidgetSwitchedOff(props.instance.definition, useAtmosphereMoments());
+    const source = props.followSource
+        ? props.followSource.groupNamesValue
+            ? bodyCaption ?? undefined
+            : widgetGroupFollowSource(props.followSource.value, props.followSource.wide || phone)
+        : bodyCaption ?? bindingLabel ?? pluginName;
+    // Carried, the card keeps its mark and says its source and the size it keeps (lab wgdnd 1).
+    const carried = useWidgetCarriedIdentity({ kind: 'widget', mark: descriptor?.icon ?? 'squares-four',
+        source: typeof source === 'string' || source === undefined ? source : source.text, size: props.size ?? 'medium' });
+    const entityDrag = React.useMemo(() => props.entityDrag ? { ...props.entityDrag, ...carried } : null, [carried, props.entityDrag]);
+    const drag = useSessionSurfaceEntityDrag(focused ? entityDrag : null);
     const carriedStyle = useSessionSurfaceCarriedStyle(drag);
     const sectionRef = React.useRef<View>(null);
     const latestMeasurement = React.useRef<Promise<NearViewportSpan | null> | null>(null);
@@ -70,12 +96,12 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     const near = useIsNearViewport(props.tracker, span);
     const [bodyHeight, setBodyHeight] = React.useState(0);
     const active = focused && near;
-    const descriptor = props.widget ?? null;
     const size = props.size ?? 'medium';
     const widgetPresentation = React.useMemo(() => ({ size, footprint: getWidgetSizeFootprintV1('home', size)! }), [size]);
 
     const measure = React.useCallback(() => {
         const node = sectionRef.current;
+        if (!props.tracker) return;
         const measurement = props.tracker.measureSpan(node);
         latestMeasurement.current = measurement;
         void measurement.then(next => {
@@ -84,10 +110,12 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
         });
     }, [props.tracker]);
     React.useEffect(() => {
-        let revision = props.tracker.getLayoutRevision();
+        const tracker = props.tracker;
+        if (!tracker) return;
+        let revision = tracker.getLayoutRevision();
         measure();
-        const unsubscribe = props.tracker.subscribe(() => {
-            const next = props.tracker.getLayoutRevision();
+        const unsubscribe = tracker.subscribe(() => {
+            const next = tracker.getLayoutRevision();
             if (next === revision) return;
             revision = next;
             measure();
@@ -109,11 +137,6 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
             && destination.availability === 'available');
         return pages.length === 1 ? pages[0]! : null;
     }, [destinations, props.widget?.surface?.pluginId]);
-    const pluginName = descriptor?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
-    // Copies are named by what they are bound to, in the source slot (lab dbind H, N1).
-    const bindingLabel = useWidgetInstanceBindingLabel(props.instance, descriptor);
-    // The body may name what it shows ("Tokens by agent · last 7 days"), as it does in every area.
-    const [bodyCaption, setBodyCaption] = React.useState<string | null>(null);
     const footer = React.useMemo<WidgetFrameFooter | null>(() => (page
         ? {
             kind: 'open',
@@ -124,9 +147,12 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     const body = React.useMemo(() => ({
         kind: 'content' as const,
         children: active ? (
-            <View testID={`${props.testID}.body`} onLayout={onBodyLayout}>
+            // Fills the frame's body room so a state replacing the body sits balanced in the card.
+            <View testID={`${props.testID}.body`} onLayout={onBodyLayout} style={{ flexGrow: 1 }}>
                 <WidgetFrameBodyCaptionContext.Provider value={setBodyCaption}>
+                <WidgetFrameBodyMetaContext.Provider value={setBodyMeta}>
                     <HubWidgetBody widget={descriptor ?? undefined} instance={props.instance} groupBindings={props.groupBindings} size={size} onRepairInputs={props.onRepairInputs} testID={`${props.testID}.widget`} />
+                </WidgetFrameBodyMetaContext.Provider>
                 </WidgetFrameBodyCaptionContext.Provider>
             </View>
         ) : (
@@ -135,6 +161,7 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
         ),
     }), [active, bodyHeight, onBodyLayout, props.testID, descriptor, props.instance, props.onRepairInputs, size]);
 
+    if (switchedOff) return null;
     return (
         <View ref={node => { sectionRef.current = node; drag.ref(node); }} collapsable={false} testID={props.testID} onLayout={() => { measure(); drag.onLayout(); }} style={[styles.cell, carriedStyle]} {...props.hoverProps}>
             <WidgetFrame
@@ -142,17 +169,18 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
                 frameStyle={props.frameStyle}
                 placement="home"
                 widgetPresentation={widgetPresentation}
-                mark={descriptor?.icon ?? 'squares-four'}
-                title={props.titleEditor ?? props.instance.displayName ?? descriptor?.title ?? t('boards.widgets.kind')}
-                source={props.followSource
-                    ? widgetGroupFollowSource(props.followSource.value, props.followSource.wide || phone)
-                    : bodyCaption ?? bindingLabel ?? pluginName}
-                grouped={props.grouped === true}
-                compactHeader={props.halfCell === true && !phone}
+                {...(props.sectionHost ? { title: null } : {
+                    mark: descriptor?.icon ?? 'squares-four',
+                    title: props.titleEditor ?? props.instance.displayName ?? descriptor?.title ?? t('boards.widgets.kind'),
+                    source,
+                    meta: bodyMeta,
+                })}
+                grouped={props.grouped === true || props.sectionHost === true}
+                {...(props.sectionHost ? { bodyHeight: 'content' as const } : {})}
                 {...(props.entityDrag && props.showGrip ? { leading: <SessionSurfaceEntityDragHandle drag={drag} title={props.entityDrag.title} testID={`${props.testID}.move`} /> } : {})}
                 menu={props.menu}
                 body={body}
-                footer={footer}
+                footer={props.sectionHost ? null : footer}
             />
             <SessionSurfaceEntityTargetFeedback drag={drag} testID={`${props.testID}.drop`} />
         </View>

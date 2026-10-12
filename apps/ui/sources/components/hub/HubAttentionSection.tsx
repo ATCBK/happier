@@ -35,6 +35,10 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { refreshOrdinarySessionList } from '@/sync/domains/session/listing/sessionListQueryRuntime';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
+import { summarizeMachinesNeedingAttention, useMachinesNeedingAttention } from '@/components/machines/attention/useMachinesNeedingAttention';
+import { machinePageHref, machinesIndexHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
+
 import type { HubSectionProps } from './hubSectionProps';
 import { useActivityOverviewSummary } from '@/activity/source/useActivityOverview';
 
@@ -179,6 +183,36 @@ function useHomesNotAnswering(): AttentionItem[] {
 }
 
 /**
+ * Machines that need you now (MPG-23), as one row like the Sessions above: one machine by its name and
+ * reason with its action, several as a count that opens the list of machines — through the rail door.
+ */
+function useMachinesNeedingYou(): AttentionItem[] {
+    const router = useRouter();
+    const { theme } = useUnistyles();
+    const machines = useMachinesNeedingAttention();
+    return React.useMemo(() => {
+        const summary = summarizeMachinesNeedingAttention(machines);
+        if (!summary) return [];
+        const target = summary.machine;
+        return [{
+            key: 'machines',
+            mark: <Icon name="desktop" size={MARK_SIZE} color={theme.colors.text.secondary} />,
+            title: summary.title,
+            actionLabel: summary.actionLabel,
+            onAction: () => {
+                if (!target) {
+                    router.push(machinesIndexHref('rail') as never);
+                    return;
+                }
+                beginMachinePageTabIntent({ machineId: target.machineId, serverId: target.serverId }, target.tab);
+                router.push(machinePageHref({ door: 'rail', target: { machineId: target.machineId, serverId: target.serverId },
+                    ...(target.tab ? { tab: target.tab } : {}) }) as never);
+            },
+        }];
+    }, [machines, router, theme.colors.text.secondary]);
+}
+
+/**
  * Only what needs the person now, each with the action that resolves it. The section is absent
  * when nothing does: a healthy setup is quiet.
  */
@@ -189,7 +223,8 @@ export const HubAttentionSection = React.memo(function HubAttentionSection(props
     const updates = useUpdatesNeedingAttention();
     const plugins = usePluginChangesAwaitingReview();
     const homes = useHomesNotAnswering();
-    const items = [...sessions, ...homes, ...updates, ...agents, ...services, ...plugins];
+    const machines = useMachinesNeedingYou();
+    const items = [...sessions, ...machines, ...homes, ...updates, ...agents, ...services, ...plugins];
     return <HubAttentionList items={items} menu={props.menu} />;
 });
 

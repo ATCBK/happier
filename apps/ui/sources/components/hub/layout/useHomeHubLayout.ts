@@ -7,6 +7,11 @@ import { useHomeWidgetCandidates } from './useHomeWidgetCandidates';
 import { useHomeHubArtifactLayout } from './useHomeHubArtifactLayout';
 import { useWidgetInstanceDescriptors } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { t } from '@/text';
 
 export type HomeHubLayout = Readonly<{
     order: readonly string[];
@@ -55,7 +60,26 @@ export function useHomeHubLayout(): HomeHubLayout {
     }, [widgets, descriptors]);
     const resolved = React.useMemo(() => resolveHomeHubLayout(layout, HOME_HUB_BUILTIN_DEFINITIONS, layoutWidgets), [layout, layoutWidgets]);
     const write = state.dispatch;
-    const dispatch = React.useCallback((intent: HomeHubLayoutIntent) => write(intent, { rethrow: true }), [write]);
+    const noticeKey = scope ? `home-layout-write:${serverAccountScopeKeySuffix(scope)}` : null;
+    React.useEffect(() => {
+        if (noticeKey && state.status === 'ready') retirePresentationNotice(noticeKey);
+    }, [noticeKey, state.status]);
+    const notifyFailure = React.useCallback(function notifyFailure(error: unknown) {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!noticeKey || !lifetime?.isCurrent() || !areServerAccountScopesEqual(lifetime.scope, scope)) return;
+        publishPresentationNotice({ key: noticeKey, severity: 'error',
+            message: resolveActionExecutionErrorMessage(error, t('widgetAdd.saveFailed')),
+            // Retry stays with the captured Account queue; a failed Retry restores its dismissed notice.
+            undo: { label: t('common.retry'), run: () => { void state.retry({ rethrow: true }).catch(notifyFailure); } },
+        });
+    }, [noticeKey, scope, state.retry]);
+    const dispatch = React.useCallback(async (intent: HomeHubLayoutIntent) => {
+        try { await write(intent, { rethrow: true }); }
+        catch (error) {
+            notifyFailure(error);
+            throw error;
+        }
+    }, [notifyFailure, write]);
     return React.useMemo(() => ({
         items: resolved.sections.flatMap<WidgetLayoutItemV1>(section => section.kind === 'builtin' ? [] : section.kind === 'group' ? [section.group]
             : [{ kind: 'widget' as const, instance: section.instance, size: section.size, ...(section.frameStyle ? { frameStyle: section.frameStyle } : {}) }]),

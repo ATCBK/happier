@@ -2,17 +2,11 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { useAuth } from '@/auth/context/AuthContext';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { useAccountEncryptionMode } from '@/components/settings/account/useAccountEncryptionMode';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import {
-    fetchAccountEncryptionMode,
-    getAccountEncryptionModeCacheRevision,
-    getCachedAccountEncryptionMode,
-    subscribeAccountEncryptionModeCacheInvalidation,
-} from '@/sync/api/account/apiAccountEncryptionMode';
 import { t } from '@/text';
 
 /**
@@ -24,32 +18,7 @@ import { t } from '@/text';
 export const HubSecuritySection = React.memo(function HubSecuritySection() {
     const router = useRouter();
     const { theme } = useUnistyles();
-    const credentials = useAuth().credentials;
-    const revision = React.useSyncExternalStore(
-        subscribeAccountEncryptionModeCacheInvalidation,
-        getAccountEncryptionModeCacheRevision,
-        getAccountEncryptionModeCacheRevision,
-    );
-    const [mode, setMode] = React.useState<'e2ee' | 'plain' | null>(
-        () => (credentials ? getCachedAccountEncryptionMode(credentials) : null),
-    );
-
-    React.useEffect(() => {
-        if (!credentials) {
-            setMode(null);
-            return undefined;
-        }
-        let current = true;
-        void fetchAccountEncryptionMode(credentials).then(
-            (result) => { if (current) setMode(result.mode); },
-            // Not answered (offline, unreachable Home): the mode stays unknown and the section absent
-            // until the next read; nothing waits on it.
-            () => undefined,
-        );
-        return () => {
-            current = false;
-        };
-    }, [credentials, revision]);
+    const mode = useAccountEncryptionMode();
 
     if (mode !== 'e2ee' && mode !== 'plain') return null;
     return (

@@ -10,10 +10,13 @@ import type { CustomModalConfig } from '@/modal/types';
 import { t } from '@/text';
 import { useIsTablet } from '@/utils/platform/responsive';
 
+import { LookPopover } from '@/components/atmosphere/look/LookChip';
+
 import { HomeLayoutEditor } from '../layout/HomeLayoutEditor';
 import { HomeCustomizeBanner } from './HomeCustomizeBanner';
 
 const SECTIONS_POPOVER_WIDTH_PX = 360;
+const HOME_LOOK_TARGET = { surface: 'home' } as const;
 const SECTIONS_POPOVER_MAX_HEIGHT_PX = 640;
 
 /** The phone sheet's section list. */
@@ -39,12 +42,19 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
   const phone = !useIsTablet();
   const sectionsAnchorRef = React.useRef<View | null>(null);
   const addAnchorRef = React.useRef<View | null>(null);
+  const barRef = React.useRef<View | null>(null);
+  const lookAnchorRef = React.useRef<View | null>(null);
   const [sectionsOpen, setSectionsOpen] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
+  const [lookOpen, setLookOpen] = React.useState(false);
+  const toggleLook = React.useCallback(() => setLookOpen((open) => !open), []);
+  const closeLook = React.useCallback(() => setLookOpen(false), []);
   const toggleSections = React.useCallback(
     () => setSectionsOpen((open) => !open),
     [],
   );
+  // Opening Add never moves the page: the panel keeps its designed size and slides inside the window
+  // around its trigger (the shared surface's `fit="shift"`), so nothing under it jumps.
   const toggleAdd = React.useCallback(() => setAddOpen((open) => !open), []);
   const closeSections = React.useCallback(() => setSectionsOpen(false), []);
   const closeAdd = React.useCallback(() => setAddOpen(false), []);
@@ -76,6 +86,17 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
         onDone={props.onDone}
         sectionsAnchorRef={sectionsAnchorRef}
         addAnchorRef={addAnchorRef}
+        barRef={barRef}
+        lookOpen={lookOpen}
+        onToggleLook={toggleLook}
+        lookAnchorRef={lookAnchorRef}
+      />
+      <LookPopover
+        target={HOME_LOOK_TARGET}
+        open={lookOpen}
+        anchorRef={lookAnchorRef}
+        onRequestClose={closeLook}
+        interactionBoundaryRef={props.interactionBoundaryRef}
       />
       {sectionsOpen && phone ? (
         <CustomModal visible config={sheetConfig} onClose={closeSections} />
@@ -118,6 +139,7 @@ export const HomeCustomizeBar = React.memo(function HomeCustomizeBar(
       <HomeWidgetAddPopover
         open={addOpen}
         anchorRef={addAnchorRef}
+        regionRef={barRef}
         onRequestClose={closeAdd}
         testID="home-hub.add"
       />

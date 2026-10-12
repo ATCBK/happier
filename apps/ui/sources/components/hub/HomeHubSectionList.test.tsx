@@ -50,22 +50,34 @@ describe('HomeHubSectionList (the column contract)', () => {
         expect(cellSpans(screen, 'home-hub.cards:automations')).toContain('row');
     });
 
+    it('never leaves a hole beside a half-width card: a half with no half beside it takes the row', async () => {
+        // Latest runs (half) then a full-width group: the half would sit beside an empty slot.
+        const before = await renderList([builtin('automations'), widget('group', 'full'), widget('a'), widget('b'), widget('c')]);
+        const rows = before.findByTestId('home-hub.cards:automations')!
+            .findAll((node) => node.props?.span === 'row' && typeof node.props.children === 'string')
+            .map((node) => node.props.children);
+        // a and b pair up; Latest runs before the full-width group and c after b each take their row.
+        expect([...new Set(rows)]).toEqual(['block:automations', 'block:group', 'block:c']);
+    });
     it('preserves a configured full-width copy between independently sized half-width copies', async () => {
-        const screen = await renderList([widget('first'), widget('wide', 'full'), widget('last')]);
+        const sections = [widget('first'), widget('wide', 'full'), widget('last')];
+        const saved = JSON.stringify(sections);
+        const screen = await renderList(sections);
         expect(screen.getTextContent()).toBe('block:first block:wide block:last');
         const grid = screen.findByTestId('home-hub.cards:first');
-        const full = grid?.findAll((node) => node.props?.span === 'row');
-        expect(full).toHaveLength(1);
-        expect(full?.[0]?.props.children).toBe('block:wide');
+        const full = grid?.findAll((node) => node.props?.span === 'row' && typeof node.props.children === 'string');
+        // Each half stands alone in its row, so each takes the row; the saved sizes are unchanged.
+        expect([...new Set(full?.map((node) => node.props.children))]).toEqual(['block:first', 'block:wide', 'block:last']);
+        expect(JSON.stringify(sections)).toBe(saved);
     });
     it('keeps equal-area medium and wide footprints distinct while phone reflow preserves saved intent', async () => {
         const sections = [widget('medium', 'medium'), widget('wide', 'wide')];
         const before = JSON.stringify(sections);
         const screen = await renderList(sections);
         const grid = screen.findByTestId('home-hub.cards:medium')!;
-        const full = grid.findAll(node => node.props?.span === 'row');
-        expect(full).toHaveLength(1);
-        expect(full[0]!.props.children).toBe('block:wide');
+        const full = grid.findAll(node => node.props?.span === 'row' && typeof node.props.children === 'string');
+        // The medium has no half beside it (the wide takes its own row), so it takes the row too.
+        expect([...new Set(full.map(node => node.props.children))]).toEqual(['block:medium', 'block:wide']);
         const measured = screen.findAll(node => node.props?.testID === 'home-hub.cards:medium' && typeof node.props.onLayout === 'function')[0]!;
         await act(async () => measured.props.onLayout({ nativeEvent: { layout: { width: 390, height: 600 } } }));
         expect(screen.getTextContent()).toBe('block:medium block:wide');

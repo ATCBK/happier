@@ -5,9 +5,20 @@ export type HomeHubReadState = Readonly<{
     layout: HomeHubLayoutValue;
     status: 'loading' | 'ready' | 'error';
     hasSnapshot: boolean;
+    isWriting: boolean;
     errorCode?: string;
     failedIntent?: HomeHubLayoutIntent;
 }>;
+
+/** A validated mutation receipt survived, but its subsequent projection read did not. */
+export class HomeHubAcknowledgedProjectionReadError extends Error {
+    readonly code: string;
+    constructor(error: unknown) {
+        super('Home layout projection unavailable after acknowledgement');
+        this.code = error instanceof Error && 'code' in error && typeof error.code === 'string'
+            ? error.code : 'home_hub_projection_unavailable';
+    }
+}
 
 /** A mounted projection of the Artifact owner. Only Actions admit and acknowledge edits. */
 export function createHomeHubAccountStore(input: Readonly<{
@@ -16,7 +27,7 @@ export function createHomeHubAccountStore(input: Readonly<{
     isCurrent(): boolean;
     execute(intent: HomeHubLayoutIntent): Promise<HomeHubLayoutValue>;
 }>) {
-    let state: HomeHubReadState = { layout: HOME_HUB_DEFAULT_LAYOUT, status: 'loading', hasSnapshot: false };
+    let state: HomeHubReadState = { layout: HOME_HUB_DEFAULT_LAYOUT, status: 'loading', hasSnapshot: false, isWriting: false };
     let writes = 0;
     let refreshing: Promise<void> | null = null;
     let tail: Promise<void> = Promise.resolve();
@@ -36,12 +47,14 @@ export function createHomeHubAccountStore(input: Readonly<{
         const before = writes;
         refreshing = reader.read().then(layout => {
             if (before === writes) set({ layout, status: state.failedIntent ? 'error' : 'ready', hasSnapshot: true,
+                isWriting: state.isWriting,
                 ...(state.failedIntent ? { failedIntent: state.failedIntent, errorCode: state.errorCode } : {}) });
         }, error => { if (before === writes) set({ ...state, status: 'error', errorCode: errorCode(error) }); })
             .finally(() => { refreshing = null; });
         return refreshing;
     };
     const dispatch = (intent: HomeHubLayoutIntent, options?: Readonly<{ rethrow?: boolean }>) => {
+        if (input.isCurrent()) set({ ...state, isWriting: true });
         const operation = tail.then(async () => {
             if (!input.isCurrent()) {
                 if (options?.rethrow) throw new HomeHubMutationErrorV1('home_hub_scope_retired');
@@ -50,25 +63,44 @@ export function createHomeHubAccountStore(input: Readonly<{
             writes++;
             try {
                 const layout = await input.execute(intent);
-                set({ layout, status: 'ready', hasSnapshot: true });
+                set({ layout, status: 'ready', hasSnapshot: true, isWriting: state.isWriting });
             } catch (error) {
+                if (error instanceof HomeHubAcknowledgedProjectionReadError) {
+                    // The invoker keeps its actual ACK. Recovery rereads the projection,
+                    // never replays the mutation whose receipt was already validated.
+                    set({ layout: state.layout, status: 'error', hasSnapshot: state.hasSnapshot,
+                        isWriting: state.isWriting, errorCode: errorCode(error) });
+                    return;
+                }
                 set({ ...state, status: 'error', failedIntent: intent, errorCode: errorCode(error) });
                 if (options?.rethrow) throw error;
             }
         });
         // A checked caller observes failure without poisoning the existing retry/write queue.
-        tail = operation.catch(() => {});
+        const queuedCompletion = operation.catch(() => {});
+        tail = queuedCompletion;
+        void operation.finally(() => {
+            // A previous ACK cannot re-enable controls while a neighboring write still owns the tail.
+            if (tail === queuedCompletion) set({ ...state, isWriting: false });
+        }).catch(() => {});
         return operation;
     };
     return {
         getSnapshot: () => state,
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
         refresh, dispatch,
-        retry: () => state.failedIntent ? dispatch(state.failedIntent) : refresh(),
+        retire() {
+            // Retirement publishes no new Account content; it only ends this old queue's busy presentation.
+            if (!state.isWriting) return;
+            state = { ...state, isWriting: false };
+            for (const listener of listeners) listener();
+        },
+        retry: (options?: Readonly<{ rethrow?: boolean }>) => state.failedIntent ? dispatch(state.failedIntent, options) : refresh(),
         cancelFailedIntent: () => {
             if (!state.failedIntent) return;
             // Discard only the rejected intent. The acknowledged layout and Artifact writer stay intact.
-            set({ layout: state.layout, status: state.hasSnapshot ? 'ready' : 'loading', hasSnapshot: state.hasSnapshot });
+            set({ layout: state.layout, status: state.hasSnapshot ? 'ready' : 'loading', hasSnapshot: state.hasSnapshot,
+                isWriting: state.isWriting });
         },
     };
 }

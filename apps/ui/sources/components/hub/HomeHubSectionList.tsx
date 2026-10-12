@@ -49,9 +49,27 @@ function spansRow(section: HomeHubSection<WidgetCandidate>): boolean {
 }
 
 /**
+ * Which cards of a two-up run take the whole row: a full-width card, and any half that would otherwise
+ * sit beside an empty slot (no half follows it in its row). Saved sizes are untouched; this is placement.
+ */
+function rowSpanningCards(entries: readonly Placed[]): ReadonlySet<string> {
+    const spanning = new Set<string>();
+    let column = 0;
+    entries.forEach((entry, index) => {
+        if (spansRow(entry.section)) { spanning.add(entry.section.id); column = 0; return; }
+        if (column === 1) { column = 0; return; }
+        const next = entries[index + 1];
+        if (!next || spansRow(next.section)) { spanning.add(entry.section.id); return; }
+        column = 1;
+    });
+    return spanning;
+}
+
+/**
  * Home's sections below the header, on one column: every block shares the page column's edges
  * (the composer's width), grids fill that width, and consecutive cards (widgets, Latest runs) form
- * two-up rows. A card left alone in its row takes the whole row rather than leaving a hole. Home and
+ * two-up rows. A card left alone in its row (alone in the run, or beside a full-width card) takes the whole
+ * row rather than leaving a hole. Home and
  * its `/dev/home` fixture both lay out through this one owner.
  */
 export function HomeHubSectionList(props: Readonly<{
@@ -64,12 +82,12 @@ export function HomeHubSectionList(props: Readonly<{
                 if (slot.kind === 'single') {
                     return <React.Fragment key={slot.key}>{props.renderSection(slot.entry.section, slot.entry.index)}</React.Fragment>;
                 }
-                const alone = slot.entries.length === 1;
+                const spanning = rowSpanningCards(slot.entries);
                 return (
                     // A sheetless group gives the card row the same column edges as every other section.
                     <ItemGroup key={slot.key} surface="none">
                         <CardGrid testID={`home-hub.${slot.key}`} columns={HOME_HUB_CARD_ROW_COLUMNS}>
-                            {slot.entries.map((entry) => (alone || spansRow(entry.section) ? (
+                            {slot.entries.map((entry) => (spanning.has(entry.section.id) ? (
                                 <CardGridCell key={entry.section.id} span="row">
                                     {props.renderSection(entry.section, entry.index)}
                                 </CardGridCell>

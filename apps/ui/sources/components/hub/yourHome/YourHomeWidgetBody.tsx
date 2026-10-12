@@ -1,0 +1,619 @@
+import * as React from 'react';
+import { PixelRatio, StyleSheet as RNStyleSheet, View } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useWidgetPresentation } from '@happier-dev/plugin-ui';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useAtmosphereMoment } from '@/components/atmosphere/atmosphereMoments';
+import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
+import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
+import { MACHINES_ADD_ROUTE } from '@/components/settings/machines/collection/machineCollectionModel';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
+import {
+  useWidgetFrameBodyCaption,
+  useWidgetFrameBodyMeta,
+} from '@/components/widgets/frame/widgetFrameBodyCaption';
+import {
+  workStatusGlyphColor,
+  workStatusWordStyle,
+} from '@/components/work/status/workStatusTreatment';
+import { Typography } from '@/constants/Typography';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { t } from '@/text';
+import { formatLastSeen } from '@/utils/sessions/sessionUtils';
+
+import {
+  resolveYourHomeHeaderFact,
+  type YourHomeHeaderFact,
+  type YourHomeMachine,
+  type YourHomeModel,
+} from './yourHomeModel';
+import {
+  layoutYourHomeScene,
+  type YourHomeScene,
+  type YourHomeSceneOptions,
+} from './yourHomeScene';
+import { useYourHomeModel } from './useYourHomeModel';
+
+type Size = 'small' | 'medium' | 'wide' | 'full';
+
+/**
+ * The "Your Home" widget's body (atmosphere lab `at-widget.js`): the planet is the Home, its machines
+ * are moons on flat dotted orbits, their sessions ride each orbit as dots, amber means needs you, an
+ * offline machine dims. Static art: nothing animates, at rest or under reduced motion. The art is
+ * decorative; the machines' names and counts are the readable content.
+ *
+ * Off by its atmosphere moment, the body draws nothing (Home and widget areas also leave the frame out).
+ */
+export function YourHomeWidgetBody(props: Readonly<{ testID: string }>) {
+  const moment = useAtmosphereMoment('yourHome');
+  if (!moment.on) return null;
+  return <YourHomeWidget testID={props.testID} />;
+}
+
+function YourHomeWidget(props: Readonly<{ testID: string }>) {
+  const presentation = useWidgetPresentation();
+  const size = readSize(presentation?.size);
+  const model = useYourHomeModel();
+  const homeName = useActiveHomeName();
+  // Full width names the Home beside the title; a half-width card keeps the title and its fact (lab).
+  const fullWidth = presentation
+    ? presentation.footprint.columnSpan === presentation.footprint.columns
+    : false;
+  useWidgetFrameBodyCaption(fullWidth ? homeName : '');
+  const fact = resolveYourHomeHeaderFact(model);
+  const factKind = fact?.kind;
+  const factCount = fact?.count;
+  const meta = React.useMemo(
+    () =>
+      factKind && factCount !== undefined ? (
+        <HeaderFact
+          fact={{ kind: factKind, count: factCount }}
+          testID={`${props.testID}.fact`}
+        />
+      ) : null,
+    [factCount, factKind, props.testID],
+  );
+  useWidgetFrameBodyMeta(meta);
+  const geometry = presentation?.geometry;
+  if (!geometry) return <View testID={props.testID} />;
+  return (
+    <View
+      testID={props.testID}
+      style={{ width: geometry.width, height: geometry.height }}
+    >
+      <YourHomeComposition
+        size={size}
+        width={geometry.width}
+        height={geometry.height}
+        model={model}
+        testID={props.testID}
+      />
+    </View>
+  );
+}
+
+function readSize(size: string | undefined): Size {
+  if (size === 'small' || size === 'wide' || size === 'full') return size;
+  return size === 'large' ? 'full' : 'medium';
+}
+
+function useActiveHomeName(): string | null {
+  const active = useActiveServerSnapshot();
+  useServerProfilesGeneration();
+  return resolveHomeDisplayName(getServerProfileById(active.serverId));
+}
+
+/** The lab's composition per size (`yourHome()`), in the body box the frame measured. */
+function YourHomeComposition(
+  props: Readonly<{
+    size: Size;
+    width: number;
+    height: number;
+    model: YourHomeModel;
+    testID: string;
+  }>,
+) {
+  const { size, width: sw, height: bodyH, model } = props;
+  const machines = model.machines;
+  if (machines.length === 0) {
+    const tall = size === 'medium' || size === 'full';
+    const h = tall ? bodyH - 112 : bodyH - 30;
+    const k = fit(sw, h, size === 'small' || size === 'medium' ? 262 : 564, tall ? 186 : 88);
+    const scene = layoutYourHomeScene(sw, h, machines, { small: !tall, pr: (tall ? 34 : 18) * k });
+    return (
+      <View style={styles.fill}>
+        <OrbitScene scene={scene} small={!tall} />
+        <EmptyHome tall={tall} testID={props.testID} />
+      </View>
+    );
+  }
+  if (size === 'small') {
+    const h = bodyH - 22;
+    const scene = layoutYourHomeScene(sw, h, machines, { small: true, pr: 18 * fit(sw, h, 262, 96), angles: [-14, 196, 166] });
+    return (
+      <View style={styles.fill}>
+        <OrbitScene scene={scene} small />
+        <View style={styles.foot} testID={`${props.testID}.foot`}>
+          <Text style={styles.footText}>
+            {t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })}
+          </Text>
+          {model.needsYou > 0 ? (
+            <NeedsYou label={t('homeIndex.sessionsNeedYou', { count: model.needsYou })} />
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+  if (size === 'wide') {
+    const w = Math.round(sw * 0.5);
+    const pr = 26 * fit(w, bodyH, 282, 118);
+    const scene = layoutYourHomeScene(w, bodyH, machines, { small: true, pr, radii: radii([1.55, 1.95, 2.3], pr), angles: [-14, 196, 166] });
+    return (
+      <View style={[styles.fill, styles.row]}>
+        <OrbitScene scene={scene} small />
+        <Legend machines={machines} compact height={bodyH} testID={props.testID} />
+      </View>
+    );
+  }
+  if (size === 'medium') {
+    const h = bodyH - MEDIUM_LEGEND_PX;
+    const pr = 40 * fit(sw, h, 262, 196);
+    const scene = layoutYourHomeScene(sw, h, machines, { pr, radii: radii([1.55, 1.97, 2.4], pr), angles: [-38, 214, 128] });
+    return (
+      <View style={styles.fill}>
+        <OrbitScene scene={scene} />
+        <Legend machines={machines} compact column height={MEDIUM_LEGEND_PX} testID={props.testID} />
+      </View>
+    );
+  }
+  const w = Math.round(sw * 0.54);
+  const pr = 50 * fit(w, bodyH, 305, 298);
+  const scene = layoutYourHomeScene(w, bodyH, machines, { pr, radii: radii([1.62, 2.2, 2.78], pr), angles: [-34, 212, 130] });
+  return (
+    <View style={[styles.fill, styles.row]}>
+      <OrbitScene scene={scene} />
+      <Legend machines={machines} height={bodyH} testID={props.testID} />
+    </View>
+  );
+}
+
+/** Under the medium scene the lab keeps three compact rows. */
+const MEDIUM_LEGEND_PX = 102;
+
+/**
+ * The lab's radii were drawn for its scene box at each size (A3 cells). A body shorter or narrower
+ * than that box scales the planet and its orbits down with it, so the composition keeps the lab's
+ * proportions instead of clipping; a larger body keeps the lab's sizes.
+ */
+const fit = (w: number, h: number, labW: number, labH: number) => Math.max(0, Math.min(1, w / labW, h / labH));
+
+const radii = (
+  ks: readonly number[],
+  pr: number,
+): YourHomeSceneOptions['radii'] => ks.map((k) => k * pr);
+
+/**
+ * Orbits behind, the planet (PlanetCanvas, the brand scene at rest: no re-typing), then the session
+ * dots and moons in front. Hidden from assistive technology; it is art at static props.
+ */
+const OrbitScene = React.memo(function OrbitScene(
+  props: Readonly<{ scene: YourHomeScene; small?: boolean }>,
+) {
+  const { theme } = useUnistyles();
+  const { scene } = props;
+  const ink = theme.colors.text.primary;
+  const card = theme.colors.edge.cardFill;
+  const amber = workStatusGlyphColor(theme.colors, 'attention');
+  // The lab's lattice: at least 3 device px with crisp dots, never a dithered smudge at widget sizes.
+  const dpr = Math.min(2, PixelRatio.get() || 1);
+  const planet = React.useMemo(
+    () => ({
+      theme: theme.dark ? ('dark' as const) : ('light' as const),
+      R: scene.pr,
+      cx: scene.canvas.size / 2,
+      cy: scene.canvas.size / 2,
+      view: { w: scene.canvas.size, h: scene.canvas.size },
+      time: 0,
+      rate: 0,
+      pitch: Math.max(1.5, 3 / dpr),
+      dpr,
+    }),
+    [dpr, scene.canvas.size, scene.pr, theme.dark],
+  );
+  const f = (value: number) => Number(value.toFixed(1));
+  return (
+    <View
+      pointerEvents="none"
+      aria-hidden
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[styles.scene, { width: scene.width, height: scene.height }]}
+    >
+      <Svg
+        width={scene.width}
+        height={scene.height}
+        style={RNStyleSheet.absoluteFill}
+      >
+        {scene.orbits.map((orbit, index) => (
+          <Circle
+            key={index}
+            cx={scene.px}
+            cy={scene.py}
+            r={orbit.r}
+            fill="none"
+            stroke={ink}
+            strokeOpacity={orbit.off ? 0.15 : 0.26}
+            strokeWidth={1.3}
+            strokeLinecap="round"
+            strokeDasharray={orbit.off ? '0 7' : '0 4.2'}
+          />
+        ))}
+      </Svg>
+      <PlanetCanvas
+        width={scene.canvas.size}
+        height={scene.canvas.size}
+        options={planet}
+        style={{
+          position: 'absolute',
+          left: scene.canvas.left,
+          top: scene.canvas.top,
+        }}
+      />
+      <Svg
+        width={scene.width}
+        height={scene.height}
+        style={RNStyleSheet.absoluteFill}
+      >
+        {scene.sessions.map((session, index) =>
+          session.state === 'need' ? (
+            <React.Fragment key={index}>
+              <Circle
+                cx={f(session.x)}
+                cy={f(session.y)}
+                r={6}
+                fill={amber}
+                fillOpacity={0.22}
+              />
+              <Circle
+                cx={f(session.x)}
+                cy={f(session.y)}
+                r={2.7}
+                fill={amber}
+              />
+            </React.Fragment>
+          ) : (
+            <Circle
+              key={index}
+              cx={f(session.x)}
+              cy={f(session.y)}
+              r={session.state === 'work' ? 2.2 : 1.9}
+              fill={ink}
+              fillOpacity={session.state === 'work' ? 0.7 : 0.26}
+            />
+          ),
+        )}
+        {scene.moons.map((moon, index) =>
+          moon.off ? (
+            <Circle
+              key={index}
+              cx={f(moon.x)}
+              cy={f(moon.y)}
+              r={moon.r}
+              fill={card}
+              stroke={ink}
+              strokeOpacity={0.34}
+              strokeWidth={1.1}
+              strokeDasharray="1.4 1.6"
+            />
+          ) : (
+            // The card-coloured ring parts the orbit around the moon; its body is ink over the card.
+            <React.Fragment key={index}>
+              <Circle
+                cx={f(moon.x)}
+                cy={f(moon.y)}
+                r={moon.r}
+                fill={card}
+                stroke={card}
+                strokeWidth={1.5}
+              />
+              <Circle
+                cx={f(moon.x)}
+                cy={f(moon.y)}
+                r={moon.r}
+                fill={ink}
+                fillOpacity={0.62}
+              />
+            </React.Fragment>
+          ),
+        )}
+      </Svg>
+    </View>
+  );
+});
+
+/** The machines, one row each: glyph, name (and its state line at full size), then what it holds. */
+function Legend(
+  props: Readonly<{
+    machines: readonly YourHomeMachine[];
+    compact?: boolean;
+    column?: boolean;
+    /** The legend's room: rows that do not fit fold into one quiet "N more" row. */
+    height: number;
+    testID: string;
+  }>,
+) {
+  const rowPx = props.compact ? LEGEND_ROW_COMPACT_PX : LEGEND_ROW_PX;
+  const fits = Math.max(1, Math.floor((props.height + LEGEND_GAP_PX) / (rowPx + LEGEND_GAP_PX)));
+  const shown = props.machines.length > fits ? props.machines.slice(0, fits - 1) : props.machines;
+  const more = props.machines.length - shown.length;
+  return (
+    <View style={[styles.legend, props.column ? styles.legendColumn : null]}>
+      {shown.map((machine, index) => (
+        <LegendRow
+          key={machine.id}
+          machine={machine}
+          compact={props.compact === true}
+          first={index === 0}
+          testID={`${props.testID}.machine.${machine.id}`}
+        />
+      ))}
+      {more > 0 ? (
+        <View testID={`${props.testID}.more`} style={[styles.legendRow, styles.legendRowCompact, shown.length > 0 ? styles.legendRowDivided : null]}>
+          <Text style={styles.legendState}>{t('homeWidgets.yourHomeMore', { count: more })}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const LEGEND_ROW_PX = 40;
+const LEGEND_ROW_COMPACT_PX = 30;
+const LEGEND_GAP_PX = 2;
+
+function LegendRow(
+  props: Readonly<{
+    machine: YourHomeMachine;
+    compact: boolean;
+    first: boolean;
+    testID: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { machine } = props;
+  const off = !machine.online;
+  const state = off
+    ? t('homeWidgets.yourHomeOffline', {
+        lastSeen: formatLastSeen(machine.lastSeenAt ?? 0),
+      })
+    : [
+        t('homeWidgets.yourHomeSessions', { count: machine.shown.length }),
+        ...(machine.working > 0
+          ? [t('homeWidgets.yourHomeWorking', { count: machine.working })]
+          : []),
+      ].join(' · ');
+  const needLabel = t('homeIndex.sessionsNeedYou', { count: machine.needsYou });
+  return (
+    <View
+      testID={props.testID}
+      accessible
+      accessibilityLabel={[
+        machine.name,
+        state,
+        ...(machine.needsYou > 0 ? [needLabel] : []),
+      ].join(', ')}
+      style={[
+        styles.legendRow,
+        props.compact ? styles.legendRowCompact : null,
+        props.first ? null : styles.legendRowDivided,
+      ]}
+    >
+      <Icon
+        name={machine.isThisComputer ? 'laptop' : 'desktop'}
+        size={ICON_SIZE.sm}
+        color={theme.colors.text.secondary}
+      />
+      <View style={styles.legendText}>
+        <Text
+          style={[styles.legendName, off ? styles.dim : null]}
+          numberOfLines={1}
+        >
+          {machine.name}
+        </Text>
+        {props.compact ? null : (
+          <Text
+            style={[styles.legendState, off ? styles.dim : null]}
+            numberOfLines={1}
+          >
+            {state}
+          </Text>
+        )}
+      </View>
+      {machine.needsYou > 0 ? (
+        <NeedsYou label={String(machine.needsYou)} />
+      ) : off ? (
+        <View style={styles.offDot} />
+      ) : (
+        <Text style={styles.legendCount}>{machine.shown.length}</Text>
+      )}
+    </View>
+  );
+}
+
+/** Amber means it needs you: the attention dot and its word, in the attention treatment. */
+function NeedsYou(props: Readonly<{ label: string }>) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={styles.need}>
+      <View
+        style={[
+          styles.needDot,
+          { backgroundColor: workStatusGlyphColor(theme.colors, 'attention') },
+        ]}
+      />
+      <Text style={[workStatusWordStyle('attention'), styles.needText]}>
+        {props.label}
+      </Text>
+    </View>
+  );
+}
+
+function HeaderFact(
+  props: Readonly<{ fact: YourHomeHeaderFact; testID: string }>,
+) {
+  return (
+    <View testID={props.testID}>
+      {props.fact.kind === 'needsYou' ? (
+        <NeedsYou
+          label={t('homeIndex.sessionsNeedYou', { count: props.fact.count })}
+        />
+      ) : (
+        <Text style={styles.footText}>
+          {t('homeWidgets.yourHomeWorking', { count: props.fact.count })}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/** An empty Home: two quiet orbits, then what to do — add the first machine. */
+function EmptyHome(props: Readonly<{ tall: boolean; testID: string }>) {
+  const router = useRouter();
+  const { theme } = useUnistyles();
+  const add = React.useCallback(
+    () => router.push(MACHINES_ADD_ROUTE as never),
+    [router],
+  );
+  return (
+    <View
+      testID={`${props.testID}.empty`}
+      style={props.tall ? styles.emptyFlow : styles.emptyRow}
+    >
+      <Text style={styles.emptyTitle}>
+        {t('homeWidgets.yourHomeEmptyTitle')}
+      </Text>
+      {props.tall ? (
+        <Text style={styles.emptyBody}>
+          {t('homeWidgets.yourHomeEmptyBody')}
+        </Text>
+      ) : null}
+      <RoundButton
+        testID={`${props.testID}.addMachine`}
+        size="small"
+        display="secondary"
+        title={t('settings.addMachine')}
+        onPress={add}
+        leading={
+          <Icon
+            name="plus"
+            size={ICON_SIZE.xs}
+            color={theme.colors.text.primary}
+          />
+        }
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  fill: { flex: 1, position: 'relative' },
+  row: { flexDirection: 'row', alignItems: 'stretch' },
+  scene: { position: 'relative', flexShrink: 0, overflow: 'hidden' },
+  foot: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.space.s10,
+  },
+  footText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+    fontVariant: ['tabular-nums'],
+  },
+  legend: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: LEGEND_GAP_PX,
+    paddingLeft: theme.space.s6,
+  },
+  legendColumn: { flex: 0, height: MEDIUM_LEGEND_PX, paddingLeft: 0 },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+    minHeight: LEGEND_ROW_PX,
+    paddingHorizontal: theme.space.s2,
+  },
+  legendRowCompact: { minHeight: LEGEND_ROW_COMPACT_PX },
+  legendRowDivided: {
+    borderTopWidth: RNStyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  legendText: { flex: 1, minWidth: 0 },
+  legendName: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.primary,
+  },
+  legendState: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
+  legendCount: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+    fontVariant: ['tabular-nums'],
+  },
+  dim: { color: theme.colors.text.tertiary },
+  offDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: theme.colors.text.tertiary,
+    opacity: 0.6,
+  },
+  need: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
+  needDot: { width: 6, height: 6, borderRadius: 3 },
+  needText: {
+    ...happierPageTextMetrics('meta'),
+    fontVariant: ['tabular-nums'],
+  },
+  emptyFlow: { marginTop: theme.space.s6, alignItems: 'center', gap: theme.space.s2 },
+  emptyRow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.space.s10,
+  },
+  emptyTitle: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('sectionDescription'),
+    color: theme.colors.text.primary,
+  },
+  emptyBody: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('sectionDescription'),
+    color: theme.colors.text.secondary,
+    marginBottom: theme.space.s8,
+    textAlign: 'center',
+  },
+}));

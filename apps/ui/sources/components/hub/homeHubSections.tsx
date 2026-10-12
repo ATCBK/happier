@@ -5,12 +5,11 @@ import type { IconName } from '@/components/ui/icons/Icon';
 import type { WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
+import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 
 import { HubAttentionSection } from './HubAttentionSection';
 import { HubComposerSection } from './composer/HubComposerSection';
-import { HubMachinesSection } from './HubMachinesSection';
 import { HubSetupSection } from './HubSetupSection';
-import { UsageCapacitySection } from '@/components/settings/usage/UsageCapacitySection';
 import { HOME_HUB_BUILTIN_DEFINITIONS, type HomeHubBuiltinDefinition, type HomeHubSection } from './layout/homeHubLayout';
 export { isHomeHubCardSection } from './layout/homeHubLayout';
 
@@ -63,21 +62,6 @@ export const HOME_HUB_BUILTIN_SECTIONS: readonly HomeHubBuiltinSection[] = Objec
         title: () => t('homeWidgets.latestRunsTitle'),
         render: ({ menu, frameStyle }) => <AutomationsLatestRunsSection menu={menu} frameStyle={frameStyle} />,
     },
-    {
-        ...builtin('machines'),
-        icon: 'desktop',
-        description: () => t('homeIndex.machinesDescription'),
-        // Off until turned on in Customize; shown, it is a grid of the machines.
-        title: () => t('settingsOverview.machinesTitle'),
-        render: ({ menu }) => <HubMachinesSection menu={menu} />,
-    },
-    {
-        ...builtin('usage'),
-        icon: 'speedometer',
-        description: () => t('homeIndex.builtIn'),
-        title: () => t('settingsOverview.usageTitle'),
-        render: ({ menu }) => <UsageCapacitySection menu={menu} />,
-    },
 ]);
 
 const BUILTIN_BY_ID: ReadonlyMap<string, HomeHubBuiltinSection> = new Map(
@@ -92,6 +76,6 @@ export function findHomeHubBuiltinSection(id: string): HomeHubBuiltinSection | n
 export function homeHubSectionTitle(section: HomeHubSection<WidgetCandidate>): string {
     if (section.kind === 'widget') return section.instance.displayName ?? section.widget?.title ?? section.instance.id;
     // A group is its title, or (untitled) the names of its widgets.
-    if (section.kind === 'group') return section.group.title ?? section.children.map(homeHubSectionTitle).join(' · ');
+    if (section.kind === 'group') return readWidgetGroupTitle(section.group) ?? section.children.map(homeHubSectionTitle).join(' · ');
     return findHomeHubBuiltinSection(section.id)?.title() ?? section.id;
 }

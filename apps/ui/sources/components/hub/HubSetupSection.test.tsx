@@ -268,7 +268,7 @@ describe('HubSetupSection on Home (tiles)', () => {
             // An Account layout update while pairing is pending must not be overwritten by success.
             await act(async () => {
                 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-                const result = await createDefaultActionExecutor().execute('home.hub.layout.update', { intent: { kind: 'visibility', sectionId: 'machines', hidden: true } }, {
+                const result = await createDefaultActionExecutor().execute('home.hub.layout.update', { intent: { kind: 'visibility', sectionId: 'automations', hidden: true } }, {
                     surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: connection!.home.id, expectedAccountId: 'account-setup',
                 });
                 expect(result.ok, JSON.stringify(result)).toBe(true);
@@ -287,7 +287,7 @@ describe('HubSetupSection on Home (tiles)', () => {
             await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
             await flushHookEffects({ cycles: 3 });
             expect(state.request.mock.calls.some(([path]) => path === '/v1/auth/account/response')).toBe(true);
-            expect([...artifact.layout().hidden].sort()).toEqual(['machines', 'setup:addPhone', 'usage']);
+            expect([...artifact.layout().hidden].sort()).toEqual(['automations', 'setup:addPhone', 'usage']);
             expect(artifact.layout().order.slice(0, 2)).toEqual(['setup', 'future-section']);
             expect(artifact.layout().sections).toEqual({ setup: { frameStyle: 'plain' } });
             expect(screen.findByTestId('settings-add-your-phone-shortcut')).toBeNull();
@@ -377,11 +377,11 @@ describe('HubSetupSection on Home (tiles)', () => {
         await flushHookEffects({ cycles: 2 });
 
         expect(screen.findByTestId('hub-setup.addMachine')).toBeNull();
-        expect(artifact.layout().hidden).toEqual(['setup:addMachine', 'machines']);
+        expect(artifact.layout().hidden).toEqual(['setup:addMachine']);
         expect(screen.findByTestId('settings-add-your-phone-shortcut')).toBeTruthy();
         await act(async () => { screen.pressByTestId('settings-add-your-phone-shortcut.dismiss'); });
         await flushHookEffects({ cycles: 3 });
-        expect(artifact.layout().hidden).toEqual(['setup:addMachine', 'machines', 'setup:addPhone']);
+        expect(artifact.layout().hidden).toEqual(['setup:addMachine', 'setup:addPhone']);
         expect(screen.findByTestId('settings-add-your-phone-shortcut')).toBeNull();
     });
 
@@ -490,7 +490,7 @@ describe('HubSetupSection on Home (tiles)', () => {
             const screen = await renderSection();
             await act(async () => { screen.pressByTestId('hub-setup.personalize.dismiss'); });
             await flushHookEffects({ cycles: 2 });
-            expect(artifact.layout().hidden).toEqual(['setup:personalize', 'machines']);
+            expect(artifact.layout().hidden).toEqual(['setup:personalize']);
             expect(screen.findByTestId('hub-setup.personalize')).toBeNull();
         });
     });

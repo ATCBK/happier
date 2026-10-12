@@ -15,7 +15,7 @@ import {
 const NO_SUGGESTIONS: readonly HomeComposerSuggestion[] = Object.freeze([]);
 
 function suggestionSignature(suggestions: readonly HomeComposerSuggestion[]): string {
-    return suggestions.map((suggestion) => suggestion.source === 'starter' ? suggestion.id : [
+    return suggestions.map((suggestion) => suggestion.source !== 'sessionHistory' ? suggestion.id : [
         suggestion.id,
         suggestion.sessionCount,
         suggestion.since.kind,

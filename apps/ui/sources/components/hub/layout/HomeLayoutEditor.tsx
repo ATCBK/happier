@@ -25,6 +25,9 @@ import { findHomeHubBuiltinSection, homeHubSectionTitle } from '../homeHubSectio
 import type { HomeHubSection } from './homeHubLayout';
 import { useHomeHubLayout, type HomeHubLayout } from './useHomeHubLayout';
 import { WIDGET_GROUP_ICON } from '@/components/widgets/group/widgetGroupMenu';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
+import { useHomeHubLayoutWritePending } from './useHomeHubArtifactLayout';
 
 type EditorRow = Readonly<{ id: string; section: HomeHubSection<WidgetCandidate> }>;
 
@@ -43,6 +46,7 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
     presentation?: 'section' | 'popover';
 }>) {
     const layout = useHomeHubLayout();
+    const isWriting = useHomeHubLayoutWritePending();
     const scope = useActiveServerAccountScope();
     const placed = React.useMemo(
         () => layout.sections.map((section) => ({ id: section.id, title: homeHubSectionTitle(section) })),
@@ -104,16 +108,18 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
                 action: reset,
             })}
         >
+            {isWriting && scope ? <HomeReachabilityGate variant="line" relevantServerIds={[scope.serverId]}>{null}</HomeReachabilityGate> : null}
             {layout.status === 'error' ? (
                 <SurfaceStateCard
                     testID="home-layout.save-error"
                     kind="error"
                     size="line"
-                    title={t('common.error')}
+                    title={resolveActionExecutionFailureMessage({ ok: false, errorCode: layout.errorCode }, t('common.error'))!}
                     diagnosticCode={layout.errorCode}
-                    action={{ label: t('common.retry'), onPress: layout.retry, testID: 'home-layout.retry' }}
+                    action={{ label: t('common.retry'), onPress: layout.retry, testID: 'home-layout.retry', disabled: isWriting }}
                     secondaryAction={layout.canCancelFailedIntent ? {
                         label: t('common.cancel'), onPress: layout.cancelFailedIntent, testID: 'home-layout.cancel',
+                        disabled: isWriting,
                     } : undefined}
                     accessibilitySemantics="alert"
                 />
@@ -210,16 +216,16 @@ function EditorRowView(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     popoverHeader: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 4,
-        gap: 4,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s4,
+        gap: theme.space.s4,
     },
     popoverTitleRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     popoverTitle: {
         ...Typography.default('semiBold'),
@@ -239,7 +245,7 @@ const styles = StyleSheet.create((theme) => ({
     size: {
         paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
         paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
     },
     sizeDivided: {
         borderBottomWidth: StyleSheet.hairlineWidth,
@@ -257,7 +263,7 @@ const styles = StyleSheet.create((theme) => ({
     locked: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     lockedText: {
         ...Typography.default(),

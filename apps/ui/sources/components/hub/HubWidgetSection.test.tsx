@@ -15,12 +15,18 @@ import {
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { HubWidgetSection } from './HubWidgetSection';
 
-const boundary = vi.hoisted(() => ({ projection: null as PluginUiProjectionModel | null, pushed: [] as unknown[], stage: null as ((open: { pageId: string; subPath: string; input: { selection: string } }) => boolean) | null }));
+const boundary = vi.hoisted(() => ({ projection: null as PluginUiProjectionModel | null, pushed: [] as unknown[], stage: null as ((open: { pageId: string; subPath: string; input: { selection: string } }) => boolean) | null, moments: {} as Record<string, boolean> }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/', router: { push: (href: unknown) => boundary.pushed.push(href) } }).module);
-vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({}));
+// The Account settings are a store boundary: only the atmosphere moments vary here.
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
+    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+    return createStorageModuleStub({ useSetting: createUseSettingMock({ values: {}, fallback: (key) => key === 'homeAtmosphere'
+        ? { ...settingsDefaults.homeAtmosphere, moments: boundary.moments } : settingsDefaults[key as keyof typeof settingsDefaults] }) });
+});
 vi.mock('@/sync/store/hooks', async () => await import('@/sync/domains/state/storage'));
 // Unused HTTP envelope API is outside this navigation corridor. Throw if reached;
 // the test must never perform Session key preparation or network mutation.
@@ -56,7 +62,7 @@ function LaunchProbe() {
 function home() {
     return <PluginAppPageLaunchInputScope pluginUiProjection={boundary.projection}><LaunchProbe /><HubWidgetSection widget={widget} instance={instance} frameStyle="plain" menu={null} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 800 })} testID="home-widget" /></PluginAppPageLaunchInputScope>;
 }
-beforeEach(() => { boundary.projection = projection(); boundary.pushed = []; clearActiveUnsavedChangesGuard(); });
+beforeEach(() => { boundary.projection = projection(); boundary.pushed = []; boundary.moments = {}; clearActiveUnsavedChangesGuard(); });
 afterEach(() => { clearActiveUnsavedChangesGuard(); standardCleanup(); });
 
 describe('Home widget Open', () => {
@@ -84,5 +90,39 @@ describe('Home widget Open', () => {
         const screen = await renderScreen(home());
         expect(screen.findByTestId('home-widget.frame.open')).toBeNull();
         expect(boundary.pushed).toEqual([]);
+    });
+});
+
+describe('Home widget switched off by its atmosphere moment', () => {
+    const yourHome = { v: 1 as const, id: 'your-home-copy', definition: { kind: 'builtin' as const, id: 'your_home' as const }, bindings: {} };
+    // Far below the viewport: the frame is drawn, its body stays deferred.
+    const section = () => <HubWidgetSection instance={yourHome} frameStyle="plain" menu={null}
+        tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })} testID="home-your-home" />;
+
+    it('keeps a placed Your Home copy on Home while the moment is on', async () => {
+        boundary.moments = { yourHome: true };
+        const screen = await renderScreen(section());
+        expect(screen.findAllHostsByTestId('home-your-home')).toHaveLength(1);
+    });
+
+    it('draws nothing for a placed copy while the moment is off, without removing it from the layout', async () => {
+        boundary.moments = { yourHome: false };
+        const screen = await renderScreen(section());
+        expect(screen.findAllHostsByTestId('home-your-home')).toHaveLength(0);
+    });
+});
+
+describe('a widget that follows its group', () => {
+    const follows = (groupNamesValue: boolean) => <HubWidgetSection widget={widget} instance={instance} frameStyle="plain" menu={null}
+        followSource={{ value: 'devbox · 3ad2', wide: true, groupNamesValue }}
+        tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 800 })} testID="home-follow" />;
+
+    it('says which value it follows only when its group has no header to name it', async () => {
+        const untitled = await renderScreen(follows(false));
+        expect(untitled.getTextContent()).toContain('devbox · 3ad2');
+        standardCleanup();
+        const titled = await renderScreen(follows(true));
+        expect(titled.getTextContent()).not.toContain('devbox · 3ad2');
+        expect(titled.getTextContent()).not.toContain('Following group');
     });
 });

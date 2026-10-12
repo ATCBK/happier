@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { selectWidgetCandidates, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { useAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 function sameCandidates(left: readonly WidgetCandidate[], right: readonly WidgetCandidate[]): boolean {
@@ -26,17 +27,19 @@ function sameCandidates(left: readonly WidgetCandidate[], right: readonly Widget
 /**
  * The installed App-target widgets Home may show. The inventory is recomputed only when the app
  * shell's plugin projection changes, and keeps its previous identity when that change leaves the
- * widgets as they were — so an unrelated plugin update re-renders no hub section. A widget's own
+ * widgets as they were — so an unrelated plugin update re-renders no hub section. Built-ins follow
+ * the atmosphere's moment switches (Your Home), so turning one off withdraws it here at once. A widget's own
  * data never passes through here: each mounted widget subscribes to its placement, so a data change
  * stays inside that widget.
  */
 export function useHomeWidgetCandidates(): readonly WidgetCandidate[] {
     const projection = useAppShellPluginUiProjection().pluginUiProjection;
+    const moments = useAtmosphereMoments();
     const previous = React.useRef<readonly WidgetCandidate[] | null>(null);
     return React.useMemo(() => {
-        const next = selectWidgetCandidates(projection);
+        const next = selectWidgetCandidates(projection, undefined, moments);
         if (previous.current && sameCandidates(previous.current, next)) return previous.current;
         previous.current = next;
         return next;
-    }, [projection]);
+    }, [projection, moments]);
 }

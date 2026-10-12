@@ -22,7 +22,18 @@ import { HubComposerSuggestions, type HomeComposerSuggestionFill } from './sugge
  * The composer's chips issue no machine RPCs until the person shows intent (focus, hover, touch or
  * a suggestion); until then they show cached state.
  */
-export const HubComposerSection = React.memo(function HubComposerSection() {
+export const HubComposerSection = React.memo(function HubComposerSection(props: Readonly<{
+    /**
+     * `hero`: under Home's atmosphere the composer stands in the hero's own column (it supplies the
+     * width and rhythm), and the suggestions step back to links or pills. Refs let the hero measure it.
+     */
+    hero?: Readonly<{
+        suggestions: 'links' | 'pills';
+        composerRef: React.Ref<View>;
+        suggestionsRef: React.Ref<View>;
+        onLayout: () => void;
+    }>;
+}>) {
     const { host, markDemanded } = useNewSessionEmbeddedHostState();
     const draftId = typeof host.params.draftId === 'string' ? host.params.draftId : 'home-composer';
     const setHostParams = host.setParams;
@@ -42,21 +53,37 @@ export const HubComposerSection = React.memo(function HubComposerSection() {
         });
     }, [markDemanded, setHostParams]);
 
+    const hero = props.hero;
+    const composer = (
+        <View
+            ref={hero?.composerRef}
+            onLayout={hero?.onLayout}
+            testID="hub-composer.intent"
+            onFocus={markDemanded}
+            onPointerEnter={markDemanded}
+            onTouchStart={markDemanded}
+        >
+            <NewSessionEmbeddedHostProvider host={host}>
+                <ComposerBannerCollapseProvider key={draftId}>
+                    <NewSessionScreen presentation="embedded" />
+                </ComposerBannerCollapseProvider>
+            </NewSessionEmbeddedHostProvider>
+        </View>
+    );
+    if (hero) {
+        return (
+            <View testID="hub-composer" style={styles.heroStack}>
+                {composer}
+                <View ref={hero.suggestionsRef} onLayout={hero.onLayout}>
+                    <HubComposerSuggestions onFill={fill} presentation={hero.suggestions} />
+                </View>
+            </View>
+        );
+    }
     return (
         <ItemGroup surface="none">
             <View testID="hub-composer" style={styles.stack}>
-                <View
-                    testID="hub-composer.intent"
-                    onFocus={markDemanded}
-                    onPointerEnter={markDemanded}
-                    onTouchStart={markDemanded}
-                >
-                    <NewSessionEmbeddedHostProvider host={host}>
-                        <ComposerBannerCollapseProvider key={draftId}>
-                            <NewSessionScreen presentation="embedded" />
-                        </ComposerBannerCollapseProvider>
-                    </NewSessionEmbeddedHostProvider>
-                </View>
+                {composer}
                 <HubComposerSuggestions onFill={fill} />
             </View>
         </ItemGroup>
@@ -66,5 +93,9 @@ export const HubComposerSection = React.memo(function HubComposerSection() {
 const styles = StyleSheet.create(() => ({
     stack: {
         gap: 10,
+    },
+    // Lab `at-links`: the suggestions sit 12 px under the composer.
+    heroStack: {
+        gap: 12,
     },
 }));
