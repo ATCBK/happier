@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { Server } from 'socket.io';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { reloadConfiguration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createTerminalAttachmentId, readTerminalHostAttachmentInfo, writeTerminalHostAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
@@ -14,11 +16,14 @@ import { buildTerminalMetadataFromHostHandle } from '@/terminal/runtime/terminal
 import { createDaemonControlApp } from '../controlServer';
 import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 import { readProcessIdentityByPid } from '../processIdentity';
-import { listSessionMarkers } from '../sessionRegistry';
+import { hashProcessCommand, listSessionMarkers, promoteSessionMarkerPid, readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
+import { createAgentRuntimeDaemonServiceAuthorityPath, readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker } from '../agentRuntime/sessionBridgeAuthorization';
+import { refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority } from '../agentRuntime/refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
 import { probeSessionRunnerServiceability } from '../sessions/isSessionRunnerActive';
 import type { TrackedSession } from '../types';
 import { persistAcceptedSpawnMarker } from '../spawn/persistAcceptedSpawnMarker';
+import { waitForSessionWebhook } from '../spawn/waitForSessionWebhook';
 import { probeAlreadyRunningExistingSessionServiceability } from './pendingQueueNudge';
 import { publishReportedTerminalControlServiceability } from './publishReportedTerminalControlServiceability';
 import { createSessionStartupReadinessHandler } from './sessionStartupReadiness';
@@ -26,6 +31,80 @@ import { createSessionStartupReadinessHandler } from './sessionStartupReadiness'
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('session startup acknowledgement', () => {
+    it('settles fresh wrapper creation only after the captured child marker and runner authority are published', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-fresh-wrapper-readiness-'));
+        vi.stubEnv('HAPPIER_HOME_DIR', home);
+        reloadConfiguration();
+        const wrapperPid = 649131;
+        const runnerPid = 649132;
+        const sessionId = 'session-fresh-wrapper-readiness';
+        const command = '/immutable/runtime/versions/1.2.3/bin/happier fixture';
+        // Only the native process table is substituted; all report, readiness,
+        // marker, source-custody and private-authority owners below are real.
+        const readIdentity = async (pid: number) => ({ pid,
+            processStartTimeMs: pid === wrapperPid ? 12_345 : 23_456,
+            command: pid === wrapperPid ? '/runtime/scope-exit' : command });
+        const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir: home, publicReleaseRing: configuration.publicReleaseRing });
+        const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'fixture.runner', pluginVersion: '1.2.3',
+            agentId: 'fixture', localAgentId: 'fixture',
+            sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: '1.2.3' } },
+            locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+            normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' });
+        const tracked: TrackedSession = { pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
+            processStartTimeMs: 12_345, processCommandHash: hashProcessCommand('/runtime/scope-exit'),
+            agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, acceptedSpawnMarkerGate: Promise.resolve(true),
+            runnerAgentBootstrapIdentity: { agentId: 'fixture', backendId: 'fixture' },
+            spawnOptions: { directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } };
+        await writeSessionMarker({ pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: home,
+            processStartTimeMs: 12_345,
+            respawn: { version: 1, directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } });
+        const sessions = new Map([[wrapperPid, tracked]]);
+        const awaiters = new Map<number, (session: TrackedSession) => void>();
+        const resolvers = new Map<number, (result: SpawnSessionResult) => void>();
+        const timeouts = new Map<number, NodeJS.Timeout>();
+        const startup = waitForSessionWebhook({ pid: wrapperPid, pidToTrackedSession: sessions, pidToAwaiter: awaiters,
+            pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts, timeoutErrorMessage: 'Fixture startup failed' });
+        const handler = createSessionStartupReadinessHandler({
+            onHappySessionWebhook: createOnHappySessionWebhook({ pidToTrackedSession: sessions, pidToAwaiter: awaiters,
+                getParentPidFn: async () => wrapperPid, readProcessIdentityByPidFn: readIdentity,
+                promoteSessionMarkerFn: (from, to) => promoteSessionMarkerPid(from, to, { readProcessIdentityByPidFn: readIdentity }),
+                readCredentialsFn: async () => null }),
+            reconcileCanonicalReadiness: async (candidate) => {
+                await refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority({ happyHomeDir: home,
+                    publicReleaseRing: configuration.publicReleaseRing, httpPort: 3210, sessionId, tracked: candidate,
+                    // A Plugin contribution fixture uses the canonical binding producer.
+                    resolveCurrentRetainedAgent: async () => binding, readProcessIdentityByPidFn: readIdentity });
+            },
+            reconcileFollowUp: async () => {}, onFollowUpError: (error) => { throw error; },
+        });
+        const app = createDaemonControlApp({ getChildren: () => [...sessions.values()], machineId: 'machine-fresh-wrapper',
+            spawnSession: async () => { throw new Error('unexpected second spawn'); }, stopSession: async () => ({ status: 'not_found' }),
+            requestShutdown: () => {}, controlToken: 'fresh-wrapper-token', onHappySessionWebhook: handler });
+        try {
+            const response = await app.inject({ method: 'POST', url: '/session-started',
+                headers: { 'x-happier-daemon-token': 'fresh-wrapper-token' },
+                payload: { sessionId, metadata: createTestMetadata({ hostPid: runnerPid, startedBy: 'daemon', happyHomeDir: home, path: home }) } });
+            expect(response.statusCode, response.body).toBe(200);
+            await expect(startup).resolves.toMatchObject({ type: 'success', sessionId });
+            const marker = await readSessionMarkerForPid(runnerPid);
+            expect(marker).toMatchObject({ pid: runnerPid, happySessionId: sessionId, processStartTimeMs: 23_456,
+                runnerAgentSourceCustodyV1: binding.sourceCustody });
+            const authority = await readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker({ happyHomeDir: home,
+                publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, sessionId,
+                runner: { pid: runnerPid, processStartTimeMs: 23_456, processCommandHash: hashProcessCommand(command), snapshotIdentity: 'version:1.2.3' } });
+            expect(authority).toMatchObject({ sessionId, runner: { pid: runnerPid, processStartTimeMs: 23_456 }, retainedAgent: binding });
+            expect(sessions.get(wrapperPid)).toBe(tracked);
+            expect(tracked.processStartTimeMs).toBe(12_345);
+            expect(awaiters.size).toBe(0);
+            expect(resolvers.size).toBe(0);
+            expect(timeouts.size).toBe(0);
+        } finally {
+            startup.settleFailure({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'Fixture cleanup' });
+            await app.close();
+            await rm(home, { recursive: true, force: true });
+        }
+    });
+
     it('awaits canonical custody but acknowledges while the runner RPC follow-up is pending', async () => {
         const home = await mkdtemp(join(tmpdir(), 'happier-startup-readiness-'));
         const sessionId = 'session-startup-readiness';
