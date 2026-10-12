@@ -1104,6 +1104,34 @@ test('SDK Voice runtime public signature closes through the author inventory', a
   );
 });
 
+test('SDK Action and request-auth signatures publish their named author dependencies', async () => {
+  const report = await readCurrentPackageSourceReport();
+  const dependenciesBySpecifier = {
+    './actions': [
+      'BuiltinWidgetIdV1',
+      'CapabilityRulesActionInputById',
+      'CapabilityRulesActionResultById',
+    ],
+    './connected-accounts': [
+      'ConnectedAccountAuthFailureRequestV1',
+      'ConnectedAccountQuotaFailureRequestV1',
+      'OAuthBearerLeaseV1',
+      'QualifiedConnectedAccountPurposeV1',
+      'RequestAuthFailureOutcomeV1',
+    ],
+  };
+
+  for (const [specifier, exportNames] of Object.entries(dependenciesBySpecifier)) {
+    for (const exportName of exportNames) {
+      assert.equal(report.inventory.symbols.some((symbol) => (
+        symbol.specifier === specifier
+        && symbol.exportName === exportName
+        && symbol.kind === 'type'
+      )), true, `${specifier} must publish the ${exportName} public signature dependency`);
+    }
+  }
+});
+
 test('SDK workflow Action ingress projection closes through the author inventory', async () => {
   const report = await readCurrentPackageSourceReport();
 
