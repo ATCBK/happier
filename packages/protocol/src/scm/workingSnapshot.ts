@@ -81,6 +81,7 @@ const ScmCapabilitiesSchemaCore = lazyZodSchema(() => z.object({
   writeStash: z.boolean().optional(),
   writeStashCreate: z.boolean().optional(),
   worktreeCreate: z.boolean(),
+  worktreeRetention: z.boolean().optional(),
   changeSetModel: ScmChangeSetModelSchema,
   supportedDiffAreas: z.array(ScmDiffAreaSchema).min(1),
   operationLabels: z

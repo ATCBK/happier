@@ -2,14 +2,13 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
 function isRootOrUnsafeSelectedMutationPath(rawPath: string): boolean {
-  const trimmed = rawPath.trim();
-  if (!trimmed) return true;
-  if (trimmed.includes('\0')) return true;
-  if (trimmed.startsWith('-') || trimmed.startsWith(':')) return true;
-  if (trimmed.startsWith('/') || trimmed.startsWith('~')) return true;
-  if (/^[A-Za-z]:/.test(trimmed)) return true;
+  if (!rawPath) return true;
+  if (rawPath.includes('\0')) return true;
+  if (rawPath.startsWith('-') || rawPath.startsWith(':')) return true;
+  if (rawPath.startsWith('/') || rawPath.startsWith('~')) return true;
+  if (/^[A-Za-z]:/.test(rawPath)) return true;
 
-  const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
   if (!normalized || normalized === '.') return true;
   const parts = normalized.split('/');
   return parts.some((part) => !part || part === '..');

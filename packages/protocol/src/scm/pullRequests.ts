@@ -18,6 +18,7 @@ import {
 } from './remoteNormalization.js';
 import { ScmRequestBaseSchema } from './requestBase.js';
 import { RepositoryCheckpointCommitEvidenceSchema } from '../sessions/changes/schemas.js';
+import { ScmBranchWorkIdentitySchema } from './branches.js';
 
 export {
   ScmDefaultBranchPushPolicySchema,
@@ -281,6 +282,10 @@ export type ScmPullRequestSummary = z.infer<typeof ScmPullRequestSummarySchema>;
 /** Private authorized SCM read projection, never accounting event metadata. */
 export const ScmPullRequestWorkEvidenceSchema = lazyZodSchema(() => RepositoryCheckpointCommitEvidenceSchema.extend({
   pullRequest: ScmPullRequestSummarySchema,
+  /** Local refs with exactly this admitted hosting head, never matched by name. */
+  branches: z.array(ScmBranchWorkIdentitySchema).optional(),
+  /** The local branch reader's opaque Git-directory identity; hosted repositoryKey stays unchanged. */
+  branchRepositoryKey: z.string().min(1).optional(),
 }).strict());
 export type ScmPullRequestWorkEvidence = z.infer<typeof ScmPullRequestWorkEvidenceSchema>;
 const ScmPullRequestWorkEvidenceRequestSchema = lazyZodSchema(() => z.object({

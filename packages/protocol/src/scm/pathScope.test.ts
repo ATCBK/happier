@@ -6,6 +6,15 @@ import {
 } from './pathScope.js';
 
 describe('scmPathScope', () => {
+  it('keeps filename whitespace distinct through include and exclude scopes', () => {
+    expect(resolveScmScopedChangedPaths({
+      changedPaths: ['', 'file', 'file ', ' ', ' dir/file'],
+      include: ['file ', ' ', ' dir'], exclude: ['file'],
+    })).toEqual(['file ', ' ', ' dir/file']);
+    expect(scmPathMatchesScopePath({ changedPath: 'file ', scopePath: 'file' })).toBe(false);
+    expect(scmPathMatchesScopePath({ changedPath: ' ', scopePath: '' })).toBe(false);
+    expect(resolveScmScopedChangedPaths({ changedPaths: ['', ' '], include: ['.'] })).toEqual([' ']);
+  });
   it('matches directory scopes against nested changed paths', () => {
     expect(
       scmPathMatchesScopePath({

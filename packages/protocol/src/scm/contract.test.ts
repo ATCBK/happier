@@ -568,7 +568,6 @@ describe('scm protocol contracts', () => {
     it('rejects root-equivalent selected paths for mutation requests', () => {
         const invalidSelectedPaths = [
             '',
-            ' ',
             '.',
             './',
             ':',
@@ -614,6 +613,13 @@ describe('scm protocol contracts', () => {
                 }],
             }).success).toBe(false);
         }
+    });
+
+    it.each(['file ', ' ', ' .', ' ..', ' -path', ' :literal'])('preserves valid literal mutation filename %j', (path) => {
+        expect(ScmChangeApplyRequestSchema.parse({ paths: [path] }).paths).toEqual([path]);
+        expect(ScmChangeDiscardRequestSchema.parse({ entries: [{ path, kind: 'modified' }] }).entries[0]?.path).toBe(path);
+        expect(ScmCommitCreateRequestSchema.parse({ message: 'Literal filename', scope: { kind: 'paths', include: [path] } }).scope)
+            .toEqual({ kind: 'paths', include: [path] });
     });
 
     it('supports discarding a set of pending changes', () => {
@@ -686,6 +692,25 @@ describe('scm protocol contracts', () => {
             '',
         ].join('\n');
         expect(isScmPatchBoundToPath('src/a.ts', multiFilePatch)).toBe(false);
+    });
+
+    it.each(['file ', ' ', ' file', 'a/file ', 'part b/part '])('preserves literal spaces in Git patch paths for %j', (path) => {
+        const patch = `diff --git a/${path} b/${path}\n--- a/${path}\t\n+++ b/${path}\t\n@@ -1 +1 @@\n-old\n+new\n`;
+        expect(parseScmPatchPaths(patch)).toEqual([path]);
+        expect(isScmPatchBoundToPath(path, patch)).toBe(true);
+        expect(isScmPatchBoundToPath('file', patch)).toBe(false);
+        expect(parseScmPatchPaths(`diff --git a/${path} b/${path}\nBinary files differ\n`)).toEqual([path]);
+    });
+
+    it('preserves C-quoted Git filename whitespace and escapes', () => {
+        const path = 'file\t"\\\n';
+        const token = '"a/file\\t\\"\\\\\\n"';
+        const right = '"b/file\\t\\"\\\\\\n"';
+        const patch = `diff --git ${token} ${right}\n--- ${token}\n+++ ${right}\n@@ -1 +1 @@\n-old\n+new\n`;
+        expect(parseScmPatchPaths(patch)).toEqual([path]);
+        expect(isScmPatchBoundToPath(path, patch)).toBe(true);
+        const unicodePatch = 'diff --git "a/\\303\\251\\t " "b/\\303\\251\\t "\n--- "a/\\303\\251\\t "\n+++ "b/\\303\\251\\t "\n';
+        expect(parseScmPatchPaths(unicodePatch)).toEqual(['é\t ']);
     });
 
     it('accepts deterministic unsupported feature errors', () => {

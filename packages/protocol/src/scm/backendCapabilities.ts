@@ -67,6 +67,7 @@ export const ScmBackendDetectionCapabilitiesSchema = capabilityLeafMap([
 ]);
 
 export const ScmBackendReadCapabilitiesSchema = capabilityLeafMap([
+  'ignoredPaths',
   'status',
   'diffFile',
   'diffCommit',
@@ -131,6 +132,8 @@ export const ScmBackendWorktreeCapabilitiesSchema = capabilityLeafMap([
   'remove',
   'prune',
   'prepare',
+  'retire',
+  'reinstate',
 ]);
 
 export const ScmBackendLifecycleCapabilitiesSchema = capabilityLeafMap([

@@ -53,6 +53,16 @@ export type ScmWorktreeRemoveRequest = z.infer<typeof ScmWorktreeRemoveRequestSc
 export const ScmWorktreeRemoveResponseSchema = ScmWorktreeCommandResponseSchema;
 export type ScmWorktreeRemoveResponse = z.infer<typeof ScmWorktreeRemoveResponseSchema>;
 
+/** Separate advertised operations: an older backend must never ignore a retention request. */
+export const ScmWorktreeRetireRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
+  worktreePath: z.string().min(1),
+  targetPath: z.string().min(1),
+  entryId: z.string().min(1),
+}).strict());
+export type ScmWorktreeRetireRequest = z.infer<typeof ScmWorktreeRetireRequestSchema>;
+export const ScmWorktreeReinstateRequestSchema = ScmWorktreeRetireRequestSchema;
+export type ScmWorktreeReinstateRequest = ScmWorktreeRetireRequest;
+
 export const ScmWorktreePruneRequestSchema = ScmRequestBaseSchema;
 export type ScmWorktreePruneRequest = z.infer<typeof ScmWorktreePruneRequestSchema>;
 

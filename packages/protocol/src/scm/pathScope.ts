@@ -1,8 +1,8 @@
 function normalizeScopeToken(raw: string): string {
-  const trimmed = raw.trim().replace(/\\/g, '/');
-  if (!trimmed) return '';
-  if (trimmed === '.') return '.';
-  const withoutDotPrefix = trimmed.replace(/^\.\//, '');
+  const normalized = raw.replace(/\\/g, '/');
+  if (!normalized) return '';
+  if (normalized === '.') return '.';
+  const withoutDotPrefix = normalized.replace(/^\.\//, '');
   if (!withoutDotPrefix) return '.';
   const withoutTrailingSlash = withoutDotPrefix.replace(/\/+$/, '');
   return withoutTrailingSlash || '.';

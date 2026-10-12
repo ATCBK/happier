@@ -193,6 +193,14 @@ export const ScmWorktreeEnrichmentEntrySchema = lazyZodSchema(() => z.object({
   path: z.string(),
   changeCount: z.number().int().nonnegative().optional(),
   lastActivityAt: z.number().int().nonnegative().optional(),
+  ahead: z.number().int().nonnegative().optional(),
+  upstream: z.string().nullable().optional(),
+  upstreamGone: z.boolean().optional(),
+  mergedIntoDefault: z.boolean().optional(),
+  isLocked: z.boolean().optional(),
+  lockReason: z.string().optional(),
+  headOid: z.string().optional(),
+  hasSubmodules: z.boolean().optional(),
 }));
 export type ScmWorktreeEnrichmentEntry = z.infer<typeof ScmWorktreeEnrichmentEntrySchema>;
 
@@ -404,16 +412,48 @@ export const ScmCommitUndoLastResponseSchema = lazyZodSchema(() => z.object({
 export type ScmCommitUndoLastResponse = z.infer<typeof ScmCommitUndoLastResponseSchema>;
 
 function normalizeScmPatchPathToken(raw: string): string | null {
-  let value = raw.trim();
+  let value = raw;
   if (!value || value === '/dev/null') return null;
 
-  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-    value = value.slice(1, -1);
+  if (value.startsWith('"')) {
+    const decoded = decodeScmQuotedPatchPath(value);
+    if (decoded === null) return null;
+    value = decoded;
   }
 
-  value = value.replace(/^([ab])\//, '').replace(/^\.\/+/, '').trim();
+  value = value.replace(/^([ab])\//, '').replace(/^\.\/+/, '');
   if (!value || value === '/dev/null') return null;
   return value;
+}
+
+function decodeScmQuotedPatchPath(token: string): string | null {
+  if (!token.endsWith('"')) return null;
+  const escapes: Readonly<Record<string, string>> = {
+    a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '"': '"', '\\': '\\',
+  };
+  let result = '';
+  for (let index = 1; index < token.length - 1; index += 1) {
+    const char = token[index]!;
+    if (char !== '\\') {
+      if (char === '"') return null;
+      result += char;
+      continue;
+    }
+    const octets: number[] = [];
+    while (token[index] === '\\' && /^[0-7]{3}$/.test(token.slice(index + 1, index + 4))) {
+      octets.push(parseInt(token.slice(index + 1, index + 4), 8));
+      index += 4;
+    }
+    if (octets.length > 0) {
+      result += new TextDecoder().decode(Uint8Array.from(octets));
+      index -= 1;
+      continue;
+    }
+    const escaped = escapes[token[++index] ?? ''];
+    if (escaped === undefined) return null;
+    result += escaped;
+  }
+  return result;
 }
 
 function tokenizeScmDiffHeader(value: string): string[] {
@@ -423,8 +463,13 @@ function tokenizeScmDiffHeader(value: string): string[] {
 
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index] ?? '';
+    if (inQuotes && char === '\\') {
+      current += char + (value[++index] ?? '');
+      continue;
+    }
     if (char === '"') {
       inQuotes = !inQuotes;
+      current += char;
       continue;
     }
     if (!inQuotes && /\s/.test(char)) {
@@ -442,9 +487,18 @@ function tokenizeScmDiffHeader(value: string): string[] {
 }
 
 function parseScmGitDiffHeaderPath(line: string): string[] {
-  const raw = line.slice('diff --git '.length).trim();
+  const raw = line.slice('diff --git '.length);
   if (!raw) return [];
 
+  // Git leaves spaces unquoted here. A same-file patch repeats the exact path
+  // after the a/ and b/ prefixes, so use that identity to find its separator.
+  if (raw.startsWith('a/')) {
+    for (let split = raw.indexOf(' b/'); split >= 0; split = raw.indexOf(' b/', split + 1)) {
+      const left = normalizeScmPatchPathToken(raw.slice(0, split));
+      const right = normalizeScmPatchPathToken(raw.slice(split + 1));
+      if (left !== null && left === right) return [left];
+    }
+  }
   const tokens = tokenizeScmDiffHeader(raw);
   if (tokens.length < 2) return [];
 
@@ -467,7 +521,8 @@ export function parseScmPatchPaths(patch: string): string[] {
     }
 
     if (line.startsWith('--- ') || line.startsWith('+++ ')) {
-      const parsed = normalizeScmPatchPathToken(line.slice(4));
+      // An unquoted filename ends at the timestamp separator, never at a space.
+      const parsed = normalizeScmPatchPathToken(line.slice(4).split('\t')[0] ?? '');
       if (parsed) seen.add(parsed);
     }
   }
@@ -476,7 +531,7 @@ export function parseScmPatchPaths(patch: string): string[] {
 }
 
 export function isScmPatchBoundToPath(path: string, patch: string): boolean {
-  const normalizedPath = normalizeScmPatchPathToken(path);
+  const normalizedPath = path.replace(/^\.\/+/, '');
   if (!normalizedPath) return false;
   const parsedPaths = parseScmPatchPaths(patch);
   if (parsedPaths.length === 0) return false;
