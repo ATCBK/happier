@@ -15,6 +15,10 @@ export const GOOGLE_PLUGIN = definePlugin({
   version: '0.0.0',
   displayName: 'Google Voice',
   description: 'Google Gemini speech-to-text and Google Cloud text-to-speech.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' },
   runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
