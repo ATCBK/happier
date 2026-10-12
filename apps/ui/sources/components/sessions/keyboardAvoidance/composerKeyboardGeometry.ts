@@ -49,6 +49,17 @@ export function clampKeyboardAvoidanceValue({ value, min = 0, max }: KeyboardAvo
     return Math.min(Math.max(normalizedValue, effectiveMin), normalizedMax);
 }
 
+/**
+ * How far a keyboard rises inside a scaffold that already sits above `layoutBottomInset` of bottom
+ * chrome (the tab bar's reservation). The keyboard covers that chrome first, so only the remainder
+ * lifts the composer — one rule for native and web, or the composer floats a tab bar's height over
+ * the keyboard on one platform and every overlay placed from the shared rule overlaps it (R9).
+ */
+export function resolveKeyboardHeightWithinScaffold(keyboardHeight: number, layoutBottomInset: number): number {
+    'worklet';
+    return Math.max(0, keyboardHeight - Math.max(0, layoutBottomInset));
+}
+
 export function resolveComposerBottomOffset({ keyboardHeight, safeAreaBottom }: ComposerBottomOffsetInput): number {
     return Math.max(normalizeNonNegativeNumber(keyboardHeight), normalizeNonNegativeNumber(safeAreaBottom));
 }

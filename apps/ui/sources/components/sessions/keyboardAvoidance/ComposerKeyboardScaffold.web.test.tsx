@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 
 const webScaffoldLayout = vi.hoisted(() => ({
     bottomInset: 0,
@@ -56,6 +57,17 @@ vi.mock('react-native-reanimated', async () => {
 });
 
 describe('ComposerKeyboardScaffold web', () => {
+    it('inherits the containing content plane instead of covering the atmosphere with its own solid ground', async () => {
+        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.web');
+        const screen = await renderScreen(<HappierMaterialRoleProvider role="content" resolveMaterialColor={() => 'transparent'}>
+            <ComposerKeyboardScaffold mode="newSession" testID="scaffold" composerTestID="composer"
+                composer={<React.Fragment>composer</React.Fragment>}><React.Fragment>content</React.Fragment></ComposerKeyboardScaffold>
+        </HappierMaterialRoleProvider>);
+        for (const id of ['scaffold', 'composer']) {
+            const node = screen.tree.root.findAll(node => node.props.testID === id && (node.type === 'AnimatedView' || node.type === 'View'))[0]!;
+            expect(StyleSheet.flatten(node.props.style).backgroundColor).toBe('transparent');
+        }
+    });
     beforeEach(() => {
         modalState.insideModalBoundary = false;
         modalState.suppressed = false;
@@ -174,5 +186,84 @@ describe('ComposerKeyboardScaffold web', () => {
         );
 
         expect(webScaffoldLayout.lastOptions?.keyboardLiftSuppressed).toBe(false);
+    });
+
+    it('publishes where the composer band rests in the window, not counting the keyboard lift', async () => {
+        // The browser's layout measurement is the boundary; the shell registry stays real. The
+        // test window is 600 tall: a 120 band lifted 300 by the keyboard is measured at y 140.
+        webScaffoldLayout.bottomInset = 320;
+        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.web');
+        const {
+            SessionCockpitChromeRegistryProvider,
+            useSessionCockpitComposerChromeHeight,
+            useSessionCockpitComposerChromeTop,
+        } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        function Probe() {
+            return <React.Fragment>{`top=${useSessionCockpitComposerChromeTop()} height=${useSessionCockpitComposerChromeHeight()}`}</React.Fragment>;
+        }
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <ComposerKeyboardScaffold
+                    mode="session"
+                    safeAreaBottom={20}
+                    composer={<React.Fragment>composer</React.Fragment>}
+                    composerTestID="composer"
+                >
+                    <React.Fragment>content</React.Fragment>
+                </ComposerKeyboardScaffold>
+                <Probe />
+            </SessionCockpitChromeRegistryProvider>,
+            {
+                createNodeMock: (element) => (element.props as { testID?: string }).testID === 'composer'
+                    ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 140, 800, 120) }
+                    : null,
+            },
+        );
+
+        await act(async () => {
+            screen.findByTestId('composer')!.props.onLayout({ nativeEvent: { layout: { height: 120 } } });
+        });
+        expect(screen.getTextContent()).toContain('top=160 height=120');
+    });
+
+    it('withdraws the band of a composer that is not rendered (a hidden workspace screen)', async () => {
+        // A display:none screen still holds a mounted composer; it measures as a 0×0 box at the
+        // window origin. Published as-is, its "top" is the whole window and every shell overlay
+        // placed above composers climbs onto the title strip (R13).
+        webScaffoldLayout.bottomInset = 320;
+        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.web');
+        const {
+            SessionCockpitChromeRegistryProvider,
+            useSessionCockpitComposerChromeHeight,
+            useSessionCockpitComposerChromeTop,
+        } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        function Probe() {
+            return <React.Fragment>{`top=${useSessionCockpitComposerChromeTop()} height=${useSessionCockpitComposerChromeHeight()}`}</React.Fragment>;
+        }
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <ComposerKeyboardScaffold mode="session" safeAreaBottom={20} composer={<React.Fragment>visible</React.Fragment>} composerTestID="composer-visible">
+                    <React.Fragment>content</React.Fragment>
+                </ComposerKeyboardScaffold>
+                <ComposerKeyboardScaffold mode="session" safeAreaBottom={20} composer={<React.Fragment>hidden</React.Fragment>} composerTestID="composer-hidden">
+                    <React.Fragment>content</React.Fragment>
+                </ComposerKeyboardScaffold>
+                <Probe />
+            </SessionCockpitChromeRegistryProvider>,
+            {
+                createNodeMock: (element) => {
+                    const testID = (element.props as { testID?: string }).testID;
+                    if (testID === 'composer-visible') return { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 140, 800, 120) };
+                    if (testID === 'composer-hidden') return { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 0, 0) };
+                    return null;
+                },
+            },
+        );
+
+        await act(async () => {
+            screen.findByTestId('composer-visible')!.props.onLayout({ nativeEvent: { layout: { height: 120 } } });
+            screen.findByTestId('composer-hidden')!.props.onLayout({ nativeEvent: { layout: { height: 150 } } });
+        });
+        expect(screen.getTextContent()).toContain('top=160 height=120');
     });
 });

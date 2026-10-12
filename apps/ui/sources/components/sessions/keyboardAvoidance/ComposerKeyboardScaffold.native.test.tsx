@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 
 const scaffoldLayout = vi.hoisted(() => ({
     lastOptions: undefined as { availablePanelMaxHeight?: number; keyboardLiftSuppressed?: boolean } | undefined,
@@ -79,6 +80,15 @@ function resolveStyleBackgroundColor(style: unknown): string | undefined {
 }
 
 describe('ComposerKeyboardScaffold native', () => {
+    it('inherits the containing content plane instead of covering the atmosphere with solid ground', async () => {
+        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.native');
+        const screen = await renderScreen(<HappierMaterialRoleProvider role="content" resolveMaterialColor={() => 'transparent'}>
+            <ComposerKeyboardScaffold mode="newSession" testID="scaffold" composerTestID="composer"
+                composer={<View />}><View /></ComposerKeyboardScaffold>
+        </HappierMaterialRoleProvider>);
+        expect(StyleSheet.flatten(screen.findByTestId('scaffold')!.props.style).backgroundColor).toBe('transparent');
+        expect(StyleSheet.flatten(screen.findByTestId('composer')!.props.style).backgroundColor).toBe('transparent');
+    });
     beforeEach(() => {
         modalState.insideModalBoundary = false;
         modalState.suppressed = false;

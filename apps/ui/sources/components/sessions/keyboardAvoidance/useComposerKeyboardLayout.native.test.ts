@@ -648,7 +648,7 @@ describe('useComposerKeyboardLayout native', () => {
     });
 
     it('marks the scaffold-relative keyboard height helper as a worklet', () => {
-        const source = readFileSync(new URL('./useComposerKeyboardLayout.native.ts', import.meta.url), 'utf8');
+        const source = readFileSync(new URL('./composerKeyboardGeometry.ts', import.meta.url), 'utf8');
 
         expect(source).toMatch(/function resolveKeyboardHeightWithinScaffold[^{]*{\s*['"]worklet['"];/);
     });

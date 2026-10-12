@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { View, type LayoutChangeEvent } from 'react-native';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useUnistyles } from 'react-native-unistyles';
@@ -12,6 +13,7 @@ import { useComposerKeyboardLayout } from './useComposerKeyboardLayout.native';
 
 export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): React.ReactElement {
     const { theme } = useUnistyles();
+    const materialColor = useHappierMaterialColorResolver('content');
     const modal = useOptionalModal();
     const isInsideModalBoundary = useIsInsideModalBoundary();
     const modalKeyboardLiftSuppressed = modal?.isKeyboardLiftSuppressedByModal === true;
@@ -38,7 +40,7 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
     const { style: contentPropsStyle, ...contentProps } = props.contentProps ?? {};
     // A transparent scaffold is presented over the screen behind it, so it paints no ground of its
     // own and lets the caller supply a `backdrop` instead.
-    const surfaceBackgroundColor = props.surface === 'transparent' ? undefined : theme.colors.surface.base;
+    const surfaceBackgroundColor = props.surface === 'transparent' ? undefined : materialColor(theme.colors.surface.base, 'transparent');
 
     return (
         <ComposerKeyboardProvider layout={layout}>

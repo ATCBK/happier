@@ -7,6 +7,7 @@ import {
     resolveAvailablePanelHeight,
     resolveComposerBottomOffset,
     resolveListBottomInset,
+    resolveKeyboardHeightWithinScaffold,
 } from './composerKeyboardGeometry';
 import type { ComposerKeyboardLayout } from './ComposerKeyboardContext';
 
@@ -75,10 +76,6 @@ function resolveAndroidFinalFrameKeyboardHeight(
     return Math.max(reportedHeight, heightFromScreenY);
 }
 
-function resolveKeyboardHeightWithinScaffold(keyboardHeight: number, layoutBottomInset: number): number {
-    'worklet';
-    return Math.max(0, keyboardHeight - Math.max(0, layoutBottomInset));
-}
 
 /**
  * Should this keyboard frame be ignored, and does it re-open the gate?

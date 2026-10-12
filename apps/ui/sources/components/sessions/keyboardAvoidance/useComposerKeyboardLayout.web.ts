@@ -6,6 +6,7 @@ import { resolveWebVisualViewportKeyboardInset } from '@/hooks/ui/resolveWebVisu
 import {
     resolveAvailablePanelHeight,
     resolveComposerBottomOffset,
+    resolveKeyboardHeightWithinScaffold,
 } from './composerKeyboardGeometry';
 import type { ComposerKeyboardLayout } from './ComposerKeyboardContext';
 import type { ComposerKeyboardLayoutOptions } from './useComposerKeyboardLayout.native';
@@ -43,6 +44,9 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         ? Math.max(0, options.availablePanelMaxHeight)
         : undefined;
     const keyboardLiftSuppressed = options.keyboardLiftSuppressed === true;
+    const layoutBottomInset = typeof options.layoutBottomInset === 'number' && Number.isFinite(options.layoutBottomInset)
+        ? Math.max(0, options.layoutBottomInset)
+        : 0;
     const availablePanelHeight = useSharedValue(0);
     const bottomInset = useSharedValue(resolveComposerBottomOffset({ keyboardHeight: 0, safeAreaBottom }));
     const composerHeight = useSharedValue(0);
@@ -110,7 +114,11 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         keyboardHeightForInset.value = keyboardHeight;
         keyboardProgress.value = keyboardHeight > 0 ? 1 : 0;
         notifyKeyboardHeight(effectiveKeyboardHeight);
-        bottomInset.value = resolveComposerBottomOffset({ keyboardHeight: effectiveKeyboardHeight, safeAreaBottom });
+        // The scaffold already clears the bottom chrome the keyboard covers (same rule as native).
+        bottomInset.value = resolveComposerBottomOffset({
+            keyboardHeight: resolveKeyboardHeightWithinScaffold(effectiveKeyboardHeight, layoutBottomInset),
+            safeAreaBottom,
+        });
         listBottomInset.value = 0;
         notifyListBottomInset(0);
         availablePanelHeight.value = resolveAvailablePanelHeight({
@@ -132,6 +140,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         keyboardHeightLive,
         keyboardLiftSuppressed,
         keyboardProgress,
+        layoutBottomInset,
         listBottomInset,
         notifyAvailablePanelHeight,
         notifyKeyboardHeight,
