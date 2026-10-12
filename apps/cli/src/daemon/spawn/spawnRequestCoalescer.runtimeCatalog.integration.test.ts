@@ -571,22 +571,22 @@ describe('computeDaemonSpawnRequestKey', () => {
     const a = computeDaemonSpawnRequestKey({
       directory: '/tmp/repo',
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-b', 'portable-a'],
         forceExcludeServerIds: ['workspace-a'],
-      },
+      } },
     } satisfies SpawnSessionOptions);
     const b = computeDaemonSpawnRequestKey({
       directory: '/tmp/repo',
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-a', 'portable-b'],
         forceExcludeServerIds: ['workspace-a'],
-      },
+      } },
     } satisfies SpawnSessionOptions);
 
     expect(a.kind).toBe('new');
@@ -598,22 +598,22 @@ describe('computeDaemonSpawnRequestKey', () => {
     const a = computeDaemonSpawnRequestKey({
       directory: '/tmp/repo',
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-a'],
         forceExcludeServerIds: [],
-      },
+      } },
     } satisfies SpawnSessionOptions);
     const b = computeDaemonSpawnRequestKey({
       directory: '/tmp/repo',
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: true,
         forceIncludeServerIds: ['portable-a'],
         forceExcludeServerIds: [],
-      },
+      } },
     } satisfies SpawnSessionOptions);
 
     expect(a.kind).toBe('new');

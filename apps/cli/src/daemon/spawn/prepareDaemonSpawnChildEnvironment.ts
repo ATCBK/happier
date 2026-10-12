@@ -3,6 +3,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 
 import type { DaemonSpawnHooks } from '@/daemon/spawnHooks';
 import { configuration } from '@/configuration';
+import { buildToolIdleTimeoutEnvironmentOverlay, type MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
 import type { ProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
 import type {
     ProviderSpawnAuthorizationAttempt,
@@ -37,6 +38,7 @@ import {
 
 type ConnectedServiceAuth = Awaited<ReturnType<typeof resolveConnectedServiceAuthForSpawn>>;
 export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
+    readMachineResourcesPolicy?: MachineResourcesPolicyReader;
     options: SpawnSessionOptions;
     existingSessionMetadata?: Readonly<Record<string, unknown>> | null;
     resolvedAgentId?: string | null;
@@ -175,7 +177,14 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
             input.connectedServiceMaterializationIdentity,
         )
         : spawnEnvironment.extraEnvForChild;
-    const extraEnvForChild = { ...connectedServiceChildEnvironment };
+    const extraEnvForChild = {
+        ...connectedServiceChildEnvironment,
+        ...(input.readMachineResourcesPolicy ? buildToolIdleTimeoutEnvironmentOverlay({
+            environment: { ...input.processEnv, ...connectedServiceChildEnvironment },
+            policy: input.readMachineResourcesPolicy(),
+            unsetEnvKeys: spawnEnvironment.unsetEnvKeys,
+        }) : {}),
+    };
     // Inherited daemon/tmux state is never requester authority. Only the
     // admitted launch owner supplies this exact protected Session custody.
     delete extraEnvForChild.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE;

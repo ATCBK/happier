@@ -1,8 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import { MachineResourcesPolicyV1Schema, type MachineResourcesPolicyGetResultV1 } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 
 import { buildSpawnChildProcessEnv } from './buildSpawnChildProcessEnv';
+import { parseProcessOwnerTag } from '@/processes/ownerTag';
 
 describe('buildSpawnChildProcessEnv', () => {
+  it('inherits the admitted tool idle policy while preserving explicit environment choices', () => {
+    const ready = (toolIdleCloseMs?: number | null): MachineResourcesPolicyGetResultV1 => ({ status: 'ready', revision: 1,
+      source: 'stored', policy: MachineResourcesPolicyV1Schema.parse({ v: 1,
+        ...(toolIdleCloseMs !== undefined ? { processes: { toolIdleCloseMs } } : {}) }) });
+    const build = (policy: MachineResourcesPolicyGetResultV1, processEnv: NodeJS.ProcessEnv = {},
+      extraEnv: Record<string, string | undefined> = {}, unsetEnvKeys?: readonly string[]) =>
+      buildSpawnChildProcessEnv({ processEnv, extraEnv, unsetEnvKeys, readMachineResourcesPolicy: () => policy });
+    expect(build(ready()).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe('300000');
+    expect(build(ready(1_250)).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe('1250');
+    expect(build(ready(null)).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBeUndefined();
+    expect(build({ status: 'unavailable' }).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBeUndefined();
+    expect(build(ready(), { AGENT_BROWSER_IDLE_TIMEOUT_MS: 'daemon-value' }).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe('daemon-value');
+    expect(build(ready(), {}, { AGENT_BROWSER_IDLE_TIMEOUT_MS: '' }).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe('');
+    expect(build(ready(), {}, {}, ['AGENT_BROWSER_IDLE_TIMEOUT_MS']).AGENT_BROWSER_IDLE_TIMEOUT_MS).toBeUndefined();
+  });
+  it('retains host-issued session ownership despite plugin overlays or an explicit unset', () => {
+    const env = buildSpawnChildProcessEnv({ processEnv: { HAPPIER_PROCESS_OWNER: 'ambient' },
+      extraEnv: { HAPPIER_PROCESS_OWNER: 'forged' }, unsetEnvKeys: ['HAPPIER_PROCESS_OWNER'],
+      processOwner: { kind: 'session', sessionId: 'canonical-session' }, happierHomeDir: '/home/alice/.happier' });
+    expect(parseProcessOwnerTag(env.HAPPIER_PROCESS_OWNER)?.owner).toEqual({ kind: 'session', sessionId: 'canonical-session' });
+  });
   it('merges process env with extra env and strips nested daemon/session bootstrap variables', () => {
     const env = buildSpawnChildProcessEnv({
       processEnv: {

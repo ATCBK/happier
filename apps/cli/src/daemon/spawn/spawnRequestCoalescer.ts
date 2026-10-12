@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { readRuntimeDescriptorV1 } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 
 import { readCanonicalSpawnRuntimeSelection } from '@/rpc/handlers/spawnRuntimeSelection';
@@ -56,17 +56,25 @@ function hashRecordValues(record: Record<string, string> | undefined): Record<st
   return out;
 }
 
-function normalizeMcpSelectionForFingerprint(value: SpawnSessionOptions['mcpSelection']): Json {
+function normalizeCapabilitySelectionForFingerprint(value: SpawnSessionOptions['capabilitySelection']): Json {
   if (value === undefined) return null;
-  const parsed = SessionMcpSelectionV1Schema.safeParse(value);
+  const parsed = SessionCapabilitySelectionV1Schema.safeParse(value);
   if (!parsed.success) return null;
 
-  const { v, managedServersEnabled, forceIncludeServerIds, forceExcludeServerIds } = parsed.data;
+  const { mcp, skills } = parsed.data;
   return {
-    v,
-    managedServersEnabled,
-    forceIncludeServerIds: [...forceIncludeServerIds].sort(),
-    forceExcludeServerIds: [...forceExcludeServerIds].sort(),
+    ...(mcp ? { mcp: {
+      v: mcp.v,
+      managedServersEnabled: mcp.managedServersEnabled,
+      forceIncludeServerIds: [...mcp.forceIncludeServerIds].sort(),
+      forceExcludeServerIds: [...mcp.forceExcludeServerIds].sort(),
+    } } : {}),
+    ...(skills ? { skills: {
+      v: skills.v,
+      forceIncludeSkillIds: [...skills.forceIncludeSkillIds].sort(),
+      forceExcludeSkillIds: [...skills.forceExcludeSkillIds].sort(),
+      excludeNativeSkillNames: [...skills.excludeNativeSkillNames].sort(),
+    } } : {}),
   };
 }
 
@@ -170,7 +178,7 @@ function buildSpawnSemanticFingerprint(options: SpawnSessionOptions): Json {
     providerBindingSecurityChangeConfirmation: options.providerBindingSecurityChangeConfirmationV1 === undefined
       ? null
       : toStableJson(options.providerBindingSecurityChangeConfirmationV1, new WeakSet()),
-    mcpSelection: normalizeMcpSelectionForFingerprint(options.mcpSelection),
+    capabilitySelection: normalizeCapabilitySelectionForFingerprint(options.capabilitySelection),
     sessionConfigOptionOverrides: normalizeSessionConfigOptionOverridesForFingerprint(
       options.sessionConfigOptionOverrides,
     ),

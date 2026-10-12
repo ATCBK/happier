@@ -21,7 +21,7 @@ export async function persistAcceptedSpawnMarker(params: Readonly<{
   }>;
 }>): Promise<void> {
   const { trackedSession } = params;
-  const processPid = params.processPid ?? trackedSession.pid;
+  const processPid = params.processPid ?? trackedSession.sessionRunnerPid ?? trackedSession.pid;
   if (!Number.isInteger(processPid) || processPid <= 0) {
     throw new Error('Accepted spawn custody requires a valid process PID');
   }
@@ -90,6 +90,7 @@ export async function persistAcceptedSpawnMarker(params: Readonly<{
     startedBy: 'daemon',
     cwd: trackedSession.spawnOptions.directory,
     processStartTimeMs: processIdentity.processStartTimeMs,
+    ...(trackedSession.linuxLaunchUnit ? { linuxLaunchUnit: trackedSession.linuxLaunchUnit } : {}),
     ...(observedProcessCommand
       ? {
           processCommand: observedProcessCommand,

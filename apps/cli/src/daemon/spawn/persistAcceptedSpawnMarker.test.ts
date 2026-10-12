@@ -1,0 +1,55 @@
+import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { TrackedSession } from '../types';
+
+describe('persistAcceptedSpawnMarker native runner witness', () => {
+    it('persists the runner generation rather than a distinct native wrapper, preserving explicit custody overrides', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-runner-marker-'));
+        vi.stubEnv('HAPPIER_HOME_DIR', home);
+        vi.resetModules();
+        try {
+            const { persistAcceptedSpawnMarker } = await import('./persistAcceptedSpawnMarker');
+            const { readProcessIdentityByPid } = await import('../processIdentity');
+            const { readSessionMarkerForPid } = await import('../sessionRegistry');
+            const { readOrCreateDeviceLocalSecretStorage } = await import('../deviceLocalSecretStorage');
+            const storage = await readOrCreateDeviceLocalSecretStorage({ path: join(home, 'fixture-secret.key') });
+            // Genuine procfs boundary: wrapper and runner have different native births.
+            const linuxBoundary = {
+                readdir: async () => [String(process.pid), '1111', '2222'],
+                readlink: async () => '/usr/bin/node',
+                readFile: async (path: string) => {
+                    if (path === '/proc/self/auxv') return Buffer.alloc(0);
+                    const pid = Number(/^\/proc\/(\d+)\//u.exec(path)?.[1]);
+                    if (path.endsWith('/stat')) return `${pid} (node) S 1 ${pid} ${pid} 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 ${pid === 2222 ? 456 : 123} 4096 1`;
+                    if (path.endsWith('/status')) return `Name:\tnode\nUid:\t1000\t1000\t1000\t1000\n`;
+                    if (path.endsWith('/cmdline')) return `node\0${pid === 2222 ? 'runner' : 'wrapper'}`;
+                    if (path.endsWith('/environ')) return '';
+                    if (path.endsWith('/cgroup')) return '0::/user.slice';
+                    throw new Error(`Unexpected procfs read ${path}`);
+                },
+            };
+            const tracked: TrackedSession = { pid: 1111, sessionRunnerPid: 2222, startedBy: 'daemon', happySessionId: 's1',
+                linuxLaunchUnit: 'happier-session-0123456789ab.session-0123456789abcdef0123456789abcdef.scope',
+                spawnOptions: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } } };
+            const readIdentity: typeof readProcessIdentityByPid = pid => readProcessIdentityByPid(pid, { platform: 'linux', linuxBoundary });
+            await persistAcceptedSpawnMarker({ trackedSession: tracked, deviceLocalSecretStorage: storage, readProcessIdentityByPidFn: readIdentity });
+            const marker = await readSessionMarkerForPid(2222);
+            expect(marker).toMatchObject({ pid: 2222, processStartTimeMs: 4560, linuxLaunchUnit: tracked.linuxLaunchUnit });
+            const { buildTrackedSessionFromMarker } = await import('../sessions/trackedSessionFromMarker');
+            expect(buildTrackedSessionFromMarker({ marker: marker!, startedByFallback: 'reattached' }).linuxLaunchUnit).toBe(tracked.linuxLaunchUnit);
+            const { writeSessionMarker } = await import('../sessionRegistry');
+            await writeSessionMarker({ pid: 2222, happySessionId: 's1', startedBy: 'daemon', processStartTimeMs: 4560 });
+            expect(await readSessionMarkerForPid(2222)).toHaveProperty('linuxLaunchUnit', tracked.linuxLaunchUnit);
+            expect(await readSessionMarkerForPid(1111)).toBeNull();
+            expect(tracked.processStartTimeMs).toBe(4560);
+            await persistAcceptedSpawnMarker({ trackedSession: tracked, processPid: 1111, deviceLocalSecretStorage: storage, readProcessIdentityByPidFn: readIdentity });
+            expect(await readSessionMarkerForPid(1111)).toMatchObject({ pid: 1111, processStartTimeMs: 1230 });
+        } finally {
+            vi.unstubAllEnvs();
+            vi.resetModules();
+            await rm(home, { recursive: true, force: true });
+        }
+    });
+});

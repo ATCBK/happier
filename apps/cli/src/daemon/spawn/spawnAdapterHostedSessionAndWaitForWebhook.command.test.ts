@@ -38,6 +38,7 @@ import { buildAgentCliSessionCommandBuildInput, partitionProviderSessionArgs } f
 import { isSupportedHerdrVersion } from '@/integrations/herdr/runtimeBinary';
 import { withHerdrApi } from '@/integrations/herdr/herdrApi.testkit';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { parseProcessOwnerTag } from '@/processes/ownerTag';
 
 import { spawnAdapterHostedSessionAndWaitForWebhook } from './spawnAdapterHostedSessionAndWaitForWebhook';
 
@@ -55,7 +56,7 @@ describe('daemon-hosted executable Agent command', () => {
         api.setServerVersion('0.9.1');
         const result = await spawnAdapterHostedSessionAndWaitForWebhook({
           terminalRequest: { requested: 'herdr', herdr: { sessionName: 'work terminals' } },
-          directory: home, trackedSpawnOptions: { directory: home }, normalizedExistingSessionId: '', effectiveResume: '',
+          directory: home, trackedSpawnOptions: { directory: home }, normalizedExistingSessionId: 'session-hosted-command', effectiveResume: '',
           effectiveBackendTargetV2: { kind: 'backend', sourceKind: 'built_in', backendId: 'codex' },
           sessionControlArgs: [], directoryCreated: false, extraEnvForChildWithMessage: {}, processEnv: process.env, happyHomeDir: home,
           pidToTrackedSession: new Map(), pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
@@ -76,7 +77,7 @@ describe('daemon-hosted executable Agent command', () => {
       });
     });
   });
-  it.skipIf(process.platform === 'win32')('produces a Codex command accepted by the actual public Agent parser', async () => {
+  it.skipIf(process.platform === 'win32').each(['existing', 'fresh'] as const)('produces a %s Codex command accepted by the actual public Agent parser', async (sessionKind) => {
     // The genuine harmless version command supplies a stable semver banner.
     expect(isSupportedHerdrVersion(process.version)).toBe(true);
     vi.stubEnv('HERDR_BIN_PATH', process.execPath);
@@ -85,6 +86,7 @@ describe('daemon-hosted executable Agent command', () => {
       await withHerdrApi(async (api) => {
         boundary.socketPath = api.socketPath;
         let runnerArgs: string[] | undefined;
+        let runnerOwnerTag: string | undefined;
         api.beforeResponse.set('layout.apply', () => {
           const request = api.requests.at(-1);
           const root = request?.params.root;
@@ -99,6 +101,10 @@ describe('daemon-hosted executable Agent command', () => {
             throw new Error('Invalid terminal launch spec args');
           }
           runnerArgs = spec.args;
+          if ('env' in spec && typeof spec.env === 'object' && spec.env !== null
+            && 'HAPPIER_PROCESS_OWNER' in spec.env && typeof spec.env.HAPPIER_PROCESS_OWNER === 'string') {
+            runnerOwnerTag = spec.env.HAPPIER_PROCESS_OWNER;
+          }
         });
         // Retire the submitted pane/spec without pretending a provider runner
         // or session webhook exists. This case decides executable CLI admission.
@@ -107,10 +113,11 @@ describe('daemon-hosted executable Agent command', () => {
           terminalRequest: { requested: 'herdr', herdr: { sessionName: 'work terminals' } },
           directory: home,
           trackedSpawnOptions: { directory: home },
-          normalizedExistingSessionId: '', effectiveResume: '',
+          normalizedExistingSessionId: sessionKind === 'existing' ? 'session-hosted-command' : '', effectiveResume: '',
           effectiveBackendTargetV2: { kind: 'backend', sourceKind: 'built_in', backendId: 'codex' },
           sessionControlArgs: [], directoryCreated: false,
-          extraEnvForChildWithMessage: {}, processEnv: process.env, happyHomeDir: home,
+          extraEnvForChildWithMessage: { HAPPIER_PROCESS_OWNER: 'forged-host-owner' },
+          unsetEnvKeys: ['HAPPIER_PROCESS_OWNER'], processEnv: process.env, happyHomeDir: home,
           pidToTrackedSession: new Map(), pidToAwaiter: new Map(),
           pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
           onChildExited: () => {},
@@ -125,6 +132,9 @@ describe('daemon-hosted executable Agent command', () => {
         });
         expect(result).toMatchObject({ type: 'error', errorCode: 'SPAWN_FAILED' });
         expect(api.panes.size).toBe(0);
+        if (sessionKind === 'existing') expect(parseProcessOwnerTag(runnerOwnerTag)?.owner).toEqual({ kind: 'session', sessionId: 'session-hosted-command' });
+        else if (process.platform === 'linux') expect(parseProcessOwnerTag(runnerOwnerTag)?.owner.kind).toBe('happier');
+        else expect(parseProcessOwnerTag(runnerOwnerTag)?.owner.kind).not.toBe('session');
         if (!runnerArgs) throw new Error('The real daemon producer did not submit an executable command');
         const commandIndex = runnerArgs.indexOf('codex');
         expect(commandIndex).toBeGreaterThanOrEqual(0);

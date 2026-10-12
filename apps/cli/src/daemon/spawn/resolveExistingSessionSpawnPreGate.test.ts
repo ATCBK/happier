@@ -60,6 +60,7 @@ describe('resolveExistingSessionSpawnPreGate', () => {
     expect(resolved.shortCircuitResult).toMatchObject({
       type: 'error',
       errorMessage: expect.stringContaining('restart'),
+      runtimeFailureReason: 'runner_authority_unavailable',
     });
     expect(probeSessionRunnerPresence).not.toHaveBeenCalled();
     expect(onAlreadyRunning).not.toHaveBeenCalled();

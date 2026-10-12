@@ -178,6 +178,21 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
     await pluginReloadController.shutdown();
   });
 
+  it('returns a typed resource failure when the OS cannot assign a runner pid', async () => {
+    const child = createFakeChildProcess(0);
+    Object.defineProperty(child, 'pid', { value: undefined });
+    mocks.spawnHappyCLI.mockReturnValue(child);
+    const params = createParams();
+    const pending = spawnRegularProcessAndWaitForWebhook(params);
+    await vi.waitFor(() => expect(child.listenerCount('error')).toBeGreaterThan(0));
+    child.emit('error', Object.assign(new Error('spawn EMFILE'), { code: 'EMFILE', syscall: 'spawn' }));
+    await expect(pending).resolves.toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_NO_PID,
+      errorDetail: { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' },
+      errorMessage: expect.stringContaining("can't open more files") });
+    expect(params.cleanupSpawnResources).toHaveBeenCalled();
+    expect(params.spawnLifecycleCallbacks.cleanupPendingSessionAttach).toHaveBeenCalled();
+  });
+
   it.skipIf(originalPlatform === 'win32').each([
     ['codex', 'acp', 'none', 'herdr'],
     ['codex', 'appServer', 'provider_attach', 'herdr'],
@@ -494,11 +509,14 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
                       pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs, onExitObserved: onChildExited }),
                   });
                   pidToTrackedSession.set(pid, { ...observed, processStartTimeMs: observed.processStartTimeMs + 1 });
-                  expect(await stop('session-1')).toEqual({ status: 'incomplete', reason: 'missing_attachment_identity' });
+                  expect(await stop('session-1')).toEqual({ status: 'incomplete', reason: requestedHost === 'plain'
+                    ? 'runner_signal_incomplete' : 'missing_attachment_identity' });
                   expect(process.kill(pid, 0)).toBe(true);
-                  pidToTrackedSession.set(pid, { ...observed, startedBy: 'terminal' });
-                  expect(await stop('session-1')).toEqual({ status: 'incomplete', reason: 'missing_attachment_identity' });
-                  expect(process.kill(pid, 0)).toBe(true);
+                  if (requestedHost !== 'plain') {
+                    pidToTrackedSession.set(pid, { ...observed, startedBy: 'terminal' });
+                    expect(await stop('session-1')).toEqual({ status: 'incomplete', reason: 'missing_attachment_identity' });
+                    expect(process.kill(pid, 0)).toBe(true);
+                  }
                   pidToTrackedSession.set(pid, observed);
                   // Hold only the genuine procfs read; a replacement tracked
                   // object cannot inherit the earlier absent-presenter proof.
@@ -520,7 +538,8 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
                     await vi.waitFor(() => expect(readStarted).toBe(true));
                     pidToTrackedSession.set(pid, { ...observed });
                     releaseRead();
-                    expect(await replacedStop).toEqual({ status: 'incomplete', reason: 'missing_attachment_identity' });
+                    expect(await replacedStop).toEqual({ status: 'incomplete', reason: requestedHost === 'plain'
+                      ? 'runner_signal_incomplete' : 'missing_attachment_identity' });
                     expect(process.kill(pid, 0)).toBe(true);
                   } finally {
                     releaseRead();
@@ -1255,6 +1274,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
       errorMessage: 'Child process exited before session webhook (pid=4244, code=1, signal=null)',
+      errorDetail: { kind: 'spawn_failure', reason: 'other' },
     });
   });
 
@@ -1521,6 +1541,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
       errorMessage: 'Child process exited before session webhook (pid=4248, code=1, signal=null)',
+      errorDetail: { kind: 'spawn_failure', reason: 'other' },
     });
     expect(params.onChildExited).not.toHaveBeenCalled();
     expect(params.pidToTrackedSession.get(4248)).toBe(replacementTracked);
@@ -1566,6 +1587,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
       errorMessage: 'Child process exited before session webhook (pid=4249, code=1, signal=null)',
+      errorDetail: { kind: 'spawn_failure', reason: 'other' },
     });
     expect(params.onChildExited).not.toHaveBeenCalled();
     expect(params.pidToTrackedSession.get(4249)).toBe(replacementTracked);
@@ -1715,6 +1737,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
       errorMessage: expect.stringContaining('fatal: missing configured provider runtime'),
+      errorDetail: { kind: 'spawn_failure', reason: 'other' },
     });
     expect(result.errorMessage).toContain('recent stderr:');
     expect(result.errorMessage).toContain('authorization: bearer [REDACTED]');

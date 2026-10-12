@@ -22,7 +22,7 @@ export async function waitForTerminalHostedSessionWebhook(params: Readonly<{
   effectiveResume: string;
   directoryCreated: boolean;
   message?: string;
-  trackedSessionFields?: Partial<Pick<TrackedSession, 'tmuxSessionId' | 'tmuxTmpDir' | 'hostedTerminal'>>;
+  trackedSessionFields?: Partial<Pick<TrackedSession, 'tmuxSessionId' | 'tmuxTmpDir' | 'hostedTerminal' | 'linuxLaunchUnit'>>;
   runnerAgentSessionBootstrapAuthorization?: RunnerAgentSessionBootstrapAuthorization | null;
   runnerAgentInvocationContext?: RunnerAgentInvocationContext | null;
   pidToTrackedSession: Map<number, TrackedSession>;

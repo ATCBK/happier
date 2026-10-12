@@ -13,13 +13,14 @@ import type {
 import type {
   RunnerAgentSessionBootstrapAuthorization,
 } from '../agentRuntime/sessionBridgeAuthorization';
-import { spawnHappyCLI, type HappyCliSubprocessLaunchOptions } from '@/utils/spawnHappyCLI';
+import { buildHappyCliSubprocessLaunchSpec, spawnHappyCLI, type HappyCliSubprocessLaunchOptions } from '@/utils/spawnHappyCLI';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
 import { buildSpawnChildProcessEnv } from './buildSpawnChildProcessEnv';
 import { applySpawnedChildOomScoreAdjustment } from '../platform/linux/applySpawnedChildOomScoreAdjustment';
 import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
-import { shouldUseSystemdUserSessionResourceGovernor } from '../platform/linux/systemdUserResourceGovernor';
+import { createHappierLinuxScopeName, shouldUseSystemdUserSessionResourceGovernor } from '../platform/linux/systemdUserResourceGovernor';
+import { readHostProcessOwnerTag, withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 import type { SpawnLifecycleCallbacks } from './createSpawnLifecycleCallbacks';
 import {
   tombstoneTrackedSessionWebhookPids,
@@ -33,8 +34,9 @@ import {
   resolveSpawnErrorAfterStartupCancellation,
   type CancelStartupLaunch,
 } from './startupLaunchCancellation';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { createExactWindowsProcessCancellation } from '../platform/windows/windowsProcessCustody';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 const CHILD_STDERR_CAPTURE_MAX_CHARS = 16_384;
 const CHILD_STDERR_DIAGNOSTIC_MAX_BYTES = 2_048;
@@ -91,29 +93,41 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   createStreamingSanitizer?: () => ProviderStreamingSanitizer;
   revalidateBeforeCommit?: SpawnCommitRevalidation;
   runnerLaunchOptions?: HappyCliSubprocessLaunchOptions;
+  memoryHighBytes?: number | null;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }>): Promise<SpawnSessionResult> {
   const sanitizeDiagnosticText = params.sanitizeDiagnosticText ?? ((value: string) => value);
-  // NOTE: sessionId is reserved for future Happy session resume; we currently ignore it.
-  const baseEnv = buildSpawnChildProcessEnv({
-    processEnv: params.processEnv,
-    extraEnv: params.extraEnvForChildWithMessage,
-    unsetEnvKeys: params.unsetEnvKeys,
-  });
   const useLinuxCgroupSelfMigration = shouldUseSystemdUserSessionResourceGovernor({
     platform: process.platform,
     startupSource: String(params.processEnv.HAPPIER_DAEMON_STARTUP_SOURCE ?? '').trim(),
   });
-  const cgroupSelfMigratingLaunchSpec = useLinuxCgroupSelfMigration
+  const runnerLaunchSpec = useLinuxCgroupSelfMigration
+    ? buildHappyCliSubprocessLaunchSpec(Array.from(params.args), params.runnerLaunchOptions ?? { preferWindowsPackagedBinary: true })
+    : null;
+  const childEnv = buildSpawnChildProcessEnv({
+    ...(params.normalizedExistingSessionId ? { processOwner: { kind: 'session' as const, sessionId: params.normalizedExistingSessionId } } : {}),
+    ...(params.processEnv.HAPPIER_HOME_DIR ? { happierHomeDir: params.processEnv.HAPPIER_HOME_DIR } : {}),
+    processEnv: params.processEnv,
+    extraEnv: { ...params.extraEnvForChildWithMessage, ...(runnerLaunchSpec?.env ?? {}) },
+    unsetEnvKeys: params.unsetEnvKeys,
+  });
+  const baseEnv = useLinuxCgroupSelfMigration && !params.normalizedExistingSessionId
+    ? withHostProcessOwnerEnvironment(childEnv, readHostProcessOwnerTag(params.processEnv))
+    : childEnv;
+  const cgroupSelfMigratingLaunchSpec = runnerLaunchSpec
     ? await buildCgroupSelfMigratingHappyCliLaunchSpec({
-      args: Array.from(params.args),
+      unit: createHappierLinuxScopeName(baseEnv.HAPPIER_PROCESS_OWNER),
+      memoryHighBytes: params.memoryHighBytes,
+      launchSpec: { ...runnerLaunchSpec, env: baseEnv },
       daemonPid: process.pid,
       environment: params.processEnv,
-      launchOptions: params.runnerLaunchOptions ?? { preferWindowsPackagedBinary: true },
     })
     : null;
   const commitRefusal = await params.revalidateBeforeCommit?.() ?? null;
   if (commitRefusal) return commitRefusal;
-  const happyProcess = cgroupSelfMigratingLaunchSpec
+  let happyProcess: ReturnType<typeof spawnChildProcess>;
+  try {
+    happyProcess = cgroupSelfMigratingLaunchSpec
     ? spawnChildProcess(cgroupSelfMigratingLaunchSpec.filePath, cgroupSelfMigratingLaunchSpec.args, {
       cwd: params.directory,
       detached: true,
@@ -131,6 +145,14 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
       windowsHide: true,
       env: baseEnv,
     }, params.runnerLaunchOptions ?? { preferWindowsPackagedBinary: true });
+  } catch (error) {
+    const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
+    await params.cleanupSpawnResources();
+    await params.spawnLifecycleCallbacks.cleanupPendingSessionAttach();
+    return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+      errorMessage: spawnFailureMessage(spawnFailure, 'Failed to spawn Happier process'),
+      errorDetail: { kind: 'spawn_failure', ...spawnFailure } };
+  }
 
   let capturedStderrTail = '';
   const stderrSanitizer = params.createStreamingSanitizer?.() ?? null;
@@ -165,13 +187,18 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
 
   const pid = happyProcess.pid;
   if (typeof pid !== 'number') {
+    // A failed Node OS spawn has no PID and emits its errno on the next tick.
+    // Observe it before returning, so it cannot become an unhandled error.
+    const error = await new Promise<Error>((resolve) => happyProcess.once('error', resolve));
+    const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
     params.logDebug('[DAEMON RUN] Failed to spawn process - no PID returned');
     await params.cleanupSpawnResources();
     await params.spawnLifecycleCallbacks.cleanupPendingSessionAttach();
     return {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_NO_PID,
-      errorMessage: 'Failed to spawn Happier process - no PID returned',
+      errorMessage: spawnFailureMessage(spawnFailure, 'Failed to spawn Happier process - no PID returned'),
+      errorDetail: { kind: 'spawn_failure', ...spawnFailure },
     };
   }
 
@@ -191,6 +218,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
     happySessionId:
       params.normalizedExistingSessionId || `PID-${pid}`,
     pid,
+    ...(cgroupSelfMigratingLaunchSpec?.linuxLaunchUnit ? { linuxLaunchUnit: cgroupSelfMigratingLaunchSpec.linuxLaunchUnit } : {}),
     childProcess: happyProcess,
     spawnOptions: params.trackedSpawnOptions,
     ...(params.sessionCreationOutcome
@@ -261,7 +289,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
           return windowsDisposition;
         }
       } else {
-        await killProcessTree(happyProcess, { graceMs: 1_000 });
+        await terminateProcessTree(happyProcess, { graceMs: 1_000 });
       }
       const ownedPids = Array.from(new Set([
         pid,
@@ -370,6 +398,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
       const failure = {
         type: 'error' as const,
         errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
+        errorDetail: { kind: 'spawn_failure' as const, ...classifySpawnFailure(undefined) },
         errorMessage: appendRecentStderrDiagnostic(
           `Child process exited before session webhook (pid=${pid}, code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
           stderrTail,

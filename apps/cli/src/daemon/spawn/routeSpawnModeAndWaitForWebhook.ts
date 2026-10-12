@@ -36,6 +36,7 @@ import { ensureJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/ensureJa
 import { isBun } from '@/utils/runtime';
 import { resolveLiveRunnerSnapshotFingerprints } from '../sessionRunnerRuntime/resolveLiveRunnerSnapshotFingerprints';
 import type { BackendExecutionSurfaces } from '@/agent/runtime/registry/engineRegistry';
+import type { SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 function resolveSourceDevWorkspaceNamesForBackendTarget(
   target: BackendTargetRefV2 | undefined,
@@ -87,6 +88,8 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
   createStreamingSanitizer?: () => ProviderStreamingSanitizer;
   revalidateBeforeCommit?: SpawnCommitRevalidation;
   onUntrackedHostedChild: () => void;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
+  memoryHighBytes?: number | null;
 }>): Promise<SpawnSessionResult> {
   const revalidateBeforeCommit = withTakeoverAdmissionCommitRevalidation(
     params.takeoverAdmission,
@@ -183,6 +186,8 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
   };
 
   const tmuxSpawnResult = await spawnTmuxHostedSessionAndWaitForWebhook({
+    memoryHighBytes: params.memoryHighBytes,
+    readSpawnFailureLimits: params.readSpawnFailureLimits,
     startingMode,
     terminalRequest: effectiveTerminalRequest,
     directory: params.directory,
@@ -226,6 +231,7 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
       errorMessage: tmuxFallbackReason ?? 'Tmux window creation may have committed; regular fallback was refused',
+      ...(tmuxSpawnResult.spawnFailure ? { errorDetail: { kind: 'spawn_failure' as const, ...tmuxSpawnResult.spawnFailure } } : {}),
     };
   }
 
@@ -234,6 +240,7 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
       errorMessage: tmuxFallbackReason ?? 'Tmux window creation committed but exact absence was verified',
+      ...(tmuxSpawnResult.spawnFailure ? { errorDetail: { kind: 'spawn_failure' as const, ...tmuxSpawnResult.spawnFailure } } : {}),
     };
   }
 
@@ -242,10 +249,13 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
       errorMessage: tmuxFallbackReason ?? 'Tmux launch cleanup is incomplete; regular fallback was refused',
+      ...(tmuxSpawnResult.spawnFailure ? { errorDetail: { kind: 'spawn_failure' as const, ...tmuxSpawnResult.spawnFailure } } : {}),
     };
   }
 
   const adapterHostedResult = await spawnAdapterHostedSessionAndWaitForWebhook({
+    memoryHighBytes: params.memoryHighBytes,
+    readSpawnFailureLimits: params.readSpawnFailureLimits,
     startingMode,
     onUntrackedHostedChild: params.onUntrackedHostedChild,
     terminalRequest: effectiveTerminalRequest,
@@ -302,6 +312,7 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
   });
   if (windowsLaunchMode === 'windows_terminal' || windowsLaunchMode === 'console') {
     return await spawnWindowsHostedSessionAndWaitForWebhook({
+      readSpawnFailureLimits: params.readSpawnFailureLimits,
       windowsLaunchMode,
       args,
       agentCommand,
@@ -338,6 +349,7 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
   }
 
   return await spawnRegularProcessAndWaitForWebhook({
+    memoryHighBytes: params.memoryHighBytes,
     args,
     directory: params.directory,
     options: params.options,
@@ -367,6 +379,7 @@ export async function routeSpawnModeAndWaitForWebhook(params: Readonly<{
     warn: params.warn,
     sanitizeDiagnosticText: params.sanitizeDiagnosticText,
     createStreamingSanitizer: params.createStreamingSanitizer,
+    readSpawnFailureLimits: params.readSpawnFailureLimits,
     revalidateBeforeCommit,
     runnerLaunchOptions,
   });

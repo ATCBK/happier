@@ -236,21 +236,21 @@ describe('resolveSpawnChildEnvironment provider overlay composition', () => {
       profileId: 'work',
       transcriptStorage: 'direct',
       attachMetadataIdentityPolicy: 'replace_with_runtime_identity',
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['server-a'],
         forceExcludeServerIds: [],
-      },
+      } },
       sessionConfigOptionOverrides: {
         v: 1,
         updatedAt: 123,
         overrides: { speed: { updatedAt: 123, value: 'fast' } },
       },
       connectedServices: {
-        v: 1,
+        v: 2,
         bindingsByServiceId: {
-          'openai-codex': {
+          'happier.agent.codex/openai-codex': {
             source: 'connected',
             selection: 'profile',
             profileId: 'happier',
@@ -267,7 +267,6 @@ describe('resolveSpawnChildEnvironment provider overlay composition', () => {
       'HAPPIER_SESSION_PROFILE_ID',
       'HAPPIER_TRANSCRIPT_STORAGE',
       'HAPPIER_SESSION_ATTACH_METADATA_IDENTITY_POLICY',
-      'HAPPIER_SESSION_MCP_SELECTION_JSON',
       'HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON',
       'HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_JSON',
       'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON',
@@ -297,7 +296,6 @@ describe('resolveSpawnChildEnvironment provider overlay composition', () => {
       HAPPIER_SESSION_PROFILE_ID: 'work',
       HAPPIER_TRANSCRIPT_STORAGE: 'direct',
       HAPPIER_SESSION_ATTACH_METADATA_IDENTITY_POLICY: 'replace_with_runtime_identity',
-      HAPPIER_SESSION_MCP_SELECTION_JSON: JSON.stringify(options.mcpSelection),
       HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON: JSON.stringify(options.sessionConfigOptionOverrides),
       HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_JSON: JSON.stringify(options.connectedServices),
       HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON: JSON.stringify(

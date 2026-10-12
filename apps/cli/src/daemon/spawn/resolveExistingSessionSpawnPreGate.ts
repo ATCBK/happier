@@ -7,7 +7,7 @@ import { waitForExistingSessionExitIfStopRequested } from '../sessions/waitForEx
 import type { TrackedSession } from '../types';
 import { classifyTrackedSessionProcessPresence, type SessionRunnerPresenceProbe } from '../sessions/isSessionRunnerActive';
 import type { Metadata } from '@/api/types';
-import type { WindowsProcessInventoryFact } from '../platform/windows/windowsProcessInventory';
+import type { ProcessCensusProcessFact } from '@/processes/census/processFacts';
 import { hashProcessCommand, processIdentityMatches } from '@happier-dev/cli-common/processInstance';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { readProcessRunState } from '../processRunState';
@@ -20,7 +20,7 @@ type PendingSessionStartup = Readonly<{
   readSessionMetadata: (sessionId: string) => Promise<Metadata | null>;
   readProcessRunState?: typeof readProcessRunState;
   readProcessIdentityByPid?: typeof readProcessIdentityByPid;
-  readAllWindowsProcessFactsFn?: () => Promise<ReadonlyMap<number, WindowsProcessInventoryFact>>;
+  readAllWindowsProcessFactsFn?: () => Promise<ReadonlyMap<number, ProcessCensusProcessFact>>;
 }>;
 
 function isPendingStartup(tracked: TrackedSession, params: Readonly<{
@@ -149,6 +149,7 @@ export async function resolveExistingSessionSpawnPreGate(params: Readonly<{
       shortCircuitResult: {
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+        runtimeFailureReason: 'runner_authority_unavailable',
         errorMessage:
           'The existing Agent runtime survived a daemon restart without reusable runtime authority. Retry after the existing runner has exited.',
       },
@@ -158,6 +159,7 @@ export async function resolveExistingSessionSpawnPreGate(params: Readonly<{
   const unknownPresenceResult: ResolveExistingSessionSpawnPreGateResult = {
     shortCircuitResult: {
       type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+      runtimeFailureReason: 'runner_presence_unproven',
       errorMessage: 'The existing session runtime could not be verified. Retry resume after connectivity recovers.',
     },
   };

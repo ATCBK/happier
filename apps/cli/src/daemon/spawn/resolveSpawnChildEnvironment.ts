@@ -11,6 +11,7 @@ import { AgentProviderRequirementsV1Schema } from '@happier-dev/protocol/provide
 import { readCanonicalSpawnRuntimeSelection } from '@/rpc/handlers/spawnRuntimeSelection';
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
 import { sanitizeEnvVarRecord } from '@/terminal/runtime/envVarSanitization';
+import { normalizeUnsetEnvKeys, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 import {
   createDaemonSpawnToolResolutionContext,
   type DaemonSpawnHooks,
@@ -173,6 +174,7 @@ export async function resolveSpawnChildEnvironment(params: {
   logWarn: (message: string) => void;
   connectedServiceAuth?: {
     env: Record<string, string>;
+    unsetEnvKeys?: readonly string[];
     cleanupOnFailure: (() => void | Promise<void>) | null;
     cleanupOnExit: (() => void | Promise<void>) | null;
     diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
@@ -213,6 +215,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   logWarn: (message: string) => void;
   connectedServiceAuth?: {
     env: Record<string, string>;
+    unsetEnvKeys?: readonly string[];
     cleanupOnFailure: (() => void | Promise<void>) | null;
     cleanupOnExit: (() => void | Promise<void>) | null;
     diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
@@ -563,7 +566,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     };
   }
 
-  const extraEnvForChild = { ...extraEnv };
+  let extraEnvForChild = { ...extraEnv };
   const literalReplacementEnvironmentKeys = new Set<string>();
   delete extraEnvForChild.TMUX_SESSION_NAME;
   delete extraEnvForChild.TMUX_TMPDIR;
@@ -677,6 +680,11 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     }
   }
   Object.assign(extraEnvForChild, providerEnv);
+  const unsetEnvKeys = normalizeUnsetEnvKeys([
+    ...(params.connectedServiceAuth?.unsetEnvKeys ?? []),
+    ...providerUnsetEnvKeys,
+  ]);
+  extraEnvForChild = stripUnsetEnvironmentVariables(extraEnvForChild, unsetEnvKeys);
   const survivingProfileCredentialEnvironmentVariables =
     selectedAgentCredentialEnvironmentVariables.filter((name) => (
       Object.prototype.hasOwnProperty.call(expandedProfileEnv, name)
@@ -775,8 +783,12 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   if (params.options.attachMetadataIdentityPolicy) {
     extraEnvForChild.HAPPIER_SESSION_ATTACH_METADATA_IDENTITY_POLICY = params.options.attachMetadataIdentityPolicy;
   }
-  if (params.options.mcpSelection) {
-    extraEnvForChild.HAPPIER_SESSION_MCP_SELECTION_JSON = JSON.stringify(params.options.mcpSelection);
+  if (!params.options.existingSessionId
+    && (params.options.allowedTools !== undefined || params.options.unlistedTools !== undefined)) {
+    extraEnvForChild.HAPPIER_SESSION_TOOL_POLICY_JSON = JSON.stringify({
+      allowedTools: params.options.allowedTools,
+      unlistedTools: params.options.unlistedTools,
+    });
   }
   if (params.options.sessionConfigOptionOverrides) {
     extraEnvForChild.HAPPIER_SESSION_CONFIG_OPTION_OVERRIDES_JSON = JSON.stringify(params.options.sessionConfigOptionOverrides);
@@ -827,7 +839,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     ok: true,
     expandedEnvironmentVariables: extraEnv,
     extraEnvForChild,
-    unsetEnvKeys: Object.freeze([...providerUnsetEnvKeys]),
+    unsetEnvKeys,
     providerEnvKeys: Object.freeze(Object.keys(providerEnv).concat(providerUnsetEnvKeys)),
     ...(lateProviderMaterialization
       ? { providerBindingLaunchHandoff: lateProviderMaterialization.providerBindingLaunchHandoff }

@@ -55,7 +55,10 @@ const directTeamOptions: SpawnSessionOptions = {
   teamCredentialBindings: [teamSlotBinding],
   primaryTeamId: 'team-1',
   reportsTo: { sessionId: 'lead-1' },
-  mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['docs'], forceExcludeServerIds: [] },
+  capabilitySelection: {
+    mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['docs'], forceExcludeServerIds: [] },
+    skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native-review'] },
+  },
 } as SpawnSessionOptions;
 
 function plainSessionRow(id: string, metadata: Record<string, unknown>) {
@@ -90,6 +93,7 @@ describe('commitDaemonLaunchSession', () => {
     expect(daemonLaunchRequiresCommittedSession(directTeamOptions)).toBe(true);
     expect(daemonLaunchRequiresCommittedSession({
       ...directTeamOptions,
+      capabilitySelection: undefined,
       connectedServices: {
         v: 2,
         bindingsByServiceId: {
@@ -208,6 +212,7 @@ describe('commitDaemonLaunchSession', () => {
     expect(createInput.metadata).toMatchObject({
       path: '/repo',
       mcpSelectionV1: { v: 1, forceIncludeServerIds: ['docs'] },
+      skillSelectionV1: { v: 1, forceIncludeSkillIds: ['lint'], excludeNativeSkillNames: ['native-review'] },
       connectedServiceMaterializationIdentityV1: committed.session.options.connectedServiceMaterializationIdentityV1,
       work: { sessionRolesV1: initialSessionRolesV1 },
       summary: { text: '3 · Implement', updatedAt: expect.any(Number) },

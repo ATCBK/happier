@@ -1,15 +1,20 @@
-import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
+import { buildScopedProcessEnv, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 import { resolveStackProcessKindOverrideForSessionSpawn } from './resolveStackProcessKindOverrideForSessionSpawn';
 import {
   selectTrustedSessionControlEnvironment,
   stripSessionControlEnvOverrides,
 } from '@/session/runtime/control/sessionControlEnvironment';
 import { finalizeSessionChildEnvironment } from '@/session/runtime/control/finalizeSessionChildEnvironment';
+import { withProcessOwnerEnvironment, type ProcessOwnerRef } from '@/processes/ownerTag';
+import { buildToolIdleTimeoutEnvironmentOverlay, type MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
 export function buildSpawnChildProcessEnv(params: {
   processEnv: NodeJS.ProcessEnv;
   extraEnv: Record<string, string | undefined>;
   unsetEnvKeys?: readonly string[];
-}): NodeJS.ProcessEnv {
+  processOwner?: ProcessOwnerRef;
+  happierHomeDir?: string;
+  readMachineResourcesPolicy?: MachineResourcesPolicyReader;
+}): Record<string, string> {
   const env = buildScopedProcessEnv({
     baseEnv: stripSessionControlEnvOverrides(params.processEnv),
     explicitEnv: params.extraEnv,
@@ -20,7 +25,7 @@ export function buildSpawnChildProcessEnv(params: {
   delete env.HAPPIER_DAEMON_EXECUTION_GENERATION_V1;
 
   const stackProcessKindOverride = resolveStackProcessKindOverrideForSessionSpawn(params.processEnv);
-  return finalizeSessionChildEnvironment({
+  const finalized = finalizeSessionChildEnvironment({
     environment: env,
     canonicalSessionControlEnvironment: selectTrustedSessionControlEnvironment(params.extraEnv),
     enableCgroupSelfMigration:
@@ -28,4 +33,19 @@ export function buildSpawnChildProcessEnv(params: {
     stackProcessKind:
       stackProcessKindOverride.HAPPIER_STACK_PROCESS_KIND === 'session' ? 'session' : null,
   });
+  const withIdlePolicy = params.readMachineResourcesPolicy ? {
+    ...finalized,
+    ...buildToolIdleTimeoutEnvironmentOverlay({
+      environment: finalized,
+      policy: params.readMachineResourcesPolicy(),
+      unsetEnvKeys: params.unsetEnvKeys,
+    }),
+  } : finalized;
+  // Scoped environments already omit undefined values. Preserve that launch
+  // contract after finalization and ownership stamping, rather than widening
+  // their type back to the ambient process environment.
+  return stripUnsetEnvironmentVariables(
+    params.processOwner ? withProcessOwnerEnvironment(withIdlePolicy, params.processOwner, params.happierHomeDir) : withIdlePolicy,
+    undefined,
+  );
 }

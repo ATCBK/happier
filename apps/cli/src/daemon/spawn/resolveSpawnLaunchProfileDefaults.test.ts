@@ -89,14 +89,14 @@ describe('resolveSpawnLaunchProfileDefaults', () => {
       })).toMatchObject({ ok: false });
   });
 
-  it('keeps the canonical pre-migration built-in compatibility path', () => {
+  it('keeps the canonical retained legacy profile compatibility path', () => {
     expect(resolveSpawnLaunchProfileDefaults({
-      options: { ...baseOptions, profileId: 'deepseek' },
+      options: { ...baseOptions, profileId: 'azure-openai' },
       effectiveBackendTarget: baseOptions.backendTarget!,
       rawSettings: {},
     })).toEqual({
       ok: true,
-      options: { ...baseOptions, profileId: 'deepseek' },
+      options: { ...baseOptions, profileId: 'azure-openai' },
     });
   });
 });

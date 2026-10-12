@@ -57,6 +57,7 @@ function createPinnedSpawnAgentRegistry(): ResolvedExecutablePluginRuntimeRegist
     } };
   });
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes: createResolvedContributionRegistry({ agents, activationTargets: [] }),
     hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
     pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set<string>(),
@@ -72,7 +73,9 @@ describe('daemon Agent preconditions', () => {
   it('uses the activated native auth probe for an OAuth-only connected home and still rejects a missing credential', async () => {
     const home = await createTempDir('happier-spawn-activated-auth-', tmpdir());
     const fixture = await createAdmittedPluginRuntimeFixture({
-      runtimeOptions: { pluginIds: [] },
+      // The fixture's scoped pluginIds are activation authority, not just
+      // eager-load preferences. Admit Codex before asking for its native probe.
+      runtimeOptions: { pluginIds: ['happier.agent.codex'] },
     });
     try {
       const connectedHome = join(home, 'connected');

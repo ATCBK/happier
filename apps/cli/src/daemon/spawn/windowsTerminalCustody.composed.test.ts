@@ -3,7 +3,6 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as processInstance from '@happier-dev/cli-common/processInstance';
-import * as windowsProcessInventory from '../platform/windows/windowsProcessInventory';
 
 import type { Metadata } from '@/api/types';
 import type { TrackedSession } from '../types';
@@ -41,9 +40,11 @@ describe('Windows Terminal exact Agent custody composition', () => {
     vi.doUnmock(
       '../platform/windows/spawnHappyCliWindowsTerminal',
     );
-    vi.doUnmock('../platform/windows/windowsProcessInventory');
+    vi.doUnmock('node:fs');
+    vi.doUnmock('@happier-dev/cli-common/process');
     vi.doUnmock('@happier-dev/cli-common/processInstance');
     vi.resetModules();
+
     if (testRoot) {
       rmSync(testRoot, { recursive: true, force: true });
     }
@@ -120,19 +121,34 @@ describe('Windows Terminal exact Agent custody composition', () => {
     );
     // This suite emulates Windows on Linux workers. Keep marker/lock logic
     // real, but supply the OS inventory fact for this live test process.
-    vi.doMock('../platform/windows/windowsProcessInventory', () => ({
-      ...windowsProcessInventory,
-      readWindowsProcessInventory: async () => new Map([[process.pid, {
-        pid: process.pid, processStartTimeMs: 1, command: process.execPath,
-        executablePath: process.execPath,
-      }]]),
-    }));
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs')>();
+      return { ...actual, existsSync: (path: string) => String(path).endsWith('happier-process-custody.exe') || actual.existsSync(path) };
+    });
+    vi.doMock('@happier-dev/cli-common/process', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@happier-dev/cli-common/process')>();
+      return { ...actual, execFileWithDeadline: async (command: string, args: readonly string[], options: Parameters<typeof actual.execFileWithDeadline>[2]) => {
+        if (args[0] !== 'process-census') return await actual.execFileWithDeadline(command, args, options);
+        return { stdout: JSON.stringify({ v: 1, capturedAtMs: Date.now(), logicalCpus: 4, rows: [{
+          pid: process.pid, ppid: 1, start: { startTimeMs: 1 }, name: 'node.exe',
+          principal: { kind: 'sid', value: 'S-1-5-21-1' }, memory: null, cpuTimeUs: null,
+          commandLine: process.execPath, argv: [process.execPath], executablePath: process.execPath,
+        }] }), stderr: '' };
+      } };
+    });
     // The reclaim guard reads the same OS birth witness synchronously.
     vi.doMock('@happier-dev/cli-common/processInstance', () => ({
       ...processInstance, readProcessStartTimeMsSync: (pid: number) =>
         pid === process.pid ? 1 : processInstance.readProcessStartTimeMsSync(pid),
     }));
     vi.resetModules();
+
+    // The census captures its native platform when its reader is created.
+    // Initialize the Windows source graph under the same emulated OS boundary.
+    Object.defineProperty(process, 'platform', {
+      ...originalPlatform,
+      value: 'win32',
+    });
 
     // These cold entry points share modules; initialize them sequentially after
     // resetModules so Vitest's mocked-module loader can finish each import.
@@ -149,12 +165,6 @@ describe('Windows Terminal exact Agent custody composition', () => {
       await import('../platform/windows/windowsCommandLine');
     const { captureExactWindowsTerminalLaunchProcess } =
       await import('../platform/windows/windowsProcessCustody');
-
-    // Emulate the OS for the runtime exercise, not Vitest's module loader.
-    Object.defineProperty(process, 'platform', {
-      ...originalPlatform,
-      value: 'win32',
-    });
 
     const pidToTrackedSession =
       new Map<number, TrackedSession>();

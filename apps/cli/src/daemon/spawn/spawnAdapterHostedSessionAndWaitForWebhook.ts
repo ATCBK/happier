@@ -1,5 +1,6 @@
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
 import type { TerminalHostHandle } from '@happier-dev/agents';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 import { createDefaultTerminalHostAdapterInventory } from '@/integrations/terminal/host/defaultAdapters';
 import { resolveTerminalHostCreationFailure, resolveTerminalHostUnavailableSpawnErrorDetail } from '@/integrations/terminal/host/errors';
@@ -17,11 +18,13 @@ import type { RunnerAgentSessionBootstrapAuthorization } from '../agentRuntime/s
 import type { ChildExit } from '../sessions/onChildExited';
 import type { RunnerAgentInvocationContext, TrackedSession } from '../types';
 import { buildSpawnChildProcessEnv } from './buildSpawnChildProcessEnv';
-import { stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { SpawnLifecycleCallbacks } from './createSpawnLifecycleCallbacks';
 import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTakeoverAdmission';
 import type { SpawnCommitRevalidation } from './spawnCommitRevalidation';
 import { waitForTerminalHostedSessionWebhook } from './waitForTerminalHostedSessionWebhook';
+import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { createHappierLinuxScopeName } from '../platform/linux/systemdUserResourceGovernor';
+import { PROCESS_OWNER_ENV_KEY, readHostProcessOwnerTag, withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonly<{
   terminalRequest: ResolvedTerminalRequest;
@@ -53,6 +56,8 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
   sanitizeDiagnosticText?: (value: string) => string;
   revalidateBeforeCommit?: SpawnCommitRevalidation;
   runnerLaunchOptions?: HappyCliSubprocessLaunchOptions;
+  memoryHighBytes?: number | null;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
   onUntrackedHostedChild: () => void;
 }>): Promise<SpawnSessionResult | null> {
   if (params.terminalRequest.requested !== 'zellij' && params.terminalRequest.requested !== 'herdr') return null;
@@ -100,7 +105,9 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
     ...params.sessionControlArgs,
   ];
   const launchSpec = buildHappyCliSubprocessLaunchSpec(args, params.runnerLaunchOptions ?? { preferWindowsPackagedBinary: true });
-  const spawnEnv = stripUnsetEnvironmentVariables(buildSpawnChildProcessEnv({
+  const childEnv = buildSpawnChildProcessEnv({
+    ...(params.normalizedExistingSessionId ? { processOwner: { kind: 'session' as const, sessionId: params.normalizedExistingSessionId } } : {}),
+    happierHomeDir: params.happyHomeDir,
     processEnv: params.processEnv,
     extraEnv: {
       ...params.extraEnvForChildWithMessage,
@@ -108,7 +115,15 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
       HAPPIER_TERMINAL_ATTACHMENT_ID: attachmentId,
     },
     unsetEnvKeys: params.unsetEnvKeys,
-  }), params.unsetEnvKeys);
+  });
+  const spawnEnv = process.platform === 'linux' && !params.normalizedExistingSessionId
+    ? withHostProcessOwnerEnvironment(childEnv, readHostProcessOwnerTag(params.processEnv))
+    : childEnv;
+  const scopedLaunchSpec = process.platform === 'linux'
+    ? await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec: { ...launchSpec, env: spawnEnv }, environment: params.processEnv,
+      unit: createHappierLinuxScopeName(spawnEnv.HAPPIER_PROCESS_OWNER), memoryHighBytes: params.memoryHighBytes })
+    : null;
+  const effectiveLaunchSpec = scopedLaunchSpec ?? launchSpec;
   const commitRefusal = await params.revalidateBeforeCommit?.() ?? null;
   if (commitRefusal) return commitRefusal;
 
@@ -120,9 +135,9 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
     handle = await adapter.createOrAttachHost({
       sessionName,
       workingDirectory: params.directory,
-      spawnArgv: [launchSpec.filePath, ...launchSpec.args],
-      spawnEnv,
-      unsetEnvKeys: params.unsetEnvKeys,
+      spawnArgv: [effectiveLaunchSpec.filePath, ...effectiveLaunchSpec.args],
+      spawnEnv: { ...spawnEnv, ...effectiveLaunchSpec.env },
+      unsetEnvKeys: params.unsetEnvKeys?.filter(key => key.toUpperCase() !== PROCESS_OWNER_ENV_KEY),
       isolatedEnv: true,
     });
     const createdHandle = handle;
@@ -140,7 +155,9 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
       message: params.directoryCreated
         ? `The path '${params.directory}' did not exist. We created a new folder and spawned a new session in ${displayName}.`
         : `Spawned new session in ${displayName}.`,
-      trackedSessionFields: { hostedTerminal: terminal },
+      trackedSessionFields: { hostedTerminal: terminal,
+        ...(scopedLaunchSpec?.linuxLaunchUnit ? { linuxLaunchUnit: scopedLaunchSpec.linuxLaunchUnit } : {}),
+      },
       runnerAgentSessionBootstrapAuthorization: params.runnerAgentSessionBootstrapAuthorization,
       runnerAgentInvocationContext: params.runnerAgentInvocationContext,
       pidToTrackedSession: params.pidToTrackedSession,
@@ -194,11 +211,12 @@ export async function spawnAdapterHostedSessionAndWaitForWebhook(params: Readonl
     if (failure.creationDisposition === 'created_or_uncertain' || failure.cleanupIncomplete) {
       params.warn(`[DAEMON RUN] ${displayName} launch cleanup could not be completed (terminal_host_launch_cleanup_incomplete, disposition=${failure.creationDisposition})`);
     }
+    const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: params.readSpawnFailureLimits?.() });
     return {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
-      errorMessage: `${displayName} runner launch failed: ${sanitizeDiagnosticText(error instanceof Error ? error.message : String(error))}`,
-      errorDetail: resolveTerminalHostUnavailableSpawnErrorDetail(error),
+      errorMessage: spawnFailureMessage(spawnFailure, `${displayName} runner launch failed: ${sanitizeDiagnosticText(error instanceof Error ? error.message : String(error))}`),
+      errorDetail: resolveTerminalHostUnavailableSpawnErrorDetail(error) ?? { kind: 'spawn_failure', ...spawnFailure },
     };
   }
 }

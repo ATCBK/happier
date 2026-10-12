@@ -1,6 +1,7 @@
 import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTakeoverAdmission';
 import fs from 'fs/promises';
 import { randomUUID } from 'node:crypto';
+import type { SpawnFailure, SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
 
@@ -41,6 +42,7 @@ type SpawnTmuxHostedSessionAndWaitForWebhookResult = Readonly<{
   tmuxFallbackReason: string | null;
   tmuxCreationDisposition: TmuxWindowCreationDisposition;
   tmuxCleanupIncomplete?: boolean;
+  spawnFailure?: SpawnFailure;
 }>;
 
 export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
@@ -75,6 +77,8 @@ export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
   sanitizeDiagnosticText?: (value: string) => string;
   revalidateBeforeCommit?: SpawnCommitRevalidation;
   runnerLaunchOptions?: HappyCliSubprocessLaunchOptions;
+  memoryHighBytes?: number | null;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }>): Promise<SpawnTmuxHostedSessionAndWaitForWebhookResult> {
   const sanitizeDiagnosticText = params.sanitizeDiagnosticText ?? ((value: string) => value);
   const tmuxAvailable = await isTmuxAvailable();
@@ -157,7 +161,10 @@ export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
     ...(tmuxTmpDir ? ['--happy-tmux-tmpdir', tmuxTmpDir] : []),
   ];
 
-  const { commandTokens, tmuxEnv, unsetEnvKeys } = await buildTmuxSpawnConfig({
+  const { commandTokens, tmuxEnv, unsetEnvKeys, linuxLaunchUnit } = await buildTmuxSpawnConfig({
+    memoryHighBytes: params.memoryHighBytes,
+    sessionId: params.normalizedExistingSessionId,
+    happierHomeDir: configuration.happyHomeDir,
     startingMode: params.startingMode,
     agent: agentSubcommand,
     directory: params.directory,
@@ -197,6 +204,7 @@ export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
   }
 
   const tmuxResult = await tmux.spawnInTmux(commandTokens, {
+    readSpawnFailureLimits: params.readSpawnFailureLimits,
     sessionName: resolvedTmuxSessionName,
     windowName,
     windowNameIsUnique: true,
@@ -229,6 +237,7 @@ export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
       tmuxFallbackReason,
       tmuxCreationDisposition: tmuxResult.creationDisposition,
       tmuxCleanupIncomplete: tmuxResult.cleanupIncomplete,
+      spawnFailure: tmuxResult.spawnFailure,
     };
   }
 
@@ -254,6 +263,7 @@ export async function spawnTmuxHostedSessionAndWaitForWebhook(params: Readonly<{
       ? `The path '${params.directory}' did not exist. We created a new folder and spawned a new session in tmux session '${tmuxSession}'. Use 'tmux attach -t ${tmuxSession}' to view the session.`
       : `Spawned new session in tmux session '${tmuxSession}'. Use 'tmux attach -t ${tmuxSession}' to view the session.`,
     trackedSessionFields: {
+      ...(linuxLaunchUnit ? { linuxLaunchUnit } : {}),
       tmuxSessionId: tmuxResult.sessionId,
       ...(typeof tmuxTmpDir === 'string' && tmuxTmpDir.trim() ? { tmuxTmpDir: tmuxTmpDir.trim() } : {}),
     },

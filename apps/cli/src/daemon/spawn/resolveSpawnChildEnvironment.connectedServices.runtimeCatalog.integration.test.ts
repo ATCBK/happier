@@ -1,11 +1,56 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 
 import { resolveSpawnChildEnvironment } from './resolveSpawnChildEnvironment';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import { HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY } from '@/agent/runtime/sessionConnectedServicesBindingsEnv';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import '@/agent/runtime/registry/engineRegistry/runtimeCore';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({
+    runtimeOptions: { pluginIds: ['happier.agent.claude'] },
+  });
+});
+afterAll(async () => { await runtime?.dispose(); });
 
 describe('resolveSpawnChildEnvironment (connected services)', () => {
+  it('removes selected-purpose inherited keys from the actual child while native launches retain them', async () => {
+    const inherited = {
+      AGY_ACP_CCPA_BASE_URL: 'https://native.example',
+      agy_acp_ccpa_project: 'native-project',
+      GOOGLE_APPLICATION_CREDENTIALS: 'native-google',
+      XDG_CACHE_HOME: 'user-cache',
+    };
+    const readChild = async (connected: boolean) => {
+      const result = await resolveSpawnChildEnvironment({
+        options: { directory: '.', environmentVariables: {} },
+        profileEnvironmentVariables: {}, daemonSpawnHooks: null,
+        processEnv: inherited, logDebug() {}, logInfo() {}, logWarn() {},
+        connectedServiceAuth: connected ? {
+          env: {}, cleanupOnFailure: null, cleanupOnExit: null,
+          unsetEnvKeys: ['AGY_ACP_CCPA_BASE_URL', 'AGY_ACP_CCPA_PROJECT'],
+        } : null,
+      });
+      if (!result.ok) throw new Error(result.errorCode);
+      const output = execFileSync(process.execPath, ['-e',
+        'process.stdout.write(JSON.stringify(process.env))',
+      ], { env: buildScopedProcessEnv({
+        baseEnv: inherited, explicitEnv: result.extraEnvForChild,
+        unsetEnvKeys: result.unsetEnvKeys,
+      }), encoding: 'utf8' });
+      return JSON.parse(output) as Record<string, string>;
+    };
+    const connected = await readChild(true);
+    expect(connected).not.toHaveProperty('AGY_ACP_CCPA_BASE_URL');
+    expect(connected).not.toHaveProperty('agy_acp_ccpa_project');
+    expect(connected).toMatchObject({ GOOGLE_APPLICATION_CREDENTIALS: 'native-google', XDG_CACHE_HOME: 'user-cache' });
+    expect(await readChild(false)).toMatchObject(inherited);
+  });
+
   it('injects connected service materialization env when provided', async () => {
     const options: SpawnSessionOptions = {
       directory: '.',
@@ -38,9 +83,9 @@ describe('resolveSpawnChildEnvironment (connected services)', () => {
       directory: '.',
       environmentVariables: {},
       connectedServices: {
-        v: 1,
+        v: 2,
         bindingsByServiceId: {
-          'openai-codex': {
+          'happier.agent.codex/openai-codex': {
             source: 'connected',
             selection: 'profile',
             profileId: 'happier',
@@ -141,23 +186,30 @@ describe('resolveSpawnChildEnvironment (connected services)', () => {
   });
 
   it('fails closed when profile env references connected service env injected for the child', async () => {
+    const agent = runtime.registry.contributes.agents.find((entry) => entry.pluginId === 'happier.agent.claude');
+    if (!agent) throw new Error('The real Claude Agent must be admitted for its declared credential inventory');
+    expect(runtime.registry.contributes.agentDefinitionsById.get(agent.id)?.cliMetadata?.auth.environmentVariables)
+      .toContain('ANTHROPIC_API_KEY');
     const options: SpawnSessionOptions = {
       directory: '.',
       environmentVariables: {},
     };
 
     const result = await resolveSpawnChildEnvironment({
+      resolvedAgentId: agent.id, pluginRuntimeRegistry: runtime.registry,
       options,
       profileEnvironmentVariables: {
-        ANTHROPIC_AUTH_TOKEN: '${DEEPSEEK_AUTH_TOKEN}',
+        ANTHROPIC_API_KEY: '${INJECTED_CONNECTED_AUTH}',
       },
       daemonSpawnHooks: null,
-      processEnv: {},
+      // Resolve an owned executable at the genuine OS boundary. No Agent is
+      // started: the unresolved credential must reject before child launch.
+      processEnv: { HAPPIER_CLAUDE_PATH: process.execPath },
       logDebug: () => {},
       logInfo: () => {},
       logWarn: () => {},
       connectedServiceAuth: {
-        env: { DEEPSEEK_AUTH_TOKEN: 'sk-connected-secret' },
+        env: { INJECTED_CONNECTED_AUTH: 'fixture-connected-secret' },
         cleanupOnFailure: null,
         cleanupOnExit: null,
       },
@@ -166,6 +218,6 @@ describe('resolveSpawnChildEnvironment (connected services)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errorCode).toBe(SPAWN_SESSION_ERROR_CODES.AUTH_ENV_UNEXPANDED);
-    expect(result.errorMessage).toContain('ANTHROPIC_AUTH_TOKEN references ${DEEPSEEK_AUTH_TOKEN}');
+    expect(result.errorMessage).toContain('ANTHROPIC_API_KEY references ${INJECTED_CONNECTED_AUTH}');
   });
 });

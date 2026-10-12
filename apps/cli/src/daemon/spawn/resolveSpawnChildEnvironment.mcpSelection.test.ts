@@ -6,6 +6,45 @@ import { buildSpawnChildProcessEnv } from './buildSpawnChildProcessEnv';
 import { captureSessionLaunchControlMetadata, createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
 
 describe('resolveSpawnChildEnvironment (mcp selection)', () => {
+  it('round-trips only admitted birth tool policy, excluding all ambient and overlay injection', async () => {
+    for (const policy of [
+      { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const },
+      { allowedTools: [], unlistedTools: 'deny' as const },
+      {},
+    ]) {
+      const injectedPolicy = JSON.stringify({ allowedTools: ['Bash'], unlistedTools: 'ask' });
+      const injection = {
+        HAPPIER_SESSION_TOOL_POLICY_JSON: injectedPolicy,
+        happier_session_tool_policy_json: injectedPolicy,
+      };
+      const options: SpawnSessionOptions = {
+        directory: '/tmp/project', ...policy, environmentVariables: injection,
+      };
+      const result = await resolveSpawnChildEnvironment({
+        options, processEnv: injection, daemonSpawnHooks: null,
+        profileEnvironmentVariables: injection,
+        providerEnvironmentOverlay: [{
+          name: 'HAPPIER_SESSION_TOOL_POLICY_JSON', value: injectedPolicy, source: 'provider',
+        }],
+        logDebug: () => {}, logInfo: () => {}, logWarn: () => {},
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.errorMessage);
+      const childEnvironment = buildSpawnChildProcessEnv({ processEnv: injection, extraEnv: result.extraEnvForChild });
+      const captured = captureSessionLaunchControlMetadata({ processEnvironment: childEnvironment });
+      const { metadata } = createSessionMetadata({
+        flavor: 'test-agent', machineId: 'machine-1', directory: options.directory,
+        launchControlMetadata: captured,
+      });
+      if ('allowedTools' in policy) expect(metadata).toMatchObject(policy);
+      else {
+        expect(metadata).not.toHaveProperty('allowedTools');
+        expect(metadata).not.toHaveProperty('unlistedTools');
+      }
+      expect(childEnvironment.happier_session_tool_policy_json).toBeUndefined();
+      expect(childEnvironment.HAPPIER_SESSION_TOOL_POLICY_JSON).toBeUndefined();
+    }
+  });
   it('carries only admitted fresh identity into host metadata, excluding ambient and Profile overrides', async () => {
     const identity = { bot: { kind: 'bot' as const }, createdAsBot: true as const };
     for (const existingSessionId of [undefined, 'existing-session']) {
@@ -81,34 +120,6 @@ describe('resolveSpawnChildEnvironment (mcp selection)', () => {
     } else {
       expect(metadata).not.toHaveProperty('sessionDirectoryV1');
     }
-  });
-
-  it('exports session-scoped MCP selection JSON for the spawned runner', async () => {
-    const options: SpawnSessionOptions = {
-      directory: '.',
-      mcpSelection: {
-        v: 1,
-        managedServersEnabled: false,
-        forceIncludeServerIds: ['server-a'],
-        forceExcludeServerIds: ['server-b'],
-      },
-    } as any;
-
-    const result = await resolveSpawnChildEnvironment({
-      options,
-      profileEnvironmentVariables: {},
-      daemonSpawnHooks: null,
-      processEnv: {},
-      logDebug: () => {},
-      logInfo: () => {},
-      logWarn: () => {},
-      connectedServiceAuth: null,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(result.extraEnvForChild.HAPPIER_SESSION_MCP_SELECTION_JSON).toBe(JSON.stringify(options.mcpSelection));
   });
 
   it('does not export removed session workspace linkage metadata into child env', async () => {

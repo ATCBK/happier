@@ -1,5 +1,6 @@
 import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTakeoverAdmission';
 import type { Metadata } from '@/api/types';
+import type { SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import { buildHappyCliSubprocessLaunchSpec, type HappyCliSubprocessLaunchOptions } from '@/utils/spawnHappyCLI';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { writeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
@@ -74,10 +75,13 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
     sanitizeDiagnosticText?: (value: string) => string;
     revalidateBeforeCommit?: SpawnCommitRevalidation;
     runnerLaunchOptions?: HappyCliSubprocessLaunchOptions;
+    readSpawnFailureLimits?: SpawnFailureLimitsReader;
     windowsProcessCustodyDependencies?: WindowsProcessCustodyDependencies;
 }>): Promise<SpawnSessionResult> {
     const sanitizeDiagnosticText = params.sanitizeDiagnosticText ?? ((value: string) => value);
     const buildWindowsHostedLaunchEnv = (launchSpec: ReturnType<typeof buildHappyCliSubprocessLaunchSpec>) => buildSpawnChildProcessEnv({
+        ...(params.normalizedExistingSessionId ? { processOwner: { kind: 'session' as const, sessionId: params.normalizedExistingSessionId } } : {}),
+        happierHomeDir: params.happyHomeDir,
         processEnv: params.processEnv,
         extraEnv: {
             ...params.extraEnvForChildWithMessage,
@@ -511,6 +515,7 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
             buildWindowsHostedLaunchEnv(launchSpec);
         const started =
             await startHappySessionInVisibleWindowsConsole({
+            readSpawnFailureLimits: params.readSpawnFailureLimits,
             filePath: launchSpec.filePath,
             args: launchSpec.args,
             workingDirectory: params.directory,
@@ -525,6 +530,7 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
                 type: 'error',
                 errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
                 errorMessage,
+                ...(started.spawnFailure ? { errorDetail: { kind: 'spawn_failure' as const, ...started.spawnFailure } } : {}),
             };
         }
         params.logDebug(`[DAEMON RUN] Spawned visible-console session with PID ${started.pid}`);
@@ -625,6 +631,7 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
         };
         const startPromise =
             startHappySessionInWindowsTerminal({
+            readSpawnFailureLimits: params.readSpawnFailureLimits,
             filePath: launchSpec.filePath,
             args: launchSpec.args,
             workingDirectory: params.directory,
@@ -691,6 +698,7 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
             type: 'error',
             errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
             errorMessage: windowsTerminalError,
+            ...(started.spawnFailure ? { errorDetail: { kind: 'spawn_failure' as const, ...started.spawnFailure } } : {}),
         };
     }
 

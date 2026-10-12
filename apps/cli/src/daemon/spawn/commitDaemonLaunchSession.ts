@@ -1,18 +1,12 @@
-import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
 
-import { parseSessionMcpSelectionV1Json } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
-import { SessionRolesV1Schema } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
-import type { ConnectedServiceMaterializationIdentityV1, SessionMetadata } from '@happier-dev/protocol';
-import { applyAcpSessionModeIntentSessionMetadata, applyDisplayTitleSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
 
 import type { ApiClient } from '@/api/api';
 import { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessionCreationTerminalSpawnErrorDetail';
 import type { SessionCreationOutcome } from '@/api/types';
-import { parseSessionMetadataConfigOptionOverridesJson } from '@/agent/runtime/compat/sessionMetadataOverrides';
-import { applyInitialSessionCreationFactsToMetadata, applySessionConfigOptionOverridesToMetadata } from '@/agent/runtime/createSessionMetadata';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
 import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { StoredCredentials } from '@/persistence';
 import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
@@ -46,6 +40,7 @@ type SpawnError = Extract<SpawnSessionResult, { type: 'error' }>;
  * runner-side creation.
  */
 export function daemonLaunchRequiresCommittedSession(options: SpawnSessionOptions): boolean {
+  if (options.capabilitySelection !== undefined) return true;
   if (options.requesterSessionBootstrap) return true;
   if ((options.promptStack?.length ?? 0) > 0) return true;
   if (options.creationAuthorization || options.initialSessionRolesV1 || (options.initialTriggers?.length ?? 0) > 0) return true;
@@ -65,59 +60,6 @@ export type CommittedDaemonLaunchSession = Readonly<{
   /** The launch continues as an attach to this Session with these options. */
   options: SpawnSessionOptions;
 }>;
-
-/**
- * Seeds the launch intents an attaching runner never takes from its own
- * process (`mergeSessionMetadataForStartup` attach safety): the requested
- * session mode, display title, configuration overrides and MCP selection. Permission mode and
- * model arrive as runner startup overrides; every other runtime field is the
- * runner's own, applied on attach with `replace_with_runtime_identity`.
- */
-function buildCommittedLaunchMetadata(input: Readonly<{
-  options: SpawnSessionOptions;
-  directory: string;
-  agentModeId?: string;
-  agentModeUpdatedAt?: number;
-  materializationIdentity: ConnectedServiceMaterializationIdentityV1;
-  accountSettings?: Readonly<Record<string, unknown>>;
-}>): SessionMetadata {
-  const { options } = input;
-  const mcpSelection = options.mcpSelection
-    ? parseSessionMcpSelectionV1Json(JSON.stringify(options.mcpSelection))
-    : null;
-  let metadata: SessionMetadata = {
-    path: input.directory,
-    host: os.hostname(),
-    ...(options.sessionCreationCorrespondence
-      ? { sessionCreationCorrespondenceV1: options.sessionCreationCorrespondence }
-      : {}),
-    ...(options.placementOrigin ? { placementOrigin: options.placementOrigin } : {}),
-    ...(options.runtimeDescriptorV1 ? { runtimeDescriptorV1: options.runtimeDescriptorV1 } : {}),
-    ...(mcpSelection ? { mcpSelectionV1: mcpSelection } : {}),
-    connectedServiceMaterializationIdentityV1: input.materializationIdentity,
-    ...(options.initialSessionRolesV1 ? { work: { sessionRolesV1: SessionRolesV1Schema.parse(options.initialSessionRolesV1) } } : {}),
-  };
-  if (options.initialTitle) {
-    metadata = applyDisplayTitleSessionMetadata(metadata, {
-      title: options.initialTitle,
-      staleBehavior: 'bump-if-value-changed',
-    });
-  }
-  const agentModeId = input.agentModeId?.trim();
-  if (agentModeId) {
-    metadata = applyAcpSessionModeIntentSessionMetadata(metadata, {
-      v: 1,
-      modeId: agentModeId,
-      updatedAt: input.agentModeUpdatedAt ?? Date.now(),
-    });
-  }
-  return applySessionConfigOptionOverridesToMetadata(
-    applyInitialSessionCreationFactsToMetadata(metadata, { ...options, accountSettings: input.accountSettings }),
-    options.sessionConfigOptionOverrides
-      ? parseSessionMetadataConfigOptionOverridesJson(JSON.stringify(options.sessionConfigOptionOverrides))
-      : null,
-  );
-}
 
 /**
  * Commits a fresh daemon launch's Session through the runner's own
