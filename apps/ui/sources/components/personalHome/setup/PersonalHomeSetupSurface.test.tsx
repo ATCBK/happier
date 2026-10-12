@@ -5,7 +5,7 @@ import { renderScreen } from '@/dev/testkit';
 import { hasTranslation, setPreferredLanguageFromSettings, tLoose } from '@/text';
 
 import { PersonalHomeSetupSurface } from './PersonalHomeSetupSurface';
-import { derivePersonalHomeSetupProgress } from './personalHomeSetupProgress';
+import { CapacityRing } from '@/components/ui/progress/CapacityRing';
 import { sanitizePersonalHomeDiagnosticMessage } from './PersonalHomeDiagnosticDetails';
 import type { PersonalHomeBootstrapSnapshot } from '../bootstrap/personalHomeBootstrapTypes';
 import type { SystemTaskRunState } from '@/components/systemTasks/types';
@@ -53,7 +53,7 @@ describe('PersonalHomeSetupSurface', () => {
         expect(screen.findByTestId('personal-home-bootstrap-download-progress')).not.toBeNull();
         expect(screen.getTextContent()).toContain('1.0 KB');
         expect(screen.getTextContent()).toContain('2.0 KB');
-        expect(screen.findByTestId('personal-home-bootstrap-progress')).toBeNull();
+        expect(screen.findByTestId('personal-home-bootstrap-progress')?.props.accessibilityValue).toEqual({ min: 0, max: 5, now: 0 });
         await screen.update(<PersonalHomeSetupSurface snapshot={snapshot} activeTask={{
             ...activeTask, status: 'succeeded', result: { protocolVersion: 1, taskId: 'acquire', ok: true },
         }} />);
@@ -97,12 +97,26 @@ describe('PersonalHomeSetupSurface', () => {
         }
     });
 
-    it('renders one stable operational frame with one live status and one activity treatment', async () => {
+    it('renders one stable operational frame with one live status and the Loading planet\'s mark', async () => {
         const screen = await renderScreen(<PersonalHomeSetupSurface snapshot={snapshot} />);
         expect(screen.findByTestId('personal-home-setup-surface')).not.toBeNull();
         expect(screen.findByTestId('personal-home-bootstrap-phase')).not.toBeNull();
-        expect(screen.findAllHostsByTestId('personal-home-bootstrap-activity')).toHaveLength(1);
-        expect(screen.findByTestId('personal-home-bootstrap-progress')).toBeNull();
+        expect(screen.findAllHostsByTestId('personal-home-bootstrap-mark')).toHaveLength(1);
+        expect(screen.findByTestId('personal-home-bootstrap-progress')?.props.accessibilityValue).toEqual({ min: 0, max: 5, now: 0 });
+    });
+
+    it('preserves factual milestone progress even within the same setup phase', async () => {
+        const screen = await renderScreen(<PersonalHomeSetupSurface snapshot={{ ...snapshot,
+            progressMilestones: { runtimeHealthy: true, identityVerified: false, authenticated: false, signupClosed: false },
+        }} />);
+        expect(screen.findByTestId('personal-home-bootstrap-progress')?.props.accessibilityValue).toEqual({ min: 0, max: 5, now: 1 });
+        expect(screen.root.findByType(CapacityRing).props.ratio).toBe(1 / 5);
+        await screen.update(<PersonalHomeSetupSurface snapshot={{ ...snapshot,
+            progressMilestones: { runtimeHealthy: true, identityVerified: true, authenticated: true, signupClosed: false },
+        }} />);
+        expect(screen.findByTestId('personal-home-bootstrap-progress')?.props.accessibilityValue).toEqual({ min: 0, max: 5, now: 3 });
+        expect(screen.root.findByType(CapacityRing).props.ratio).toBe(3 / 5);
+        expect(screen.findAllHostsByTestId('personal-home-bootstrap-mark')).toHaveLength(1);
     });
 
     it('names the Personal Home while checking instead of showing a generic loading label', async () => {
@@ -125,7 +139,6 @@ describe('PersonalHomeSetupSurface', () => {
         );
         expect(screen.findByTestId('personal-home-bootstrap-retry')).not.toBeNull();
         expect(screen.findByTestId('personal-home-bootstrap-details')).not.toBeNull();
-        expect(screen.findByTestId('personal-home-bootstrap-activity')).toBeNull();
     });
 
     // U10: a failure Retry cannot fix (offline runtime install, unhealthy runtime) must not trap the
@@ -251,43 +264,6 @@ describe('PersonalHomeSetupSurface', () => {
             expect(screen.root.findAll((node) => typeof node.type === 'string' && node.props.accessibilityRole === 'header')).toHaveLength(1);
             expect(screen.findAllHostsByTestId('personal-home-bootstrap-phase')).toHaveLength(1);
         }
-    });
-
-    it('fills the mark only from derived milestones, never from an interpolated estimate', async () => {
-        for (const state of everySnapshotState()) {
-            const screen = await renderScreen(
-                <PersonalHomeSetupSurface snapshot={state} onRetry={() => {}} onUseExisting={() => {}} onUseAnotherHome={() => {}} />,
-            );
-            const arc = screen.root.findByProps({ testID: 'personal-home-bootstrap-progress-arc' });
-            const circumference = Number(arc.props.circumference ?? String(arc.props.strokeDasharray).split(' ')[0]);
-            const filled = 1 - Number(arc.props.animatedProps?.strokeDashoffset ?? arc.props.strokeDashoffset ?? arc.props.dashOffset) / circumference;
-
-            expect(filled).toBeCloseTo(derivePersonalHomeSetupProgress(state).fraction, 5);
-            // One of exactly six quantised values: a time-based or event-counted fill cannot land here.
-            expect([0, 1 / 5, 2 / 5, 3 / 5, 4 / 5, 1].some((allowed) => Math.abs(allowed - filled) < 1e-5)).toBe(true);
-        }
-    });
-
-    it('stops the activity treatment but keeps the proven milestones visible when blocked', async () => {
-        const blocked: PersonalHomeBootstrapSnapshot = {
-            ...snapshot,
-            phase: 'blocked',
-            action: 'retry',
-            progressMilestones: {
-                runtimeHealthy: true,
-                identityVerified: false,
-                authenticated: false,
-                signupClosed: false,
-            },
-            detail: { code: 'auth', message: 'Needs attention', retryable: true },
-        };
-        const screen = await renderScreen(<PersonalHomeSetupSurface snapshot={blocked} onRetry={() => {}} />);
-
-        expect(screen.findByTestId('personal-home-bootstrap-activity')).toBeNull();
-        expect(screen.findAllHostsByTestId('personal-home-bootstrap-mark')).toHaveLength(1);
-        const arc = screen.root.findByProps({ testID: 'personal-home-bootstrap-progress-arc' });
-        const circumference = Number(arc.props.circumference ?? String(arc.props.strokeDasharray).split(' ')[0]);
-        expect(1 - Number(arc.props.animatedProps?.strokeDashoffset ?? arc.props.strokeDashoffset ?? arc.props.dashOffset) / circumference).toBeCloseTo(1 / 5, 5);
     });
 
     it('never announces or displays a percentage', async () => {

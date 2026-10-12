@@ -1,11 +1,16 @@
 import * as React from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
-import { PersonalHomeSetupSurface } from '../setup/PersonalHomeSetupSurface';
+import { useAtmosphereMoment } from '@/components/atmosphere/atmosphereMoments';
+import { useHomeLoadingMoment } from '@/components/atmosphere/moments/homeLoadingMoment';
+import { PersonalHomeSetupBackdrop, PersonalHomeSetupSurface } from '../setup/PersonalHomeSetupSurface';
+import { derivePersonalHomeSetupProgress } from '../setup/personalHomeSetupProgress';
 import { PersonalHomeRecoveryStrip } from './PersonalHomeRecoveryStrip';
-import { PersonalHomeSetupReveal } from './PersonalHomeSetupReveal';
+import { usePersonalHomeSetupReveal } from './PersonalHomeSetupReveal';
 import { isPersonalHomeBootstrapRuntimeHost } from './personalHomeBootstrapHost';
 import type {
     PersonalHomeBootstrapOperation,
@@ -45,31 +50,44 @@ export function PersonalHomeBootstrapContent(props: Readonly<{ children: React.R
     const gating = presentation?.gating === true;
     const snapshot = presentation?.setupProps.snapshot ?? null;
     const reducedMotion = useReducedMotionPreference();
-    const departingSnapshotRef = React.useRef<PersonalHomeBootstrapSnapshot | null>(null);
-    const [revealSnapshot, setRevealSnapshot] = React.useState<PersonalHomeBootstrapSnapshot | null>(null);
-    const handleRevealSettled = React.useCallback(() => setRevealSnapshot(null), []);
+    const { theme } = useUnistyles();
+    // The frame the user last read: kept while it lifts off the released shell. A frame that only
+    // ever said "checking" is not held, so a fast start shows no setup at all.
+    const [held, setHeld] = React.useState<Readonly<{ snapshot: PersonalHomeBootstrapSnapshot | null; departing: boolean }>>(
+        { snapshot: null, departing: false });
+    if (gating) {
+        const next = snapshot?.phase !== 'checking' ? snapshot : held.snapshot;
+        if (next !== held.snapshot || held.departing) setHeld({ snapshot: next, departing: false });
+    } else if (held.snapshot && !held.departing) {
+        setHeld({ snapshot: held.snapshot, departing: true });
+    }
+    const handleRevealSettled = React.useCallback(() => setHeld({ snapshot: null, departing: false }), []);
+    const departing = !gating && held.departing;
+    const revealStyle = usePersonalHomeSetupReveal(departing, handleRevealSettled);
 
-    React.useEffect(() => {
-        if (gating) {
-            if (snapshot?.phase !== 'checking') departingSnapshotRef.current = snapshot;
-            setRevealSnapshot((current) => current === null ? current : null);
-            return;
-        }
-        const departing = departingSnapshotRef.current;
-        departingSnapshotRef.current = null;
-        if (!departing || reducedMotion) return;
-        setRevealSnapshot(departing);
-    }, [gating, reducedMotion, snapshot]);
-
-    const setupProps = presentation ? {
-        ...presentation.setupProps,
-        snapshot: gating ? presentation.setupProps.snapshot : revealSnapshot ?? presentation.setupProps.snapshot,
-    } : null;
-    const setupSurface = setupProps && (gating || revealSnapshot !== null)
-        ? presentation?.setupSurface ? presentation.setupSurface(setupProps) : <PersonalHomeSetupSurface {...setupProps} />
+    const frameSnapshot = gating ? snapshot : departing ? held.snapshot : null;
+    const setupProps = presentation && frameSnapshot ? { ...presentation.setupProps, snapshot: frameSnapshot } : null;
+    const customSurface = presentation?.setupSurface;
+    const setupSurface = setupProps
+        ? customSurface ? customSurface(setupProps) : <PersonalHomeSetupSurface {...setupProps} backdrop={false} />
         : null;
-    return (
-        <View style={{ flex: 1 }}>
+
+    // Loading (plan R-11): the cloud gathers in the setup's mark, between the setup's page and its copy,
+    // and keeps resolving onto Home's planet after the frame lifts. Home below reports when it is ready.
+    const rootRef = React.useRef<View>(null);
+    const [pane, setPane] = React.useState({ width: 0, height: 0 });
+    const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        setPane(current => current.width === width && current.height === height ? current : { width, height });
+    }, []);
+    const working = frameSnapshot ? derivePersonalHomeSetupProgress(frameSnapshot).working : true;
+    const loadingMoment = useAtmosphereMoment('loading');
+    const moment = useHomeLoadingMoment({
+        waiting: gating && loadingMoment.on, start: 'first-wait', paused: gating && !working, reducedMotion,
+        theme: theme.dark ? 'dark' : 'light', pane, rootRef,
+    });
+    return <>{moment.provide(
+        <View ref={rootRef} style={{ flex: 1 }} onLayout={onLayout} collapsable={false}>
             <View
                 testID="personal-home-bootstrap-backdrop"
                 style={{ flex: 1 }}
@@ -80,14 +98,26 @@ export function PersonalHomeBootstrapContent(props: Readonly<{ children: React.R
             >
                 {props.children}
             </View>
-            {gating ? <View style={StyleSheet.absoluteFill}>{setupSurface}</View> : null}
-            {!gating && revealSnapshot ? (
-                <PersonalHomeSetupReveal onSettled={handleRevealSettled}>
-                    {setupSurface}
-                </PersonalHomeSetupReveal>
+            {setupSurface && !customSurface ? (
+                <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, revealStyle]}>
+                    <PersonalHomeSetupBackdrop />
+                </Animated.View>
             ) : null}
-        </View>
-    );
+            {moment.layer}
+            {setupSurface ? (
+                <Animated.View
+                    // The departing frame never takes input: the shell beneath is already interactive.
+                    testID={departing ? 'personal-home-setup-reveal' : undefined}
+                    pointerEvents={departing ? 'none' : 'auto'}
+                    accessibilityElementsHidden={departing}
+                    importantForAccessibility={departing ? 'no-hide-descendants' : 'auto'}
+                    style={[StyleSheet.absoluteFill, revealStyle]}
+                >
+                    {setupSurface}
+                </Animated.View>
+            ) : null}
+        </View>,
+    )}</>;
 }
 
 export type PersonalHomeBootstrapGateProps = Readonly<{

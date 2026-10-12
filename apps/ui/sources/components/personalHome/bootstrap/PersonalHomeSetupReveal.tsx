@@ -1,70 +1,59 @@
 import * as React from 'react';
-import { StyleSheet } from 'react-native';
-import Animated, {
-    cancelAnimation,
-    runOnJS,
-    useAnimatedStyle,
-    useSharedValue,
-    withTiming,
+import {
+  cancelAnimation,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
 } from 'react-native-reanimated';
+import { PLANET_MOMENT_TIMINGS } from '@happier-dev/brand/planet';
 
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 
-/** How far the departing setup frame recedes while it dissolves. Small on purpose: this is a settle, not a zoom. */
-const REVEAL_SCALE_LIFT = 0.012;
+/** Loading's cover fade (plan R-11): Home is usable at once and the page lifts in 0.14 s, light or reduced motion. */
+const COVER_FADE_MS = PLANET_MOMENT_TIMINGS.L4.FADE * 1000;
 
 /**
- * The departing first-run setup frame, played once over the shell that has just been released.
+ * The departing first-run setup frame's fade, played once over the shell that has just been released.
  *
  * Lane 03 releases the shell the moment Home readiness is derived; without this the frame was
- * replaced in a single commit — a hard cut out of the surface the user was reading. The outgoing
- * frame therefore stays mounted for one restrained settle (opacity out, a hair of recession)
- * above the live shell, and unmounts when the animation lands. It never takes input: the shell
- * beneath is already interactive.
+ * replaced in a single commit — a hard cut out of the surface the user was reading. It is the Loading
+ * moment's cover: the frame's page and its copy lift together over the brand's cover fade (a
+ * smoothstep over 0.14 s), while the Loading planet, drawn between them, resolves and travels on.
+ * Under reduced motion the same fade is the 140 ms cross-fade. `onSettled` fires when it lands.
  *
- * Under reduced motion the gate does not mount this at all — the immediate swap is the
- * substitute, and no fact is carried by the transition itself.
+ * The returned style is shared by the frame's layers so they lift as one.
  */
-export function PersonalHomeSetupReveal(props: Readonly<{
-    onSettled: () => void;
-    children: React.ReactNode;
-}>): React.ReactElement {
-    const progress = useSharedValue(1);
-    const onSettledRef = React.useRef(props.onSettled);
-    onSettledRef.current = props.onSettled;
+export function usePersonalHomeSetupReveal(
+  departing: boolean,
+  onSettled: () => void,
+) {
+  const progress = useSharedValue(0);
+  const onSettledRef = React.useRef(onSettled);
+  onSettledRef.current = onSettled;
 
-    React.useEffect(() => {
-        const settle = () => onSettledRef.current();
-        progress.value = withTiming(
-            0,
-            {
-                duration: reanimatedMotionTokens.durationMs.stageCrossfade,
-                easing: reanimatedMotionTokens.easing.standard,
-            },
-            (finished) => {
-                'worklet';
-                if (finished) runOnJS(settle)();
-            },
-        );
-        return () => {
-            cancelAnimation(progress);
-        };
-    }, [progress]);
-
-    const style = useAnimatedStyle(() => ({
-        opacity: progress.value,
-        transform: [{ scale: 1 + (1 - progress.value) * REVEAL_SCALE_LIFT }],
-    }));
-
-    return (
-        <Animated.View
-            testID="personal-home-setup-reveal"
-            pointerEvents="none"
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={[StyleSheet.absoluteFill, style]}
-        >
-            {props.children}
-        </Animated.View>
+  React.useEffect(() => {
+    if (!departing) {
+      cancelAnimation(progress);
+      progress.value = 0;
+      return;
+    }
+    const settle = () => onSettledRef.current();
+    progress.value = withTiming(
+      1,
+      { duration: COVER_FADE_MS, easing: reanimatedMotionTokens.easing.linear },
+      (finished) => {
+        'worklet';
+        if (finished) runOnJS(settle)();
+      },
     );
+    return () => {
+      cancelAnimation(progress);
+    };
+  }, [departing, progress]);
+
+  return useAnimatedStyle(() => {
+    const t = Math.min(1, Math.max(0, progress.value));
+    return { opacity: 1 - t * t * (3 - 2 * t) };
+  });
 }

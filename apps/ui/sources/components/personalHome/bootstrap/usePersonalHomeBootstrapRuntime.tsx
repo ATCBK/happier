@@ -45,7 +45,7 @@ import {
     getActiveServerSnapshot,
 } from '@/sync/domains/server/serverRuntime';
 import { canonicalizeServerUrl, createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { SystemTaskRunState } from '@/components/systemTasks/types';
 import { HappyError } from '@/utils/errors/errors';
 
@@ -388,7 +388,7 @@ export function usePersonalHomeBootstrapRuntime(): PersonalHomeBootstrapRuntime 
             if (activeCredentials?.token) {
                 signedInOtherHome = {
                     serverId: activeProfile.id,
-                    label: activeProfile.name?.trim() || toServerUrlDisplay(activeProfile.serverUrl),
+                    label: resolveHomeDisplayLabel(activeProfile, activeProfile.id),
                 };
             }
         }

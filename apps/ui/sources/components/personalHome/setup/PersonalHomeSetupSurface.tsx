@@ -8,6 +8,8 @@ import { Text } from '@/components/ui/text/Text';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { useGlassBlurSetting } from '@/components/ui/glass/useGlassBlurSetting';
 import { Typography } from '@/constants/Typography';
+import { LoadingPlanetSlot } from '@/components/atmosphere/moments/homeLoadingMoment';
+import { CapacityRing } from '@/components/ui/progress/CapacityRing';
 import { t, tLoose } from '@/text';
 
 import type { PersonalHomeBootstrapSnapshot } from '../bootstrap/personalHomeBootstrapTypes';
@@ -17,42 +19,38 @@ import {
     PersonalHomeUseAnotherHomeAction,
 } from './PersonalHomeExistingRuntimeDecision';
 import { PersonalHomeSetupFailure } from './PersonalHomeSetupFailure';
-import { PersonalHomeSetupMark } from './PersonalHomeSetupMark';
 import { PersonalHomeDiagnosticDetails } from './PersonalHomeDiagnosticDetails';
 import { derivePersonalHomeSetupProgress } from './personalHomeSetupProgress';
 
 const CONTENT_MAX_WIDTH = 520;
+/** The mark's room when no Loading host places the planet in it (the former setup mark's size). */
+const MARK_FALLBACK_SIZE = 76;
 const RECOVERY_MAX_WIDTH = 420;
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1 },
     scroll: { flex: 1 },
-    scrollContent: { flexGrow: 1, paddingHorizontal: 32, paddingVertical: 40, alignItems: 'center' },
+    scrollContent: { flexGrow: 1, paddingHorizontal: theme.space.s32, paddingVertical: theme.space.s40, alignItems: 'center' },
     // Auto margins centre the composition while keeping BOTH overflow edges reachable at compact
     // heights and large text sizes, which `justifyContent: 'center'` alone does not on web.
-    centered: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignItems: 'center', marginVertical: 'auto', gap: 22 },
-    header: { alignItems: 'center', gap: 16 },
+    centered: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignItems: 'center', marginVertical: 'auto', gap: theme.space.s24 },
+    header: { alignItems: 'center', gap: theme.space.s16 },
     title: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 28,
-        lineHeight: 34,
-        letterSpacing: -0.4,
+        ...Typography.variant('display'),
         textAlign: 'center',
     },
     // Two lines of height are reserved so a changing status sentence never moves the mark above it.
     status: {
-        ...Typography.default(),
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
-        fontSize: 15,
-        lineHeight: 22,
         minHeight: 44,
         maxWidth: 380,
         textAlign: 'center',
     },
     recovery: { width: '100%', maxWidth: RECOVERY_MAX_WIDTH, alignItems: 'center' },
-    detailsButton: { alignSelf: 'center', minHeight: 44, paddingHorizontal: 12, justifyContent: 'center' },
-    detailsText: { ...Typography.default('semiBold'), color: theme.colors.text.secondary, fontSize: 14 },
+    detailsButton: { alignSelf: 'center', minHeight: 44, paddingHorizontal: theme.space.s12, justifyContent: 'center' },
+    detailsText: {  color: theme.colors.text.secondary, ...Typography.variant('label', 'semiBold') },
     details: { width: '100%', maxWidth: RECOVERY_MAX_WIDTH },
 }));
 
@@ -121,9 +119,13 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
     onUseAnotherHome?: () => void;
     onKeepSignedInHome?: () => void;
     onCreatePersonalHome?: () => void;
+    /**
+     * False when the host draws the surface's page itself (`PersonalHomeSetupBackdrop`) so the Loading
+     * planet can stand between that page and this copy.
+     */
+    backdrop?: boolean;
 }>) {
     const { theme } = useUnistyles();
-    const { blurEnabled, blurIntensity } = useGlassBlurSetting();
     const [detailsOpen, setDetailsOpen] = React.useState(false);
     const retryRef = React.useRef<FocusableAction | null>(null);
     const detailsRef = React.useRef<React.ElementRef<typeof Pressable>>(null);
@@ -199,14 +201,7 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
         </View>
     );
 
-    return (
-        <GlassSurface
-            style={styles.root}
-            testID="personal-home-setup-surface"
-            enabled={blurEnabled}
-            blurIntensity={blurIntensity}
-            solidColor={theme.colors.background.canvas}
-        >
+    const content = (
             <ScrollView
                 style={styles.scroll}
                 contentContainerStyle={styles.scrollContent}
@@ -215,7 +210,17 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
             >
                 <View style={styles.centered}>
                     <View style={styles.header}>
-                        <PersonalHomeSetupMark fraction={progress.fraction} working={progress.working} />
+                        <View
+                            testID="personal-home-bootstrap-progress"
+                            accessible
+                            accessibilityRole="progressbar"
+                            accessibilityLabel={t('personalHome.bootstrap.title')}
+                            accessibilityValue={{ min: 0, max: progress.totalMilestones, now: progress.completedMilestones }}
+                        >
+                            <CapacityRing ratio={progress.fraction} color={theme.colors.text.secondary} size={MARK_FALLBACK_SIZE}>
+                                <LoadingPlanetSlot fallbackSize={MARK_FALLBACK_SIZE} testID="personal-home-bootstrap-mark" />
+                            </CapacityRing>
+                        </View>
                         <Text style={styles.title} accessibilityRole="header">
                             {t('personalHome.bootstrap.title')}
                         </Text>
@@ -290,6 +295,26 @@ export const PersonalHomeSetupSurface = React.memo(function PersonalHomeSetupSur
                     {showDetails && !showExistingDecision ? detailsPanel : null}
                 </View>
             </ScrollView>
+    );
+    if (props.backdrop === false) {
+        return <View style={styles.root} testID="personal-home-setup-surface">{content}</View>;
+    }
+    return <PersonalHomeSetupBackdrop testID="personal-home-setup-surface">{content}</PersonalHomeSetupBackdrop>;
+});
+
+/** The setup surface's page: the glass the setup copy and the Loading planet stand on. */
+export function PersonalHomeSetupBackdrop(props: Readonly<{ testID?: string; children?: React.ReactNode }>) {
+    const { theme } = useUnistyles();
+    const { blurEnabled, blurIntensity } = useGlassBlurSetting();
+    return (
+        <GlassSurface
+            style={styles.root}
+            testID={props.testID}
+            enabled={blurEnabled}
+            blurIntensity={blurIntensity}
+            solidColor={theme.colors.background.canvas}
+        >
+            {props.children}
         </GlassSurface>
     );
-});
+}

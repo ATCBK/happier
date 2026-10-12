@@ -145,12 +145,13 @@ describe('Personal Home shell reveal', () => {
         expect(screen.findByTestId('personal-home-setup-reveal')?.props.pointerEvents).toBe('none');
     });
 
-    it('also keeps the shell as the only frame under reduced motion', async () => {
+    it('lifts the frame with the same short cross-fade under reduced motion (plan R-11)', async () => {
         reducedMotionSpy.mockReturnValue(true);
         const screen = await renderBootstrapThroughHomeReady();
 
         expect(screen.findByTestId('normal-shell')).not.toBeNull();
-        expect(screen.findByTestId('personal-home-setup-reveal')).toBeNull();
-        expect(screen.findByTestId('personal-home-setup-surface')).toBeNull();
+        expect(screen.findByTestId('ready-home-content')).not.toBeNull();
+        expect(screen.findByTestId('personal-home-setup-reveal')).not.toBeNull();
+        expect(screen.findByTestId('personal-home-setup-reveal')?.props.pointerEvents).toBe('none');
     });
 });

@@ -60,7 +60,7 @@ describe('PersonalHomeSetupSurface accessibility', () => {
         expect(screen.findByTestId('personal-home-bootstrap-failure')?.props.accessibilityRole).toBe('alert');
     });
 
-    it('keeps the single activity treatment decorative while the concise status owns announcements', async () => {
+    it('keeps the Loading planet\'s mark decorative while the concise status owns announcements', async () => {
         const screen = await renderScreen(
             <PersonalHomeSetupSurface
                 snapshot={{
@@ -74,9 +74,10 @@ describe('PersonalHomeSetupSurface accessibility', () => {
             />,
         );
 
-        const activity = screen.findByTestId('personal-home-bootstrap-activity');
-        expect(activity?.props.accessible).toBe(false);
-        expect(activity?.props.accessibilityLiveRegion).toBeUndefined();
+        const mark = screen.findByTestId('personal-home-bootstrap-mark');
+        expect(mark?.props.accessible).toBe(false);
+        expect(mark?.props.accessibilityElementsHidden).toBe(true);
+        expect(mark?.props.accessibilityLiveRegion).toBeUndefined();
         expect(screen.findByTestId('personal-home-bootstrap-phase')?.props.accessibilityLiveRegion).toBe('polite');
     });
 
