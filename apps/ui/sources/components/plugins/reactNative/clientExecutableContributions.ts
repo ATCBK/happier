@@ -812,12 +812,13 @@ export function createPluginUiClientExecutableComposition(input: Readonly<{
                 activation,
                 preparedTarget.registrationContributes,
             );
-            let active = activeByTargetKey.get(preparedTarget.key);
-            const incumbentRemainsCurrent = active !== undefined
-                && active.fingerprint === fingerprint
-                && isClientExecutableActivationCurrent(active.activation);
-            if (!active || active.fingerprint !== fingerprint) {
-                active = Object.freeze({
+            const incumbent = activeByTargetKey.get(preparedTarget.key);
+            const incumbentRemainsCurrent = incumbent !== undefined
+                && incumbent.fingerprint === fingerprint
+                && isClientExecutableActivationCurrent(incumbent.activation);
+            let active: ActiveClientExecutableTarget = incumbent && incumbent.fingerprint === fingerprint
+                ? incumbent
+                : Object.freeze({
                     fingerprint,
                     pluginId: activation.pluginId,
                     activation,
@@ -827,16 +828,10 @@ export function createPluginUiClientExecutableComposition(input: Readonly<{
                     authorityKey,
                     executableHost: leaf.executableHost,
                 });
+            if (active !== incumbent) {
                 activeByTargetKey.set(preparedTarget.key, active);
             }
-            const lifecycle: PluginUiClientExecutableRegistrationLifecycle = Object.freeze({
-                signal: active.controller.signal,
-                isCurrent: () => (
-                    !active.controller.signal.aborted
-                    && isClientExecutableActivationCurrent(activation)
-                ),
-            });
-            const targetIsCurrent = () => isLifecycleCurrent(lifecycle);
+            let createdScope = false;
             const result = await leaf.executableHost.activate({
                 cache: activation.cache,
                 identity: activation.identity,
@@ -845,6 +840,23 @@ export function createPluginUiClientExecutableComposition(input: Readonly<{
                 hostPlatform: activation.target.platform,
                 authority: activation.authority,
                 createScope: () => {
+                    createdScope = true;
+                    // The host may retire a derived scope despite equal bytes.
+                    // A fresh scope owns this activation before commit checks its
+                    // retained lease; only an actual host reuse keeps the incumbent.
+                    if (active === incumbent) {
+                        active.controller.abort();
+                        active = Object.freeze({ ...active, activation, controller: new AbortController() });
+                        activeByTargetKey.set(preparedTarget.key, active);
+                    }
+                    const lifecycle: PluginUiClientExecutableRegistrationLifecycle = Object.freeze({
+                        signal: active.controller.signal,
+                        isCurrent: () => (
+                            !active.controller.signal.aborted
+                            && isClientExecutableActivationCurrent(activation)
+                        ),
+                    });
+                    const targetIsCurrent = () => isLifecycleCurrent(lifecycle);
                     const registrationScope = registrationIndex.createScope({
                         pluginId: activation.pluginId,
                         contributes: preparedTarget.registrationContributes,
@@ -908,7 +920,9 @@ export function createPluginUiClientExecutableComposition(input: Readonly<{
                 },
             });
             for (const index of preparedTarget.inputIndexes) results[index] = result;
-            for (const index of preparedTarget.inputIndexes) reused[index] = result.ok && incumbentRemainsCurrent;
+            for (const index of preparedTarget.inputIndexes) {
+                reused[index] = result.ok && incumbentRemainsCurrent && !createdScope;
+            }
             if (result.ok) {
                 if (!incumbentRemainsCurrent) {
                     activeByTargetKey.set(preparedTarget.key, Object.freeze({

@@ -8,9 +8,8 @@ import type {
 } from '@happier-dev/plugin-ui/environment';
 import type { TextStyle } from 'react-native';
 
-import { pageTitleTypography } from '@/components/ui/layout/pageTitleTypography';
-import { ITEM_TITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
-import { FontWeights, getMonoFont, Typography } from '@/constants/Typography';
+import { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT } from '@happier-dev/plugin-ui/presentation';
+import { getMonoFont, Typography } from '@/constants/Typography';
 import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { Theme } from '@/theme';
@@ -80,47 +79,21 @@ function readTextStyleMetric(
 }
 
 /**
- * The ONE mapping from plugin type roles to the host's own typography owners.
- *
- * Both projections below read it, so the public snapshot's metrics and the
- * same-realm role styles can never disagree on size:
- *
- * - `heading` — the page title step (`PageHeader`), for a plugin page heading;
- * - `title` — the host's primary item title, for pane and section headings;
- * - `label` — the host row title, for row titles, buttons and tabs;
- * - `body` — the host row meta line, for secondary lines;
- * - `reading` — the host reading prose step, for a detail's prose and a story step's body;
- * - `caption` — the host timestamp role (tabular), for quiet metadata.
- *
- * Each is a descending step, so a heading always reads above a row title and a
- * row title always reads above its own context line.
+ * Project one role table through the font owner. Public snapshot keys stay
+ * stable: title takes heading, caption takes micro; body, reading and label
+ * take their same-named roles. Same-realm facts expose all eight roles.
  */
-const PLUGIN_UI_TYPE_ROLES: Readonly<Record<HappierTypeRole, Readonly<{
-    style: () => TextStyle;
-    fontWeight: string;
-}>>> = Object.freeze({
-    heading: { style: () => pageTitleTypography(), fontWeight: FontWeights.bold },
-    title: {
-        style: () => ({ ...Typography.default('semiBold'), ...ITEM_TITLE_TEXT_METRICS.comfortable }),
-        fontWeight: FontWeights.semiBold,
-    },
-    label: { style: () => Typography.rowTitle(), fontWeight: FontWeights.semiBold },
-    body: { style: () => Typography.rowMeta(), fontWeight: FontWeights.regular },
-    reading: { style: () => Typography.reading(), fontWeight: FontWeights.regular },
-    caption: { style: () => Typography.timestamp(), fontWeight: FontWeights.regular },
-});
-
 function projectTypeRoleMetric(role: HappierTypeRole) {
-    const style = PLUGIN_UI_TYPE_ROLES[role].style();
+    const style = Typography.variant(role);
     return Object.freeze({
         fontSize: readTextStyleMetric(style, 'fontSize'),
         lineHeight: readTextStyleMetric(style, 'lineHeight'),
-        fontWeight: PLUGIN_UI_TYPE_ROLES[role].fontWeight,
+        fontWeight: HAPPIER_TYPE_WEIGHT[HAPPIER_TYPE_SCALE[role].weight],
     });
 }
 
 function projectTypeRoleStyle(role: HappierTypeRole): HappierTypeRoleStyle {
-    const style = PLUGIN_UI_TYPE_ROLES[role].style();
+    const style: TextStyle = Typography.variant(role);
     return Object.freeze({
         fontSize: readTextStyleMetric(style, 'fontSize'),
         lineHeight: readTextStyleMetric(style, 'lineHeight'),
@@ -152,12 +125,14 @@ let hostTypography: HappierUiTypography | null = null;
  */
 export function readPluginUiHostTypography(): HappierUiTypography {
     hostTypography ??= Object.freeze({
-        heading: projectTypeRoleStyle('heading'),
+        display: projectTypeRoleStyle('display'),
         title: projectTypeRoleStyle('title'),
+        heading: projectTypeRoleStyle('heading'),
         label: projectTypeRoleStyle('label'),
         body: projectTypeRoleStyle('body'),
         reading: projectTypeRoleStyle('reading'),
-        caption: projectTypeRoleStyle('caption'),
+        meta: projectTypeRoleStyle('meta'),
+        micro: projectTypeRoleStyle('micro'),
         // The face per weight of the configuration-page anatomy (`HAPPIER_PAGE_TEXT`).
         weights: Object.freeze({
             regular: projectFontFace(Typography.default('regular')),
@@ -214,11 +189,11 @@ export function projectPluginUiTheme(theme: Theme): PluginUiThemeV1 {
             overlay: theme.colors.overlay.scrim,
         }),
         spacing: Object.freeze({
-            xsmall: theme.margins.xs,
-            small: theme.margins.sm,
-            medium: theme.margins.md,
-            large: theme.margins.lg,
-            xlarge: theme.margins.xl,
+            xsmall: theme.space.s4,
+            small: theme.space.s8,
+            medium: theme.space.s12,
+            large: theme.space.s16,
+            xlarge: theme.space.s20,
         }),
         radii: Object.freeze({
             small: theme.borderRadius.sm,
@@ -230,8 +205,8 @@ export function projectPluginUiTheme(theme: Theme): PluginUiThemeV1 {
             body: projectTypeRoleMetric('body'),
             reading: projectTypeRoleMetric('reading'),
             label: projectTypeRoleMetric('label'),
-            title: projectTypeRoleMetric('title'),
-            caption: projectTypeRoleMetric('caption'),
+            title: projectTypeRoleMetric('heading'),
+            caption: projectTypeRoleMetric('micro'),
             code: Object.freeze({
                 fontSize: readTextStyleMetric(code, 'fontSize'),
                 lineHeight: readTextStyleMetric(code, 'lineHeight'),
@@ -277,6 +252,9 @@ export function projectPluginUiHostPalette(theme: Theme): HappierUiPalette {
         navigationSelected: colors.surface.elevated,
         navigationHover: colors.surface.pressed,
         inset: colors.surface.inset,
+        skeleton: colors.surface.ripple,
+        versionControlAdded: colors.versionControl.added.foreground,
+        versionControlRemoved: colors.versionControl.removed.foreground,
         searchFieldRadiusPx: theme.borderRadius.lg,
         searchFieldEdge: resolveThemeControlEdge(theme, 'default') ?? undefined,
     });

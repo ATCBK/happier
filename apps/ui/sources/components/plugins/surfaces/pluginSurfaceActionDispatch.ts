@@ -1406,6 +1406,8 @@ async function executeContributedAction(
 
 export type CreatePluginSurfaceActionDispatchHandlerInput = Readonly<{
     pluginId: string;
+    /** The existing physical controller lifetime cancels pending mounted Actions as well as reads. */
+    lifetimeSignal?: AbortSignal;
     /** Exact mounted-target custody when this handler can settle a targeted operation. */
     callerSourceCustody?: PluginSourceCustodyV1;
     /** Exact declaring contribution from the bound mount's validated context. */
@@ -1470,6 +1472,7 @@ export function createPluginSurfaceActionDispatchHandler(
             selectedActionInput = selected.data;
         }
 
+        const cancellation = mergeAbortSignals([input.lifetimeSignal, options?.signal]);
         const outcome = await dispatchPluginSurfaceAction({
             actionRequestId: request.requestId,
             callerPluginId: input.pluginId,
@@ -1494,11 +1497,11 @@ export function createPluginSurfaceActionDispatchHandler(
             ...(input.isContributedActionAvailable
                 ? { isContributedActionAvailable: input.isContributedActionAvailable }
                 : {}),
-            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(cancellation.signal ? { signal: cancellation.signal } : {}),
             ...(targetedOperation ? { targetedOperation } : {}),
             ...(selectedActionInput ? { selectedActionInput } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
-        });
+        }).finally(cancellation.dispose);
         if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason]);
         return outcome.result;
     };
@@ -1542,7 +1545,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     resource?: PluginSurfaceResourceBinding;
     /** Borrowed Account read entries, after this exact mounted caller's Action admission. */
     hostResourceStore?: PluginUiResourceStore;
-    /** The bound controller's mount lifetime for daemon-backed Resource work. */
+    /** The bound controller's existing mount lifetime for Resource work and mounted Actions. */
     resourceLifetimeSignal?: AbortSignal;
     /**
      * EU-4b: the mount's sink for live resource invalidations. `watchResource`
@@ -1640,6 +1643,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     const resourceDisposeHostResource = resourceWatch?.disposeHostResource;
     const executeAction = createPluginSurfaceActionDispatchHandler({
         pluginId: input.surfaceContext.pluginId,
+        ...(input.resourceLifetimeSignal ? { lifetimeSignal: input.resourceLifetimeSignal } : {}),
         ...(input.callerSourceCustody
             ? { callerSourceCustody: input.callerSourceCustody }
             : {}),

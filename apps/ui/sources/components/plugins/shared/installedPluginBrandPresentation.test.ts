@@ -11,7 +11,12 @@ import {
     type PackageAssetArchiveOpenedV1,
 } from '@happier-dev/protocol/plugins/availability';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 
 import { createValidPluginBrandPngFixture, renderHook } from '@/dev/testkit';
 import { HAPPIER_MAX_RENDERABLE_IMAGE_PIXELS } from '@happier-dev/plugin-ui/advanced';
@@ -28,6 +33,13 @@ import type {
 const rpc = vi.hoisted(() => ({
     read: vi.fn(),
 }));
+const bundledBrands = vi.hoisted(() => [] as { pluginId: string; resourceId: string; releaseVersion: string; displayName: string; digest: string; bytes: Uint8Array }[]);
+// Packaged inventory bytes are the app/Expo asset boundary; admission stays real.
+vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
+    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
+}));
+installTokenStorageWebPlatformMocks();
 
 // These reads use the supplied RPC/Account sources, never a live socket client.
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: { request: vi.fn() } }));
@@ -102,6 +114,7 @@ function portablePackageAssets(input: Readonly<{
     return Object.freeze({
         packageAssets: Object.freeze({ reader, source }),
         source,
+        opened,
         digest: archive.descriptor.resources[0]!.digestSha256,
         withdraw() {
             admission = Object.freeze({ kind: 'unavailable', code: 'artifact_not_current' });
@@ -145,11 +158,11 @@ function availableBrand(input: Readonly<{
     };
 }
 
-function createLifetime() {
+function createLifetime(scope: ActiveServerAccountScopeLifetime['scope'] = { serverId: 'server-a', accountId: 'account-a' }) {
     let current = true;
     const listeners = new Set<() => void>();
     const lifetime: ActiveServerAccountScopeLifetime = Object.freeze({
-        scope: { serverId: 'server-a', accountId: 'account-a' },
+        scope,
         isCurrent: () => current,
         onRetire: (listener) => {
             listeners.add(listener);
@@ -206,8 +219,179 @@ function readInput(input: Readonly<{
 }
 
 describe('installed package brand presentation', () => {
+    let browserStorage: ReturnType<typeof installLocalStorageMock>;
     beforeEach(() => {
         rpc.read.mockReset();
+        bundledBrands.splice(0, bundledBrands.length, {
+            pluginId: 'happier.inspector', resourceId: 'brand-icon', releaseVersion: '0.0.0',
+            displayName: 'Inspector', digest: `sha256:${'b'.repeat(64)}`, bytes: createValidPluginBrandPngFixture(),
+        });
+        browserStorage = installLocalStorageMock();
+    });
+    afterEach(() => browserStorage.restore());
+
+    it('admits bundled non-Agent marks through the same owner without Account archive or daemon reads', async () => {
+        const bundledPackage = PluginProjectionInstalledPackageV2Schema.parse({
+            id: 'happier.inspector', displayName: 'Inspector', version: '0.0.0', enabled: true,
+            source: { kind: 'bundled', locator: '@happier-dev/plugins-inspector' },
+            brand: { ...availableBrand(), resource: { pluginId: 'happier.inspector', localId: 'brand-icon' } },
+        });
+        const brand = await readInstalledPluginBrandPresentation(readInput({
+            installedPackage: bundledPackage, machineId: null, packageAssets: null,
+        }));
+        expect(brand?.bytes).toEqual(createValidPluginBrandPngFixture());
+        expect(rpc.read).not.toHaveBeenCalled();
+        expect((await readInstalledPluginBrandPresentation(readInput({
+            installedPackage: { ...bundledPackage, brand: {
+                ...availableBrand({ pluginId: 'happier.inspector', digest: `sha256:${'c'.repeat(64)}` }),
+                resource: { pluginId: 'happier.inspector', localId: 'brand-icon' },
+            } },
+            machineId: null, packageAssets: null,
+        })))?.bytes).toBeUndefined();
+    });
+
+    it('uses the real active Account lifetime for distinct admitted view lifetimes and rereads after its retirement', async () => {
+        const active = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+        const firstView = createLifetime();
+        const secondView = createLifetime();
+        rpc.read.mockResolvedValue(brandReadResult());
+        try {
+            const first = await readInstalledPluginBrandPresentation(readInput({ accountLifetime: firstView.lifetime }));
+            firstView.retire();
+            expect(await readInstalledPluginBrandPresentation(readInput({ accountLifetime: secondView.lifetime }))).toBe(first);
+            expect(rpc.read).toHaveBeenCalledTimes(1);
+        } finally {
+            active.dispose();
+        }
+        const remountedAccount = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+        try {
+            await readInstalledPluginBrandPresentation(readInput({ accountLifetime: createLifetime().lifetime }));
+            expect(rpc.read).toHaveBeenCalledTimes(2);
+        } finally {
+            remountedAccount.dispose();
+        }
+    });
+
+    it('never reuses routed marks across a Home or Account, or accepts a contradictory credential scope', async () => {
+        rpc.read.mockResolvedValue(brandReadResult());
+        const first = createLifetime();
+        const otherAccount = createLifetime({ serverId: 'server-a', accountId: 'account-b' });
+        const otherHome = createLifetime({ serverId: 'server-b', accountId: 'account-a' });
+        for (const bound of [first, otherAccount, otherHome]) {
+            expect((await readInstalledPluginBrandPresentation({
+                ...readInput({ accountLifetime: bound.lifetime }), serverId: bound.lifetime.scope.serverId,
+                credentialAccountScope: bound.lifetime.scope,
+            }))?.bytes).toEqual(createValidPluginBrandPngFixture());
+        }
+        expect(rpc.read).toHaveBeenCalledTimes(3);
+        await expect(readInstalledPluginBrandPresentation({
+            ...readInput({ accountLifetime: otherAccount.lifetime }), credentialAccountScope: first.lifetime.scope,
+        })).resolves.toBeNull();
+        await expect(readInstalledPluginBrandPresentation({
+            ...readInput({ accountLifetime: otherHome.lifetime }), credentialAccountScope: otherHome.lifetime.scope,
+        })).resolves.toBeNull();
+        expect(rpc.read).toHaveBeenCalledTimes(3);
+        for (const serverId of ['server-a', 'server-b']) {
+            expect(await TokenStorage.setCredentialsForServerUrl(`https://brand-${serverId}.test`, { serverId }, { token: 'replacement' })).toBe(true);
+        }
+    });
+
+    it('shares routed Account marks across distinct view lifetimes until real Home credentials change', async () => {
+        const homeUrl = 'https://brand-home.test';
+        const firstLifetime = createLifetime();
+        const secondLifetime = createLifetime();
+        const firstController = new AbortController();
+        let resolveRead!: (result: MachinePluginUiResourceReadResult) => void;
+        let producerSignal: AbortSignal | undefined;
+        rpc.read.mockImplementation((_machine, options: { signal?: AbortSignal }) => {
+            producerSignal = options.signal;
+            return new Promise<MachinePluginUiResourceReadResult>((resolve) => { resolveRead = resolve; });
+        });
+        const routedInput = (lifetime: ReturnType<typeof createLifetime>, signal = new AbortController().signal) => ({
+            ...readInput({ accountLifetime: lifetime.lifetime, signal }),
+            credentialAccountScope: lifetime.lifetime.scope,
+        });
+        const first = readInstalledPluginBrandPresentation(routedInput(firstLifetime, firstController.signal));
+        const second = readInstalledPluginBrandPresentation(routedInput(secondLifetime));
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+        firstController.abort();
+        firstLifetime.retire();
+        await expect(first).resolves.toBeNull();
+        expect(producerSignal?.aborted).toBe(false);
+        resolveRead(brandReadResult());
+        const presentation = await second;
+        expect(presentation?.bytes).toEqual(createValidPluginBrandPngFixture());
+        secondLifetime.retire();
+        expect(await readInstalledPluginBrandPresentation(routedInput(createLifetime()))).toBe(presentation);
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+
+        // This is the real credential writer/fanout, only browser persistence
+        // and the daemon RPC are substituted system boundaries.
+        expect(await TokenStorage.setCredentialsForServerUrl(homeUrl, { serverId: 'server-a' }, { token: 'replacement-account-token' })).toBe(true);
+        rpc.read.mockResolvedValue(brandReadResult());
+        await readInstalledPluginBrandPresentation(routedInput(createLifetime()));
+        expect(rpc.read).toHaveBeenCalledTimes(2);
+
+        const pendingLifetime = createLifetime();
+        const retireBinding = subscribeHomeCredentialChange((event) => {
+            if (event.serverId === 'server-a') pendingLifetime.retire();
+        });
+        const replacementPackage = installedPackage({ brand: availableBrand(), occurrenceId: 'pending-replacement' });
+        rpc.read.mockImplementation((_machine, options: { signal?: AbortSignal }) => {
+            producerSignal = options.signal;
+            return new Promise<MachinePluginUiResourceReadResult>((resolve) => { resolveRead = resolve; });
+        });
+        const pending = readInstalledPluginBrandPresentation({ ...routedInput(pendingLifetime), installedPackage: replacementPackage });
+        expect(producerSignal?.aborted).toBe(false);
+        expect(await TokenStorage.removeCredentialsForServerUrl(homeUrl, { serverId: 'server-a' })).toBe(true);
+        expect(producerSignal?.aborted).toBe(true);
+        resolveRead(brandReadResult());
+        await expect(pending).resolves.toBeNull();
+        retireBinding();
+    });
+
+    it('shares pending and settled marks across views without borrowing a view cancellation lifetime', async () => {
+        const lifetime = createLifetime();
+        const firstController = new AbortController();
+        let resolveRead!: (result: MachinePluginUiResourceReadResult) => void;
+        rpc.read.mockImplementation(() => new Promise<MachinePluginUiResourceReadResult>((resolve) => { resolveRead = resolve; }));
+        const first = readInstalledPluginBrandPresentation(readInput({ accountLifetime: lifetime.lifetime, signal: firstController.signal }));
+        const second = readInstalledPluginBrandPresentation(readInput({ accountLifetime: lifetime.lifetime }));
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+        firstController.abort();
+        await expect(first).resolves.toBeNull();
+        resolveRead(brandReadResult());
+        const presentation = await second;
+        expect(presentation?.bytes).toEqual(createValidPluginBrandPngFixture());
+        expect(await readInstalledPluginBrandPresentation(readInput({ accountLifetime: lifetime.lifetime }))).toBe(presentation);
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+        lifetime.retire();
+        await expect(readInstalledPluginBrandPresentation(readInput({ accountLifetime: lifetime.lifetime }))).resolves.toBeNull();
+        rpc.read.mockResolvedValue(brandReadResult());
+        await readInstalledPluginBrandPresentation(readInput());
+        expect(rpc.read).toHaveBeenCalledTimes(2);
+    });
+
+    it('shares mounted hook marks and rereads a replacement package occurrence', async () => {
+        const lifetime = createLifetime();
+        rpc.read.mockResolvedValue(brandReadResult());
+        const firstInput = readInput({ accountLifetime: lifetime.lifetime });
+        const secondInput = readInput({ accountLifetime: lifetime.lifetime });
+        const first = await renderHook(() => useInstalledPluginBrandPresentation(firstInput));
+        const second = await renderHook(() => useInstalledPluginBrandPresentation(secondInput));
+        expect(second.getCurrent()?.bytes).toEqual(first.getCurrent()?.bytes);
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+        await first.unmount();
+        await second.unmount();
+        const remounted = await renderHook(() => useInstalledPluginBrandPresentation(firstInput));
+        expect(remounted.getCurrent()?.bytes).toEqual(createValidPluginBrandPngFixture());
+        expect(rpc.read).toHaveBeenCalledTimes(1);
+        await remounted.unmount();
+        await readInstalledPluginBrandPresentation(readInput({
+            accountLifetime: lifetime.lifetime,
+            installedPackage: installedPackage({ brand: availableBrand(), occurrenceId: 'replacement-occurrence' }),
+        }));
+        expect(rpc.read).toHaveBeenCalledTimes(2);
     });
 
     it('reads the admitted same-plugin PNG through the canonical contextual Resource authority', async () => {
@@ -226,6 +410,47 @@ describe('installed package brand presentation', () => {
             callerPluginId: PLUGIN_ID,
             resource: BRAND_RESOURCE,
         }));
+    });
+
+    it('aborts shared acquisition on Account retirement and fences its late delivery', async () => {
+        const lifetime = createLifetime();
+        let transportSignal: AbortSignal | undefined;
+        let resolveRead!: (result: MachinePluginUiResourceReadResult) => void;
+        rpc.read.mockImplementation((_machineId, options: { signal?: AbortSignal }) => {
+            transportSignal = options.signal;
+            return new Promise<MachinePluginUiResourceReadResult>((resolve) => { resolveRead = resolve; });
+        });
+        const pending = readInstalledPluginBrandPresentation(readInput({ accountLifetime: lifetime.lifetime }));
+        expect(transportSignal?.aborted).toBe(false);
+        lifetime.retire();
+        expect(transportSignal?.aborted).toBe(true);
+        resolveRead(brandReadResult());
+        await expect(pending).resolves.toBeNull();
+    });
+
+    it('shares portable results only for the current reader and protected source identities', async () => {
+        const lifetime = createLifetime();
+        const portable = portablePackageAssets();
+        const input = readInput({
+            accountLifetime: lifetime.lifetime,
+            packageAssets: portable.packageAssets,
+            installedPackage: installedPackage({ brand: availableBrand({ digest: portable.digest }) }),
+        });
+        const first = await readInstalledPluginBrandPresentation(input);
+        expect(await readInstalledPluginBrandPresentation(input)).toBe(first);
+        expect(portable.source.readArchive).toHaveBeenCalledTimes(1);
+        const replacement = portablePackageAssets();
+        expect((await readInstalledPluginBrandPresentation({ ...input, packageAssets: { reader: portable.packageAssets.reader, source: replacement.source } }))?.bytes)
+            .toEqual(createValidPluginBrandPngFixture());
+        expect(replacement.source.readArchive).toHaveBeenCalledTimes(1);
+        const third = portablePackageAssets();
+        expect((await readInstalledPluginBrandPresentation({ ...input, packageAssets: third.packageAssets }))?.bytes)
+            .toEqual(createValidPluginBrandPngFixture());
+        expect(third.source.readArchive).toHaveBeenCalledTimes(1);
+        third.withdraw();
+        await expect(readInstalledPluginBrandPresentation({ ...input, packageAssets: third.packageAssets }))
+            .resolves.toEqual({ displayName: 'Acme Brand' });
+        expect(rpc.read).not.toHaveBeenCalled();
     });
 
     it('reads a portable brand only through its Availability-selected Package Asset lease', async () => {
@@ -253,6 +478,32 @@ describe('installed package brand presentation', () => {
         }))).resolves.toEqual({ displayName: 'Acme Brand' });
         expect(portable.source.readArchive).not.toHaveBeenCalled();
         expect(rpc.read).not.toHaveBeenCalled();
+    });
+
+    it('withdraws a mounted portable mark before a replacement source acquires its bytes', async () => {
+        const lifetime = createLifetime();
+        const portable = portablePackageAssets();
+        const input = readInput({ accountLifetime: lifetime.lifetime, packageAssets: portable.packageAssets,
+            installedPackage: installedPackage({ brand: availableBrand({ digest: portable.digest }) }) });
+        const seen: Array<ReturnType<typeof useInstalledPluginBrandPresentation>> = [];
+        const hook = await renderHook((props: typeof input) => {
+            const result = useInstalledPluginBrandPresentation(props);
+            seen.push(result);
+            return result;
+        }, { initialProps: input });
+        expect(hook.getCurrent()?.bytes).toEqual(createValidPluginBrandPngFixture());
+        const replacement = portablePackageAssets();
+        let resolveArchive!: (archive: PackageAssetArchiveOpenedV1) => void;
+        const archive = replacement.opened;
+        const pendingSource: PluginProtectedAccountPackageAssetSource = {
+            readArchive: () => new Promise<PackageAssetArchiveOpenedV1>((resolve) => { resolveArchive = resolve; }),
+        };
+        seen.length = 0;
+        await hook.rerender({ ...input, packageAssets: { reader: input.packageAssets!.reader, source: pendingSource } });
+        expect(seen.every((presentation) => presentation?.bytes === undefined)).toBe(true);
+        await act(async () => { resolveArchive(archive); });
+        expect(hook.getCurrent()?.bytes).toEqual(createValidPluginBrandPngFixture());
+        await hook.unmount();
     });
 
     it('does not fall through to a daemon Resource read when the portable Account source is unavailable', async () => {

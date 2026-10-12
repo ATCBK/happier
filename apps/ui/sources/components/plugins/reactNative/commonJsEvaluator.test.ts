@@ -14,6 +14,26 @@ const identity = Object.freeze({
 const encoder = new TextEncoder();
 
 describe('evaluatePluginUiCommonJsBundle', () => {
+    it('uses the production author-module map and refuses host-private presentation', () => {
+        const read = evaluatePluginUiCommonJsBundle({
+            bytes: encoder.encode('exports.read = () => Boolean(require("@happier-dev/plugin-ui") && require("@happier-dev/plugin-ui/components"));'),
+            identity,
+            requestedExport: 'read',
+        });
+        expect(read()).toBe(true);
+
+        for (const specifier of [
+            '@happier-dev/plugin-ui/presentation',
+            '@happier-dev/plugin-ui/presentation/typeScale',
+        ]) {
+            expect(() => evaluatePluginUiCommonJsBundle({
+                bytes: encoder.encode(`require(${JSON.stringify(specifier)}); exports.read = () => true;`),
+                identity,
+                requestedExport: 'read',
+            })).toThrowError(expect.objectContaining({ code: 'unknown_host_module' }));
+        }
+    });
+
     it('supports both CommonJS export forms and validates the requested callable export', () => {
         const first = evaluatePluginUiCommonJsBundle({
             bytes: encoder.encode('module.exports = { renderSurface() { return "module"; } };'),

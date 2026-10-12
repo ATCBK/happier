@@ -261,6 +261,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
      * becoming a controller identity or lifecycle owner.
      */
     isDaemonInteractionEnabled?: () => boolean;
+    /** Live projection admission narrows interaction without retiring this physical mount. */
+    isInteractionEnabled?: () => boolean;
 }>;
 
 /** Host-private currentness observation supplied by an incumbent physical mount. */
@@ -747,7 +749,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         && accountLifetime?.isCurrent() === true
         && parentLifetime?.isCurrent() !== false
         && input.facts.isHostCurrent?.() !== false;
-    const isInteractionCurrent = (): boolean => isCurrent() && input.facts.interactionEnabled;
+    const isInteractionCurrent = (): boolean => isCurrent()
+        && (input.facts.isInteractionEnabled?.() ?? input.facts.interactionEnabled);
     const binding = input.binding;
     const openConnectedAccounts = binding?.openConnectedAccounts
         ? createPluginOpenConnectedAccountsHostApiHandler(
@@ -1200,12 +1203,13 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const retire = (): void => {
         if (retired) return;
         retired = true;
-        mountLifetime.abort();
     };
     const dispose = (): void => {
         if (disposed) return;
         disposed = true;
         retire();
+        // Insertion cleanup only fences admission; cancellation can notify mounted React observers.
+        mountLifetime.abort();
         notifyRetirement();
         accountRetirement?.dispose();
         parentRetirement?.dispose();
@@ -1258,6 +1262,16 @@ export function useBoundPluginSurfaceController(input: Readonly<{
 }>): BoundPluginSurfaceController {
     const facts = input.facts;
     const binding = input.binding;
+    const interactionEnabledRef = React.useRef(facts.interactionEnabled);
+    interactionEnabledRef.current = facts.interactionEnabled;
+    const isInteractionEnabled = React.useCallback(() => interactionEnabledRef.current, []);
+    const contributedActionResolverRef = React.useRef(facts.resolveContributedAction);
+    contributedActionResolverRef.current = facts.resolveContributedAction;
+    const hasContributedActionResolver = facts.resolveContributedAction !== undefined;
+    const resolveContributedAction = React.useCallback<NonNullable<BoundPluginSurfaceFacts['resolveContributedAction']>>(
+        identity => contributedActionResolverRef.current?.(identity) ?? null,
+        [],
+    );
     const executionOriginCurrentRef = React.useRef(binding?.isExecutionOriginCurrent);
     executionOriginCurrentRef.current = binding?.isExecutionOriginCurrent;
     const isExecutionOriginCurrent = React.useCallback(() => executionOriginCurrentRef.current?.() !== false, []);
@@ -1267,15 +1281,27 @@ export function useBoundPluginSurfaceController(input: Readonly<{
         () => daemonInteractionEnabledRef.current,
         [],
     );
-    const actionInputSelectionFactsKey = serializePluginActionInputSelectionFacts({
-        pluginProjectionById: facts.pluginProjectionById,
-        pluginUiProjection: facts.pluginUiProjection,
-        targetedContributions: facts.targetedContributions,
-        targetPluginId: facts.pluginId,
-    });
+    // Projection producers replace these read-only snapshots on semantic
+    // changes. Reuse their existing complete key during unrelated host renders.
+    const actionInputSelectionFactsKey = React.useMemo(
+        () => serializePluginActionInputSelectionFacts({
+            pluginProjectionById: facts.pluginProjectionById,
+            pluginUiProjection: facts.pluginUiProjection,
+            targetedContributions: facts.targetedContributions,
+            targetPluginId: facts.pluginId,
+        }),
+        [facts.pluginProjectionById, facts.pluginUiProjection, facts.targetedContributions, facts.pluginId],
+    );
+    const resourceFactsKey = React.useMemo(() => stableJsonStringify(Object.fromEntries(
+        Object.entries(facts.pluginUiProjection?.resourcesById ?? {}).map(([key, entry]) => {
+            const { hostOrigin, hostSupplies, hostCompatibility, ...resource } = entry;
+            return [key, resource];
+        }),
+    )), [facts.pluginUiProjection?.resourcesById]);
     const controller = React.useMemo(
         () => createBoundPluginSurfaceController({
-            facts: { ...facts, isDaemonInteractionEnabled },
+            facts: { ...facts, isDaemonInteractionEnabled, isInteractionEnabled,
+                resolveContributedAction: hasContributedActionResolver ? resolveContributedAction : undefined },
             binding: { ...binding, isExecutionOriginCurrent },
         }),
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the memo is keyed
@@ -1298,15 +1324,15 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             stableJsonStringify(facts.executionOrigin ?? null),
             facts.resourceCapability?.readable,
             facts.resourceCapability?.dynamic,
-            stableJsonStringify(facts.pluginUiProjection?.resourcesById ?? null),
+            resourceFactsKey,
             serializeBoundPluginSurfaceResourceContext(facts.resourceContext),
             facts.accountLifetime,
             facts.parentLifetime,
             facts.isHostCurrent,
             facts.mountInstanceKey,
-            facts.interactionEnabled,
             actionInputSelectionFactsKey,
-            facts.resolveContributedAction,
+            hasContributedActionResolver,
+            resolveContributedAction,
             joinResourceScope(facts.resourceScope),
             binding?.executeHostAction,
             binding?.openSurface,

@@ -151,7 +151,7 @@ export function createActionInputForm<
     >;
     /** Captured by the host that owns the active Account scope. */
     accountLifetime?: ActionInputFormAccountLifetime | null;
-    /** Host-owned present-user invocation deadline; invalid values fail closed. */
+    /** Optional caller-authored invocation deadline; invalid values fail closed. */
     deadlineMs?: number;
     signal?: AbortSignal;
     isCurrent?: () => boolean;

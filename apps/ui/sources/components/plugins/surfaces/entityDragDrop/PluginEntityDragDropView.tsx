@@ -13,7 +13,7 @@ import { isSecondaryEntityRowControl, useEntityDragDomBinding, useEntityDropDomB
 import { measureWindowBounds, readWindowBounds, toTreeDropMeasurableRef } from '@/components/ui/treeDragDrop/registry/measureWindowBounds';
 import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { EntityDropSettledFeedback } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
-import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
+import { useEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 import { TreeDropOutline } from '@/components/ui/treeDragDrop/ui/TreeDropOutline';
 import type { EntityDragCarry, EntityDropDestination } from '@/components/ui/treeDragDrop/entityDragDropTypes';
 import type { WindowBounds } from '@/components/ui/treeDragDrop/treeDragDropTypes';
@@ -161,7 +161,7 @@ function PluginSourceStagedFeedback(props: Readonly<{ binding: PluginEntityDragD
     }, () => null);
     const hints = useEntityStagedMoveHints();
     const staged = snapshot && (snapshot.phase === 'carrying' || snapshot.phase === 'pending') ? snapshot : null;
-    const outcome = staged ? describeEntityDropOutcome(staged) : null;
+    const outcome = useEntityDropOutcome(staged);
     const announcement = describeHappierDropAnnouncement(outcome);
     return <>
         {outcome ? <EntityStagedMoveDock outcome={outcome} hints={hints} /> : null}

@@ -40,7 +40,7 @@ const PLUGIN_UI_ICON_TOKEN_TO_ICON_NAME: Readonly<Record<PluginUiIconTokenV1, Ic
     search: 'magnifying-glass',
     'change-open': 'git-pull-request',
     'change-complete': 'git-merge',
-    issue: 'target',
+    issue: 'radio-button',
     bug: 'bug',
     pin: 'push-pin',
     conversations: 'chats-circle',

@@ -1,5 +1,6 @@
 import type { CurrentUiContextSnapshotV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginUiResolvedSemanticCommandV1 } from '@happier-dev/protocol/plugins/ui';
+import { getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import {
     createPluginUiProjectedActionResolver,
@@ -88,15 +89,16 @@ function resolveProjectedActionExecutionScope(
     if (!isCurrentPluginSemanticCommandProjection(projection, scopedLaunchFacts)) return null;
     const origin = readPluginUiContributionOrigin(projectedAction);
     const executionOrigin = origin?.executionOrigin ?? null;
+    const executionRef = executionOrigin ? getPluginMachineExecutionOriginRef(executionOrigin) : null;
     if (
         !origin
         || origin.phase !== 'current'
         || origin.interactionEnabled !== true
         || (
-            executionOrigin !== null
+            executionRef !== null
             && (
-                executionOrigin.materializationRef.pluginId !== projectedAction.pluginId
-                || executionOrigin.materializationRef.machineId !== origin.machineId
+                executionRef.pluginId !== projectedAction.pluginId
+                || executionRef.machineId !== origin.machineId
             )
         )
     ) return null;

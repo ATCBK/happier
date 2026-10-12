@@ -30,6 +30,9 @@ import { createBoundPluginSurfaceController } from './boundPluginSurfaceControll
 import type { PluginSurfaceResourceReadTransport } from './pluginSurfaceResourceRead';
 import type { PreparedDaemonPluginUiTargetedSurfaceMountV1 } from './mountedTargetedContributions';
 import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
+import { TriageDetailSurfaceInputV1Schema } from '@happier-dev/triage-protocol/v1';
+import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
+import { prepareTargetedSurfaceMounts } from './mountedTargetedContributions';
 
 function prepareTargetedMount(
     rawMount: DaemonPluginUiTargetedSurfaceMountV1,
@@ -137,6 +140,24 @@ function launchInputAtSerializedByteLength(byteLength: number): PluginUiJsonValu
 }
 
 describe('readTargetedPluginSurfaceMountRequest', () => {
+    it('mounts each real Triage detail panel through its cold transported role schema', () => {
+        const transportedMount = DaemonPluginUiTargetedSurfaceMountV1Schema.parse(JSON.parse(JSON.stringify({
+            ...rawMount,
+            inputSchema: TriageDetailSurfaceInputV1Schema.jsonSchema,
+        })));
+        const prepared = prepareTargetedSurfaceMounts([transportedMount]);
+        expect(prepared).toHaveLength(1);
+        const detailInput = createTriageSourceV1Fixture().detailInput;
+        for (const panel of ['overview', 'activity', 'files', 'checks', 'actions']) {
+            const request = readTargetedPluginSurfaceReactMountRequest({
+                presentation: { surface, input: { ...detailInput, panel }, instanceKey: 'entry-17' },
+                mounts: prepared,
+                target,
+            });
+            expect(request?.input).toEqual({ ...detailInput, panel });
+        }
+    });
+
     it('projects the device diagnostic from only the exact admitted target, contributor, and renderer facts', () => {
         expect(buildTargetedPluginSurfaceReadyTestId(rawMount)).toBe([
             'plugin-targeted-surface-ready',

@@ -64,10 +64,10 @@ export type PluginHostedWebHostApiRequestHandler = (
     options?: PluginSurfaceHostApiRequestOptions,
 ) => PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1>;
 
-/** Host-private Session authority. It is never serialized into guest context. */
+/** Host-private viewer authority. It is never serialized into guest context. */
 export type CallerHostedHtmlMountAuthority = Readonly<{
     kind: 'callerHostedHtml';
-    sessionId: string;
+    sessionId?: string;
     recordRevision: string;
 }>;
 

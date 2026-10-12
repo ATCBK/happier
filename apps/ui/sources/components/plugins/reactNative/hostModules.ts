@@ -9,7 +9,6 @@ import * as PluginUi from '@happier-dev/plugin-ui';
 import * as PluginUiComponents from '@happier-dev/plugin-ui/components';
 import * as PluginUiHostApi from '@happier-dev/plugin-ui/hostApi';
 import * as PluginUiData from '@happier-dev/plugin-ui/data';
-import * as PluginUiPresentation from '@happier-dev/plugin-ui/presentation';
 import * as PluginUiDeclarative from '@happier-dev/plugin-ui/declarative';
 import * as PluginUiEnvironment from '@happier-dev/plugin-ui/environment';
 import * as PluginUiAdvanced from '@happier-dev/plugin-ui/advanced';
@@ -38,7 +37,6 @@ export const PLUGIN_UI_COMMON_JS_HOST_MODULES: PluginUiHostRuntimeExternalModule
     '@happier-dev/plugin-ui/components': PluginUiComponents,
     '@happier-dev/plugin-ui/hostApi': PluginUiHostApi,
     '@happier-dev/plugin-ui/data': PluginUiData,
-    '@happier-dev/plugin-ui/presentation': PluginUiPresentation,
     '@happier-dev/plugin-ui/declarative': PluginUiDeclarative,
     '@happier-dev/plugin-ui/environment': PluginUiEnvironment,
     '@happier-dev/plugin-ui/advanced': PluginUiAdvanced,

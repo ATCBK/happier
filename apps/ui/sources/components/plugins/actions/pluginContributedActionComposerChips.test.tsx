@@ -3,6 +3,7 @@ import { act, create } from 'react-test-renderer';
 import { Platform } from 'react-native';
 import { ComposerControlStateV1Schema } from '@happier-dev/protocol';
 import { PLUGIN_UI_HOST_API_DIAGNOSTIC_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol/plugins/ui';
+import { HappierComposerChip } from '@happier-dev/plugin-ui/presentation';
 import type {
     PluginComposerControlContributionV1,
     PluginProjectedComposerControlEntryV1,
@@ -1521,6 +1522,7 @@ describe('plugin contributed composer Action chips', () => {
             popoverAnchorRef: React.createRef(),
         });
         if (!React.isValidElement(primaryNode)) throw new Error('expected primary Action chip');
+        expect(primaryNode.type).toBe(HappierComposerChip);
         const primaryIcon = React.Children.toArray(
             (primaryNode.props as Readonly<{ children: React.ReactNode }>).children,
         )[0];

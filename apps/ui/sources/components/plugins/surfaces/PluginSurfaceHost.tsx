@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExecutor';
 import { useFindSurfaceRegistrationHost } from '@/keyboard/KeyboardShortcutProvider';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import type { PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
@@ -20,6 +23,7 @@ import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurfa
 
 import { BrowserViewTargetV1Schema, type BrowserViewTargetV1 } from '@happier-dev/protocol/browser/target/v1';
 import { PluginHostedHtmlSourceV1Schema, type PluginHostedHtmlSourceV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlSourceV1';
+import { UiSurfaceNetworkRequestV1Schema, normalizeUiSurfaceCapabilityRequestV1, intersectUiSurfaceNetworkPoliciesV1, type UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
 import type { DaemonPluginUiTargetedSurfaceMountV1, DaemonContributionRegistryProjectionMountedTargetV1, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -27,6 +31,7 @@ import type { PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1 } from '@
 import { getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from './pluginSurfaceExecutionOrigin';
+import type { PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { SessionExecutionTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import {
@@ -190,6 +195,7 @@ import { projectPluginUiHostPalette } from './pluginUiThemeProjection';
 import { useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/PageHeader';
 import { NavigationHeaderActions } from '@/components/ui/layout/NavigationHeaderActions';
+import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import {
     createPluginSurfaceComposerMountContext,
@@ -416,6 +422,10 @@ function resolveMountedTargetProjectionFallback(
                 case 'invalid-response':
                     return Object.freeze({ state: 'unavailable', reasonCode: 'targeted_contributions_invalid_response' });
                 case 'unavailable':
+                    if (state.failure.code === 'plugin_targeted_contributions_unavailable'
+                        || state.failure.code === 'plugin_targeted_contributions_target_stale') {
+                        return Object.freeze({ state: 'loading', reasonCode: state.failure.code });
+                    }
                     return Object.freeze({ state: 'unavailable', reasonCode: 'targeted_contributions_target_unavailable' });
                 default:
                     return Object.freeze({ state: 'unavailable', reasonCode: 'targeted_contributions_error' });
@@ -1284,7 +1294,14 @@ function PluginHostedWebBrowserArtifactFramePane(props: Readonly<{
 }
 
 function renderPluginNavigationActions(actions: React.ReactNode) {
-    return <NavigationHeaderActions primary={null} actions={actions} />;
+    return <PluginPageHeaderActions actions={actions} />;
+}
+
+function PluginPageHeaderActions(props: Readonly<{ actions: React.ReactNode }>) {
+    const chromeShowsTitle = useNavigationTitleChromeShowsTitle();
+    const routeActions = useClaimedStackHeaderActions();
+    return chromeShowsTitle ? <NavigationHeaderActions primary={null} actions={props.actions} />
+        : <>{routeActions}{props.actions}</>;
 }
 
 function PluginReactNativeSurfaceHost(props: Readonly<{
@@ -1302,7 +1319,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     decision: PluginReactNativeCompatibilityDecision;
     loadPolicy?: PluginReactNativeLoaderPolicyInput;
     cacheKey?: string;
-    load?: () => Promise<PluginReactNativeSurfaceModule>;
+    load?: (signal: AbortSignal) => Promise<PluginReactNativeSurfaceModule>;
     unavailableAction?: SurfaceStateAction;
     hostApi: PluginSurfaceHostApiV1;
     resourceStore?: PluginUiResourceStore;
@@ -1904,7 +1921,7 @@ function resolveHostedWebProjectionMount(params: Readonly<{
 
 type PluginSurfaceRenderGateDecision =
     | Readonly<{ canRender: true }>
-    | Readonly<{ canRender: false; reason: string }>;
+    | Readonly<{ canRender: false; reason: string; state?: 'loading' }>;
 
 function firstDiagnosticOrReason(
     diagnostics: readonly string[],
@@ -1936,6 +1953,9 @@ export function resolvePluginSurfaceDescriptorRenderGate(
         return { canRender: true };
     }
     const availability = readRecord(descriptor.availability);
+    if (availability?.state === 'resolving') {
+        return { canRender: false, reason: 'plugin_execution_origin_pending', state: 'loading' };
+    }
     if (availability?.state !== 'available') {
         return {
             canRender: false,
@@ -2084,6 +2104,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     PluginSurfaceHostDestinationInput | PluginSurfaceHostTargetedInput | PluginSurfaceHostComposerInput | PluginSurfaceHostEphemeralInput
 ) & {
     resourceBrowserTarget?: unknown;
+    contextualExecutionTarget?: PluginExecutionOriginContextualTarget | null;
     machineId?: string | null;
     serverId?: string | null;
     /** Explicit Settings-route daemon target; `null` intentionally disables origin fallback. */
@@ -2113,6 +2134,8 @@ function PluginSurfaceHostMount(props: Readonly<(
     binding?: BoundPluginSurfaceBinding;
     /** EU-5a: the launch input the opener passed for THIS selected placement. */
     launchInput?: PluginUiLaunchInputV1;
+    /** Persisted widget egress choice, intersected with the installed renderer ceiling. */
+    guestNetworkOverride?: UiSurfaceNetworkRequestV1;
     /** Resolver-stamped ephemeral instance identity; absent for legacy singleton mounts. */
     mountInstanceKey?: PluginUiInstanceKeyV1;
     /** Validated current framed-renderer height; the outer placement owns sizing. */
@@ -2237,17 +2260,22 @@ function PluginSurfaceHostMount(props: Readonly<(
     const pluginExecution = usePluginSurfaceExecutionOrigin({
         pluginId: mountedPluginId, projection: props.pluginUiProjection, entry: descriptor,
         enabled: needsMachineExecution,
+        contextualTarget: props.contextualExecutionTarget,
     });
-    const origin = accountUnionMount
+    // Producer snapshots are immutable; preserve their derived origin between
+    // unrelated parent and Availability-only updates.
+    const origin = React.useMemo(() => accountUnionMount
         ? needsMachineExecution ? pluginExecution.selectedSupply : null
-        : descriptor ? readPluginUiContributionOrigin(descriptor) : null;
+        : descriptor ? readPluginUiContributionOrigin(descriptor) : null,
+    [accountUnionMount, descriptor, needsMachineExecution, pluginExecution.selectedSupply]);
     // The same producer-stamped origin backs both unioned and direct machine
     // projections. A mounted action never reconstructs this ref from UI facts.
-    const executionOrigin = targetedBinding?.mount.executionOrigin
+    const executionOrigin = React.useMemo(() => targetedBinding?.mount.executionOrigin
         ?? composerBinding?.catalogEntry.executionOrigin
         ?? ephemeralBinding?.surface.executionOrigin
         ?? origin?.executionOrigin
-        ?? (!accountUnionMount && descriptor ? readPluginUiProjectionEntryExecutionOrigin(descriptor) : undefined);
+        ?? (!accountUnionMount && descriptor ? readPluginUiProjectionEntryExecutionOrigin(descriptor) : undefined),
+    [accountUnionMount, composerBinding, descriptor, ephemeralBinding, origin, targetedBinding]);
     const machineId = (executionOrigin ? getPluginMachineExecutionOriginRef(executionOrigin).machineId : null)
         ?? origin?.machineId
         ?? (accountUnionMount ? null : props.machineId);
@@ -2308,7 +2336,9 @@ function PluginSurfaceHostMount(props: Readonly<(
             && selectedEmbeddedRenderer.availability.state === 'available'
         : origin
             ? origin.phase === 'current' && origin.interactionEnabled === true
-            : accountUnionMount ? false : props.projectionInteractionEnabled;
+            // Machine-free Account reads need no execution-origin selection.
+            // A machine-backed mount with no admitted origin still fails closed.
+            : accountUnionMount && needsMachineExecution ? false : props.projectionInteractionEnabled;
     const daemonInteraction = usePluginSurfaceDaemonInteraction({
         machineId,
         projectionInteractionEnabled,
@@ -3090,12 +3120,36 @@ function PluginSurfaceHostMount(props: Readonly<(
             },
         });
     }, [accountLifetime, baseCreateMountedHostApiHandlers, controllerFacts.sessionId, currentUiContextMountPublisher, entityDragMountKey, entityDragRuntime, mountedPluginId]);
+    const pluginActionApproval = useActionApprovalContinuation({
+        scopeKey: JSON.stringify([accountLifetime?.scope ?? null, mountedSurfaceId, surfaceTargetAuthorityKey, props.mountInstanceKey ?? null]),
+        serverId: accountLifetime?.scope.serverId ?? serverId ?? '',
+        onExecuted: () => {},
+    });
+    const requestPluginActionApproval = pluginActionApproval.requestApproval;
+    // This is a controller-lifetime input: presentation-only binding changes must retain the executor.
+    const defaultPluginActionExecute = React.useMemo(() => {
+        if (controllerBindingWithConnectedAccounts.executeHostAction || !accountLifetime
+            || (serverId && serverId !== accountLifetime.scope.serverId)) return undefined;
+        return scopedHomeActionExecutor(accountLifetime.scope, {
+            onBlockingApprovalPending: ({ artifactId, signal }) => {
+                if (!accountLifetime.isCurrent() || signal?.aborted) return;
+                // The executor keeps effect/result custody; this mounted observer only presents its Artifact.
+                requestPluginActionApproval({ artifactId, scope: accountLifetime.scope,
+                    refreshAfterExecution: false, ...(signal ? { signal } : {}),
+                    onExecuted: async () => 'ignored',
+                });
+            },
+        });
+    }, [accountLifetime, controllerBindingWithConnectedAccounts.executeHostAction, requestPluginActionApproval, serverId]);
     const effectiveControllerBinding = React.useMemo<BoundPluginSurfaceBinding | undefined>(() => {
         if (!baseCreateMountedHostApiHandlers && !currentUiContextMountPublisher && !accountLifetime) {
             return controllerBindingWithConnectedAccounts;
         }
         return Object.freeze({
             ...controllerBindingWithConnectedAccounts,
+            ...(!controllerBindingWithConnectedAccounts?.executeHostAction && defaultPluginActionExecute ? {
+                executeHostAction: defaultPluginActionExecute,
+            } : {}),
             createMountedHostApiHandlers,
         });
     }, [
@@ -3104,6 +3158,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         createMountedHostApiHandlers,
         currentUiContextMountPublisher,
         accountLifetime,
+        defaultPluginActionExecute,
     ]);
     const controller = useBoundPluginSurfaceController({
         facts: controllerFacts,
@@ -3396,7 +3451,28 @@ function PluginSurfaceHostMount(props: Readonly<(
             />
         );
     }, [hasEmbeddedMount, mountedTarget, preparedTargetedSurfaceMounts, renderMountedTargetedSurface, targetedContributions]);
-    const renderGate = selectedEmbeddedRenderer
+    const inlineSlot = props.inlineMount
+        ? resolvePluginUiInlineSurfaceSlotV1(
+            props.inlineMount.role,
+            props.inlineMount.presentation,
+            selectedInlineBinding?.targetKind,
+        )
+        : null;
+    const inlineMountBinding = mountBinding?.kind === 'inline' ? mountBinding : null;
+    const inlinePresentation = inlineSlot?.presentation;
+    // Public mount context projects the admitted binding, not each host render.
+    const surfaceMount = React.useMemo(() => mountBinding?.kind === 'inline'
+        ? inlinePresentation ? createPluginSurfaceInlineMountContext(mountBinding, inlinePresentation) : null
+        : mountBinding?.kind === 'targetedSurface'
+            ? createPluginSurfaceTargetedMountContext(mountBinding)
+            : mountBinding?.kind === 'composer'
+                ? createPluginSurfaceComposerMountContext(mountBinding)
+                : mountBinding?.kind === 'ephemeral'
+                    ? createPluginSurfaceEphemeralMountContext()
+                    : mountBinding?.kind === 'destination'
+                        ? createPluginSurfaceDestinationMountContext(mountBinding)
+                        : null, [inlinePresentation, mountBinding]);
+    const renderGate: PluginSurfaceRenderGateDecision = selectedEmbeddedRenderer
         ? selectedEmbeddedRenderer.availability.state === 'available'
             ? { canRender: true as const }
             : { canRender: false as const, reason: selectedEmbeddedRenderer.availability.reason }
@@ -3429,7 +3505,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         );
     };
     if (!renderGate.canRender) {
-        return renderUnavailable(renderGate.reason);
+        return renderUnavailable(renderGate.reason, renderGate.state);
     }
     if (!mountBinding) {
         return renderUnavailable(props.inlineMount
@@ -3460,14 +3536,6 @@ function PluginSurfaceHostMount(props: Readonly<(
         installedMethods: controller.admissionMethods,
         canPushToSurface: true,
     });
-    const inlineSlot = props.inlineMount
-        ? resolvePluginUiInlineSurfaceSlotV1(
-            props.inlineMount.role,
-            props.inlineMount.presentation,
-            selectedInlineBinding?.targetKind,
-        )
-        : null;
-    const inlineMountBinding = mountBinding.kind === 'inline' ? mountBinding : null;
     if (inlineMountBinding && (
         !props.inlineMount
         || !inlineSlot
@@ -3481,17 +3549,6 @@ function PluginSurfaceHostMount(props: Readonly<(
     if (props.inlineMount && !inlineMountBinding) {
         return renderUnavailable('inline_surface_binding_unavailable');
     }
-    const surfaceMount = inlineMountBinding && inlineSlot
-        ? createPluginSurfaceInlineMountContext(inlineMountBinding, inlineSlot.presentation)
-        : mountBinding.kind === 'targetedSurface'
-        ? createPluginSurfaceTargetedMountContext(mountBinding)
-        : mountBinding.kind === 'composer'
-            ? createPluginSurfaceComposerMountContext(mountBinding)
-            : mountBinding.kind === 'ephemeral'
-                ? createPluginSurfaceEphemeralMountContext()
-            : mountBinding.kind === 'destination'
-                ? createPluginSurfaceDestinationMountContext(mountBinding)
-                : null;
     if (!surfaceMount) {
         return renderUnavailable('inline_surface_binding_unavailable');
     }
@@ -3725,6 +3782,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 ? {
                     inlineDocument,
                     inlineDocumentNetworkOrigins,
+                    inlineDocumentNetwork,
                     projectedContribution: null,
                     pluginUiProjection: mountedPluginUiProjection,
                 }
@@ -3806,11 +3864,17 @@ function PluginSurfaceHostMount(props: Readonly<(
         // capability ceiling is deliberately not applied on this path.
         const capabilities = resolvePluginUiHostedHtmlCapabilityRequestV1(renderer);
         if (!capabilities) return renderUnavailable('hosted_html_source_invalid');
+        const override = props.guestNetworkOverride === undefined ? null : UiSurfaceNetworkRequestV1Schema.safeParse(props.guestNetworkOverride);
+        if (override && !override.success) return renderUnavailable('hosted_html_source_invalid');
+        const requestedNetwork = override?.success ? normalizeUiSurfaceCapabilityRequestV1(override.data) : capabilities;
+        if (!requestedNetwork) return renderUnavailable('hosted_html_source_invalid');
+        const network = intersectUiSurfaceNetworkPoliciesV1(requestedNetwork, capabilities);
         return renderWithTargetedSurfaceBoundary(renderHostedWebPane(
             mountedContributionId,
             null,
             source.data,
-            capabilities.networkOrigins,
+            network.networkOrigins,
+            network.network === 'origins' ? undefined : network.network,
         ));
     };
 
@@ -4079,7 +4143,8 @@ function PluginSurfaceHostMount(props: Readonly<(
             machineId={machineId ?? undefined} serverId={serverId} sessionId={props.sessionId}
             accountLifetime={accountLifetime ?? undefined} isCurrent={controller.isCurrent}
             contextKey={surfaceTargetAuthorityKey ?? undefined}>
-        {needsMachineExecution ? <View style={{ paddingVertical: 8, alignItems: 'flex-start' }}>
+            {needsMachineExecution && props.descriptor?.contributionKind === 'surfacePlacement'
+                && (props.descriptor.binding.kind !== 'destination' || props.descriptor.binding.container !== 'appPage') ? <View style={{ paddingVertical: 8, alignItems: 'flex-start' }}>
             <PluginMachineExecutionOriginSelectorView selection={pluginExecution.selection}
                 presentation="chip" groupTitle={t('settingsPlugins.executionOriginTitle')}
                 testIDPrefix="plugin-surface-execution" />
@@ -4093,6 +4158,11 @@ function PluginSurfaceHostMount(props: Readonly<(
                 reactNative: renderReactNative,
             }}
         />
+        {pluginActionApproval.approvalPending && pluginActionApproval.approvalId ? (
+            <ActionApprovalPendingNotice testID="plugin-surface-approval-pending"
+                message={t('approvals.status.open')} summary={pluginActionApproval.approvalSummary}
+                onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(pluginActionApproval.approvalId!)}?serverId=${encodeURIComponent(accountLifetime?.scope.serverId ?? serverId ?? '')}`)} />
+        ) : null}
         </InputTypePickerHostProvider>
     );
 }
@@ -4100,6 +4170,7 @@ function PluginSurfaceHostMount(props: Readonly<(
 export function PluginSurfacePlacementHost(props: Readonly<{
     placement: PluginUiPhysicalSurfacePlacementProjection;
     resourceBrowserTarget?: unknown;
+    contextualExecutionTarget?: PluginExecutionOriginContextualTarget | null;
     machineId?: string | null;
     serverId?: string | null;
     sessionId?: string | null;
@@ -4114,6 +4185,7 @@ export function PluginSurfacePlacementHost(props: Readonly<{
     binding?: BoundPluginSurfaceBinding;
     /** EU-5a: the launch input the opener passed for THIS selected placement. */
     launchInput?: PluginUiLaunchInputV1;
+    guestNetworkOverride?: UiSurfaceNetworkRequestV1;
     /** Resolver-stamped ephemeral instance identity; absent for legacy singleton mounts. */
     mountInstanceKey?: PluginUiInstanceKeyV1;
     /** Validated current framed-renderer height; the outer placement owns sizing. */
@@ -4136,6 +4208,7 @@ export function PluginSurfacePlacementHost(props: Readonly<{
             descriptor={props.placement}
             renderer={props.placement.renderer}
             resourceBrowserTarget={props.resourceBrowserTarget}
+            contextualExecutionTarget={props.contextualExecutionTarget}
             machineId={props.machineId}
             serverId={props.serverId}
             sessionId={props.sessionId}
@@ -4149,6 +4222,7 @@ export function PluginSurfacePlacementHost(props: Readonly<{
             nowMs={props.nowMs}
             binding={props.binding}
             launchInput={props.launchInput}
+            guestNetworkOverride={props.guestNetworkOverride}
             mountInstanceKey={props.mountInstanceKey}
             {...(props.onIntrinsicHeightChange
                 ? { onIntrinsicHeightChange: props.onIntrinsicHeightChange }

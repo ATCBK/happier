@@ -2,6 +2,7 @@ import * as React from 'react';
 import { AccessibilityInfo, StyleSheet, TextInput, View } from 'react-native';
 
 import { t } from '@/text';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 
 type PluginSurfaceInteractionBoundaryProps = Readonly<{
     children: React.ReactNode;
@@ -131,8 +132,12 @@ export function PluginSurfaceInteractionBoundary(
                     accessibilityLabel={t('pluginSurfaces.offlineSnapshot.accessibilityLabel', {
                         title: props.snapshotTitle,
                     })}
-                    style={styles.accessibilitySummary}
-                />
+                >
+                    <SurfaceFreshnessLine
+                        testID={`plugin-surface-offline-summary:${props.surfaceId}-freshness`}
+                        reason={t('pluginSurfaces.state.offline.reason')}
+                    />
+                </View>
             ) : null}
         </View>
     );
@@ -170,11 +175,5 @@ const styles = StyleSheet.create({
         width: 0,
         height: 0,
         opacity: 0,
-    },
-    accessibilitySummary: {
-        position: 'absolute',
-        width: 1,
-        height: 1,
-        overflow: 'hidden',
     },
 });

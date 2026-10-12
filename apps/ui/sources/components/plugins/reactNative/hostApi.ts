@@ -61,6 +61,7 @@ import {
     type PluginUiWatchSessionRequestV1,
     type PluginUiSurfaceContextV1,
 } from '@happier-dev/protocol/plugins/ui';
+import { randomUUID } from '@/platform/randomUUID';
 import {
     OpenableContentReadResultV1Schema,
     OpenableContentStatResultV1Schema,
@@ -79,12 +80,7 @@ import {
     type PluginCancellationOptions,
     type PluginReference,
 } from '@happier-dev/plugin-sdk';
-import {
-    decodePluginUiClipboardReadResult,
-    decodePluginUiConfirmResult,
-    decodePluginUiResourceContent,
-    encodePluginUiDiagnostic,
-} from '@happier-dev/plugin-sdk/host/ui';
+import { loadPluginUiHostSupport } from '../hostApi/loadPluginUiHostSupport';
 
 import { resolveNegotiatedPluginSurfaceHostApiMethods } from '../hostApi/negotiatedMethods';
 import { pluginSurfaceSettlementSurvivesRetirement } from '../hostApi/outwardEffectSettlement';
@@ -205,21 +201,17 @@ function readResourceWatchAdmittedDigest(
 
 function createPluginReactNativeHostRequestTransport(params: Readonly<{
     requestSurface: PluginUiSurfaceContextV1;
-    requestIdPrefix: string;
     handleRequest: PluginReactNativeHostApiRequestHandler;
     isRequestSurfaceCurrent?: (surface: PluginUiSurfaceContextV1) => boolean;
-    createRequestId?: () => string;
 }>): PluginReactNativeHostRequestTransport {
     const resourceListeners = new Map<string, (event: PluginUiResourceSubscriptionEventV1) => void>();
     const settledResourceSubscriptionIds = new Set<string>();
     const composerListeners = new Map<string, (snapshot: ComposerSnapshotV1) => void>();
     const settledComposerSubscriptionIds = new Set<string>();
     let disposed = false;
-    let sequence = 0;
-    const createRequestId = params.createRequestId ?? (() => {
-        sequence += 1;
-        return `${params.requestIdPrefix}:${sequence}`;
-    });
+    // Mount authority stays in the envelope's surface/currentness owner. Root
+    // Actions reuse this opaque correlation field with their bounded budget.
+    const createRequestId = randomUUID;
     const subscriptions = createPluginUiHostSubscriptionRegistry({
         deliverSubscriptionEvent: (event) => {
             resourceListeners.get(event.subscriptionId)?.(event);
@@ -711,7 +703,8 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
     }
 }
 
-function readCanonicalResource(value: PluginUiJsonValueV1 | undefined): ResourceContent {
+async function readCanonicalResource(value: PluginUiJsonValueV1 | undefined): Promise<ResourceContent> {
+    const { decodePluginUiResourceContent } = await loadPluginUiHostSupport();
     const decoded = decodePluginUiResourceContent(
         value,
         (bytesBase64) => decodeBase64(bytesBase64, 'base64'),
@@ -841,7 +834,6 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
     const isCurrent = params.isCurrent;
     const transport = createPluginReactNativeHostRequestTransport({
         requestSurface: params.requestSurface,
-        requestIdPrefix: params.requestIdPrefix,
         handleRequest: params.handleRequest,
         ...(isCurrent ? { isRequestSurfaceCurrent: () => isCurrent() } : {}),
     });
@@ -1116,7 +1108,9 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             const result = await transport.request('readResource', {
                 resource: canonicalResourceReferencePayload(resource),
             }, options?.signal ? { signal: options.signal } : undefined);
-            return readCanonicalResource(result);
+            const resourceContent = await readCanonicalResource(result);
+            assertActive(options?.signal);
+            return resourceContent;
         },
         statOpenableContent: async (ref, options) => {
             assertActive(options?.signal);
@@ -1438,13 +1432,18 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             // mid-flight withdrawal as the typed failure — never a boolean the
             // plugin would read as the user's decision — while the signal
             // beside the request lets the mount dismiss the open dialog.
+            const { decodePluginUiConfirmResult } = await loadPluginUiHostSupport();
+            assertActive(options?.signal);
             const decoded = decodePluginUiConfirmResult(result);
             if (!decoded.ok) throwHostApiError('invalid_payload', [decoded.diagnostic]);
             return decoded.value;
         },
         diagnostic: (data) => {
             if (!admitFireAndForget('diagnostic')) return;
-            void transport.request('diagnostic', encodePluginUiDiagnostic(data)).catch(() => undefined);
+            void loadPluginUiHostSupport().then(({ encodePluginUiDiagnostic }) => {
+                if (!admitFireAndForget('diagnostic')) return;
+                return transport.request('diagnostic', encodePluginUiDiagnostic(data));
+            }).catch(() => undefined);
         },
         readClipboard: async (options) => {
             assertActive(options?.signal);
@@ -1454,6 +1453,8 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 undefined,
                 options?.signal ? { signal: options.signal } : undefined,
             );
+            const { decodePluginUiClipboardReadResult } = await loadPluginUiHostSupport();
+            assertActive(options?.signal);
             const decoded = decodePluginUiClipboardReadResult(result);
             if (!decoded.ok) throwHostApiError('invalid_payload', [decoded.diagnostic]);
             return decoded.value;

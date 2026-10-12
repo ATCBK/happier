@@ -121,14 +121,13 @@ describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
         const PLUGIN_UI_HOST_TYPOGRAPHY = readPluginUiHostTypography();
         // Headings over row titles over their own context line over metadata:
         // a row title smaller than its subtitle is the inversion this guards.
-        expect(PLUGIN_UI_HOST_TYPOGRAPHY.heading.fontSize).toBeGreaterThan(typography.title.fontSize);
+        expect(PLUGIN_UI_HOST_TYPOGRAPHY.title.fontSize).toBeGreaterThan(typography.title.fontSize);
         expect(typography.title.fontSize).toBeGreaterThan(typography.label.fontSize);
         expect(typography.label.fontSize).toBeGreaterThan(typography.body.fontSize);
         expect(typography.body.fontSize).toBeGreaterThan(typography.caption.fontSize);
-        for (const role of ['title', 'label', 'body', 'caption'] as const) {
-            expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].fontSize, `${role} size`).toBe(typography[role].fontSize);
-            expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].lineHeight, `${role} line height`).toBe(typography[role].lineHeight);
+        for (const [snapshot, role] of [['title', 'heading'], ['label', 'label'], ['body', 'body'], ['caption', 'micro']] as const) {
+            expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].fontSize, `${role} size`).toBe(typography[snapshot].fontSize);
+            expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].lineHeight, `${role} line height`).toBe(typography[snapshot].lineHeight);
         }
-        expect(PLUGIN_UI_HOST_TYPOGRAPHY.caption.fontVariant).toEqual(['tabular-nums']);
     });
 });

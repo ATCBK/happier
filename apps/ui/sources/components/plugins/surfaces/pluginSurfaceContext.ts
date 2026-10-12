@@ -290,20 +290,23 @@ const ACCOUNT_MODE_LOADING = Object.freeze({ status: 'loading' as const });
 
 type ResolvedAccountEncryptionMode = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime;
-    credentials: AuthCredentials;
+    credentials: AuthCredentials | null | undefined;
+    resolveMode: ((signal: AbortSignal) => Promise<SurfaceContext['accountEncryptionMode']>) | undefined;
     cacheRevision: number;
     result: Exclude<PluginSurfaceAccountEncryptionModeReadiness, { status: 'loading' }>;
 }>;
 
 /**
- * Resolve the public disclosure through the incumbent Account-mode cache while
+ * Resolve public disclosure through the canonical Account-mode reader while
  * keeping request currentness local to this physical surface mount. This state
- * is not a second cache: a change is immediately withheld and only the cache
- * owner supplies the next value.
+ * is not a second cache: invalidation immediately withholds the value, and an
+ * exact-Home reader uses its captured transport instead of the focused Home.
  */
 export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime | null;
-    credentials: AuthCredentials | null | undefined;
+    credentials?: AuthCredentials | null;
+    /** An exact-Home reader uses the same disclosure lifetime, never the focused Home's transport. */
+    resolveMode?: (signal: AbortSignal) => Promise<SurfaceContext['accountEncryptionMode']>;
     /** Gates disclosure through the incumbent physical mount. */
     isCurrent: () => boolean;
 }>): PluginSurfaceAccountEncryptionModeReadiness {
@@ -320,11 +323,13 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
     React.useEffect(() => {
         const accountLifetime = input.accountLifetime;
         const credentials = input.credentials;
+        const resolveMode = input.resolveMode;
         const requestRevision = requestRevisionRef.current + 1;
         requestRevisionRef.current = requestRevision;
         setResolved((previous) => (
             previous?.accountLifetime === accountLifetime
             && previous.credentials === credentials
+            && previous.resolveMode === resolveMode
             && previous.cacheRevision === cacheRevision
                 ? previous
                 : null
@@ -332,21 +337,24 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
 
         if (
             !accountLifetime
-            || !credentials
+            || (!credentials && !resolveMode)
             || !accountLifetime.isCurrent()
             || !isCurrentRef.current()
         ) {
             return;
         }
 
+        const readAbort = new AbortController();
         const retirement = accountLifetime.onRetire(() => {
+            readAbort.abort();
             requestRevisionRef.current += 1;
             setResolved((previous) => (
                 previous?.accountLifetime === accountLifetime ? null : previous
             ));
         });
-        void fetchAccountEncryptionMode(credentials).then(
-            ({ mode }) => {
+        const modeRead = resolveMode ? resolveMode(readAbort.signal) : fetchAccountEncryptionMode(credentials!).then(({ mode }) => mode);
+        void modeRead.then(
+            (mode) => {
                 if (
                     requestRevisionRef.current !== requestRevision
                     || !accountLifetime.isCurrent()
@@ -354,7 +362,7 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
                 ) {
                     return;
                 }
-                setResolved({ accountLifetime, credentials, cacheRevision, result: { status: 'ready', mode } });
+                setResolved({ accountLifetime, credentials, resolveMode, cacheRevision, result: { status: 'ready', mode } });
             },
             () => {
                 if (
@@ -362,19 +370,21 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
                     && accountLifetime.isCurrent()
                     && isCurrentRef.current()
                 ) {
-                    setResolved({ accountLifetime, credentials, cacheRevision, result: { status: 'unavailable' } });
+                    setResolved({ accountLifetime, credentials, resolveMode, cacheRevision, result: { status: 'unavailable' } });
                 }
             },
         );
         return () => {
+            readAbort.abort();
             requestRevisionRef.current += 1;
             retirement.dispose();
         };
-    }, [cacheRevision, input.accountLifetime, input.credentials, input.isCurrent]);
+    }, [cacheRevision, input.accountLifetime, input.credentials, input.resolveMode, input.isCurrent]);
 
     return resolved
         && resolved.accountLifetime === input.accountLifetime
         && resolved.credentials === input.credentials
+        && resolved.resolveMode === input.resolveMode
         && resolved.cacheRevision === cacheRevision
         && input.accountLifetime?.isCurrent() === true
         && isCurrentRef.current()

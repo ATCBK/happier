@@ -29,7 +29,7 @@ const EXPECTED_PRIVATE_ICON_NAMES: Readonly<Record<string, IconName>> = Object.f
     search: 'magnifying-glass',
     'change-open': 'git-pull-request',
     'change-complete': 'git-merge',
-    issue: 'target',
+    issue: 'radio-button',
     bug: 'bug',
     pin: 'push-pin',
     conversations: 'chats-circle',

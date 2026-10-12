@@ -429,6 +429,10 @@ describe('HostedArtifactFrame native adapter', () => {
             await Promise.resolve();
         });
 
+        await vi.waitFor(async () => {
+            await act(async () => { await Promise.resolve(); });
+            expect(nativeViewMock.mock.calls.at(-1)?.[0]?.inlineDocumentHandleToken).toBeTruthy();
+        });
         const token = `hpa_${'11111111111141118111111111111111'}${'22222222222242228222222222222222'}`;
         expect(nativeModuleMock.registerInlineDocument).toHaveBeenCalledExactlyOnceWith({
             token,
@@ -436,7 +440,7 @@ describe('HostedArtifactFrame native adapter', () => {
             contentSecurityPolicy: 'sandbox allow-scripts',
         });
         const registeredDocument = nativeModuleMock.registerInlineDocument.mock.calls[0]?.[0]?.html as string;
-        expect(registeredDocument).toContain("connect-src https://api.example.test");
+        expect(registeredDocument).toContain('connect-src data: https://api.example.test');
         expect(registeredDocument).toContain('"frameOrigin":"null"');
         const nativeProps = nativeViewMock.mock.calls.at(-1)?.[0];
         expect(nativeProps).toMatchObject({

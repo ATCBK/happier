@@ -5,25 +5,51 @@ import { act } from 'react-test-renderer';
 import { normalizePluginUiDestinationBindingV1, PluginUiDestinationBindingV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection, createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
 import type { PluginProjectedActionV2 } from '@happier-dev/protocol';
-import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readPluginUiContributionSupplies, unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from './pluginSurfaceExecutionOrigin';
 import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
+import { MainAppTabStateProvider } from '@/components/navigation/mobile/chrome/MainAppTabStateProvider';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { CurrentUiContextProvider, useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { registerCurrentUiContextActionPort } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
+import { createPluginExecutionOriginActionDeps } from '@/sync/ops/actions/pluginExecutionOriginActionDeps';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ pathname: '/session/context', segments: ['(app)', 'session', '[id]'] }).module;
+});
+
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
+});
 
 describe('plugin surface execution requirement', () => {
     afterEach(async () => { await standardCleanup(); });
 
     it('binds through real Account and machine owners and rejects a replaced occurrence before rerender', async () => {
-        installDisconnectedServerSocketBoundary();
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://surface-source.example.test',
-            serverIdentityId: 'srv_surface_source', accountId: 'account-surface-source' });
+            serverIdentityId: 'srv_surface_source', accountId: 'account-surface-source', credentials: { token: `e30.${Buffer.from(JSON.stringify({
+                sub: 'account-surface-source', provenance: { v: 1, kind: 'account', authority: 'present_user' }, tokenEpoch: 0,
+            })).toString('base64url')}.signature` } });
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Account restoration did not establish a lifetime');
         const scope = lifetime.scope;
+        // Restore the real Account before freezing its clock, as the Home testkit requires.
+        // A cold Action import must not age this admitted Machine fixture into an offline one.
+        const admittedAtMs = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(admittedAtMs);
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const credentials = (await TokenStorage.getCredentialsForServerUrl(connection.home.serverUrl))!;
         const pluginId = 'acme.surface-source';
         const machineId = 'machine-source';
         const entryId = `surfacePlacement:${pluginId}:home`;
@@ -54,7 +80,7 @@ describe('plugin surface execution requirement', () => {
         const machine = createMachineFixture({ id: machineId, active: true, activeAt: Date.now() });
         storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true,
             machines: { [machineId]: machine }, machineListByServerId: { [connection.home.id]: [machine] },
-            machineListStatusByServerId: { [connection.home.id]: 'idle' },
+            machineListStatusByServerId: { [connection.home.id]: 'idle', srv_surface_source: 'idle' },
             settings: { ...storage.getState().settings, machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } });
         function Wrapper({ children }: React.PropsWithChildren) {
             return React.createElement(AppShellPluginUiProjectionValueProvider, { value: {
@@ -63,12 +89,130 @@ describe('plugin surface execution requirement', () => {
                 reloadConnectedAccountProjection() {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {},
             }, children });
         }
+        function ContextPort() {
+            const reader = useOptionalCurrentUiContextReader();
+            React.useLayoutEffect(() => reader ? registerCurrentUiContextActionPort(() => reader) : undefined, [reader]);
+            return null;
+        }
+        function ContextualWrapper({ children }: React.PropsWithChildren) {
+            return React.createElement(InjectedAuthProvider, { credentials }, React.createElement(Wrapper, null, React.createElement(MainAppTabStateProvider, null,
+                React.createElement(AppPaneProvider, null, React.createElement(CurrentUiContextProvider, null,
+                    React.createElement(ContextPort), children)))));
+        }
         try {
+            let pageEntryForRender = initialProjection.surfacePlacementsById[entryId];
             const hook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: initialProjection,
-                entry: initialProjection.surfacePlacementsById[entryId], enabled: true }), { wrapper: Wrapper });
+                entry: pageEntryForRender, enabled: true }), { wrapper: Wrapper });
+            // The cold HTTP fixture finishes restoration with no machine
+            // inventory. Publish this test's live observation after that turn.
+            await act(async () => storage.setState({ machines: { [machineId]: machine },
+                machineListByServerId: { [connection.home.id]: [machine], srv_surface_source: [machine] },
+                machineListStatusByServerId: { [connection.home.id]: 'idle', srv_surface_source: 'idle' } }));
             const mounted = hook.getCurrent();
             expect(mounted.selectedSupply, JSON.stringify(mounted.selection.state)).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1 });
             expect(mounted.isExecutionOriginCurrent()).toBe(true);
+            // Route chrome can rerender while a picker opens. An equivalent
+            // page snapshot is not a new plugin selection or resolving state.
+            pageEntryForRender = { ...pageEntryForRender! };
+            await hook.rerender();
+            expect(hook.getCurrent().selection.state).toBe(mounted.selection.state);
+            expect(hook.getCurrent().selection.selectedOrigin).toBe(mounted.selection.selectedOrigin);
+            // A presence flap withdraws executable authority, not the exact
+            // producer that already supplied this mounted page.
+            const offlineMachine = { ...machine, active: false, activeAt: 0 };
+            await act(async () => { storage.setState({ machines: { [machineId]: offlineMachine },
+                machineListByServerId: { [connection.home.id]: [offlineMachine] } }); });
+            await hook.rerender();
+            expect(hook.getCurrent().selection.canExecute).toBe(false);
+            expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(false);
+            expect(hook.getCurrent().selectedSupply).toBe(mounted.selectedSupply);
+            await act(async () => { storage.setState({ machines: { [machineId]: machine },
+                machineListByServerId: { [connection.home.id]: [machine] } }); });
+            await hook.rerender();
+            expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(true);
+            // Origin selection belongs to the plugin, not the currently open
+            // page. Another current installation may expose a different page.
+            const otherMachineId = 'machine-other-source';
+            const otherMachine = createMachineFixture({ id: otherMachineId, active: true, activeAt: Date.now() });
+            const otherEntryId = `surfacePlacement:${pluginId}:other`;
+            const otherEntry = { ...initialProjection.surfacePlacementsById[entryId]!, id: otherEntryId,
+                hostOrigin: null, hostSupplies: readPluginUiContributionSupplies(initialProjection.surfacePlacementsById[entryId]).map(supply => ({
+                    ...supply, machineId: otherMachineId, executionTargetDefault: false,
+                    executionOrigin: { serverIdentityId: 'srv_surface_source', sourceRef: {
+                        machineId: otherMachineId, pluginId, sourceCustody: { kind: 'development' as const, registeredRootId: 'other-root' },
+                    } },
+                })) };
+            const pageEntry = { ...initialProjection.surfacePlacementsById[entryId]!, hostSupplies:
+                readPluginUiContributionSupplies(initialProjection.surfacePlacementsById[entryId]).map(supply => ({ ...supply, executionTargetDefault: false })) };
+            const multiProjection = { ...initialProjection, surfacePlacementsById: { [entryId]: pageEntry, [otherEntryId]: otherEntry } };
+            await act(async () => { storage.setState({ machines: { [machineId]: machine, [otherMachineId]: otherMachine },
+                machineListByServerId: { [connection.home.id]: [machine, otherMachine] } }); });
+            committedProjection = multiProjection;
+            const multiHook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: multiProjection,
+                entry: pageEntry, enabled: true }), { wrapper: Wrapper });
+            expect(multiHook.getCurrent().selection.state.kind).toBe('selectionRequired');
+            expect(multiHook.getCurrent().selectedSupply).toBeNull();
+            await multiHook.unmount();
+            const savedOtherOrigin = readPluginUiContributionSupplies(otherEntry)[0]?.executionOrigin;
+            if (!savedOtherOrigin || !('sourceRef' in savedOtherOrigin)) throw new Error('Other source must have an exact origin');
+            const savedPreferences = { v: 1 as const, pluginExecutionOriginsByPluginId: { [pluginId]: savedOtherOrigin } };
+            await act(async () => storage.setState({ settingsVersion: 1, settings: { ...storage.getState().settings,
+                machineAdministrationSelectionsV1: savedPreferences } }));
+            let contextualMachineId = machineId;
+            const contextual = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: multiProjection,
+                entry: pageEntry, enabled: true, contextualTarget: { serverIdentityId: 'srv_surface_source', machineId: contextualMachineId } }), { wrapper: ContextualWrapper });
+            expect(contextual.getCurrent().selectedSupply?.machineId).toBe(machineId);
+            expect(contextual.getCurrent().isExecutionOriginCurrent()).toBe(true);
+            const actionAccount = await captureLazyActionAccountContext(connection.home.id);
+            const owner = createPluginExecutionOriginActionDeps(actionAccount).pluginExecutionOriginAction!;
+            const executor = createActionExecutor({ pluginExecutionOriginAction: owner });
+            const invoke = async (actionId: Parameters<typeof owner>[0]['actionId'], input: unknown) => {
+                const result = await executor.execute(actionId, input, { surface: 'agent', authority: 'account_automation' });
+                expect(result.ok).toBe(true);
+                return result.ok ? result.result : null;
+            };
+            const inventory = await invoke('plugins.execution_origin.list', { pluginId, contextual: true });
+            expect(inventory).toMatchObject({ status: 'available', contextualTargets: [{ commandId: expect.any(String) }] });
+            const target = (inventory as { contextualTargets: readonly { commandId: string }[] }).contextualTargets[0]!;
+            const contextualTarget = { commandId: target.commandId };
+            expect(await invoke('plugins.execution_origin.list', { pluginId, contextualTarget }))
+                .toMatchObject({ status: 'available', storedOrigin: null, selectedOrigin: readPluginUiContributionSupplies(pageEntry)[0]?.executionOrigin });
+            await act(async () => { expect(await invoke('plugins.execution_origin.set', { pluginId, contextualTarget, origin: savedOtherOrigin }))
+                .toEqual({ status: 'applied' }); });
+            expect(contextual.getCurrent().selection.resolveExecutionOrigin()?.machineTarget.target.machineId,
+                JSON.stringify({ state: contextual.getCurrent().selection.state, canExecute: contextual.getCurrent().selection.canExecute,
+                    lifetimeCurrent: lifetime.isCurrent(), scope, settingsScope: storage.getState().settingsScope,
+                    machines: storage.getState().machines })).toBe(otherMachineId);
+            expect(storage.getState().settings.machineAdministrationSelectionsV1).toBe(savedPreferences);
+            expect(await invoke('plugins.execution_origin.set', { pluginId, contextualTarget,
+                origin: { ...savedOtherOrigin, sourceRef: { ...savedOtherOrigin.sourceRef, machineId: 'absent' } } })).toEqual({ status: 'unavailable' });
+            await act(async () => { expect(await invoke('plugins.execution_origin.clear', { pluginId, contextualTarget })).toEqual({ status: 'applied' }); });
+            expect(contextual.getCurrent().selectedSupply?.machineId).toBe(machineId);
+            await act(async () => { storage.setState({ machines: { [machineId]: machine, [otherMachineId]: { ...otherMachine, active: false, activeAt: 0 } },
+                machineListByServerId: { [connection.home.id]: [machine, { ...otherMachine, active: false, activeAt: 0 }] } }); });
+            expect(await invoke('plugins.execution_origin.set', { pluginId, contextualTarget, origin: savedOtherOrigin })).toEqual({ status: 'unavailable' });
+            await act(async () => { storage.setState({ machines: { [machineId]: machine, [otherMachineId]: otherMachine },
+                machineListByServerId: { [connection.home.id]: [machine, otherMachine] } }); });
+            await act(async () => { expect(await contextual.getCurrent().selection.selectOrigin(savedOtherOrigin)).toMatchObject({ status: 'applied' }); });
+            expect(contextual.getCurrent().selection.resolveExecutionOrigin()?.machineTarget.target.machineId).toBe(otherMachineId);
+            expect(storage.getState().settings.machineAdministrationSelectionsV1).toBe(savedPreferences);
+            await act(async () => { await contextual.getCurrent().selection.clearOrigin(); });
+            expect(contextual.getCurrent().selectedSupply?.machineId).toBe(machineId);
+            const stalePicker = contextual.getCurrent().selection.selectOrigin;
+            contextualMachineId = otherMachineId;
+            await contextual.rerender();
+            expect(await invoke('plugins.execution_origin.clear', { pluginId, contextualTarget })).toEqual({ status: 'unavailable' });
+            expect(await stalePicker(savedOtherOrigin)).toEqual({ status: 'unavailable' });
+            await act(async () => { storage.setState({ settingsScope: { ...scope, accountId: 'other-account' } }); });
+            expect(await invoke('plugins.execution_origin.list', { pluginId, contextual: true })).toEqual({ status: 'unavailable' });
+            await act(async () => { storage.setState({ settingsScope: scope }); });
+            await contextual.unmount();
+            expect(await invoke('plugins.execution_origin.set', { pluginId, contextualTarget, origin: savedOtherOrigin })).toEqual({ status: 'unavailable' });
+            actionAccount.dispose();
+            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
+                machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } }));
+            committedProjection = initialProjection;
+            await hook.rerender();
             const supply = mounted.selectedSupply;
             if (!supply?.executionOrigin) throw new Error('Selected source supply must retain its exact origin');
             const action = { id: 'refresh', pluginId, occurrenceId: 'occurrence-a', title: 'Refresh', scopes: ['session'],

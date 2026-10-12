@@ -28,6 +28,7 @@ import {
     createBoundPluginSurfaceController,
     useBoundPluginSurfaceController,
     usePluginSurfaceDaemonInteraction,
+    type BoundPluginSurfaceBinding,
 } from './boundPluginSurfaceController';
 import type { PluginSurfaceResourceReadTransport } from './pluginSurfaceResourceRead';
 import type { PluginSurfaceResourceWatchTransport } from './pluginSurfaceResourceWatch';
@@ -544,6 +545,27 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(publications[1]?.dispose).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps the facade while interaction and the current Action resolver change, and refuses withdrawn Actions', async () => {
+        const execute = vi.fn<NonNullable<BoundPluginSurfaceBinding['executeContributedAction']>>();
+        const hook = await renderHook((input: Readonly<{ enabled: boolean; available: boolean }>) => (
+            useBoundPluginSurfaceController({
+                facts: { ...FACTS, interactionEnabled: input.enabled, daemonInteractionEnabled: false,
+                    resolveContributedAction: input.available ? resolveClientTargetAction : resolveUnavailableClientTargetAction },
+                binding: { executeContributedAction: execute },
+            })
+        ), { initialProps: { enabled: true, available: true } });
+        const first = hook.getCurrent();
+        await hook.rerender({ enabled: false, available: true });
+        expect(hook.getCurrent()).toBe(first);
+        expect(await first.hostApi.handleRequest(request('executeAction', { action: 'refresh-index', input: {} })))
+            .toMatchObject({ code: 'unavailable' });
+        await hook.rerender({ enabled: true, available: false });
+        expect(hook.getCurrent()).toBe(first);
+        expect(await first.hostApi.handleRequest(request('executeAction', { action: 'refresh-index', input: {} })))
+            .toEqual({ code: 'unavailable', diagnostics: ['plugin_surface_action_projection_unavailable'] });
+        expect(execute).not.toHaveBeenCalled();
+    });
+
     it('replaces and retires the controller when its exact Session identity changes', async () => {
         const hook = await renderHook(
             (sessionId: string) => useBoundPluginSurfaceController({
@@ -584,6 +606,18 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
     });
 
     it('keeps one controller for equivalent daemon target snapshots and retires it for semantic projection or target-generation replacement', async () => {
+        let projectionTraversals = 0;
+        const pluginUiProjection = Object.freeze({
+            ...EMPTY_PLUGIN_UI_PROJECTION,
+            // Observe real materialization of an immutable public input, not
+            // the serializer implementation or an incidental invocation count.
+            unknownEntriesById: new Proxy(EMPTY_PLUGIN_UI_PROJECTION.unknownEntriesById, {
+                ownKeys(target) {
+                    projectionTraversals += 1;
+                    return Reflect.ownKeys(target);
+                },
+            }),
+        });
         const daemonFactsFor = (input: Readonly<{
             targetGeneration: string;
             actionTitle: string;
@@ -668,7 +702,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                     editableSettingsGroups: [],
                 },
             } satisfies Readonly<Record<string, PluginProjectionEntry>>;
-            return { targetedContributions, pluginProjectionById };
+            return { targetedContributions, pluginProjectionById, pluginUiProjection };
         };
         const initialDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
@@ -684,6 +718,16 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         const first = hook.getCurrent();
         const firstRetirement = vi.fn();
         first.onRetire(firstRetirement);
+
+        const initialTraversals = projectionTraversals;
+        expect(initialTraversals).toBe(0);
+        const unchanged = await hook.rerender(initialDaemonFacts);
+        // Settled parent refreshes must not repeatedly walk an unchanged
+        // projection, and must preserve its mounted interaction lifetime.
+        expect(projectionTraversals).toBe(initialTraversals);
+        expect(unchanged).toBe(first);
+        expect(first.isCurrent()).toBe(true);
+        expect(firstRetirement).not.toHaveBeenCalled();
 
         const equivalentDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
@@ -701,34 +745,65 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(first.isCurrent()).toBe(true);
         expect(firstRetirement).not.toHaveBeenCalled();
 
-        const unrelatedProjectionRefresh = await hook.rerender(daemonFactsFor({
+        const unrelatedDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
             actionTitle: 'Configure browser',
             unrelatedTitle: 'Unrelated revised',
-        }));
+        });
+        const unrelatedProjectionRefresh = await hook.rerender(unrelatedDaemonFacts);
         // The target snapshot cannot select this plugin, so its independent
         // projection update must not retire the mount or its subscriptions.
         expect(unrelatedProjectionRefresh).toBe(first);
         expect(first.isCurrent()).toBe(true);
         expect(firstRetirement).not.toHaveBeenCalled();
 
-        const projectionReplacement = await hook.rerender(daemonFactsFor({
-            targetGeneration: 'browser-generation-a',
-            actionTitle: 'Configure revised browser',
-            unrelatedTitle: 'Unrelated revised',
-        }));
+        const projectionReplacementFacts = {
+            ...unrelatedDaemonFacts,
+            pluginProjectionById: daemonFactsFor({
+                targetGeneration: 'browser-generation-a',
+                actionTitle: 'Configure revised browser',
+                unrelatedTitle: 'Unrelated revised',
+            }).pluginProjectionById,
+        };
+        const projectionReplacement = await hook.rerender(projectionReplacementFacts);
         expect(projectionReplacement).not.toBe(first);
         expect(first.isCurrent()).toBe(false);
         expect(firstRetirement).toHaveBeenCalledTimes(1);
 
-        const targetReplacement = await hook.rerender(daemonFactsFor({
-            targetGeneration: 'browser-generation-b',
-            actionTitle: 'Configure revised browser',
-            unrelatedTitle: 'Unrelated revised',
-        }));
+        const targetReplacementFacts = {
+            ...projectionReplacementFacts,
+            targetedContributions: daemonFactsFor({
+                targetGeneration: 'browser-generation-b',
+                actionTitle: 'Configure revised browser',
+                unrelatedTitle: 'Unrelated revised',
+            }).targetedContributions,
+        };
+        const targetReplacement = await hook.rerender(targetReplacementFacts);
         expect(targetReplacement).not.toBe(projectionReplacement);
         expect(projectionReplacement.isCurrent()).toBe(false);
         expect(targetReplacement.isCurrent()).toBe(true);
+
+        const uiProjectionReplacement = await hook.rerender({
+            ...targetReplacementFacts,
+            pluginUiProjection: Object.freeze({
+                ...pluginUiProjection,
+                unknownEntriesById: Object.freeze({ 'future-entry': Object.freeze({ title: 'New projection fact' }) }),
+            }),
+        });
+        // Unknown future entries are not Action-input presentation facts and
+        // must not retire the surface. Its consumed translation bundle is.
+        expect(uiProjectionReplacement).toBe(targetReplacement);
+        expect(targetReplacement.isCurrent()).toBe(true);
+        expect(uiProjectionReplacement.isCurrent()).toBe(true);
+        const translatedProjection = await hook.rerender({
+            ...targetReplacementFacts,
+            pluginUiProjection: { ...pluginUiProjection, translationsByPluginId: {
+                'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
+                    contributionKind: 'translations', locales: ['en'], bundles: { en: { 'action.title': 'Configure browser' } } },
+            } },
+        });
+        expect(translatedProjection).not.toBe(targetReplacement);
+        expect(targetReplacement.isCurrent()).toBe(false);
         await hook.unmount();
     });
 
@@ -966,6 +1041,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             serverId: 'server-1',
             expectedContributorOccurrenceId: 'daemon-action-occurrence-a',
             qualifiedActionId: `${FACTS.pluginId}/self-check`,
+            signal: expect.any(AbortSignal),
             isCurrent: expect.any(Function),
             input: {},
             executionSurface: 'ui',
@@ -1023,6 +1099,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }))).resolves.toEqual({ reloaded: true });
 
         expect(executeHostAction).toHaveBeenCalledWith('plugins.reload', {}, {
+            signal: expect.any(AbortSignal),
             actionRequestId: 'req:executeAction',
             serverId: 'server-1',
             surface: 'plugin',
@@ -1423,6 +1500,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 serverId: 'server-1',
                 expectedContributorOccurrenceId: 'daemon-action-occurrence-a',
                 qualifiedActionId: 'happier.channels/connection/prepare-v1',
+                signal: expect.any(AbortSignal),
                 isCurrent: expect.any(Function),
                 input: {
                     providerSelection: selection.selection,
@@ -1646,7 +1724,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         clipboard.getStringAsync.mockReset();
         clipboard.setStringAsync.mockReset();
         clipboard.getStringAsync.mockResolvedValue('  copied review link  ');
-        clipboard.setStringAsync.mockResolvedValue(undefined);
+        clipboard.setStringAsync.mockResolvedValue(true);
         const diagnosticLog = vi.spyOn(log, 'log').mockImplementation(() => {});
         const openUrl = vi.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
         vi.stubGlobal('open', undefined);
@@ -1862,6 +1940,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             serverId: 'server-1',
             expectedContributorOccurrenceId: 'daemon-action-occurrence-a',
             qualifiedActionId: 'acme.browser/save',
+            signal: expect.any(AbortSignal),
             isCurrent: expect.any(Function),
             input: null,
             executionSurface: 'ui',
@@ -1937,6 +2016,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             expectedContributorOccurrenceId: 'daemon-action-occurrence-a',
             qualifiedActionId: 'acme.reviewer/publish',
             input: { source: 'mounted-surface' },
+            signal: expect.any(AbortSignal),
             isCurrent: expect.any(Function),
             executionSurface: 'ui',
             // The bound placement, never the target, supplies this claim; the
@@ -1973,6 +2053,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             expectedContributorOccurrenceId: 'daemon-action-occurrence-a',
             qualifiedActionId: 'acme.reviewer/publish',
             input: { source: 'bound-session' },
+            signal: expect.any(AbortSignal),
             isCurrent: expect.any(Function),
             executionSurface: 'ui',
             sessionId: 'session-bound',

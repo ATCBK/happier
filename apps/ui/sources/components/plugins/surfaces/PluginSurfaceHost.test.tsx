@@ -3,6 +3,8 @@ import * as React from 'react';
 // Hosted guests select real browser persistence; IndexedDB is the OS boundary.
 import 'fake-indexeddb/auto';
 import NodeModule from 'node:module';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -15,6 +17,7 @@ import {
     buildQualifiedPluginContributionKey,
     createPluginContributionIdentity,
     DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1Schema,
+    DaemonPluginUiArtifactBytesReadResponseSchema,
     DaemonPluginUiComposerSurfaceCatalogEntryV1Schema,
     DaemonPluginUiTargetedSurfaceMountV1Schema,
     DaemonPluginUiResourceReadRequestSchema,
@@ -62,7 +65,7 @@ import { derivePluginUiTargetedSurfaceMountInstanceKeyV1 } from '@happier-dev/pr
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema,
     emptyConnectedAccountCatalogRecordV1, sealConnectedAccountCatalogContentV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
-import { Button, defineUiSurface } from '@happier-dev/plugin-ui';
+import { Button, defineUiSurface, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 import { completePresentationPluginUiDataClient } from '@/dev/testkit/pluginUiDataClient';
@@ -256,10 +259,13 @@ const usedAccountScopes = new Map<string, Readonly<{ serverId: string; accountId
 let surfaceConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 const pluginSurfaceAccountLifetime = {
     value: null as ActiveServerAccountScopeLifetime | null,
-    async setScope(scope: Readonly<{ serverId: string; accountId: string }>, request?: (path: string, init?: RequestInit) => Response | undefined) {
+    async setScope(scope: Readonly<{ serverId: string; accountId: string }>, request?: (path: string, init?: RequestInit) => Response | undefined | Promise<Response>,
+        options?: Readonly<{ serverIdentityId?: string; currentAccount?: boolean }>) {
         await surfaceConnection?.dispose();
         surfaceConnection = await restoreServerAccountForTest({
             serverUrl: `https://${scope.serverId}`, accountId: scope.accountId,
+            ...(options?.serverIdentityId ? { serverIdentityId: options.serverIdentityId } : {}),
+            ...(options?.currentAccount ? { credentials: { token: createAccountTokenForTests(scope.accountId, { currentAccount: true }) } } : {}),
             request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 const served = request?.(path, init);
@@ -996,9 +1002,8 @@ const resourceWatchNextMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Pro
                 event: {
                     version: 1,
                     subscriptionId: request.subscriptionId,
-                    kind: 'error',
-                    code: 'unavailable',
-                    diagnostics: ['test_resource_watch_complete'],
+                    kind: 'complete',
+                    diagnostics: [],
                 },
             },
         };
@@ -1152,15 +1157,23 @@ vi.mock('expo-router', async () => {
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     const unistyles = await createUnistylesMock();
+    let previousTheme: unknown;
+    let previousDark: boolean | undefined;
+    let projectedTheme: Readonly<Record<string, unknown>> | undefined;
     return {
         ...unistyles,
         useUnistyles: () => {
             const { theme, rt } = unistyles.useUnistyles();
+            const selectedTheme = surfaceEnvironment.theme ?? theme;
+            // Match the native theme boundary: an unchanged theme retains its
+            // identity, while explicit environment changes publish a new one.
+            if (selectedTheme !== previousTheme || surfaceEnvironment.dark !== previousDark || !projectedTheme) {
+                previousTheme = selectedTheme;
+                previousDark = surfaceEnvironment.dark;
+                projectedTheme = { ...(surfaceEnvironment.theme as Record<string, unknown> | null ?? theme), dark: surfaceEnvironment.dark };
+            }
             return {
-                theme: {
-                    ...(surfaceEnvironment.theme as Record<string, unknown> | null ?? theme),
-                    dark: surfaceEnvironment.dark,
-                },
+                theme: projectedTheme,
                 rt: {
                     ...rt,
                     rtl: surfaceEnvironment.rtl,
@@ -1384,9 +1397,8 @@ beforeEach(async () => {
                 event: {
                     version: 1,
                     subscriptionId: request.subscriptionId,
-                    kind: 'error',
-                    code: 'unavailable',
-                    diagnostics: ['test_resource_watch_complete'],
+                    kind: 'complete',
+                    diagnostics: [],
                 },
             },
         };
@@ -2864,7 +2876,15 @@ describe('PluginSurfacePlacementHost', () => {
             resource: { pluginId: 'acme.live-dashboard', localId: 'live-dashboard' },
         }));
         await vi.waitFor(() => {
-            expect(screen.getTextContent()).toContain('Live dashboard');
+            const diagnostics = screen.root.findAll((node) => (
+                typeof node.props.testID === 'string' && node.props.testID.includes('diagnostic')
+            )).map((node) => node.props.testID);
+            expect(screen.getTextContent(), JSON.stringify({
+                diagnostics,
+                reads: resourceReadMock.mock.calls.length,
+                watchOpens: resourceWatchOpenMock.mock.calls.length,
+                watchNexts: resourceWatchNextMock.mock.calls.length,
+            })).toContain('Live dashboard');
             expect(screen.getTextContent()).not.toContain('Static dashboard');
         });
         await screen.update(renderPlacement(false));
@@ -3203,6 +3223,121 @@ describe('PluginSurfacePlacementHost', () => {
             expect(parseSpy).not.toHaveBeenCalled();
         } finally {
             parseSpy.mockRestore();
+            await screen.unmount();
+        }
+    });
+
+    it('keeps a mounted Inspector idle across parent renders and refreshes a replacement occurrence', async () => {
+        const { InspectorSurface } = await import('../../../../../../packages/plugins/inspector/src/ui/renderSurface');
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const pluginId = 'happier.inspector';
+        const contributionId = 'inspector-renderer';
+        const occurrenceId = 'inspector-idle-generation-44';
+        const placement = Object.freeze({ ...surfacePlacementFixture({
+            binding: { pluginId, destinationId: 'inspector-page', rendererId: contributionId,
+                container: 'appPage', target: { kind: 'app' } },
+            renderer: { kind: 'reactNative', contributionId, requiredHostMethods: ['executeAction'] },
+            occurrenceId,
+        }), ...mountedExecutionOrigin(pluginId, 'machine_1', 'inspector-installation'), generatedV2: true });
+        const bundleId = `reactNativeBundle:${pluginId}:${contributionId}`;
+        const targetFixture = primeExactTargetedContributions({ pluginId, occurrenceId, projectionGeneration: 44 });
+        const projection = withMountedTargetPackage({
+            ...EMPTY_PLUGIN_UI_PROJECTION,
+            generation: 44,
+            reactNativeBundlesById: { [bundleId]: {
+                ...generatedReactNativeProjection.reactNativeBundlesById['reactNativeBundle:acme.browser:native-panel'],
+                id: bundleId, pluginId, contributionId, occurrenceId,
+                hostApi: { minVersion: '1.0.0', methods: ['executeAction'] },
+            } },
+        } satisfies PluginUiProjectionModel, targetFixture, { displayName: 'Plugin Inspector', version: '3.2.1' });
+        let authorRenders = 0;
+        let authorMounts = 0;
+        let commits = 0;
+        // The actual Inspector and public UI primitives run under the existing
+        // physical host. Only its installed-module/daemon transport boundaries
+        // are supplied by this suite's canonical harness.
+        const MeasuredInspector = (context: RenderContext): React.ReactElement => {
+            authorRenders += 1;
+            React.useEffect(() => { authorMounts += 1; }, []);
+            return <InspectorSurface {...context} />;
+        };
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = Object.freeze({ renderSurface: defineUiSurface(context => (
+            <React.Profiler id="mounted-inspector" onRender={() => { commits += 1; }}>
+                <MeasuredInspector {...context} />
+            </React.Profiler>
+        )) });
+        let inventoryRequests = 0;
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server-a', accountId: 'account-a' }, (path, init) => {
+            if (path === '/v1/machines') return Response.json([ExternalActionMachineBootstrapV1Schema.parse({
+                id: 'machine_1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+                installationId: 'inspector-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+                access: { custodian: { accountId: 'account-a', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+            })]);
+            if (path !== '/v1/actions/plugins.list') return undefined;
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
+            inventoryRequests += 1;
+            return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'plugins.list', requestId: request.requestId,
+                execution: { ok: true, result: { ok: true, kind: 'plugins_list', plugins: [] } } }));
+        }, { serverIdentityId: 'srv_server_a', currentAccount: true });
+        const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
+        resetScopedHomeActionExecutorsForTests();
+        const availabilitySnapshot = { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] };
+        replacePluginAccountAvailabilityProjection({ scope: { serverId: 'server-a', accountId: 'account-a' },
+            snapshot: availabilitySnapshot });
+        const render = (currentPlacement = placement, currentProjection = projection) => (
+            <PluginSurfacePlacementHost placement={currentPlacement}
+                machineId="machine_1" serverId="server-a" pluginUiProjection={currentProjection}
+                platform="web" />
+        );
+        const screen = await renderScreen(render());
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('No plugins installed.'));
+            await flushHookEffects();
+            const initialContext = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+            expect(inventoryRequests).toBeGreaterThan(0);
+            const settled = { authorRenders, commits, inventoryRequests, mounts: authorMounts };
+
+            for (let update = 0; update < 10; update += 1) await screen.update(render());
+            await flushHookEffects();
+            const parentUpdates = { authorRenders: authorRenders - settled.authorRenders, commits: commits - settled.commits,
+                inventoryRequests: inventoryRequests - settled.inventoryRequests, mounts: authorMounts - settled.mounts };
+            console.info('Mounted Inspector measurement', JSON.stringify({ initial: settled, tenUnchangedParentRenders: parentUpdates }));
+            expect.soft(parentUpdates)
+                .toEqual({ authorRenders: 0, commits: 0, inventoryRequests: 0, mounts: 0 });
+
+            for (let update = 0; update < 10; update += 1) {
+                await act(async () => replacePluginAccountAvailabilityProjection({
+                    scope: { serverId: 'server-a', accountId: 'account-a' },
+                    snapshot: { ...availabilitySnapshot, availabilityCursor: update + 2 },
+                }));
+            }
+            await flushHookEffects();
+            const availabilityUpdates = { authorRenders: authorRenders - settled.authorRenders - parentUpdates.authorRenders, commits: commits - settled.commits - parentUpdates.commits,
+                inventoryRequests: inventoryRequests - settled.inventoryRequests - parentUpdates.inventoryRequests, mounts: authorMounts - settled.mounts - parentUpdates.mounts };
+            console.info('Mounted Inspector Availability measurement', JSON.stringify({ tenAvailabilityCursorUpdates: availabilityUpdates }));
+            expect.soft(availabilityUpdates).toEqual({ authorRenders: 0, commits: 0, inventoryRequests: 0, mounts: 0 });
+
+            const nextOccurrenceId = 'inspector-idle-generation-45';
+            primeExactTargetedContributions({ pluginId, occurrenceId: nextOccurrenceId, projectionGeneration: 45 });
+            const replacementPlacement = Object.freeze({ ...placement, occurrenceId: nextOccurrenceId });
+            const replacementProjection = { ...projection, generation: 45,
+                reactNativeBundlesById: { [bundleId]: { ...projection.reactNativeBundlesById[bundleId],
+                    occurrenceId: nextOccurrenceId } } } satisfies PluginUiProjectionModel;
+            await screen.update(render(replacementPlacement, replacementProjection));
+            await vi.waitFor(() => expect(authorMounts).toBeGreaterThan(settled.mounts));
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('No plugins installed.'));
+            expect(inventoryRequests).toBeGreaterThan(settled.inventoryRequests);
+            await flushHookEffects();
+            expect(initialContext.signal.aborted).toBe(true);
+            const replacementContext = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+            expect(replacementContext.signal).not.toBe(initialContext.signal);
+            expect(replacementContext.signal.aborted).toBe(false);
+            console.info('Mounted Inspector replacement measurement', JSON.stringify({ authorRenders: authorRenders - settled.authorRenders - parentUpdates.authorRenders - availabilityUpdates.authorRenders,
+                commits: commits - settled.commits - parentUpdates.commits - availabilityUpdates.commits,
+                inventoryRequests: inventoryRequests - settled.inventoryRequests, mounts: authorMounts - settled.mounts,
+                oldSignalAborted: initialContext.signal.aborted, newSignalAborted: replacementContext.signal.aborted }));
+        } finally {
             await screen.unmount();
         }
     });
@@ -4624,11 +4759,16 @@ describe('PluginSurfacePlacementHost', () => {
         expect(handleRequest).not.toHaveBeenCalled();
     });
 
-    it.each(['com.acme.external-inline', 'built-in.review-inline'])(
+    it.each([
+        { pluginId: 'com.acme.external-inline', network: { network: 'none' as const }, allowed: false },
+        { pluginId: 'built-in.review-inline', network: { network: 'open' as const }, allowed: true },
+        { pluginId: 'com.acme.external-inline', network: { networkOrigins: ['https://unapproved.example.com'] }, allowed: false },
+    ])(
         'mounts %s inline HTML through the same isolated frame without an Artifact request',
-        async (pluginId) => {
+        async ({ pluginId, network, allowed }) => {
             const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
-            const html = '<!doctype html><html><body><p>Inline destination</p></body></html>';
+            const body = '<p>Inline destination</p>';
+            const html = `<!doctype html><html><body>${body}</body></html>`;
             const hostWindow = new EventTarget();
             const iframeSource = { postMessage: vi.fn() };
             vi.stubGlobal('window', hostWindow);
@@ -4665,6 +4805,7 @@ describe('PluginSurfacePlacementHost', () => {
                     machineId="machine_1"
                     pluginUiProjection={projection}
                     platform="web"
+                    guestNetworkOverride={network}
                 />,
                 {
                     createNodeMock: (element) => element.type === 'iframe'
@@ -4677,8 +4818,13 @@ describe('PluginSurfacePlacementHost', () => {
                 && node.props.testID.startsWith('plugin-surface-unavailable-diagnostic-'))
                 .map((node) => node.props.testID)).toEqual([]);
             const frame = screen.root.findByType('iframe');
-            expect(frame.props.srcDoc).toContain(html);
-            expect(frame.props.srcDoc).toContain("connect-src https://api.example.com");
+            expect(frame.props.srcDoc).toContain(body);
+            const csp = String(frame.props.srcDoc).match(/content="([^"]*connect-src[^\"]*)"/)?.[1];
+            expect(csp?.split(';').map((directive) => directive.trim())
+                .find((directive) => directive.startsWith('connect-src '))).toBe(allowed
+                ? 'connect-src data: https://api.example.com' : 'connect-src data:');
+            expect(csp).not.toContain('https://unapproved.example.com');
+            expect(csp).not.toContain('https: wss:');
             expect(frame.props.sandbox).not.toContain('allow-same-origin');
             expect(pluginDataTransport.request).not.toHaveBeenCalled();
 
@@ -4779,6 +4925,21 @@ describe('PluginSurfacePlacementHost', () => {
         expect(deferred.findByTestId('plugin-surface-unavailable-diagnostic-availability_fact_unavailable')).toBeTruthy();
         expect(unavailable.getTextContent()).not.toContain('feature_disabled');
         expect(deferred.getTextContent()).not.toContain('feature_disabled');
+    });
+
+    it('classifies unresolved origin availability as loading at the shared render gate', async () => {
+        const { resolvePluginSurfaceDescriptorRenderGate } = await import('./PluginSurfaceHost');
+        expect(resolvePluginSurfaceDescriptorRenderGate({
+            ...browserHostedWebPlacement,
+            availability: { state: 'resolving', reason: 'available', diagnostics: [] },
+        }, {})).toMatchObject({ canRender: false, state: 'loading' });
+        const denied = resolvePluginSurfaceDescriptorRenderGate({
+            ...browserHostedWebPlacement,
+            availability: { state: 'resolving', reason: 'available', diagnostics: [],
+                when: { fact: 'host.feature', operator: 'enabled', value: 'plugins.ui.hostedWeb' } },
+        }, { isFeatureEnabled: () => false });
+        expect(denied.canRender).toBe(false);
+        expect(denied).not.toHaveProperty('state', 'loading');
     });
 
     it('threads host policy context into placement and hosted-web render gates', async () => {
@@ -6291,7 +6452,7 @@ describe('PluginSurfacePlacementHost', () => {
     });
 
     it.each([1, 2])('renders a machine-free release-less artifact from %i compatible supplies without an execution choice', async (replicaCount) => {
-        const pluginId = 'fixture.replicated-render-only';
+        const pluginId = `fixture.replicated-render-only-${replicaCount}`;
         const contributionId = 'panel';
         const entry = `react-native/${contributionId}/entry.cjs.bundle`;
         const bytes = new TextEncoder().encode("exports.renderSurface = function () { return require('react').createElement(require('react-native').View, { testID: 'replica-artifact-page' }); };");
@@ -6307,15 +6468,18 @@ describe('PluginSurfacePlacementHost', () => {
         realResourceTransport.request = async (method, payload) => {
             if (method !== RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ) throw new Error(`Unexpected replica RPC: ${method}`);
             byteRequests.push(payload);
-            return { ok: true, artifactFamily: 'reactNative', cacheIdentity: { artifactDigest },
+            return DaemonPluginUiArtifactBytesReadResponseSchema.parse({ ok: true, artifactFamily: 'reactNative', cacheIdentity: { artifactDigest },
                 artifact: { artifactKind: 'reactNativeBundle', digest: artifactDigest, format: 'plainJs', byteSize: bytes.byteLength },
-                files: [{ relativePath: entry, bytesBase64: encodeBase64(bytes, 'base64') }] };
+                files: [{ relativePath: entry, digest: fileDigest, byteSize: bytes.byteLength, bytesBase64: encodeBase64(bytes, 'base64') }] });
         };
         await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' });
         replacePluginAccountAvailabilityProjection({
             scope: { serverId: 'server_1', accountId: 'account-a' },
             snapshot: { availabilityCursor: 1, materializations: [], snapshots: [], intentReads: [] },
         });
+        const { storage } = await import('@/sync/domains/state/storage');
+        const session = createSessionFixture({ id: `replica-account-session-${replicaCount}` });
+        storage.setState({ sessions: { [session.id]: session } });
         const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
         const { unionPluginUiProjections, readPluginUiContributionOrigin } = await import('@/sync/domains/plugins/ui/projectionUnion');
         const members = Array.from({ length: replicaCount }, (_, index) => {
@@ -6323,7 +6487,7 @@ describe('PluginSurfacePlacementHost', () => {
             const occurrenceId = `replica-occurrence-${index}`;
             const placement = surfacePlacementFixture({
                 binding: { pluginId, destinationId: 'page', rendererId: contributionId, container: 'appPage', target: { kind: 'app' } },
-                renderer: { kind: 'reactNative', contributionId, requiredHostMethods: ['context'] },
+                renderer: { kind: 'reactNative', contributionId },
                 display: { label: 'Replica page' }, occurrenceId,
             });
             const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({
@@ -6340,9 +6504,9 @@ describe('PluginSurfacePlacementHost', () => {
                         id: `reactNativeBundle:${pluginId}:${contributionId}`, pluginId, contributionKind: 'reactNativeBundle',
                         contributionId, occurrenceId, pluginVersion: '1.0.0', generatedV2: true,
                         artifactSelectionOwner: 'daemonProjection', artifactGraph: graph,
-                        hostApi: { minVersion: '1.0.0', methods: ['context'] },
+                        hostApi: { minVersion: '1.0.0', methods: ['context', 'readSession'] },
                         runtime: { decision: { state: 'load', reason: 'compatible', diagnostics: [] },
-                            loadPolicy: { source: 'installedArtifact' }, cacheKey: 'replica-page', cacheIdentity: { artifactDigest } },
+                            loadPolicy: { source: 'installedArtifact' }, cacheKey: `replica-page-${replicaCount}`, cacheIdentity: { artifactDigest } },
                     },
                 } } },
             }));
@@ -6360,13 +6524,21 @@ describe('PluginSurfacePlacementHost', () => {
         const screen = await renderScreen(<PluginSurfacePlacementHost
             placement={placement} pluginUiProjection={projection} machineId={null} serverId={null} platform="web"
         />);
-        await vi.waitFor(() => expect(screen.findByTestId('replica-artifact-page')).toBeTruthy());
+        await vi.waitFor(() => expect(screen.findByTestId('replica-artifact-page'), JSON.stringify({
+            byteRequests,
+            diagnostics: screen.root.findAll((node) => typeof node.props.testID === 'string'
+                && node.props.testID.includes('diagnostic')).map((node) => node.props.testID),
+        })).toBeTruthy());
         expect(screen.findByTestId('plugin-surface-unavailable')).toBeNull();
         expect(screen.findByTestId('plugin-surface-execution.chip')).toBeNull();
         expect(byteRequests).toEqual([expect.objectContaining({ machineId: 'replica-0', cacheIdentity: { artifactDigest } })]);
         const context = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
         expect(context.surface).not.toHaveProperty('machineId');
         expect(context.surface).not.toHaveProperty('occurrenceId');
+        // A machine-free mount must serve its Account reads, not merely paint
+        // the authored tree under an inert offline interaction boundary.
+        await expect(context.hostApi.readSession(session.id)).resolves.toMatchObject({ sessionId: session.id });
+        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
         await screen.unmount();
     });
 
@@ -7487,6 +7659,7 @@ describe('PluginSurfacePlacementHost', () => {
         expect(screen.findByTestId('plugin-rn-host-api-currentness')?.props.accessibilityLabel)
             .toContain('readResource');
         expect(mountedProbeEffects).toEqual(['mount']);
+        expect(screen.findByTestId(`plugin-surface-offline-summary:${placement.id}-freshness-text`)).toBeTruthy();
 
         pluginSurfaceConnectivity.daemonStateVersion += 1;
         await screen.update(renderPlacement(true));
@@ -8603,16 +8776,21 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                 for (const listener of surfaceEnvironment.appStateListeners) listener(surfaceEnvironment.appState);
             });
             expect(spinnerStrip().props.style.animationName).toBe('happierActivitySpinnerFilmstrip');
+            // The real native foreground transition above is a separate visible
+            // phase. Settle its public effects before measuring the following
+            // simultaneous provider-background/focus-withdrawal contract.
+            await flushHookEffects();
+            const foregroundPublishLabels = [...publishLabels];
 
             currentUiContextMountLifecycle.active = false;
             await screen.update(renderPlacement(false));
             expect(publicationClear).not.toHaveBeenCalled();
-            expect(publishLabels).toEqual(initialPublishLabels);
+            expect(publishLabels).toEqual(foregroundPublishLabels);
             expect(typeof observedActivities.at(-1)).toBe('boolean');
 
             currentUiContextMountLifecycle.active = true;
             await screen.update(renderPlacement(true));
-            await vi.waitFor(() => expect(publishLabels).toEqual([...initialPublishLabels, 'Issue A']));
+            await vi.waitFor(() => expect(publishLabels).toEqual([...foregroundPublishLabels, 'Issue A']));
             expect(typeof observedActivities.at(-1)).toBe('boolean');
             expect(publicationClear).not.toHaveBeenCalled();
             await screen.update(renderPlacement(false, true));
@@ -11002,8 +11180,54 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         }
     });
 
-    it('projects the active theme and the plugin translation bundle, and updates both live', async () => {
+    it.each([
+        ['plugin_targeted_contributions_unavailable', 'loading'],
+        ['plugin_targeted_contributions_target_stale', 'loading'],
+        ['plugin_targeted_contributions_target_unavailable', 'error'],
+    ] as const)('classifies a cold target read %s as %s and follows projection recovery', async (code, kind) => {
         reactNativeSurfaceProps.length = 0;
+        await primeGeneratedArtifact();
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const occurrenceId = `browser-cold-${code}`;
+        const projection = withExactGeneratedMountedTarget({
+            projection: createGeneratedProjection(), pluginId: 'acme.browser', occurrenceId,
+            projectionGeneration: 77, displayName: 'Browser Inspector', version: '3.2.1',
+        }).projection;
+        targetedContributionsReadMock.mockResolvedValue({ supported: false, reason: 'unavailable', code });
+        const screen = await renderScreen(<PluginSurfacePlacementHost
+            placement={browserReactNativePlacementFor(occurrenceId)} resourceBrowserTarget={target}
+            machineId="machine_1" serverId="server_1" pluginUiProjection={projection} platform="web"
+            reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }}
+        />);
+        await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-unavailable')).toBeTruthy());
+        expect(Boolean(screen.findByTestId('plugin-surface-unavailable-loading-skeleton'))).toBe(kind === 'loading');
+        expect(reactNativeSurfaceProps).toHaveLength(0);
+        if (kind === 'loading') {
+            targetedContributionsReadMock.mockResolvedValue({ supported: true,
+                targetedContributions: { target: { pluginId: 'acme.browser', occurrenceId,
+                    sourceCustody: developmentSourceCustody('browser-cold-test-root') }, points: [] },
+                targetedSurfaceMounts: [] });
+            const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
+            await act(async () => { publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine_1', serverId: 'server_1' }); });
+            await vi.waitFor(() => expect(reactNativeSurfaceProps).not.toHaveLength(0));
+            expect(screen.findByTestId('plugin-surface-unavailable')).toBeNull();
+        }
+    });
+
+    it('projects the active theme and the plugin translation bundle without retiring the live surface', async () => {
+        reactNativeSurfaceProps.length = 0;
+        const mounts: string[] = [];
+        let inventoryReads = 0;
+        function ThemeProbe(context: RenderContext) {
+            const translate = usePluginTranslation();
+            // Inspector's inventory effect depends on hostApi and translate.
+            // A theme-only context push must not rerun that read.
+            React.useEffect(() => { inventoryReads += 1; }, [context.hostApi, translate]);
+            React.useEffect(() => { mounts.push('mount'); return () => { mounts.push('unmount'); }; }, []);
+            return React.createElement('View', { testID: 'theme-continuity-probe', accessibilityLabel: context.surface.colorScheme });
+        }
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(ThemeProbe) };
         await primeGeneratedArtifact();
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         const { projectPluginUiTheme } = await import('./pluginUiThemeProjection');
@@ -11068,6 +11292,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const screen = await renderScreen(render());
         await vi.waitFor(() => expect(reactNativeSurfaceProps).not.toHaveLength(0));
         const initial = readMountedSurface();
+        const initialContext = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+        expect(screen.findByTestId('theme-continuity-probe')).toBeTruthy();
         expect(initial.theme).toEqual(projectPluginUiTheme(lightTheme));
         expect(initial.locale).toBe('en');
         expect(initial.translations).toMatchObject({
@@ -11113,6 +11339,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         });
 
         // A theme change moves the projected values, not just `colorScheme`.
+        const targetedReadsBeforeTheme = targetedContributionsReadMock.mock.calls.length;
+        const inventoryReadsBeforeTheme = inventoryReads;
         surfaceEnvironment.theme = darkTheme;
         surfaceEnvironment.dark = true;
         await screen.update(render());
@@ -11120,6 +11348,21 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         expect(themed.colorScheme).toBe('dark');
         expect(themed.theme.colors.canvas).toBe(darkTheme.colors.background.canvas);
         expect(themed.theme.colors.canvas).not.toBe(initial.theme.colors.canvas);
+        const themedContext = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+        expect(themedContext.signal).toBe(initialContext.signal);
+        expect(themedContext.hostApi).toBe(initialContext.hostApi);
+        expect(initialContext.signal.aborted).toBe(false);
+        expect(mounts).toEqual(['mount']);
+        expect(targetedContributionsReadMock.mock.calls.length).toBe(targetedReadsBeforeTheme);
+        expect(inventoryReads).toBe(inventoryReadsBeforeTheme);
+        expect(screen.findByTestId('plugin-rn-ui-loading')).toBeNull();
+        expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeNull();
+        surfaceEnvironment.theme = lightTheme;
+        surfaceEnvironment.dark = false;
+        await screen.update(render());
+        expect(screen.findByTestId('theme-continuity-probe')?.props.accessibilityLabel).toBe('light');
+        expect(mounts).toEqual(['mount']);
+        expect(inventoryReads).toBe(inventoryReadsBeforeTheme);
     });
 });
 
@@ -12523,6 +12766,98 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
         expect(props?.renderContext, 'the mount must install a canonical render context').toBeTruthy();
         return props.renderContext!.hostApi;
     }
+
+    it.each(['originUnavailable', 'reject', 'retire'] as const)('presents a plugin-page blocking approval from its exact Artifact without changing the plugin caller (%s)', async disposition => {
+        const { createHomeGovernanceHarness } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const homes = createHomeGovernanceHarness();
+        onTestFinished(() => homes.reset());
+        const serverId = await homes.addHome({ name: 'Plugin page', serverUrl: 'https://server-1', accountId: 'account-a' });
+        await homes.requireActionApproval(serverId, 'widgets.fragment.update', 'plugin');
+        await pluginSurfaceAccountLifetime.setScope({ serverId, accountId: 'account-a' },
+            (path, init) => homes.request(`https://server-1${path}`, init));
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+        const restoreLoader = await installRealActionExecutorModuleLoader();
+        onTestFinished(restoreLoader);
+        const account = { serverId, accountId: 'account-a' };
+        expect(await createDefaultActionExecutor().execute('widgets.fragment.create', { account, artifactId: 'page-saved-group', fragment: {
+            name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
+            group: { width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget',
+                instance: { v: 1, definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} } }] },
+        } }, { surface: 'ui', authority: 'present_user', serverId })).toMatchObject({ ok: true });
+        reactNativeSurfaceProps.length = 0;
+        await primeCrossPathArtifact();
+        const { placement, model } = await projectPlacementFromBinding(bindingDeclaration({
+            id: 'approval-page', container: 'appPage', target: { kind: 'app' },
+        }));
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const screen = await renderScreen(<PluginSurfacePlacementHost placement={placement} pluginUiProjection={model}
+            machineId="machine_1" serverId={serverId} platform="web" reactNativeLoaderBackend={{
+                backendId: 'commonJs', available: true, loadInstalledBundle: vi.fn(async () => () => null),
+            }} />);
+        let settled = false;
+        let operation: Promise<unknown> | undefined;
+        let approvalId: string | null = null;
+        let unmounted = false;
+        try {
+            await vi.waitFor(() => expect(reactNativeSurfaceProps).not.toHaveLength(0));
+            await act(async () => {
+                operation = readMountedHostApi().executeAction('widgets.fragment.update', {
+                    account, artifactId: 'page-saved-group', patch: { name: 'Ready to ship' },
+                }).then(value => { settled = true; return value; }, error => { settled = true; throw error; });
+                // Handle early transport rejection until the deciding assertion consumes it below.
+                void operation.catch(() => {});
+            });
+            await vi.waitFor(() => {
+                const artifacts = homes.artifacts(serverId).list();
+                approvalId = artifacts.find(row => row.id !== 'page-saved-group')?.id ?? null;
+                expect(artifacts).toHaveLength(2);
+            });
+            expect(approvalId).not.toBeNull();
+            expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approvalId!)!)).toMatchObject({
+                actionId: 'widgets.fragment.update', executionOriginV1: { surface: 'plugin', authority: 'account_automation',
+                    caller: { kind: 'plugin', pluginId: 'acme.browser', contributionLocalId: 'approval-page' } },
+            });
+            expect(settled).toBe(false);
+            await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-approval-pending')).not.toBeNull());
+            const notice = () => screen.findAllByTestId('plugin-surface-approval-pending')
+                .find(node => typeof node.props.onOpenApproval === 'function');
+            await vi.waitFor(() => expect(notice()?.props.summary).toEqual(expect.any(String)));
+            const { t } = await import('@/text');
+            expect(screen.getTextContent()).toContain(t('approvals.waitingForYou'));
+            await act(async () => { notice()!.props.onOpenApproval(); });
+            const { router } = await import('expo-router');
+            expect(router.push).toHaveBeenCalledWith(`/inbox/approvals/${encodeURIComponent(approvalId!)}?serverId=${encodeURIComponent(serverId)}`);
+            if (disposition === 'retire') {
+                // React exposes an insertion-phase state update as this console diagnostic, not a typed error.
+                const reactErrors = vi.spyOn(console, 'error');
+                onTestFinished(() => reactErrors.mockRestore());
+                await screen.unmount();
+                unmounted = true;
+                await expect(operation).rejects.toMatchObject({ code: 'stale_surface' });
+                expect(reactErrors.mock.calls.some(([message]) => typeof message === 'string'
+                    && message.startsWith('useInsertionEffect must not schedule updates'))).toBe(false);
+                expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approvalId!)!)).toMatchObject({ status: 'open' });
+            } else {
+                expect(await decideApprovalAsInbox(serverId, approvalId!, disposition === 'originUnavailable' ? 'approve' : disposition)).toMatchObject({ ok: true });
+                // This fixture has no replayable daemon origin; approval must fail closed rather than borrow UI authority.
+                if (disposition === 'originUnavailable') await expect(operation).rejects.toMatchObject({ code: 'unavailable',
+                    diagnostics: [expect.objectContaining({ code: 'approval_origin_unavailable' })] });
+                else await expect(operation).rejects.toMatchObject({ code: 'unavailable' });
+                await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-approval-pending')).toBeNull());
+            }
+            expect(JSON.parse(homes.artifacts(serverId).readPlainBody('page-saved-group')!)).toMatchObject({ name: 'Release checks' });
+        } finally {
+            try {
+                const body = approvalId ? homes.artifacts(serverId).readPlainBody(approvalId) : null;
+                if (body && JSON.parse(body).status === 'open') await decideApprovalAsInbox(serverId, approvalId!, 'reject');
+            } finally {
+                try { if (!unmounted) await screen.unmount(); }
+                finally { await operation?.catch(() => {}); }
+            }
+        }
+    });
 
     const placements = [
         {

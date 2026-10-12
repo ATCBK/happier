@@ -25,6 +25,7 @@ export function PluginDictationButton(props: Omit<DictationButtonProps, 'fallbac
     const minimumTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     return <View style={{ width: minimumTargetSize, height: minimumTargetSize }}>
         <AgentInputDictationButton testID={props.testID} disabled={!featureEnabled || props.disabled}
-            status={dictation.status} onPress={() => { void dictation.onPress(); }} />
+            status={dictation.status} onFocus={() => { void dictation.onFocus(); }}
+            onPress={() => { void dictation.onFocus(); void dictation.onPress(); }} />
     </View>;
 }

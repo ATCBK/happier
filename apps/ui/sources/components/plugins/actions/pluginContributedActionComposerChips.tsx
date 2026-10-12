@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { HappierComposerChip } from '@happier-dev/plugin-ui/presentation';
 import {
     redactBugReportSensitiveText,
     trimBugReportTextHeadToMaxBytes,
@@ -36,7 +36,6 @@ import {
     AGENT_INPUT_CHIP_ICON_STYLE,
     AGENT_INPUT_MENU_ICON_SIZE_PX,
 } from '@/components/sessions/agentInput/definitions/agentInputChipIconMetrics';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import { log } from '@/log';
 
@@ -49,13 +48,6 @@ import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n
 
 const COMPOSER_CONTROL_UNKNOWN_CHOICE_ID_SAMPLE_COUNT = 3;
 const COMPOSER_CONTROL_UNKNOWN_CHOICE_ID_SAMPLE_MAX_UTF8_BYTES = 96;
-
-function resolveComposerChipPhysicalTargetStyle(): Readonly<{ minWidth: number; minHeight: number }> | undefined {
-    const platform = Platform.OS;
-    if (platform !== 'ios' && platform !== 'android') return undefined;
-    const targetSize = resolveMinimumInteractiveTargetSize(platform);
-    return { minWidth: targetSize, minHeight: targetSize };
-}
 
 function actionChipKey(action: PluginContributedActionDescriptor): string {
     return `plugin-contributed-action:${action.placement}:${action.qualifiedActionId}`;
@@ -107,12 +99,12 @@ function createComposerActionChip(params: Readonly<{
             // than treating it as a lower-priority primary Action.
             if (!isPrimary) return null;
             return (
-                <Pressable
+                <HappierComposerChip
                     testID={`plugin-composer-action:${params.action.qualifiedActionId}`}
                     accessibilityRole="button"
                     accessibilityLabel={params.action.title}
                     onPress={invoke}
-                    style={({ pressed }) => [chipStyle(pressed), resolveComposerChipPhysicalTargetStyle()]}
+                    style={chipStyle}
                 >
                     <Icon
                         name={iconName}
@@ -121,7 +113,7 @@ function createComposerActionChip(params: Readonly<{
                         style={AGENT_INPUT_CHIP_ICON_STYLE}
                     />
                     {showLabel ? <Text numberOfLines={1} style={textStyle}>{params.action.title}</Text> : null}
-                </Pressable>
+                </HappierComposerChip>
             );
         },
     };
@@ -784,7 +776,7 @@ function renderComposerControlChipNode(params: Readonly<{
         record: diagnosticRecord,
         isCurrent: host.isCurrent,
         content: (
-            <Pressable
+            <HappierComposerChip
                 ref={context.chipAnchorRef}
                 testID={composerControlKey(control)}
                 accessibilityRole="button"
@@ -804,9 +796,8 @@ function renderComposerControlChipNode(params: Readonly<{
                 // selected and an unselected control. `aria-pressed` is the
                 // valid toggle-button semantic and is emitted only for a
                 // control that actually reports an on/off state.
-                {...(resolved.state.expressesSelection
-                    ? { 'aria-pressed': resolved.selected }
-                    : {})}
+                expressesSelection={resolved.state.expressesSelection}
+                selected={resolved.selected}
                 disabled={!controlEnabled}
                 onPress={() => {
                     if (!resolved.canInteract()) return;
@@ -816,10 +807,10 @@ function renderComposerControlChipNode(params: Readonly<{
                     }
                     resolved.invokeDirectInteraction(context.chipAnchorRef);
                 }}
-                style={({ pressed }) => [context.chipStyle(pressed), resolveComposerChipPhysicalTargetStyle()]}
+                style={context.chipStyle}
             >
                 {compactContent ?? chipContent}
-            </Pressable>
+            </HappierComposerChip>
         ),
     });
 }

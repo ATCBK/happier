@@ -17,7 +17,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import type { BrowserFrameMessageReceipt } from '@/components/browser/frame/types';
 
-import { buildHostedHtmlDocument } from './buildHostedHtmlDocument';
+import { useHostedHtmlDocument } from './useHostedHtmlDocument';
 import {
     createPluginHostedWebNativeMessageBridge,
     PLUGIN_HOSTED_WEB_NO_TRANSIENT_ACTIVATION_RECEIPT,
@@ -331,6 +331,7 @@ export function HostedArtifactFrame(props: HostedArtifactFrameProps): React.Reac
 type HostedInlineDocumentFrameProps = HostedNativeFrameSharedProps & Readonly<{
     bundle: ArtifactHtmlBundleV1;
     networkOrigins?: readonly UiSurfaceNetworkOriginV1[];
+    network?: 'none' | 'open';
     bootstrapConfig?: PluginHostedWebBridgeBootstrapConfigV1;
     bridge?: (PluginHostedWebNativeBridgeConfig & Readonly<{
         attachHostMessages?: (send: (message: unknown) => void) => () => void;
@@ -405,19 +406,10 @@ export function HostedInlineDocumentFrame(
     props: HostedInlineDocumentFrameProps,
 ): React.ReactElement | null {
     const adapter = React.useMemo(resolveNativeAdapter, []);
-    const documentHtml = React.useMemo(() => {
-        try {
-            return buildHostedHtmlDocument(
-                props.bundle,
-                props.bootstrapConfig,
-                { networkOrigins: props.networkOrigins, externalHttpLinks: props.externalHttpLinks },
-            );
-        } catch {
-            // The outer surface admission normally rejects malformed input. Keep
-            // this physical boundary fail-closed if it is called independently.
-            return null;
-        }
-    }, [props.bundle, props.bootstrapConfig, props.networkOrigins, props.externalHttpLinks]);
+    const document = useHostedHtmlDocument(props.bundle, props.bootstrapConfig, {
+        network: props.network, networkOrigins: props.networkOrigins, externalHttpLinks: props.externalHttpLinks,
+    });
+    const documentHtml = document.kind === 'ready' ? document.document : null;
     const generation = React.useMemo(
         () => createInlineDocumentGeneration(documentHtml),
         [documentHtml],
@@ -446,6 +438,7 @@ export function HostedInlineDocumentFrame(
     React.useLayoutEffect(() => {
         registeredTokenRef.current = null;
         setRegisteredToken(null);
+        if (document.kind === 'loading') return;
         const register = adapter?.module.registerInlineDocument;
         const unregister = adapter?.module.unregisterInlineDocument;
         if (!adapter || typeof register !== 'function' || typeof unregister !== 'function') {
@@ -498,7 +491,7 @@ export function HostedInlineDocumentFrame(
             }
             revokeToken(generation.token);
         };
-    }, [adapter, generation, notifyUnavailable, revokeToken]);
+    }, [adapter, document.kind, generation, notifyUnavailable, revokeToken]);
 
     const retireCurrentGeneration = React.useCallback((code: HostedInlineDocumentFrameUnavailableCode) => {
         if (!generation || registeredTokenRef.current !== generation.token) return;

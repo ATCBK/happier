@@ -187,6 +187,7 @@ describe('PluginSurfaceInteractionBoundary.native', () => {
         const screen = await renderScreen(element(false));
 
         expect(screen.findByTestId('plugin-native-snapshot')).toBeTruthy();
+        expect(screen.findByTestId('plugin-surface-offline-summary:surface-native-freshness-text')).toBeTruthy();
         expect(screen.findByTestId('plugin-surface-snapshot:surface-native')?.props).toMatchObject({
             pointerEvents: 'none',
             accessibilityElementsHidden: true,

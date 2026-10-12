@@ -77,6 +77,7 @@ import { readPluginUiHostTypography } from '@/components/plugins/surfaces/plugin
 import { useSetting } from '@/sync/domains/state/storage';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
+import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
 import type { PluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import {
     useInstalledPluginBrandPresentation,
@@ -95,9 +96,21 @@ const MATCHING_PLUGIN_POPOVER_PORTAL_OPTIONS = Object.freeze({
     anchorAlign: 'start',
 });
 
+const CONTENT_SIZED_PLUGIN_POPOVER_PORTAL_OPTIONS = Object.freeze({
+    ...MATCHING_PLUGIN_POPOVER_PORTAL_OPTIONS,
+    sizeToContent: true,
+});
+
 function resolvePluginUiPopoverPresentation(input: Readonly<{
     presentation?: 'popover' | 'menu' | 'dropdown' | 'context';
+    width?: 'anchor' | 'content';
 }>) {
+    // A trigger that is not a field box (a toolbar control, a column title, a text link) is only where the
+    // choice opens: its width is the popover's minimum, not its width (a 60 px Views button must not make
+    // a 60 px menu that wraps one letter per line).
+    if (input.width === 'content' && (input.presentation === 'dropdown' || input.presentation === 'popover' || input.presentation === undefined)) {
+        return { portal: CONTENT_SIZED_PLUGIN_POPOVER_PORTAL_OPTIONS, maxWidthCap: 1024 } as const;
+    }
     switch (input.presentation) {
         case 'menu':
         case 'context':
@@ -356,6 +369,9 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         return <PluginDictationButton {...input} />;
     },
     storedImageHost: SESSION_STORED_IMAGE_HOST,
+    renderKeyboardStickyFooter(input: Readonly<{ openedOffset: number; children: React.ReactNode }>) {
+        return <KeyboardStickyFooter offset={input.openedOffset}>{input.children}</KeyboardStickyFooter>;
+    },
     localDateTimePicker: resolveAppLocalDateTimePicker(),
     renderMaterialSurface: renderThemeMaterialSurface,
     renderMarkdown(input: Readonly<{ value: string; selectable: boolean; testID?: string }>) {
@@ -383,6 +399,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         initialFocusRef?: React.RefObject<unknown>;
         placement?: 'auto' | 'top' | 'bottom' | 'left' | 'right';
         presentation?: 'popover' | 'menu' | 'dropdown' | 'context';
+        width?: 'anchor' | 'content';
         autoFocusOnOpen?: boolean;
         onRequestClose(): void;
         content(controls: Readonly<{

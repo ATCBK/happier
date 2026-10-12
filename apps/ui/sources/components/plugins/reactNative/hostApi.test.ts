@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { fileURLToPath } from 'node:url';
 import {
     PluginUiArtifactDigestV1Schema,
@@ -136,6 +137,32 @@ describe('canonical React Native plugin Host API adapter', () => {
         await expect(adapter.api.readStoredImage(reference)).rejects.toMatchObject({ code: 'invalid_payload' });
         adapter.dispose();
         mediaOwner.dispose();
+    });
+
+    it('keeps Action request correlation root-compatible with a long mounted identity', async () => {
+        const requests: PluginUiHostApiRequestEnvelopeV1[] = [];
+        const owner = createPluginSurfaceHostApi({ surfaceContext: surface, handlers: {
+            // Substitute the Action delivery boundary, keeping mounted request
+            // parsing, admission and public result normalization real.
+            executeAction: request => { requests.push(request); return { plugins: [] }; },
+        } });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: createPluginSurfaceContextFixture({ mount: canonicalRightPaneMount }),
+            requestSurface: surface,
+            // Artifact digest and destination identity legitimately exceed the
+            // root Action request-id budget; they are authority, not correlation.
+            requestIdPrefix: `rn-v2:${JSON.stringify({ mount: canonicalRightPaneMount,
+                artifactDigest: `sha256:${'e'.repeat(64)}`, occurrenceId: 'inspector-generation-44' })}`,
+            handleRequest: owner.handleRequest,
+            installedMethods: owner.installedMethods,
+        });
+        try {
+            await adapter.api.executeAction('plugins.list', {});
+            await adapter.api.executeAction('plugins.list', {});
+            expect(requests).toHaveLength(2);
+            for (const request of requests) expect(ExternalActionRequestIdV1Schema.safeParse(request.requestId).success).toBe(true);
+            expect(requests[0]!.requestId).not.toBe(requests[1]!.requestId);
+        } finally { adapter.dispose(); }
     });
 
     it('omits an absent optional Action input from the strict mounted request', async () => {

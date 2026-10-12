@@ -90,13 +90,15 @@ export function serializePluginActionInputSelectionFacts(input: Parameters<
     const projection = facts.pluginUiProjection;
     return stableJsonStringify({
         ...facts,
-        // Aggregate projection generation is a delivery snapshot, not an
-        // occurrence or Action-selection lifetime. Every consumed semantic
-        // entry remains in this key, so a real catalog change still replaces
-        // the controller without remounting it for unrelated projection work.
+        // This carrier is used only for Action presentation text. Producer
+        // presence, unrelated surfaces and aggregate delivery metadata are not
+        // an Action-selection lifetime. Exact Action and target facts above
+        // still retire a changed selection.
         pluginUiProjection: projection === null
             ? null
-            : { ...projection, generation: 0 },
+            : Object.fromEntries(Object.entries(projection.translationsByPluginId).map(([pluginId, translations]) => (
+                [pluginId, translations.bundles]
+            ))),
     });
 }
 

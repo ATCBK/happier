@@ -221,7 +221,9 @@ export function resolvePluginSurfaceDestinationDisabledReason(
     placement: PluginUiSurfacePlacementProjection,
     policyContext: PluginUiPolicyEvaluationContext | undefined,
 ): string | null {
-    if (placement.availability.state !== 'available') {
+    // Resolving execution does not deny navigation to the declared page. Its
+    // route owns loading while Administration resolves the exact origin.
+    if (placement.availability.state !== 'available' && placement.availability.state !== 'resolving') {
         return placement.availability.reason;
     }
     if (!canRenderPluginUiProjectionEntry(placement, policyContext)) {

@@ -122,6 +122,38 @@ afterEach(() => {
 });
 
 describe('inspector renderSurface (real source, mounted)', () => {
+    it('retains the inventory on a semantic catalog refusal and retries instead of publishing an empty list', async () => {
+        let listReadCount = 0;
+        const diagnostic = 'The daemon plugin runtime is unavailable.';
+        const executeAction = vi.fn(async () => {
+            listReadCount += 1;
+            if (listReadCount === 2) return {
+                ok: false,
+                kind: 'plugins_list',
+                diagnostics: [{ code: 'plugin_catalog_runtime_unavailable', message: diagnostic }],
+            };
+            return { ok: true, kind: 'plugins_list', plugins: [{ pluginId: 'acme.retained', title: 'Retained plugin', enabled: true }] };
+        });
+        await act(async () => {
+            renderer = create(renderInspectorSurface({
+                hostApi: createInspectorTabHostApi(executeAction),
+                surface: createInspectorTabSurface(),
+            }));
+        });
+        await waitForTestId(renderer!, 'inspector-plugin-acme.retained');
+        const menu = findByTestId(renderer!, 'inspector-quick-actions-menu')
+            .find((instance) => typeof instance.props.onSelect === 'function');
+        expect(menu).toBeDefined();
+        await act(async () => { menu!.props.onSelect('refresh'); });
+        await waitForTestId(renderer!, 'inspector-error');
+        expect(findByTestId(renderer!, 'inspector-error').find((instance) => instance.props.description === diagnostic)).toBeDefined();
+        expect(findByTestId(renderer!, 'inspector-plugin-acme.retained')).not.toHaveLength(0);
+        const retry = await findPressableByTestId(renderer!, 'inspector-error-retry');
+        await act(async () => { retry.props.onPress(); });
+        await vi.waitFor(() => { expect(findByTestId(renderer!, 'inspector-error')).toHaveLength(0); });
+        expect(findByTestId(renderer!, 'inspector-plugin-acme.retained')).not.toHaveLength(0);
+    });
+
     it('keeps reload authority adjacent to a selected plugin instead of exposing bulk reload', async () => {
         let listCallCount = 0;
         const executeAction = vi.fn(async (actionId: string, input: unknown) => {
@@ -220,7 +252,7 @@ describe('inspector renderSurface (real source, mounted)', () => {
         const rendered = JSON.stringify(renderer!.toJSON());
         expect(rendered).toContain('Aucun plugin installé.');
         // Untranslated key → the author fallback, never the raw key.
-        expect(rendered).toContain('Quick menu');
+        expect(quickMenu!.props.triggerAccessibilityLabel).toBe('Open Inspector quick menu');
         expect(rendered).not.toContain('plugins.inspector.surface.empty');
         expect(rendered).not.toContain('plugins.inspector.surface.quickMenu');
     });
@@ -263,10 +295,13 @@ describe('inspector renderSurface (real source, mounted)', () => {
             await Promise.resolve();
         });
 
-        expect(findByTestId(renderer!, 'inspector-error')[0]?.props).toMatchObject({
+        const failure = findByTestId(renderer!, 'inspector-error')[0]?.props;
+        expect(failure).toMatchObject({
             tone: 'danger',
             title: 'Plugin inventory unavailable',
-            description: 'Host API is unavailable.',
         });
+        expect(failure?.description).not.toBe('internal_error');
+        expect(failure?.description).toBe('Plugin inventory unavailable');
+        await findPressableByTestId(renderer!, 'inspector-error-retry');
     });
 });

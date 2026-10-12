@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { t } from '@/text';
-import { visuallyHiddenDomStyle } from '@/components/ui/accessibility/visuallyHiddenStyle';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 
 type PluginSurfaceInteractionBoundaryProps = Readonly<{
     children: React.ReactNode;
@@ -115,16 +115,17 @@ export function PluginSurfaceInteractionBoundary(
                 </div>
             </div>
             {!props.enabled ? (
-                <span
+                <div
                     data-testid={`plugin-surface-offline-summary:${props.surfaceId}`}
                     role="status"
                     aria-live="polite"
-                    style={visuallyHiddenDomStyle}
+                    aria-label={t('pluginSurfaces.offlineSnapshot.accessibilityLabel', { title: props.snapshotTitle })}
                 >
-                    {t('pluginSurfaces.offlineSnapshot.accessibilityLabel', {
-                        title: props.snapshotTitle,
-                    })}
-                </span>
+                    <SurfaceFreshnessLine
+                        testID={`plugin-surface-offline-summary:${props.surfaceId}-freshness`}
+                        reason={t('pluginSurfaces.state.offline.reason')}
+                    />
+                </div>
             ) : null}
         </>
     );

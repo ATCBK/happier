@@ -25,6 +25,7 @@ export function PluginHostedWebFrame(props: Readonly<{
     url?: string;
     bundle?: ArtifactHtmlBundleV1;
     networkOrigins?: readonly UiSurfaceNetworkOriginV1[];
+    network?: 'none' | 'open';
     bootstrapConfig?: PluginHostedWebBridgeBootstrapConfigV1;
     sandbox: PluginHostedWebSandboxPolicy;
     security: PluginHostedWebSecurityPolicyV1;
@@ -94,6 +95,7 @@ export function PluginHostedWebFrame(props: Readonly<{
             title={props.title}
             {...source}
             networkOrigins={props.networkOrigins}
+            network={props.network}
             bootstrapConfig={props.bootstrapConfig}
             sandbox={props.sandbox}
             security={props.security}

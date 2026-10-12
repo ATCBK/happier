@@ -479,6 +479,7 @@ export function PluginHostedWebPane(props: Readonly<{
     inlineDocument?: PluginHostedHtmlSourceV1;
     /** Exact normalized egress request written into this document's CSP. */
     inlineDocumentNetworkOrigins?: readonly UiSurfaceNetworkOriginV1[];
+    inlineDocumentNetwork?: 'none' | 'open';
     title?: string;
     /**
      * §3.1/UI-D11: the mount's surface identity, produced by the ONE bound
@@ -636,13 +637,14 @@ export function PluginHostedWebPane(props: Readonly<{
     });
     const rendererDocumentKey = React.useMemo(() => stableJsonStringify({
         endpointUrl: props.endpointUrl,
-        html: inlineDocument?.html,
+        bundle: inlineDocument,
+        network: props.inlineDocumentNetwork,
         networkOrigins: props.inlineDocumentNetworkOrigins,
         launchInputSemanticKey,
         occurrenceId,
         mountInstanceKey: props.mountInstanceKey,
         subPath: props.subPath,
-    }), [props.endpointUrl, inlineDocument?.html, props.inlineDocumentNetworkOrigins, launchInputSemanticKey, occurrenceId, props.mountInstanceKey, props.subPath]);
+    }), [props.endpointUrl, inlineDocument, props.inlineDocumentNetwork, props.inlineDocumentNetworkOrigins, launchInputSemanticKey, occurrenceId, props.mountInstanceKey, props.subPath]);
     const allowedMessageKinds = inlineDocument ? INLINE_DOCUMENT_MESSAGES : descriptor ? readAllowedMessageKinds(descriptor.bridge) : [];
     const canonicalHostOrigin = resolveHostedFrameHostOrigin();
     const canonicalWireAllowed = allowedMessageKinds.includes('hostApi');
@@ -1393,6 +1395,7 @@ export function PluginHostedWebPane(props: Readonly<{
                 {...(inlineDocument && bridgeIdentity && canonicalHostOrigin ? {
                     bundle: inlineDocument,
                     networkOrigins: props.inlineDocumentNetworkOrigins,
+                    network: props.inlineDocumentNetwork,
                     bootstrapConfig: { identity: bridgeIdentity, frameOrigin: 'null', hostOrigin: canonicalHostOrigin },
                     onUnexpectedNavigation: handleOpaqueArtifactUnexpectedNavigation,
                     onNativeHostedHtmlUnavailable: handleNativeHostedHtmlUnavailable,

@@ -12,10 +12,12 @@ describe('PLUGIN_UI_COMMON_JS_HOST_MODULES', () => {
         expect(Object.isFrozen(PLUGIN_UI_COMMON_JS_HOST_MODULES)).toBe(true);
     });
 
-    it('exposes every production plugin-ui subpath while keeping private/runtime packages out', () => {
+    it('exposes author components while keeping private/runtime packages out', () => {
         expect(PLUGIN_UI_COMMON_JS_HOST_MODULES['@happier-dev/plugin-ui']).toBeDefined();
+        expect(PLUGIN_UI_COMMON_JS_HOST_MODULES['@happier-dev/plugin-ui/components']).toBeDefined();
         expect(PLUGIN_UI_COMMON_JS_HOST_MODULES['@happier-dev/plugin-ui/data']).toBeDefined();
-        expect(PLUGIN_UI_COMMON_JS_HOST_MODULES['@happier-dev/plugin-ui/presentation']).toBeDefined();
+        expect(PLUGIN_UI_COMMON_JS_HOST_MODULES).not.toHaveProperty('@happier-dev/plugin-ui/presentation');
+        expect(PLUGIN_UI_COMMON_JS_HOST_MODULES).not.toHaveProperty('@happier-dev/plugin-ui/presentation/typeScale');
         expect(PLUGIN_UI_COMMON_JS_HOST_MODULES).not.toHaveProperty('@happier-dev/plugin-ui/testing');
         expect(PLUGIN_UI_COMMON_JS_HOST_MODULES).not.toHaveProperty('@happier-dev/plugin-sdk');
         expect(PLUGIN_UI_COMMON_JS_HOST_MODULES).not.toHaveProperty('@happier-dev/protocol');

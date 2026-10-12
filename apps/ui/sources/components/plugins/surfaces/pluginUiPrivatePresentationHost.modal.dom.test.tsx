@@ -346,8 +346,9 @@ function popoverElementProps(element: React.ReactNode): Record<string, unknown> 
 describe('plugin private presentation carrier in BaseModal', () => {
     it('projects semantic overlay sizing onto the incumbent Popover portal contract', () => {
         const host = createPluginUiPrivatePresentationHost(undefined);
-        const renderPresentation = (presentation: 'popover' | 'menu' | 'dropdown' | 'context') => {
+        const renderPresentation = (presentation: 'popover' | 'menu' | 'dropdown' | 'context', width?: 'anchor' | 'content') => {
             const input = {
+                ...(width === undefined ? {} : { width }),
                 open: true,
                 anchorRef: { current: null } as React.RefObject<unknown>,
                 placement: 'bottom' as const,
@@ -385,6 +386,15 @@ describe('plugin private presentation carrier in BaseModal', () => {
             anchorAlign: 'start',
         });
         expect(renderPresentation('dropdown').maxWidthCap).toBe(1024);
+        // A trigger that is not a field box sizes its dropdown or popover by content; its width is a minimum.
+        for (const presentation of ['dropdown', 'popover'] as const) {
+            expect(renderPresentation(presentation, 'content').portal).toMatchObject({
+                matchAnchorWidth: true,
+                sizeToContent: true,
+                anchorAlign: 'start',
+            });
+            expect(renderPresentation(presentation, 'anchor').portal).not.toHaveProperty('sizeToContent');
+        }
     });
 
     it('forwards a plugin scroll source to the incumbent Popover without taking over scroll behavior', () => {

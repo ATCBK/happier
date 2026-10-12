@@ -116,6 +116,7 @@ describe('PluginSurfaceInteractionBoundary.web', () => {
         );
 
         expect(screen.findByTestId('plugin-web-offline-action')).toBeTruthy();
+        expect(screen.findByTestId('plugin-surface-offline-summary:surface-web-offline-freshness-text')).toBeTruthy();
         expect(screen.findByTestId('plugin-surface-snapshot:surface-web-offline')?.props).toMatchObject({
             inert: true,
             'aria-hidden': true,
@@ -125,7 +126,7 @@ describe('PluginSurfaceInteractionBoundary.web', () => {
             'aria-live': 'polite',
         });
         expect(
-            screen.findByTestId('plugin-surface-offline-summary:surface-web-offline')?.props.children,
+            screen.findByTestId('plugin-surface-offline-summary:surface-web-offline')?.props['aria-label'],
         ).toContain('Build summary');
 
         const captureEvent = {
