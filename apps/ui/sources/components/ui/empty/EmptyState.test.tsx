@@ -197,7 +197,13 @@ describe('EmptyState', () => {
             <ListPresentationProvider value="page"><SectionLeadingColumnProvider>{state}</SectionLeadingColumnProvider></ListPresentationProvider>,
         );
         expect(inSection.findAllByType(PageContentColumn)).toHaveLength(0);
-        expect(inSection.findHostByTestId('tokens')).toBeTruthy();
+        const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
+            ? Object.assign({}, ...style.map(flatten))
+            : (style && typeof style === 'object' ? style as Record<string, unknown> : {});
+        const sectionStyle = flatten(inSection.findHostByTestId('tokens')?.props.style);
+        expect(sectionStyle.marginHorizontal).toBe(0);
+        expect(sectionStyle.marginTop).toBe(0);
+        expect(flatten(onPage.findHostByTestId('tokens')?.props.style).marginHorizontal).toBeGreaterThan(0);
     });
 
     it('omits the action slot when no action is provided', async () => {

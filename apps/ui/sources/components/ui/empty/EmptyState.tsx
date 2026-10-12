@@ -258,7 +258,7 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
     );
     if (page) {
         const pageState = (
-            <View testID={props.testID} style={[stylesheet.page, frame ? stylesheet.pageAdd : null]}>
+            <View testID={props.testID} style={[stylesheet.page, inSection ? stylesheet.pageInSection : null, frame ? stylesheet.pageAdd : null]}>
                 {state}
             </View>
         );
@@ -288,6 +288,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     centeredFrame: { ...HAPPIER_EMPTY_STATE_FRAME.centeredAdd },
     page: { ...HAPPIER_EMPTY_STATE_FRAME.page },
+    // A section around the state already puts it on the sheets' edges, one section gap down.
+    pageInSection: { marginHorizontal: 0, marginTop: 0 },
     // Lab E1: the dashed "add something here" frame, only for an invitation to add.
     pageAdd: {
         ...HAPPIER_EMPTY_STATE_FRAME.pageAdd,
