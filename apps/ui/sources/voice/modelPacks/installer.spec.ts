@@ -1,17 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 
-function openBytes(data: Uint8Array, maxReadBytes = Number.POSITIVE_INFINITY) {
+const nativeFetch = vi.hoisted(() => vi.fn<typeof fetch>());
+// Expo's native network transport is unavailable in the Node test process.
+vi.mock('expo/fetch', () => ({ fetch: nativeFetch }));
+
+function openBytes(data: Uint8Array, maxReadBytes = Number.POSITIVE_INFINITY, options: {
+  onRead?: () => void;
+  onClose?: () => void;
+  writeBytes?: (chunk: Uint8Array, offset: number) => void;
+} = {}) {
   let offset = 0;
   return {
     readBytes(length: number) {
       if (length > maxReadBytes) throw new Error('read_exceeds_js_heap_budget');
       const chunk = data.slice(offset, offset + length);
       offset += chunk.length;
+      options.onRead?.();
       return chunk;
     },
-    close() {},
+    writeBytes(chunk: Uint8Array) {
+      options.writeBytes?.(chunk, offset);
+      offset += chunk.byteLength;
+    },
+    close() { options.onClose?.(); },
   };
 }
 
@@ -54,16 +67,6 @@ describe('modelPacks installer (native)', () => {
       create() {
         if (!writes.has(this.uri)) writes.set(this.uri, []);
       }
-      writableStream() {
-        const uri = this.uri;
-        return new WritableStream({
-          write(chunk: Uint8Array) {
-            const arr = writes.get(uri) ?? [];
-            arr.push(new Uint8Array(chunk));
-            writes.set(uri, arr);
-          },
-        });
-      }
       async bytes() {
         return this.bytesSync();
       }
@@ -83,7 +86,13 @@ describe('modelPacks installer (native)', () => {
         return new TextDecoder().decode(buf);
       }
       open() {
-        return openBytes(this.bytesSync());
+        return openBytes(this.bytesSync(), Number.POSITIVE_INFINITY, {
+          writeBytes: (chunk) => {
+            const arr = writes.get(this.uri) ?? [];
+            arr.push(new Uint8Array(chunk));
+            writes.set(this.uri, arr);
+          },
+        });
       }
       write(data: string | Uint8Array) {
         const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
@@ -133,6 +142,8 @@ describe('modelPacks installer (native)', () => {
                 const value = chunks[i++]!;
                 return { done: false, value };
               },
+              async cancel() {},
+              releaseLock() {},
             };
           },
         },
@@ -205,16 +216,6 @@ describe('modelPacks installer (native)', () => {
         const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
         writes.set(this.uri, [new Uint8Array(buf)]);
       }
-      writableStream() {
-        const uri = this.uri;
-        return new WritableStream({
-          write(chunk: Uint8Array) {
-            const arr = writes.get(uri) ?? [];
-            arr.push(new Uint8Array(chunk));
-            writes.set(uri, arr);
-          },
-        });
-      }
       async bytes() {
         return this.bytesSync();
       }
@@ -234,7 +235,13 @@ describe('modelPacks installer (native)', () => {
         return new TextDecoder().decode(buf);
       }
       open() {
-        return openBytes(this.bytesSync());
+        return openBytes(this.bytesSync(), Number.POSITIVE_INFINITY, {
+          writeBytes: (chunk) => {
+            const arr = writes.get(this.uri) ?? [];
+            arr.push(new Uint8Array(chunk));
+            writes.set(this.uri, arr);
+          },
+        });
       }
       delete() {
         writes.delete(this.uri);
@@ -300,6 +307,8 @@ describe('modelPacks installer (native)', () => {
                 done = true;
                 return { done: false, value: bytes };
               },
+              async cancel() {},
+              releaseLock() {},
             };
           },
         },
@@ -331,7 +340,12 @@ describe('modelPacks installer (native)', () => {
     // Native `File.bytes()` materializes the whole file in the JS heap, which exceeds Android's
     // per-app heap for model files (tens to hundreds of MB). This boundary fake makes whole-file
     // reads fail and only supports bounded reads through `File.open().readBytes(length)`.
-    function createBoundedReadFs(files: Map<string, Uint8Array>) {
+    function createBoundedReadFs(files: Map<string, Uint8Array>, options: {
+      onRead?: () => void;
+      writeError?: Error;
+      openError?: Error;
+      openHandles?: Set<object>;
+    } = {}) {
       class Directory {
         uri: string;
         exists = true;
@@ -355,6 +369,7 @@ describe('modelPacks installer (native)', () => {
           if (!files.has(this.uri)) files.set(this.uri, new Uint8Array());
         }
         delete() {
+          if (options.openHandles?.size) throw new Error('file_handle_still_open');
           files.delete(this.uri);
         }
         write(data: string | Uint8Array) {
@@ -366,20 +381,22 @@ describe('modelPacks installer (native)', () => {
         async bytes(): Promise<Uint8Array> {
           throw new Error('whole_file_read_exceeds_js_heap');
         }
-        writableStream() {
-          const uri = this.uri;
-          return new WritableStream<Uint8Array>({
-            write(chunk) {
-              const prev = files.get(uri) ?? new Uint8Array();
-              const next = new Uint8Array(prev.length + chunk.length);
-              next.set(prev, 0);
-              next.set(chunk, prev.length);
-              files.set(uri, next);
+        open() {
+          if (options.openError) throw options.openError;
+          const token = {};
+          options.openHandles?.add(token);
+          return openBytes(files.get(this.uri) ?? new Uint8Array(), MAX_BOUNDED_READ_BYTES, {
+            onRead: options.onRead,
+            onClose: () => { options.openHandles?.delete(token); },
+            writeBytes: (chunk, offset) => {
+              if (options.writeError) throw options.writeError;
+              const prev = files.get(this.uri) ?? new Uint8Array();
+              const next = new Uint8Array(Math.max(prev.byteLength, offset + chunk.byteLength));
+              next.set(prev);
+              next.set(chunk, offset);
+              files.set(this.uri, next);
             },
           });
-        }
-        open() {
-          return openBytes(files.get(this.uri) ?? new Uint8Array(), MAX_BOUNDED_READ_BYTES);
         }
       }
 
@@ -410,6 +427,8 @@ describe('modelPacks installer (native)', () => {
                 done = true;
                 return { done: false, value: bytes };
               },
+              async cancel() {},
+              releaseLock() {},
             };
           },
         },
@@ -499,6 +518,98 @@ describe('modelPacks installer (native)', () => {
       ).rejects.toThrow(/model_pack_sha256_mismatch/);
       expect(files.has('file:///docs/modelPacks/example/model.bin')).toBe(false);
     });
+
+    it.each(['existing', 'downloaded'] as const)('stops %s file verification when cancelled and closes its handle', async (state) => {
+      const bytes = multiChunkBytes(3);
+      const fileUri = 'file:///docs/modelPacks/example/model.bin';
+      const files = new Map<string, Uint8Array>(state === 'existing' ? [[fileUri, bytes]] : []);
+      const openHandles = new Set<object>();
+      const controller = new AbortController();
+      const expectedSha = await sha256Hex(bytes);
+      const fs = createBoundedReadFs(files, { openHandles, onRead: () => queueMicrotask(() => controller.abort()) });
+      const fetchImpl: typeof fetch = async (url) => String(url).includes('manifest.json')
+        ? Response.json({ packId: 'example', kind: 'stt_sherpa', model: 'zipformer', version: 'v1', files: [
+          { path: 'model.bin', url: 'https://example.com/model.bin', sha256: expectedSha, sizeBytes: bytes.length },
+        ] })
+        : new Response(new Blob([bytes]).stream());
+
+      await expect(ensureModelPackInstalled({
+        packId: 'example', mode: 'download_if_missing', manifestUrl: 'https://example.com/manifest.json',
+        timeoutMs: 5000, signal: controller.signal,
+      }, { fs, fetch: fetchImpl })).rejects.toThrow('aborted');
+
+      expect(openHandles.size).toBe(0);
+      expect(files.has('file:///docs/modelPacks/example/pack.json')).toBe(false);
+      expect(files.has(fileUri)).toBe(state === 'existing');
+    });
+
+    it.each(['write', 'open'] as const)('cancels the response and closes file handles after a file %s failure', async (failure) => {
+      const files = new Map<string, Uint8Array>();
+      const openHandles = new Set<object>();
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array([1, 2, 3, 4])); },
+        cancel() { cancelled = true; },
+      });
+      const error = new Error(`file_${failure}_failed`);
+      const fs = createBoundedReadFs(files, { openHandles, ...(failure === 'write' ? { writeError: error } : { openError: error }) });
+      const fetchImpl: typeof fetch = async (url) => String(url).includes('manifest.json')
+        ? Response.json({ packId: 'example', kind: 'stt_sherpa', model: 'zipformer', version: 'v1', files: [
+          { path: 'model.bin', url: 'https://example.com/model.bin', sha256: 'a'.repeat(64), sizeBytes: 4 },
+        ] })
+        : new Response(body);
+
+      await expect(ensureModelPackInstalled({
+        packId: 'example', mode: 'download_if_missing', manifestUrl: 'https://example.com/manifest.json',
+        timeoutMs: 5000, signal: new AbortController().signal,
+      }, { fs, fetch: fetchImpl })).rejects.toThrow(error.message);
+
+      expect(cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+      expect(openHandles.size).toBe(0);
+      expect(files.has('file:///docs/modelPacks/example/model.bin')).toBe(false);
+      expect(files.has('file:///docs/modelPacks/example/pack.json')).toBe(false);
+    });
+
+    it('rejects unavailable streaming without reading the entire response', async () => {
+      const files = new Map<string, Uint8Array>();
+      const response = new Response(new Uint8Array([1]));
+      Object.defineProperty(response, 'body', { value: null });
+      response.arrayBuffer = async () => { throw new Error('whole_response_read'); };
+      const fetchImpl: typeof fetch = async (url) => String(url).includes('manifest.json')
+        ? Response.json({ packId: 'example', kind: 'stt_sherpa', model: 'zipformer', version: 'v1', files: [
+          { path: 'model.bin', url: 'https://example.com/model.bin', sha256: 'a'.repeat(64), sizeBytes: 1 },
+        ] })
+        : response;
+
+      await expect(ensureModelPackInstalled({
+        packId: 'example', mode: 'download_if_missing', manifestUrl: 'https://example.com/manifest.json',
+        timeoutMs: 5000, signal: new AbortController().signal,
+      }, { fs: createBoundedReadFs(files), fetch: fetchImpl })).rejects.toThrow('model_pack_download_stream_unavailable');
+      expect(files.has('file:///docs/modelPacks/example/model.bin')).toBe(false);
+    });
+
+    it('installs through Expo streaming fetch by default without global fetch', async () => {
+      const files = new Map<string, Uint8Array>();
+      const bytes = new Uint8Array([1, 2, 3, 4]);
+      const expectedSha = await sha256Hex(bytes);
+      nativeFetch.mockImplementation(async (url) => String(url).includes('manifest.json')
+        ? Response.json({ packId: 'example', kind: 'stt_sherpa', model: 'zipformer', version: 'v1', files: [
+          { path: 'model.bin', url: 'https://example.com/model.bin', sha256: expectedSha, sizeBytes: bytes.length },
+        ] })
+        : new Response(new Blob([bytes]).stream()));
+      const globalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('global_fetch_cannot_stream'));
+      try {
+        await ensureModelPackInstalled({
+          packId: 'example', mode: 'download_if_missing', manifestUrl: 'https://example.com/manifest.json',
+          timeoutMs: 5000, signal: new AbortController().signal,
+        }, { fs: createBoundedReadFs(files) });
+        expect(files.get('file:///docs/modelPacks/example/model.bin')).toEqual(bytes);
+        expect(files.has('file:///docs/modelPacks/example/pack.json')).toBe(true);
+      } finally {
+        globalFetch.mockRestore();
+      }
+    });
   });
 
   it('rejects pack manifests that contain unsafe paths', async () => {
@@ -523,9 +634,6 @@ describe('modelPacks installer (native)', () => {
       delete() {}
       async bytes() {
         return new Uint8Array();
-      }
-      writableStream() {
-        return new WritableStream();
       }
     }
 
@@ -611,17 +719,13 @@ describe('modelPacks installer (native)', () => {
         return files.get(this.uri) ?? new Uint8Array();
       }
       open() {
-        return openBytes(files.get(this.uri) ?? new Uint8Array());
-      }
-      writableStream() {
-        const uri = this.uri;
-        return new WritableStream<Uint8Array>({
-          write(chunk) {
-            const prev = files.get(uri) ?? new Uint8Array();
-            const next = new Uint8Array(prev.length + chunk.length);
-            next.set(prev, 0);
-            next.set(chunk, prev.length);
-            files.set(uri, next);
+        return openBytes(files.get(this.uri) ?? new Uint8Array(), Number.POSITIVE_INFINITY, {
+          writeBytes: (chunk, offset) => {
+            const prev = files.get(this.uri) ?? new Uint8Array();
+            const next = new Uint8Array(Math.max(prev.byteLength, offset + chunk.byteLength));
+            next.set(prev);
+            next.set(chunk, offset);
+            files.set(this.uri, next);
           },
         });
       }

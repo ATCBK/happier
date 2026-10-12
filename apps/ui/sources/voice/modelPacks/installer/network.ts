@@ -1,7 +1,11 @@
 import { parseModelPackManifest, type ModelPackManifest } from '@/voice/modelPacks/manifest';
 
-export async function raceWithAbort<T>(signal: AbortSignal, promises: Array<Promise<T>>): Promise<T> {
+export function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new Error('aborted');
+}
+
+export async function raceWithAbort<T>(signal: AbortSignal, promises: Array<Promise<T>>): Promise<T> {
+  throwIfAborted(signal);
   let onAbort: (() => void) | null = null;
   const abortPromise = new Promise<never>((_, reject) => {
     onAbort = () => reject(new Error('aborted'));

@@ -1,21 +1,23 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
+import type { File as ExpoFile } from 'expo-file-system';
 
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
 import type { InstallerFs, Progress } from './types';
 import { filePathParts } from './paths';
-import { createTimeoutPromise, raceWithAbort } from './network';
+import { createTimeoutPromise, raceWithAbort, throwIfAborted } from './network';
 
 // Model files are tens to hundreds of MB; whole-file reads exceed Android's per-app JS heap, so
 // files are hashed through bounded reads.
 const HASH_READ_CHUNK_BYTES = 1024 * 1024;
 
-async function sha256FileHex(file: any): Promise<string> {
+async function sha256FileHex(file: Pick<ExpoFile, 'open'>, signal: AbortSignal): Promise<string> {
   const hash = sha256.create();
   const handle = file.open();
   try {
     while (true) {
+      throwIfAborted(signal);
       const chunk: Uint8Array = handle.readBytes(HASH_READ_CHUNK_BYTES);
       if (chunk.length === 0) break;
       hash.update(chunk);
@@ -30,7 +32,7 @@ async function sha256FileHex(file: any): Promise<string> {
 
 async function writeResponseToFile(opts: {
   response: Response;
-  file: any;
+  file: Pick<ExpoFile, 'open'>;
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
 }): Promise<{ loaded: number; total: number }> {
@@ -42,19 +44,28 @@ async function writeResponseToFile(opts: {
   // Buffering the whole response would exceed the JS heap for large model files.
   if (!reader) throw new Error('model_pack_download_stream_unavailable');
 
-  const writer = (opts.file.writableStream() as WritableStream<Uint8Array>).getWriter();
+  let handle: ReturnType<ExpoFile['open']> | undefined;
   try {
+    // Own the handle directly: an errored WritableStream cannot close its native sink.
+    handle = opts.file.open();
     while (true) {
+      throwIfAborted(opts.signal);
       const { done, value } = await raceWithAbort(opts.signal, [reader.read()]);
       if (done) break;
-      await writer.write(value);
+      handle.writeBytes(value);
       loaded += value.byteLength;
       opts.onProgress?.({ loaded, total });
     }
-    await writer.close();
-  } catch (error) {
-    await writer.abort(error).catch(() => {});
-    throw error;
+  } finally {
+    try {
+      handle?.close();
+    } finally {
+      try {
+        await reader.cancel();
+      } finally {
+        reader.releaseLock();
+      }
+    }
   }
   return { loaded, total: total || loaded };
 }
@@ -85,10 +96,12 @@ async function downloadAndVerifyFile(opts: {
   const file = new opts.fs.File(dir, filename);
   if (file.exists) {
     try {
-      const actual = await sha256FileHex(file);
+      const actual = await sha256FileHex(file, opts.signal);
       if (actual === opts.entry.sha256.toLowerCase()) return;
       file.delete();
-    } catch {
+    } catch (error) {
+      // A cancelled verification does not invalidate an already downloaded file.
+      if (opts.signal.aborted) throw error;
       try {
         file.delete();
       } catch {
@@ -114,7 +127,7 @@ async function downloadAndVerifyFile(opts: {
 
     await writeResponseToFile({ response, file, signal: opts.signal, onProgress: opts.onProgress });
 
-    const actual = await sha256FileHex(file);
+    const actual = await sha256FileHex(file, opts.signal);
     if (actual !== opts.entry.sha256.toLowerCase()) {
       try {
         file.delete();
