@@ -2,10 +2,11 @@ import * as React from 'react';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol';
 
 import { storage } from '@/sync/domains/state/storage';
-import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
+import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { buildSessionContextFacts } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { getServerProfilesGeneration } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { observeTeam, observeTeamGroup } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
@@ -17,18 +18,37 @@ type AudienceTarget = Readonly<{
 
 /** One surface binding to existing exact-Home credentials and Team projections, never per card. */
 export function useSessionAudienceContext(addresses: readonly SessionAddress[]) {
-    const addressesKey = JSON.stringify([...new Map(addresses.map((address) => [sessionAddressKey(address), address])).values()]
-        .sort((a, b) => sessionAddressKey(a).localeCompare(sessionAddressKey(b))));
+    const addressesKey = React.useMemo(() => JSON.stringify(
+        [...new Map(addresses.map((address) => [sessionAddressKey(address), address])).entries()]
+            .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+            .map(([, address]) => address),
+    ), [addresses]);
     // These are our own serialized address tuples. Keeping this primitive as the selector result
     // makes streaming and unrelated row mutations invisible to audience observation.
     const stableAddresses = React.useMemo(() => JSON.parse(addressesKey) as SessionAddress[], [addressesKey]);
-    const targetsKey = storage(React.useCallback((state) => JSON.stringify(stableAddresses.flatMap((address) => {
-        const row = findSessionListLookupSession(state, address)?.session;
-        const hydrated = state.sessions[address.sessionId];
-        const session = row ?? (hydrated?.serverId === address.serverId ? hydrated : null);
-        const audience = session?.access?.audienceContext;
-        return audience ? [{ address, audience }] : [];
-    })), [stableAddresses]));
+    const selectTargetsKey = React.useMemo(() => {
+        let previousInputs: Pick<ReturnType<typeof storage.getState>, 'sessions' | 'sessionListRowsByServerId'> | null = null;
+        let previousProfilesGeneration = -1;
+        let key = '[]';
+        return (state: ReturnType<typeof storage.getState>) => {
+            const profilesGeneration = getServerProfilesGeneration();
+            if (previousInputs?.sessions === state.sessions
+                && previousInputs.sessionListRowsByServerId === state.sessionListRowsByServerId
+                && previousProfilesGeneration === profilesGeneration) return key;
+            previousInputs = { sessions: state.sessions, sessionListRowsByServerId: state.sessionListRowsByServerId };
+            previousProfilesGeneration = profilesGeneration;
+            key = JSON.stringify(stableAddresses.flatMap((address) => {
+                // Audience belongs to the row; the list's Home-name/index join is unused here.
+                const row = readSessionListRowForServerId(state.sessionListRowsByServerId, address.serverId, address.sessionId);
+                const hydrated = state.sessions[address.sessionId];
+                const session = row ?? (hydrated?.serverId === address.serverId ? hydrated : null);
+                const audience = session?.access?.audienceContext;
+                return audience ? [{ address, audience }] : [];
+            }));
+            return key;
+        };
+    }, [stableAddresses]);
+    const targetsKey = storage(selectTargetsKey);
     const targets = React.useMemo(() => JSON.parse(targetsKey) as AudienceTarget[], [targetsKey]);
     const credentialBindingsByServerId = useServerCredentialAccountScopeBindings(
         stableAddresses.map((address) => address.serverId),

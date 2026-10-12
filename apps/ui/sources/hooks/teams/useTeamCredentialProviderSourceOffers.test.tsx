@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     createProviderErrorV1,
     ProviderConnectionIdSchema,
@@ -7,21 +7,16 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import {
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderSettingsHarness,
-    flushHookEffects,
-    installProviderSettingsRpcBoundary,
-    renderHook,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ProviderSettingsMachineRowV1 } from '@/providers/hooks/targetMachine';
 
 const providerHarness = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(providerHarness);
+const account = createProviderSettingsAccountHarness();
+let serverId = '';
 
-function row(machineId: string, serverId = 'server-home'): ProviderSettingsMachineRowV1 {
+function row(machineId: string): ProviderSettingsMachineRowV1 {
     return {
         target: { serverIdentityId: serverId, machineId },
         serverId,
@@ -46,9 +41,13 @@ function success(machineId: string) {
 }
 
 describe('useTeamCredentialProviderSourceOffers', () => {
-    afterEach(() => {
+    beforeEach(async () => {
+        serverId = (await account.restore()).serverId;
+    });
+    afterEach(async () => {
         providerHarness.reset();
         standardCleanup();
+        await account.reset();
     });
 
     it('retains every exact Machine offer while preserving the first typed failure', async () => {

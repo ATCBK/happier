@@ -1,643 +1,289 @@
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useQualifiedConnectedAccountGroups, type UseQualifiedConnectedAccountGroupsResult } from './useQualifiedConnectedAccountGroups';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installConnectedServicesCommonModuleMocks } from '@/components/settings/connectedServices/connectedServicesTestHelpers';
+import { ConnectedServiceAuthGroupPolicyV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { encodeQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
+import { QualifiedConnectedAccountServiceRefSchema, QualifiedConnectedAccountGroupRefSchema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { buildQualifiedConnectedAccountGroupMutationRequestV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountGroupRequestsV4';
+import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { QualifiedConnectedAccountUiGroup } from '@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource';
+import type { UseQualifiedConnectedAccountGroupsResult } from './useQualifiedConnectedAccountGroups';
 
-import {
-    createDeferred,
-    flushHookEffects,
-    renderHook,
-    standardCleanup,
-} from '@/dev/testkit';
-
-const createClientMock = vi.hoisted(() => vi.fn());
-const serverFetchMock = vi.hoisted(() => vi.fn());
-// HTTP is the external boundary; the race regression uses the real client below it.
-vi.mock('@/sync/http/client', () => ({ serverFetch: serverFetchMock }));
-// Pool hooks render no Markdown; fail if this unavailable third-party export is used.
+installConnectedServicesCommonModuleMocks();
+const authState = vi.hoisted(() => ({ credentials: null as AuthCredentials | null }));
+vi.mock('@/auth/context/AuthContext', () => ({ useAuth: () => authState }));
+// Pool hooks render no Markdown; this is an unavailable third-party export boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown in pool hook'); },
 }));
-// Pool hooks do not invoke Session/Team envelope HTTP APIs. Keep unrelated
-// transport imports isolated without replacing any encryption/domain logic.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
-    const unused = () => { throw new Error('Unexpected Session envelope API in pool hook'); };
-    return { createSessionDataKeyEnvelopeClient: unused, readSessionDataKeyEnvelopeCollectionPage: unused,
-        prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
+
+const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+const policy = ConnectedServiceAuthGroupPolicyV1Schema.parse({});
+function listPathFor(identity: typeof service) {
+    return '/v4/connect/qualified/groups?service=' + encodeURIComponent(
+        encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountServiceRefSchema, identity));
+}
+const listPath = listPathFor(service);
+
+function wireGroup(groupId = 'group-a') {
+    return { v: 1 as const, ref: { service, groupId }, displayName: groupId, policy, activeConnectedAccountId: null as string | null,
+        incarnation: 'group-row:' + groupId, generation: 1, runtimeStateRevision: 1, state: {}, members: [], createdAt: 0, updatedAt: 0 };
+}
+type PoolWire = ReturnType<typeof wireGroup>;
+const deletePath = buildQualifiedConnectedAccountGroupMutationRequestV4('delete', {
+    group: wireGroup().ref, expectedIncarnation: wireGroup().incarnation, expectedGeneration: 1, expectedRuntimeStateRevision: 1,
+}).path;
+let cleanup: (() => Promise<void>) | undefined;
+afterEach(async () => {
+    standardCleanup();
+    await cleanup?.();
+    cleanup = undefined;
+    authState.credentials = null;
+    resetRuntimeFetch();
+    vi.restoreAllMocks();
 });
-vi.mock('@/sync/api/teams/membershipSessionDataKeyEnvelopesApi', () => {
-    const unused = () => { throw new Error('Unexpected Team envelope API in pool hook'); };
-    return { createMembershipSessionDataKeyEnvelopeClient: unused, prepareMembershipHistoryEnvelopesForScope: unused,
-        prepareMembershipHistoryEnvelopesDetached: unused, membershipHistoryPreparationScopeKey: unused };
-});
-const authState = vi.hoisted(() => ({
-    credentials: {
-        token: 'token-a',
-        secret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    },
-}));
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => authState,
-}));
-vi.mock('@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource', async (
-    importOriginal,
-) => ({
-    ...await importOriginal<
-        typeof import('@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource')
-    >(),
-    createQualifiedConnectedAccountGroupsClient: createClientMock,
-}));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
-
-const policy = {
-    v: 1 as const,
-    strategy: 'least_limited' as const,
-    autoSwitch: false,
-    switchOn: {
-        usageLimit: true,
-        authExpired: true,
-        accountChanged: true,
-        refreshFailure: false,
-    },
-    cooldownMs: 30_000,
-    honorProviderResetsAt: true,
-    autoRestorePrimaryWhenReset: false,
-    maxSwitchesPerTurn: 1,
-    maxSwitchesPerSessionHour: 3,
-    softSwitchRemainingPercent: 15,
-    probeIfSnapshotOlderThanMs: 300_000,
-    preTurnProbeMode: 'when_stale' as const,
-    preTurnProbeOrder: 'current_first_then_candidates' as const,
-    recoveryMode: 'switch_or_wait' as const,
-    resumePromptMode: 'standard' as const,
-};
-
-function groupFor(
-    service: Readonly<{ pluginId: string; localId: string }>,
-    groupId: string,
-) {
-    return {
-        ref: { service, groupId },
-        displayName: groupId,
-        policy,
-        activeAccountId: null,
-        revision: {
-            protocol: 'v4' as const,
-            incarnation: `group-row:${groupId}`,
-            generation: 1,
-            runtimeStateRevision: 1,
-        },
-        state: {},
-        members: [],
-    };
+async function poolHome() {
+    const home = createHomeGovernanceHarness();
+    installHomeGovernanceBoundaries(home);
+    setRuntimeFetch(home.request);
+    const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+    const restoreLoader = await installRealActionExecutorModuleLoader();
+    const serverUrl = 'https://pool-hook-races.test';
+    const serverId = await home.addHome({ name: 'Pool races', serverUrl, accountId: 'pool-race-owner', currentAccount: true });
+    const features = createRootLayoutFeaturesResponse({ capabilities: {
+        connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } },
+    } });
+    home.answer(serverId, '/v1/features', { body: features });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    authState.credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+    cleanup = async () => { restoreLoader(); await home.reset(); };
+    home.answer(serverId, 'GET /v1/account/encryption/currentness', { body: { mode: 'plain', version: 1,
+        settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+    let groups: PoolWire[] = [wireGroup()];
+    home.answer(serverId, listPath, { select: () => ({ body: { groups } }) });
+    const encodedGroup = encodeURIComponent(encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountGroupRefSchema, wireGroup().ref));
+    home.answer(serverId, '/v4/connect/qualified/group?group=' + encodedGroup, { select: () => groups.length
+        ? { body: { group: groups[0] } } : { status: 404, body: { error: 'connect_group_not_found' } } });
+    home.answer(serverId, 'GET /v1/account/entity-rows/connected-accounts/purposes', { body: { status: 'present', revision: 1,
+        content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
+    for (const key of ['presentation', 'acknowledgements']) home.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/' + key, {
+        body: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } },
+    });
+    const { useQualifiedConnectedAccountGroups } = await import('./useQualifiedConnectedAccountGroups');
+    return { home, serverId, TokenStorage, useQualifiedConnectedAccountGroups, groups: () => groups, setGroups: (next: PoolWire[]) => { groups = next; } };
 }
 
-function wireGroupFor(group: ReturnType<typeof groupFor>) {
-    return { v: 1, ref: group.ref, displayName: group.displayName, policy: group.policy,
-        incarnation: group.revision.incarnation, generation: group.revision.generation,
-        runtimeStateRevision: group.revision.runtimeStateRevision, activeConnectedAccountId: group.activeAccountId,
-        state: group.state, createdAt: 0, updatedAt: 0, members: [] };
-}
-
-async function useRealHttpClient() {
-    const { createQualifiedConnectedAccountGroupsClient } = await vi.importActual<
-        typeof import('@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource')
-    >('@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource');
-    createClientMock.mockImplementation(createQualifiedConnectedAccountGroupsClient);
+async function mountedPools(fixture: Awaited<ReturnType<typeof poolHome>>) {
+    const hook = await renderHook(() => fixture.useQualifiedConnectedAccountGroups({ serverId: fixture.serverId, service }));
+    await waitForHomeGovernance(() => expect(hook.getCurrent().groups).toHaveLength(1));
+    await waitForHomeGovernance(() => expect(hook.getCurrent().execution?.ready).toBe(true));
+    return hook;
 }
 
 describe('useQualifiedConnectedAccountGroups', () => {
-    beforeEach(() => {
-        standardCleanup();
-        createClientMock.mockReset();
-        serverFetchMock.mockReset();
+    it('loads Account pools without a machine description', async () => {
+        const fixture = await poolHome();
+        const hook = await renderHook(() => fixture.useQualifiedConnectedAccountGroups({ serverId: fixture.serverId, service }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toMatchObject({ status: 'loaded', groups: [expect.objectContaining({ ref: wireGroup().ref })] }));
+        await hook.unmount();
     });
-
-    it('does not expose service A groups while a changed server/service/auth basis loads or fails', async () => {
-        const serviceA = { pluginId: 'acme.accounts', localId: 'a' };
-        const serviceB = { pluginId: 'acme.accounts', localId: 'b' };
-        const groupA = groupFor(serviceA, 'group-a');
-        createClientMock.mockImplementation((params: Readonly<{
-            service: typeof serviceA;
-        }>) => params.service.localId === 'a'
-            ? {
-                list: vi.fn().mockResolvedValue([groupA]),
-            }
-            : {
-                list: vi.fn().mockRejectedValue(
-                    Object.assign(new Error('unavailable'), {
-                        code: 'qualified_peer_unavailable',
-                    }),
-                ),
-            });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(
-            (params: Readonly<{
-                serverId: string;
-                service: typeof serviceA;
-                peer: {
-                    status: 'ready';
-                    transport: { protocol: 'v4' };
-                    errorCode: null;
-                };
-            }>) => useQualifiedConnectedAccountGroups(params),
-            {
-                initialProps: {
-                    serverId: 'server-a',
-                    service: serviceA,
-                    peer: {
-                        status: 'ready',
-                        transport: { protocol: 'v4' },
-                        errorCode: null,
-                    },
-                },
-            },
-        );
-        await flushHookEffects();
-        expect(hook.getCurrent().groups.map((group) => group.ref.groupId))
-            .toEqual(['group-a']);
-
-        authState.credentials = {
-            token: 'token-b',
-            secret: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-        };
-        const changed = await hook.rerender({
-            serverId: 'server-b',
-            service: serviceB,
-            peer: {
-                status: 'ready',
-                transport: { protocol: 'v4' },
-                errorCode: null,
-            },
+    it.each(['absent', 'current', 'recreated'] as const)('settles a pool create against a concurrent %s list without adding members to a replacement', async (listed) => {
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const response = createDeferred<void>();
+        const created = wireGroup('new-pool');
+        fixture.home.answer(fixture.serverId, 'POST /v4/connect/qualified/groups', { respondAfter: response.promise,
+            body: { group: created } });
+        let pending: Promise<QualifiedConnectedAccountUiGroup | null> | undefined;
+        await act(async () => { pending = hook.getCurrent().create({ groupId: created.ref.groupId, displayName: 'New pool' }); });
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor('/v4/connect/qualified/groups').some(request => request.input !== null)).toBe(true));
+        const current = { ...created, generation: 2, incarnation: listed === 'recreated' ? 'replacement-row' : created.incarnation };
+        if (listed !== 'absent') fixture.setGroups([...fixture.groups(), current]);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        if (listed === 'absent') fixture.setGroups([...fixture.groups(), created]);
+        await act(async () => {
+            response.resolve();
+            if (listed === 'recreated') expect(await pending).toBeNull();
+            else expect(await pending).toMatchObject({ ref: created.ref, revision: { generation: listed === 'current' ? 2 : 1 } });
         });
+        expect(hook.getCurrent().groups.some(group => group.ref.groupId === created.ref.groupId)).toBe(true);
+        if (listed === 'recreated') expect(hook.getCurrent().groups.find(group => group.ref.groupId === created.ref.groupId)?.revision.incarnation).toBe('replacement-row');
+        await hook.unmount();
+    });
+    it('does not expose service A groups while a changed server/service/auth basis loads or fails', async () => {
+        const fixture = await poolHome();
+        const hook = await renderHook((params: { serverId: string; service: typeof service }) => fixture.useQualifiedConnectedAccountGroups(params), {
+            initialProps: { serverId: fixture.serverId, service },
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().groups).toHaveLength(1));
+        const otherService = { pluginId: 'acme.accounts', localId: 'b' };
+        const serverUrl = 'https://pool-hook-other.test';
+        const otherId = await fixture.home.addHome({ name: 'Other', serverUrl, accountId: 'other-owner', currentAccount: true });
+        const features = createRootLayoutFeaturesResponse({ capabilities: {
+            connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } },
+        } });
+        fixture.home.answer(otherId, '/v1/features', { body: features });
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: otherId, snapshot: { status: 'ready', features } });
+        authState.credentials = await fixture.TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: otherId });
+        fixture.home.answer(otherId, listPathFor(otherService), { status: 503, body: { error: 'qualified_peer_unavailable' } });
+        const changed = await hook.rerender({ serverId: otherId, service: otherService });
         expect(changed.groups).toEqual([]);
         expect(changed.source).toEqual({ protocol: 'v4' });
-
-        await flushHookEffects();
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'error',
-            source: { protocol: 'v4' },
-            groups: [],
-        }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', groups: [], source: { protocol: 'v4' } }));
+        await hook.unmount();
     });
 
-    it('never surfaces the raw peer error code as displayed copy', async () => {
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service: { pluginId: 'acme.accounts', localId: 'a' },
-            peer: {
-                status: 'error',
-                transport: null,
-                errorCode: 'connected_account_daemon_unavailable',
-            },
-        }));
+    it('does not select the removed V3 group client on a Home without qualified Account support', async () => {
+        const fixture = await poolHome();
+        const features = createRootLayoutFeaturesResponse();
+        delete features.capabilities.connectedServices.qualifiedAccounts;
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: fixture.serverId, snapshot: { status: 'ready', features } });
+        fixture.home.answer(fixture.serverId, '/v1/features', { body: features });
+        const hook = await renderHook(() => fixture.useQualifiedConnectedAccountGroups({ serverId: fixture.serverId, service }));
         await flushHookEffects();
-
-        // The peer arm publishes a machine code; every other arm of this hook
-        // already routes through the bounded presenter, so this one must too.
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'error',
-            groups: [],
-            error: 'connectedServices.errors.accountMachineUnavailable',
-        }));
-    });
-
-    it('maps a known peer error code to its own bounded copy', async () => {
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service: { pluginId: 'acme.accounts', localId: 'a' },
-            peer: {
-                status: 'error',
-                transport: null,
-                errorCode: 'connect_group_not_found',
-            },
-        }));
-        await flushHookEffects();
-
-        expect(hook.getCurrent().error)
-            .toBe('connectedServices.errors.groupNotFound');
-    });
-
-    it('does not select the removed V3 group client for a revisioned legacy peer', async () => {
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-            peer: {
-                status: 'ready',
-                transport: {
-                    protocol: 'legacy',
-                    peerClass: 'revisioned-v2-v3',
-                    legacyServiceId: 'openai-codex',
-                },
-                errorCode: null,
-            },
-        }));
-        await flushHookEffects();
-
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'unsupported',
-            source: null,
-            groups: [],
-        }));
-        expect(createClientMock).not.toHaveBeenCalled();
+        expect(hook.getCurrent()).toMatchObject({ status: 'unsupported', source: null, groups: [] });
+        expect(fixture.home.requestsFor(listPath)).toEqual([]);
+        await hook.unmount();
     });
 
     it('keeps the loaded pools visible while a refresh is in flight', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        // The peer state must keep its identity across renders: the hook's load
-        // basis is derived from it, and a new object per render would restart
-        // the mount load instead of exercising refresh().
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const groupA = groupFor(service, 'group-a');
-        let releaseSecondList!: (groups: unknown[]) => void;
-        const pendingList = new Promise<unknown[]>((resolve) => {
-            releaseSecondList = resolve;
-        });
-        const list = vi.fn()
-            .mockResolvedValueOnce([groupA])
-            .mockReturnValueOnce(pendingList);
-        createClientMock.mockReturnValue({ list });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-        expect(hook.getCurrent().groups.map((group) => group.ref.groupId))
-            .toEqual(['group-a']);
-
-        let refreshed!: Promise<void>;
-        await act(async () => {
-            refreshed = hook.getCurrent().refresh();
-        });
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'loading',
-            groups: [groupA],
-        }));
-
-        await act(async () => {
-            releaseSecondList([groupA]);
-            await refreshed;
-        });
-        await flushHookEffects();
-        expect(hook.getCurrent().groups.map((group) => group.ref.groupId))
-            .toEqual(['group-a']);
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const groups = hook.getCurrent().groups;
+        const pending = createDeferred<void>();
+        fixture.home.answer(fixture.serverId, listPath, { respondAfter: pending.promise, body: { groups: fixture.groups() } });
+        let refreshed: Promise<void> | undefined;
+        await act(async () => { refreshed = hook.getCurrent().refresh(); });
+        expect(hook.getCurrent()).toMatchObject({ status: 'loading', groups });
+        await act(async () => { pending.resolve(); await refreshed; });
+        expect(hook.getCurrent()).toMatchObject({ status: 'loaded', groups });
+        await hook.unmount();
     });
 
     it('does not let an older initial list hide a newly created pool', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const createdGroup = groupFor(service, 'group-created');
-        const olderList = createDeferred<Response>();
+        const fixture = await poolHome();
+        const olderList = createDeferred<void>();
         let firstList = true;
-        const wireCreatedGroup = wireGroupFor(createdGroup);
-        let currentGroups: typeof wireCreatedGroup[] = [];
-        await useRealHttpClient();
-        serverFetchMock.mockImplementation(async (_path: string, init?: RequestInit) => {
-            if (init?.method === 'POST') {
-                currentGroups = [wireCreatedGroup];
-                return new Response(JSON.stringify({ group: wireCreatedGroup }), { status: 200 });
-            }
-            if (firstList) { firstList = false; return olderList.promise; }
-            return new Response(JSON.stringify({ groups: currentGroups }), { status: 200 });
-        });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-
-        await act(async () => {
-            await hook.getCurrent().create({
-                groupId: createdGroup.ref.groupId,
-                displayName: createdGroup.displayName,
-            });
-        });
-        expect(hook.getCurrent().groups.map(({ ref }) => ref)).toEqual([createdGroup.ref]);
-
-        await act(async () => {
-            olderList.resolve(new Response(JSON.stringify({ groups: [] }), { status: 200 }));
-            await olderList.promise;
-        });
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'loaded',
-            source: { protocol: 'v4' },
-            groups: [expect.objectContaining({ ref: createdGroup.ref })],
-            error: null,
-        }));
+        fixture.setGroups([]);
+        fixture.home.answer(fixture.serverId, listPath, { select: () => {
+            if (firstList) { firstList = false; return { respondAfter: olderList.promise, body: { groups: [] } }; }
+            return { body: { groups: fixture.groups() } };
+        } });
+        const created = wireGroup('group-created');
+        fixture.home.answer(fixture.serverId, 'POST /v4/connect/qualified/groups', { select: () => {
+            fixture.setGroups([created]); return { body: { group: created } };
+        } });
+        const hook = await renderHook(() => fixture.useQualifiedConnectedAccountGroups({ serverId: fixture.serverId, service }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().execution?.ready).toBe(true));
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor(listPath)).toHaveLength(1));
+        await act(async () => { await hook.getCurrent().create({ groupId: created.ref.groupId, displayName: created.displayName }); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().groups.map(({ ref }) => ref)).toEqual([created.ref]));
+        await act(async () => { olderList.resolve(); await flushHookEffects(); });
+        expect(hook.getCurrent()).toMatchObject({ status: 'loaded', groups: [expect.objectContaining({ ref: created.ref })], error: null });
+        await hook.unmount();
     });
 
     it('does not let an older refresh resurrect a deleted pool', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const group = groupFor(service, 'group-a');
-        const olderRefresh = createDeferred<Response>();
-        const wireGroup = wireGroupFor(group);
-        let currentGroups = [wireGroup];
-        let listNumber = 0;
-        await useRealHttpClient();
-        serverFetchMock.mockImplementation(async (_path: string, init?: RequestInit) => {
-            if (init?.method === 'DELETE') {
-                currentGroups = [];
-                return new Response(JSON.stringify({ success: true }), { status: 200 });
-            }
-            if (++listNumber === 2) return olderRefresh.promise;
-            return new Response(JSON.stringify({ groups: currentGroups }), { status: 200 });
-        });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-        expect(hook.getCurrent().groups.map(({ ref }) => ref)).toEqual([group.ref]);
-
-        let refreshed!: Promise<void>;
-        await act(async () => {
-            refreshed = hook.getCurrent().refresh();
-        });
-
-        await act(async () => {
-            await hook.getCurrent().delete(group);
-        });
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'loaded',
-            groups: [],
-        }));
-
-        await act(async () => {
-            olderRefresh.resolve(new Response(JSON.stringify({ groups: [wireGroup] }), { status: 200 }));
-            await refreshed;
-        });
-        expect(hook.getCurrent()).toEqual(expect.objectContaining({
-            status: 'loaded',
-            source: { protocol: 'v4' },
-            groups: [],
-            error: null,
-        }));
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const original = fixture.groups();
+        const olderRefresh = createDeferred<void>();
+        let firstRefresh = true;
+        fixture.home.answer(fixture.serverId, listPath, { select: () => {
+            if (firstRefresh) { firstRefresh = false; return { respondAfter: olderRefresh.promise, body: { groups: original } }; }
+            return { body: { groups: fixture.groups() } };
+        } });
+        fixture.home.answer(fixture.serverId, 'DELETE ' + deletePath, { select: () => {
+            fixture.setGroups([]); return { body: { success: true } };
+        } });
+        let refreshed: Promise<void> | undefined;
+        await act(async () => { refreshed = hook.getCurrent().refresh(); });
+        await act(async () => { expect(await hook.getCurrent().delete(hook.getCurrent().groups[0]!)).toMatchObject({ applied: true }); });
+        expect(hook.getCurrent().groups).toEqual([]);
+        await act(async () => { olderRefresh.resolve(); await refreshed; });
+        expect(hook.getCurrent()).toMatchObject({ status: 'loaded', groups: [], error: null });
+        await hook.unmount();
     });
 
     it('does not let a late pool mutation replace a newer list revision', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const initial = groupFor(service, 'group-a');
-        const newer = {
-            ...initial,
-            displayName: 'Current pool',
-            revision: {
-                protocol: 'v4' as const,
-                generation: 2,
-                runtimeStateRevision: 2,
-            },
-        };
-        const olderMutationResult = {
-            ...initial,
-            displayName: 'Older pool name',
-            revision: {
-                protocol: 'v4' as const,
-                generation: 2,
-                runtimeStateRevision: 1,
-            },
-        };
-        const mutation = createDeferred<typeof olderMutationResult>();
-        const list = vi.fn()
-            .mockResolvedValueOnce([initial])
-            .mockResolvedValueOnce([newer]);
-        const patch = vi.fn().mockReturnValue(mutation.promise);
-        createClientMock.mockReturnValue({ list, patch });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-
-        let pendingMutation: Promise<unknown> = Promise.resolve(null);
-        await act(async () => {
-            pendingMutation = hook.getCurrent().patch({
-                group: initial,
-                displayName: 'Older pool name',
-            });
-        });
-        await act(async () => {
-            await hook.getCurrent().refresh();
-        });
-        expect(hook.getCurrent().groups).toEqual([newer]);
-
-        let result: unknown;
-        await act(async () => {
-            mutation.resolve(olderMutationResult);
-            result = await pendingMutation;
-        });
-
-        expect(result!).toBeNull();
-        expect(hook.getCurrent().groups).toEqual([newer]);
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const original = hook.getCurrent().groups[0]!;
+        const newer = { ...wireGroup(), displayName: 'Current pool', generation: 3, runtimeStateRevision: 2 };
+        const olderResult = { ...wireGroup(), displayName: 'Older pool name', generation: 2 };
+        const mutation = createDeferred<void>();
+        fixture.home.answer(fixture.serverId, 'PATCH /v4/connect/qualified/group', { respondAfter: mutation.promise, body: { group: olderResult } });
+        let pending: Promise<QualifiedConnectedAccountUiGroup | null> | undefined;
+        await act(async () => { pending = hook.getCurrent().patch({ group: original, displayName: olderResult.displayName }); });
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor('/v4/connect/qualified/group').some(request => request.input !== null)).toBe(true));
+        fixture.setGroups([newer]);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        expect(hook.getCurrent().groups[0]?.displayName).toBe('Current pool');
+        await act(async () => { mutation.resolve(); expect(await pending).toBeNull(); });
+        expect(hook.getCurrent().groups[0]).toMatchObject({ displayName: 'Current pool', revision: { generation: 3, runtimeStateRevision: 2 } });
+        await hook.unmount();
     });
 
     it('does not let a late delete acknowledgement remove a recreated pool', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const initial = {
-            ...groupFor(service, 'group-a'),
-            revision: {
-                protocol: 'v4' as const,
-                incarnation: 'original-group-row',
-                generation: 0,
-                runtimeStateRevision: 0,
-            },
-        };
-        const recreated = {
-            ...initial,
-            displayName: 'Recreated pool',
-            revision: {
-                protocol: 'v4' as const,
-                incarnation: 'recreated-group-row',
-                generation: 0,
-                runtimeStateRevision: 0,
-            },
-        };
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const original = hook.getCurrent().groups[0]!;
+        const recreated = { ...wireGroup(), displayName: 'Recreated pool', incarnation: 'recreated-group-row' };
         const deletion = createDeferred<void>();
-        const list = vi.fn()
-            .mockResolvedValueOnce([initial])
-            .mockResolvedValueOnce([recreated]);
-        const deleteGroup = vi.fn().mockReturnValue(deletion.promise);
-        createClientMock.mockReturnValue({ list, delete: deleteGroup });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-
-        let pendingDeletion: Promise<unknown> = Promise.resolve(null);
-        await act(async () => {
-            pendingDeletion = hook.getCurrent().delete(initial);
-        });
-        await act(async () => {
-            await hook.getCurrent().refresh();
-        });
-        expect(hook.getCurrent().groups).toEqual([recreated]);
-
-        let deleted: unknown;
-        await act(async () => {
-            deletion.resolve();
-            deleted = await pendingDeletion;
-        });
-
-        expect(deleted!).toBe(false);
-        expect(hook.getCurrent().groups).toEqual([recreated]);
+        fixture.home.answer(fixture.serverId, 'DELETE ' + deletePath, { respondAfter: deletion.promise, body: { success: true } });
+        let pending: ReturnType<UseQualifiedConnectedAccountGroupsResult['delete']> | undefined;
+        await act(async () => { pending = hook.getCurrent().delete(original); });
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor(deletePath)).toHaveLength(1));
+        fixture.setGroups([recreated]);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        await act(async () => { deletion.resolve(); expect(await pending).toMatchObject({ applied: true }); });
+        expect(hook.getCurrent().groups[0]).toMatchObject({ displayName: 'Recreated pool', revision: { incarnation: 'recreated-group-row' } });
+        await hook.unmount();
     });
 
     it('accepts deletion when a same-Account refresh already confirms the pool is absent', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = { status: 'ready' as const, transport: { protocol: 'v4' as const }, errorCode: null };
-        // Keep the real client, its wire parsing and revision normalization; substitute HTTP only.
-        await useRealHttpClient();
-        const deleted = createDeferred<Response>();
-        const wireGroup = { v: 1, ref: { service, groupId: 'group-a' }, displayName: 'Team', policy,
-            incarnation: 'group-row:group-a', generation: 1, runtimeStateRevision: 1,
-            activeConnectedAccountId: null, state: {}, createdAt: 0, updatedAt: 0, members: [] };
-        let groups = [wireGroup];
-        serverFetchMock.mockImplementation(async (_path: string, init?: RequestInit) => {
-            if (init?.method === 'DELETE') return deleted.promise;
-            return new Response(JSON.stringify({ groups }), { status: 200 });
-        });
-        try {
-            const hook = await renderHook(() => useQualifiedConnectedAccountGroups({ serverId: 'server-a', service, peer }));
-            await flushHookEffects();
-            const group = hook.getCurrent().groups[0]!;
-            let pending: ReturnType<UseQualifiedConnectedAccountGroupsResult['delete']> = Promise.resolve(false);
-            await act(async () => { pending = hook.getCurrent().delete(group); });
-            groups = [];
-            await act(async () => { await hook.getCurrent().refresh(); });
-            expect(hook.getCurrent().groups).toEqual([]);
-            let result: Awaited<ReturnType<UseQualifiedConnectedAccountGroupsResult['delete']>> = false;
-            await act(async () => {
-                deleted.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
-                result = await pending;
-            });
-            expect(result).toMatchObject({ applied: true });
-            expect(hook.getCurrent().groups).toEqual([]);
-        } finally {
-            serverFetchMock.mockReset();
-        }
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const original = hook.getCurrent().groups[0]!;
+        const deletion = createDeferred<void>();
+        fixture.home.answer(fixture.serverId, 'DELETE ' + deletePath, { respondAfter: deletion.promise, body: { success: true } });
+        let pending: ReturnType<UseQualifiedConnectedAccountGroupsResult['delete']> | undefined;
+        await act(async () => { pending = hook.getCurrent().delete(original); });
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor(deletePath)).toHaveLength(1));
+        fixture.setGroups([]);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        await act(async () => { deletion.resolve(); expect(await pending).toMatchObject({ applied: true }); });
+        expect(hook.getCurrent().groups).toEqual([]);
+        await hook.unmount();
     });
 
     it('does not let a late active-account result replace a newer pool revision', async () => {
-        const service = { pluginId: 'acme.accounts', localId: 'a' };
-        const peer = {
-            status: 'ready' as const,
-            transport: { protocol: 'v4' as const },
-            errorCode: null,
-        };
-        const initial = groupFor(service, 'group-a');
-        const newer = {
-            ...initial,
-            activeAccountId: 'account-b',
-            revision: {
-                protocol: 'v4' as const,
-                generation: 2,
-                runtimeStateRevision: 2,
-            },
-        };
-        const olderMutationResult = {
-            ...initial,
-            activeAccountId: 'account-a',
-            revision: {
-                protocol: 'v4' as const,
-                generation: 2,
-                runtimeStateRevision: 1,
-            },
-        };
-        const activeMutation = createDeferred<typeof olderMutationResult>();
-        const list = vi.fn()
-            .mockResolvedValueOnce([initial])
-            .mockResolvedValueOnce([newer]);
-        const setActiveAccount = vi.fn().mockReturnValue(activeMutation.promise);
-        createClientMock.mockReturnValue({ list, setActiveAccount });
-
-        const { useQualifiedConnectedAccountGroups } = await import(
-            './useQualifiedConnectedAccountGroups'
-        );
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({
-            serverId: 'server-a',
-            service,
-            peer,
-        }));
-        await flushHookEffects();
-
-        let pendingMutation: Promise<unknown> = Promise.resolve(null);
-        await act(async () => {
-            pendingMutation = hook.getCurrent().setActiveAccount({
-                group: initial,
-                account: { service, accountId: 'account-a' },
-            });
-        });
-        await act(async () => {
-            await hook.getCurrent().refresh();
-        });
-        expect(hook.getCurrent().groups).toEqual([newer]);
-
-        let result: unknown;
-        await act(async () => {
-            activeMutation.resolve(olderMutationResult);
-            result = await pendingMutation;
-        });
-
-        expect(result!).toBeNull();
-        expect(hook.getCurrent().groups).toEqual([newer]);
+        const fixture = await poolHome();
+        const hook = await mountedPools(fixture);
+        const original = hook.getCurrent().groups[0]!;
+        const newer = { ...wireGroup(), activeConnectedAccountId: 'account-b', generation: 3, runtimeStateRevision: 2 };
+        const switched = createDeferred<void>();
+        fixture.home.answer(fixture.serverId, 'POST /v4/connect/qualified/group/active-account', { respondAfter: switched.promise,
+            body: { group: { ...wireGroup(), activeConnectedAccountId: 'account-a', generation: 2 } } });
+        let pending: Promise<QualifiedConnectedAccountUiGroup | null> | undefined;
+        await act(async () => { pending = hook.getCurrent().setActiveAccount({ group: original, account: { service, accountId: 'account-a' } }); });
+        await waitForHomeGovernance(() => expect(fixture.home.requestsFor('/v4/connect/qualified/group/active-account').some(request => request.input !== null)).toBe(true));
+        fixture.setGroups([newer]);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        await act(async () => { switched.resolve(); expect(await pending).toBeNull(); });
+        expect(hook.getCurrent().groups[0]).toMatchObject({ activeAccountId: 'account-b', revision: { generation: 3, runtimeStateRevision: 2 } });
+        await hook.unmount();
     });
 });

@@ -83,7 +83,7 @@ export type ConnectedServiceQuotaSnapshotForUi =
 
 export type ConnectedServiceQuotaSnapshotsResult = Readonly<{
     /**
-     * The normalized refs this hook actually polls, in the canonical order.
+     * The normalized refs this hook observes, in the canonical order.
      *
      * Callers that need the same keyed refs (badge and summary projections)
      * read them from here instead of normalizing the same input a second time.
@@ -115,8 +115,9 @@ type LegacyConnectedServiceQuotaSnapshotsResult = Readonly<{
 }>;
 
 /**
- * `poll`: read and keep polling while mounted (a page about the accounts). `once`: read once per
- * launch if nothing was read yet, never poll (a summary that should not keep asking).
+ * `poll`: retain change-driven currentness while mounted, with foreground/reconnect and failed-read
+ * catch-up. Negotiated predecessor transport also retains its acquisition cadence.
+ * `once`: read once per launch if nothing was read yet, without retaining acquisition.
  * `cache_only`: never read; show what this launch already has.
  */
 export type ConnectedServiceQuotaSnapshotsFetchPolicy = 'poll' | 'once' | 'cache_only';

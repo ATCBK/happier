@@ -13,7 +13,6 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
@@ -36,6 +35,7 @@ installSettingsViewCommonModuleMocks({
 // hook's read lifecycle are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const SETTINGS_GET = '/v1/home/settings/get';
 

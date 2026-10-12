@@ -15,10 +15,14 @@ import {
 import {
     resolveQualifiedConnectedAccountServiceKey,
 } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { useAllMachines, useProfile, useSessions } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useAllMachines, useProfile, useSessions } from '@/sync/domains/state/storage';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveMachineControlTargetForSessionFromState } from '@/sync/ops/sessionMachineTarget';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 type AccountProfileConnectedService = AccountProfile['connectedServicesV2'][number];
@@ -78,6 +82,7 @@ export type ConnectedServiceBindingMachineTargetStatus =
     | Readonly<{ machineId: null; reason: ConnectedServiceBindingMachineTargetReason }>;
 
 function resolveConnectedServiceMachineTargetStatusForBinding(params: Readonly<{
+    accountScope: ServerAccountScope | null;
     /** Canonical qualified Connected Account service key of the session bindings. */
     serviceKey: string;
     /** Released scalar id for the V2 account lookup; null for novel external services. */
@@ -116,13 +121,14 @@ function resolveConnectedServiceMachineTargetStatusForBinding(params: Readonly<{
         if (!machineId) continue;
 
         const machine = machineById[machineId];
-        if (machine && isMachineOnline(machine)) return { machineId: machine.id };
+        if (machine && isMachineSelectableForFleet(params.accountScope, machine)) return { machineId: machine.id };
     }
 
     return { machineId: null, reason: hadMatchingBinding ? 'machine_offline' : 'no_bound_session' };
 }
 
 function resolveConnectedServiceMachineTargetForBinding(params: Readonly<{
+    accountScope: ServerAccountScope | null;
     serviceKey: string;
     legacyServiceId: ConnectedServiceId | null;
     sessions: ReadonlyArray<Session> | null;
@@ -133,6 +139,7 @@ function resolveConnectedServiceMachineTargetForBinding(params: Readonly<{
 }
 
 export function resolveConnectedServiceRecoveryCreditMachineTarget(params: Readonly<{
+    accountScope: ServerAccountScope | null;
     /** Released V3 account-surface scalar id; translated through the provenance-named legacy ingress. */
     serviceId: ConnectedServiceId;
     profileId: string;
@@ -146,6 +153,7 @@ export function resolveConnectedServiceRecoveryCreditMachineTarget(params: Reado
     const serviceKey = resolveQualifiedConnectedAccountServiceKey(params.serviceId);
     if (!serviceKey) return null;
     return resolveConnectedServiceMachineTargetForBinding({
+        accountScope: params.accountScope,
         serviceKey,
         // The V2 account lookup keeps the released scalar identity of this
         // released V3 surface fact.
@@ -169,12 +177,17 @@ export function useConnectedServiceRecoveryCreditMachineTarget(params: Readonly<
     const sessions = useSessions();
     const machines = useAllMachines();
     const profile = useProfile();
+    const activeServer = useActiveServerSnapshot();
+    const activeScope = useActiveServerAccountScope();
+    const accountScope = selectActiveServerAccountScopeForServer(activeScope, activeServer.serverId);
+    const reachabilityRevision = useMachineReachabilityRevision();
 
     return React.useMemo(() => resolveConnectedServiceRecoveryCreditMachineTarget({
+        accountScope,
         serviceId: params.serviceId,
         profileId: params.profileId,
         sessions,
         machines,
         connectedServicesV2: profile.connectedServicesV2 ?? [],
-    }), [machines, params.profileId, params.serviceId, profile.connectedServicesV2, sessions]);
+    }), [accountScope, machines, params.profileId, params.serviceId, profile.connectedServicesV2, reachabilityRevision, sessions]);
 }

@@ -1,46 +1,91 @@
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import type { ConnectedAccountDaemonControlResponse, ConnectedAccountPeerOperationTransport } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
+import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 const runControlMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({
-        serverId: 'server-a',
-        generation: 3,
-    }),
-}));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary(socket => {
+    socket.connected = true;
+    vi.spyOn(socket, 'timeout').mockReturnValue(socket);
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => ({
+        ok: true, result: await runControlMock(payload),
+    }));
+});
+let serverId: string;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let syncBridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader')['loadSyncSingletonForTests']>>;
 
-vi.mock('@/sync/store/hooks', () => ({
-    useAllMachines: () => [{
-        id: 'machine-a',
-        active: true,
-    }],
-}));
-
-vi.mock('@/sync/ops/connectedAccounts/connectedAccountDaemon', () => ({
-    runConnectedAccountControlCommand: runControlMock,
-}));
+const github = { pluginId: 'happier.scm.forge.github', localId: 'github-account' };
+const anthropic = { pluginId: 'happier.agent.claude', localId: 'anthropic' };
+function described(service: PluginContributionIdentityV1, operationTransport: ConnectedAccountPeerOperationTransport): ConnectedAccountDaemonControlResponse {
+    return { status: 'described', service,
+        descriptor: { id: service.localId, title: 'Test Account', authentication: { defaultModeId: 'manual', modes: [{
+            id: 'manual', kind: 'manual', outcomeReconciliation: 'none',
+            fields: [{ id: 'token', title: 'Token', schema: { type: 'string', minLength: 1 }, secret: true }],
+        }] } },
+        occurrenceId: 'occurrence-1', sourceCustody: { kind: 'managed', immutableGenerationId: 'artifact-1', installSource: 'archive' },
+        accounts: [], operationTransport };
+}
 
 describe('useConnectedServiceLegacyOperationAdmission', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        installHomeGovernanceBoundaries(homes);
+        const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+        syncBridge = await loadSyncSingletonForTests();
+        serverId = await homes.addHome({ name: 'Admission Home', serverUrl: 'https://account-admission.test', accountId: 'account-a' });
+        for (const id of ['machine-a', 'machine-b']) homes.answer(serverId, `/v1/machines/${id}`, {
+            body: { machine: { id, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
+        });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://account-admission.test', accountId: 'account-a', request: homes.request });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now() })], true, { sourceServerId: serverId });
+        clearMachineRequestReachabilityForTest();
         runControlMock.mockReset();
+    });
+    afterEach(async () => {
+        await standardCleanup();
+        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+        const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+        serverScopedRpcSocketPool.resetForTests();
+        resetScopedMachineTransportCacheForTests();
+        await connection?.dispose();
+        syncBridge?.dispose();
+        await homes.reset();
+        clearMachineRequestReachabilityForTest();
+        vi.restoreAllMocks();
+    });
+
+    it('moves automatic admission to reachable supply and rejects when no executable Machine remains', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
+        storage.getState().applyMachines([
+            createMachineFixture({ id: 'machine-a', activeAt: Date.now() }),
+            createMachineFixture({ id: 'machine-b', activeAt: Date.now() }),
+        ], true, { sourceServerId: serverId });
+        const hook = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
+        await act(async () => { recordMachineRequestFailed({ serverId, machineId: 'machine-a' }); });
+        runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
+        await hook.getCurrent()('github', 'quota_read');
+        expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-b');
+        await act(async () => { recordMachineRequestFailed({ serverId, machineId: 'machine-b' }); });
+        await expect(hook.getCurrent()('github', 'quota_read')).rejects.toMatchObject({ code: 'connected_account_service_identity_unsupported' });
+        await act(async () => { recordMachineRequestSucceeded({ serverId, machineId: 'machine-a' }); });
+        await hook.getCurrent()('github', 'quota_read');
+        expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-a');
     });
 
     it('carries the qualified identity and requested operation to daemon admission', async () => {
-        runControlMock.mockResolvedValue({
-            status: 'described',
-            service: {
-                pluginId: 'happier.scm.forge.github',
-                localId: 'github-account',
-            },
-            operationTransport: {
-                kind: 'legacy',
-                peerClass: 'revisioned_v2_v3',
-                serviceId: 'github',
-            },
-        });
+        runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
         const { useConnectedServiceLegacyOperationAdmission } = await import(
             './useConnectedServiceLegacyOperationAdmission'
         );
@@ -52,22 +97,17 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
             await hook.getCurrent()('github', 'quota_refresh');
         });
 
-        expect(runControlMock).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            machineId: 'machine-a',
-            expectedActiveServer: {
-                serverId: 'server-a',
-                generation: 3,
-            },
-            command: {
+        expect(runControlMock).toHaveBeenCalledWith(expect.objectContaining({
+            method: 'machine-a:daemon.connectedAccounts.control.command',
+            params: { v: 1, machineId: 'machine-a', command: {
                 operation: 'describeService',
                 service: {
                     pluginId: 'happier.scm.forge.github',
                     localId: 'github-account',
                 },
                 requiredOperation: 'quota_refresh',
-            },
-        });
+            } },
+        }));
         await standardCleanup();
     });
 
@@ -88,14 +128,7 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         ).rejects.toMatchObject({
             code: 'connected_account_service_identity_unsupported',
         });
-        runControlMock.mockResolvedValueOnce({
-            status: 'described',
-            service: {
-                pluginId: 'happier.scm.forge.github',
-                localId: 'github-account',
-            },
-            operationTransport: { kind: 'v4' },
-        });
+        runControlMock.mockResolvedValueOnce(described(github, { kind: 'v4' }));
         await expect(
             hook.getCurrent()('github', 'quota_read'),
         ).rejects.toMatchObject({
@@ -105,14 +138,7 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
     });
 
     it('admits the exact qualified V4 service only when the daemon selects V4', async () => {
-        runControlMock.mockResolvedValue({
-            status: 'described',
-            service: {
-                pluginId: 'happier.agent.claude',
-                localId: 'anthropic',
-            },
-            operationTransport: { kind: 'v4' },
-        });
+        runControlMock.mockResolvedValue(described(anthropic, { kind: 'v4' }));
         const { useConnectedAccountOperationAdmission } = await import(
             './useConnectedServiceLegacyOperationAdmission'
         );
@@ -131,38 +157,22 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
             );
         });
 
-        expect(runControlMock).toHaveBeenCalledWith({
-            serverId: 'server-a',
-            machineId: 'machine-a',
-            expectedActiveServer: {
-                serverId: 'server-a',
-                generation: 3,
-            },
-            command: {
+        expect(runControlMock).toHaveBeenCalledWith(expect.objectContaining({
+            method: 'machine-a:daemon.connectedAccounts.control.command',
+            params: { v: 1, machineId: 'machine-a', command: {
                 operation: 'describeService',
                 service: {
                     pluginId: 'happier.agent.claude',
                     localId: 'anthropic',
                 },
                 requiredOperation: 'quota_read',
-            },
-        });
+            } },
+        }));
         await standardCleanup();
     });
 
     it('rejects a contradictory exact-old daemon transport for a V4 operation', async () => {
-        runControlMock.mockResolvedValue({
-            status: 'described',
-            service: {
-                pluginId: 'happier.agent.claude',
-                localId: 'anthropic',
-            },
-            operationTransport: {
-                kind: 'legacy',
-                peerClass: 'exact_v0_2_1',
-                serviceId: 'anthropic',
-            },
-        });
+        runControlMock.mockResolvedValue(described(anthropic, { kind: 'legacy', peerClass: 'exact_v0_2_1', serviceId: 'anthropic' }));
         const { useConnectedAccountOperationAdmission } = await import(
             './useConnectedServiceLegacyOperationAdmission'
         );

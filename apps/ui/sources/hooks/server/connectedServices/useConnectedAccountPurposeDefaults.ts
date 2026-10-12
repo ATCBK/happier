@@ -5,7 +5,7 @@ import { useActiveServerAccountScope, useSettingsSelector } from '@/sync/store/h
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { ConnectedAccountCatalogOperationError } from '@/sync/api/account/apiConnectedAccountCatalog';
-import { executeConnectedAccountUiAction } from '@/sync/ops/connectedAccounts/connectedAccountUiAction';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 export type ConnectedAccountPurposeDefaultsIntent =
     | Readonly<{ kind: 'target'; target: QualifiedConnectedAccountPurposeBindingTargetV1; agentId: string; makeDefault: boolean; machineId?: string }>
@@ -15,6 +15,7 @@ export type ConnectedAccountPurposeDefaultsIntent =
 /** One catalog source and acknowledged mutation port for all Agent default surfaces. */
 export function useConnectedAccountPurposeDefaults() {
     const scope = useActiveServerAccountScope();
+    const execution = useMountedActionExecution(scope);
     const catalog = useConnectedAccountCatalog('purposes', scope);
     const legacySettings = useSettingsSelector(settings => ({
         connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
@@ -34,8 +35,12 @@ export function useConnectedAccountPurposeDefaults() {
                 : { actionId: 'connectedServices.pools.default.set' as const,
                     input: { group: { service: intent.target.service, groupId: intent.target.groupId }, agentId: intent.agentId, makeDefault: intent.makeDefault,
                         ...(intent.machineId ? { machineId: intent.machineId } : {}) } };
-        const result = await executeConnectedAccountUiAction({ ...action, ...scope });
-        return !(result && typeof result === 'object' && 'changed' in result && result.changed === false);
-    }, [scope]);
-    return React.useMemo(() => ({ catalog, legacySettings, mutateDefaults }), [catalog, legacySettings, mutateDefaults]);
+        const result = await execution.execute(action.actionId, action.input);
+        if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+        // The Action keeps its durable receipt; a retired mounted presentation
+        // must not dismiss or advance the successor Home on that receipt.
+        if (!execution.isCurrent()) return false;
+        return !(result.result && typeof result.result === 'object' && 'changed' in result.result && result.result.changed === false);
+    }, [execution.execute, execution.isCurrent, scope]);
+    return React.useMemo(() => ({ catalog, legacySettings, mutateDefaults, execution }), [catalog, legacySettings, mutateDefaults, execution]);
 }

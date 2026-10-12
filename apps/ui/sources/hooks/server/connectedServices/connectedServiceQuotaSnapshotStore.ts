@@ -8,14 +8,11 @@ import {
 } from '@/sync/api/account/apiConnectedServicesQuotasV3';
 import { openConnectedServiceQuotaViewSnapshot } from '@/sync/domains/connectedServices/openConnectedServiceQuotaViewSnapshot';
 import { connectedServiceProfileKey } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
-import {
-    computeConnectedServiceQuotaErrorBackoffMs,
-} from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
+import { getUsageProjectionNextReadAtMs, observeUsageProjection } from '@/sync/api/account/usageQueryInvalidation';
 import {
     connectedServiceQuotaRecoveryCreditConsume,
 } from '@/sync/ops/connectedServiceQuotaRecoveryCredits';
 import { sanitizeEndpointErrorMessage } from '@/sync/runtime/connectivity/sanitizeEndpointErrorMessage';
-import { isRuntimeActive, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type {
     ExpectedActiveServerFetchBasis,
@@ -88,15 +85,13 @@ type InternalEntry = {
     loadPromise: Promise<ConnectedServiceQuotaSnapshotV1 | null> | null;
     refreshPromise: Promise<void> | null;
     pollRetainCount: number;
-    pollTimer: ReturnType<typeof setTimeout> | null;
+    observation: ReturnType<typeof observeUsageProjection> | null;
     pollContext: QuotaSnapshotLoadContext | null;
     /** Public, immutable projection handed to subscribers (stable when unchanged). */
     view: QuotaSnapshotStoreEntry;
 };
 
 const REFRESH_RELOAD_DELAYS_MS = [0, 250, 500, 1_000, 2_000, 3_000, 4_000] as const;
-const QUOTA_SNAPSHOT_POLL_MS = 30_000;
-const QUOTA_SNAPSHOT_MISS_RETRY_MS = 30_000;
 
 const EMPTY_VIEW: QuotaSnapshotStoreEntry = { snapshot: null, loading: false, error: null, refreshing: false, read: false };
 
@@ -128,7 +123,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         loadPromise: null,
         refreshPromise: null,
         pollRetainCount: 0,
-        pollTimer: null,
+        observation: null,
         pollContext: null,
         view: EMPTY_VIEW,
     };
@@ -181,12 +176,6 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function clearPollTimer(entry: InternalEntry): void {
-    if (!entry.pollTimer) return;
-    clearTimeout(entry.pollTimer);
-    entry.pollTimer = null;
-}
-
 /**
  * Drops cached entries that belong to a superseded credential scope.
  *
@@ -200,54 +189,9 @@ function evictEntriesOutsideCredentialScope(activeCredentialScope: string): void
     for (const [key, entry] of entries) {
         if (entry.pollRetainCount > 0) continue;
         if (entry.credentialScope === activeCredentialScope) continue;
-        clearPollTimer(entry);
+        entry.observation?.dispose();
         entries.delete(key);
     }
-}
-
-/**
- * Quota polling is a network round trip per retained account block. It exists to
- * keep a meter the user is looking at honest, so it stops while the app is
- * backgrounded or the tab is hidden instead of waking the radio every 30 s behind
- * a locked screen, and resumes the moment the runtime is active again —
- * immediately when the cadence went overdue while away, so a returning user never
- * reads a meter that quietly went stale.
- */
-let runtimeActiveResumeDetach: (() => void) | null = null;
-
-function ensureRuntimeActiveResumeWatcher(): void {
-    if (runtimeActiveResumeDetach) return;
-    runtimeActiveResumeDetach = subscribeToRuntimeActiveChange(() => {
-        if (!isRuntimeActive()) return;
-        for (const key of [...entries.keys()]) {
-            schedulePolling(key);
-        }
-    });
-}
-
-function schedulePolling(key: string): void {
-    const entry = entries.get(key);
-    if (!entry) return;
-    clearPollTimer(entry);
-    if (entry.pollRetainCount <= 0 || entry.loadPromise || entry.refreshPromise) return;
-    if (!entry.pollContext || !isScopeActive(entry.pollContext.credentialScope)) return;
-    ensureRuntimeActiveResumeWatcher();
-    if (!isRuntimeActive()) return;
-
-    const delayMs = Math.max(0, entry.nextFetchAtMs - Date.now());
-    entry.pollTimer = setTimeout(() => {
-        entry.pollTimer = null;
-        const latest = entries.get(key);
-        if (!latest || latest.pollRetainCount <= 0 || latest.loadPromise || latest.refreshPromise) return;
-        const ctx = latest.pollContext;
-        if (!ctx || !isScopeActive(ctx.credentialScope)) return;
-        if (!isRuntimeActive()) {
-            ensureRuntimeActiveResumeWatcher();
-            return;
-        }
-        latest.loadAttempted = true;
-        void runLoad(key, ctx);
-    }, delayMs);
 }
 
 export function getQuotaSnapshotEntry(key: string | null): QuotaSnapshotStoreEntry {
@@ -272,7 +216,6 @@ export function subscribeQuotaSnapshotEntry(key: string | null, listener: () => 
 async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<ConnectedServiceQuotaSnapshotV1 | null> {
     const entry = getOrCreateEntry(key);
     if (entry.loadPromise) return entry.loadPromise;
-    clearPollTimer(entry);
 
     const promise = (async (): Promise<ConnectedServiceQuotaSnapshotV1 | null> => {
         if (!isScopeActive(ctx.credentialScope)) return null;
@@ -295,12 +238,8 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
                 if (!isScopeActive(ctx.credentialScope)) return null;
                 entry.snapshot = opened;
                 entry.consecutiveErrors = 0;
-                entry.nextFetchAtMs = Date.now() + (opened
-                    ? Math.max(
-                        QUOTA_SNAPSHOT_POLL_MS,
-                        Math.trunc(opened.staleAfterMs ?? QUOTA_SNAPSHOT_POLL_MS),
-                    )
-                    : QUOTA_SNAPSHOT_MISS_RETRY_MS);
+                entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0,
+                    legacyStaleAfterMs: opened?.staleAfterMs ?? 30_000 });
                 return opened;
             }
 
@@ -319,19 +258,14 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
             if (!isScopeActive(ctx.credentialScope)) return null;
             entry.snapshot = opened;
             entry.consecutiveErrors = 0;
-            entry.nextFetchAtMs = Date.now() + (opened
-                ? Math.max(
-                    QUOTA_SNAPSHOT_POLL_MS,
-                    Math.trunc(opened.staleAfterMs ?? QUOTA_SNAPSHOT_POLL_MS),
-                )
-                : QUOTA_SNAPSHOT_MISS_RETRY_MS);
+            entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: 0,
+                legacyStaleAfterMs: opened?.staleAfterMs ?? 30_000 });
             return opened;
         } catch (error) {
             if (!isScopeActive(ctx.credentialScope)) return null;
             entry.error = sanitizeEndpointErrorMessage(error) ?? t('common.error');
             entry.consecutiveErrors += 1;
-            entry.nextFetchAtMs = Date.now()
-                + computeConnectedServiceQuotaErrorBackoffMs(entry.consecutiveErrors);
+            entry.nextFetchAtMs = getUsageProjectionNextReadAtMs({ consecutiveErrors: entry.consecutiveErrors });
             if (!entry.snapshot) entry.snapshot = null;
             return null;
         } finally {
@@ -340,7 +274,7 @@ async function runLoad(key: string, ctx: QuotaSnapshotLoadContext): Promise<Conn
             }
             entry.loadPromise = null;
             publish(key, entry);
-            schedulePolling(key);
+            entry.observation?.reconcile();
         }
     })();
 
@@ -372,12 +306,12 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
     entry.credentialScope = ctx.credentialScope;
     evictEntriesOutsideCredentialScope(ctx.credentialScope);
 
-    if (!entry.loadAttempted || (!entry.loadPromise && Date.now() >= entry.nextFetchAtMs)) {
-        entry.loadAttempted = true;
-        void runLoad(key, ctx);
-    } else {
-        schedulePolling(key);
-    }
+    if (!entry.observation) entry.observation = observeUsageProjection({
+        serverId: ctx.serverBasis.serverId,
+        read: () => { entry.loadAttempted = true; return runLoad(key, ctx); },
+        busy: () => Boolean(entry.loadPromise || entry.refreshPromise),
+        nextReadAtMs: () => entry.nextFetchAtMs,
+    });
 
     let released = false;
     return () => {
@@ -389,14 +323,14 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
         current.pollRetainCount = Math.max(0, current.pollRetainCount - 1);
         if (current.pollRetainCount === 0) {
             current.pollContext = null;
-            clearPollTimer(current);
+            current.observation?.dispose();
+            current.observation = null;
         }
     };
 }
 
 export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadContext): Promise<void> {
     const entry = getOrCreateEntry(key);
-    clearPollTimer(entry);
     if (entry.refreshPromise) {
         await entry.refreshPromise;
         return;
@@ -461,7 +395,7 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
         if (entry.refreshPromise === promise) entry.refreshPromise = null;
         entry.refreshing = false;
         publish(key, entry);
-        schedulePolling(key);
+        entry.observation?.reconcile();
     }
 }
 
@@ -506,11 +440,9 @@ export async function consumeQuotaRecoveryCredit(
 /** Test-only: clear the module-level cache and active credential-scope leases. */
 export function __resetConnectedServiceQuotaSnapshotStore(): void {
     for (const entry of entries.values()) {
-        clearPollTimer(entry);
+        entry.observation?.dispose();
     }
     entries.clear();
     listenersByKey.clear();
     activeCredentialScopeRetainCounts.clear();
-    runtimeActiveResumeDetach?.();
-    runtimeActiveResumeDetach = null;
 }

@@ -6,6 +6,7 @@ import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/worksp
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
+import { resolveTerminalAdmissionErrorCode } from '@/components/sessions/terminal/terminalErrorCopy';
 import {
     isRecoverableTerminalRpcError,
     isRecoverableTerminalSessionErrorCode,
@@ -123,7 +124,19 @@ export function useMachineTerminalSession(params: Readonly<{
         return () => { mountedRef.current = false; };
     }, []);
 
-    const [connectionNonce, bumpConnectionNonce] = React.useReducer((x: number) => x + 1, 0);
+    const [connectionAttempt, beginConnectionAttempt] = React.useReducer(
+        (previous: Readonly<{ nonce: number; explicitRetry: boolean }>, explicitRetry: boolean) => ({
+            nonce: previous.nonce + 1,
+            explicitRetry,
+        }),
+        { nonce: 0, explicitRetry: false },
+    );
+    const connectionNonce = connectionAttempt.nonce;
+    const bumpConnectionNonce = React.useCallback(() => beginConnectionAttempt(false), []);
+    // A user Retry must reach the transport that can heal a failed observation.
+    // Its in-flight request also survives that observation becoming reachable.
+    const attemptMachineReachable = connectionAttempt.explicitRetry ? undefined : params.machineReachable;
+    const attemptRpcTargetAvailable = connectionAttempt.explicitRetry ? undefined : params.machineRpcTargetAvailable;
     const restartRequestedRef = React.useRef(false);
     const restartContextRef = React.useRef<ActionExecutorContext | undefined>(undefined);
     const autoRetryAttemptRef = React.useRef(0);
@@ -176,7 +189,7 @@ export function useMachineTerminalSession(params: Readonly<{
         setError(null);
         setStatus('connecting');
         return true;
-    }, []);
+    }, [bumpConnectionNonce]);
 
     const handleInputError = React.useCallback((inputError: unknown) => {
         const inputErrorCode = readTerminalStreamInputErrorCode(inputError);
@@ -314,13 +327,13 @@ export function useMachineTerminalSession(params: Readonly<{
         clearTerminalOutput();
         syncDetectedUrl(null);
         bumpConnectionNonce();
-    }, [byteStreamEnabled, clearActiveTerminalStream, clearTerminalOutput, params.readOnly, resetAutoRetryState, syncDetectedUrl]);
+    }, [bumpConnectionNonce, byteStreamEnabled, clearActiveTerminalStream, clearTerminalOutput, params.readOnly, resetAutoRetryState, syncDetectedUrl]);
 
     const retryConnect = React.useCallback(() => {
         resetAutoRetryState();
         restartRequestedRef.current = false;
         restartContextRef.current = undefined;
-        bumpConnectionNonce();
+        beginConnectionAttempt(true);
     }, [resetAutoRetryState]);
 
     const onLink = React.useCallback((rawUrl: string) => {
@@ -387,12 +400,12 @@ export function useMachineTerminalSession(params: Readonly<{
                 setError('terminal_missing_machine_target');
                 return;
             }
-            if (params.machineRpcTargetAvailable === false) {
+            if (attemptRpcTargetAvailable === false) {
                 setStatus('error');
                 setError('terminal_rpc_target_unavailable');
                 return;
             }
-            if (params.machineReachable === false) {
+            if (attemptMachineReachable === false) {
                 setStatus('error');
                 setError('terminal_machine_unreachable');
                 return;
@@ -440,12 +453,13 @@ export function useMachineTerminalSession(params: Readonly<{
                 return;
             }
             if (!ensured.ok) {
-                if (handleWithdrawalRef.current(ensured.errorCode)) return;
-                if (isRecoverableTerminalSessionErrorCode(ensured.errorCode) && scheduleAutoRetry()) {
+                const errorCode = resolveTerminalAdmissionErrorCode(ensured);
+                if (handleWithdrawalRef.current(errorCode)) return;
+                if (isRecoverableTerminalSessionErrorCode(errorCode) && scheduleAutoRetry()) {
                     return;
                 }
                 setStatus('error');
-                setError(ensured.errorCode);
+                setError(errorCode);
                 return;
             }
             resetAutoRetryState();
@@ -747,6 +761,8 @@ export function useMachineTerminalSession(params: Readonly<{
         admission.capture,
         clearWithdrawnTerminal,
         connectionNonce,
+        attemptMachineReachable,
+        attemptRpcTargetAvailable,
         byteStreamEnabled,
         embeddedTerminalRendererId,
         clearActiveTerminalStream,
@@ -763,8 +779,6 @@ export function useMachineTerminalSession(params: Readonly<{
         params.closeOnUnmount,
         params.machineId,
         params.serverId,
-        params.machineReachable,
-        params.machineRpcTargetAvailable,
         params.terminalKey,
         params.terminalRef,
         replaceSurfaceState,

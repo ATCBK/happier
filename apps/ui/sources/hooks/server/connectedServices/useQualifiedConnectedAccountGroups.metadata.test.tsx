@@ -18,6 +18,7 @@ import { AccountSettingsV2HistoryListResponseSchema } from '@happier-dev/protoco
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const navigationBoundary = vi.hoisted(() => ({ events: [] as string[], onPending: null as (() => Promise<void>) | null }));
 installConnectedServicesCommonModuleMocks({
@@ -35,13 +36,42 @@ installConnectedServicesCommonModuleMocks({
 const auth = vi.hoisted(() => ({ credentials: null as AuthCredentials | null }));
 // The UI's authenticated bearer is the same genuine device credential admitted by the Home harness.
 vi.mock('@/auth/context/AuthContext', () => ({ useAuth: () => auth }));
-afterEach(() => { resetRuntimeFetch(); vi.restoreAllMocks(); });
+let restoreExecutorLoader: (() => void) | undefined;
+afterEach(() => { restoreExecutorLoader?.(); restoreExecutorLoader = undefined; resetRuntimeFetch(); vi.restoreAllMocks(); });
+
+async function prepareMountedHomeBoundary(home: ReturnType<typeof createHomeGovernanceHarness>) {
+    installHomeGovernanceBoundaries(home);
+    setRuntimeFetch(home.request);
+    const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+    restoreExecutorLoader = await installRealActionExecutorModuleLoader();
+}
+
+async function advertiseQualifiedPools(home: ReturnType<typeof createHomeGovernanceHarness>, serverId: string) {
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    const features = createRootLayoutFeaturesResponse({ features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
+        capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } } });
+    home.answer(serverId, '/v1/features', { body: features });
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+}
+
+async function publishMountedHomeFixture() {
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+        await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const previous = getAppliedActiveServerSnapshot();
+    const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+    // The real connection producer's completed-Home fact is part of a mounted viewer fixture.
+    // Credential and profile scopes alone do not activate UI Account reads.
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).not.toBeNull();
+    return () => publishAppliedActiveServerSnapshot(previous, previousAvailable);
+}
 
 describe('pool deletion through its shared Action owner', () => {
     it('holds a mounted Agent pool-adoption acknowledgement at Action approval without writing metadata', async () => {
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
-        setRuntimeFetch(home.request);
+        await prepareMountedHomeBoundary(home);
         const serverId = await home.addHome({ name: 'Pool adoption', serverUrl: 'https://pool-adoption-admission.test',
             accountId: 'adoption-owner', currentAccount: true });
         const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
@@ -57,75 +87,157 @@ describe('pool deletion through its shared Action owner', () => {
         home.answer(serverId, 'GET /v1/account/entity-rows/connected-accounts/purposes', { body: { status: 'present', revision: 1,
             content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
         await home.requireUiApproval(serverId, 'connectedServices.acknowledgements.set');
+        const restoreMountedHome = await publishMountedHomeFixture();
         const { ConnectedServicesAgentSignInView } = await import('@/components/settings/connectedServices/collection/ConnectedServicesAgentSignInView');
         const { ConnectedServicesDefaultAuthRow } = await import('@/components/settings/connectedServices/ConnectedServicesDefaultAuthRow');
+        const { ActionApprovalPendingNotice } = await import('@/components/approvals/ActionApprovalPendingNotice');
         const screen = await renderScreen(<ConnectedServicesAgentSignInView />);
         try {
+            const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+            expect(getActiveServerAccountScope()).toMatchObject({ accountId: 'adoption-owner' });
             await waitForHomeGovernance(() => expect(screen.findAllByType(ConnectedServicesDefaultAuthRow).length).toBeGreaterThan(0));
             const row = screen.findAllByType(ConnectedServicesDefaultAuthRow)[0];
             // Exercise the real collection's dismissal callback, exposed to its mounted presentation row.
             const dismiss = row!.props.onDismissPoolAdoptionSuggestion as NonNullable<React.ComponentProps<typeof ConnectedServicesDefaultAuthRow>['onDismissPoolAdoptionSuggestion']>;
+            let settled = false;
+            let dismissal: Promise<boolean> | undefined;
             await act(async () => {
-                expect(await dismiss({ kind: 'adoption', agentTargetKey: buildBackendTargetKeyV2({ kind: 'agent',
+                dismissal = dismiss({ kind: 'adoption', agentTargetKey: buildBackendTargetKeyV2({ kind: 'agent',
                     identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }),
-                    service, groupId: 'work' })).toBe(false);
+                    service, groupId: 'work' }).then(result => { settled = true; return result; });
             });
+            await waitForHomeGovernance(() => expect(screen.findAllByType(ActionApprovalPendingNotice).length).toBeGreaterThan(0));
+            expect(settled).toBe(false);
             expect(home.requestsFor(CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1).filter(request => request.input !== null)).toEqual([]);
             expect(home.requestsFor('/v1/artifacts').some(request => request.input !== null)).toBe(true);
-        } finally { await screen.unmount(); await home.reset(); }
+            await screen.unmount();
+            expect(await dismissal).toBe(false);
+        } finally { await screen.unmount(); restoreMountedHome(); await home.reset(); }
     });
     it('holds a mounted Agent own-login default at Action approval without writing the purpose catalog', async () => {
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
-        setRuntimeFetch(home.request);
+        await prepareMountedHomeBoundary(home);
         const serverId = await home.addHome({ name: 'Purpose default', serverUrl: 'https://purpose-default-admission.test',
             accountId: 'purpose-owner', currentAccount: true });
         const path = '/v1/account/entity-rows/connected-accounts/purposes';
+        home.answer(serverId, 'GET /v1/account/encryption/currentness', { body: { mode: 'plain', version: 1,
+            settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
         home.answer(serverId, `GET ${path}`, { body: { status: 'present', revision: 1,
             content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
+        home.answer(serverId, `POST ${path}`, { body: { status: 'updated', revision: 2, cursor: 2 } });
         await home.requireUiApproval(serverId, 'connectedServices.accounts.purposeDefault.set');
+        const restoreMountedHome = await publishMountedHomeFixture();
+        // This contract starts with an admitted catalog, not the catalog loader's separate lifecycle.
+        const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const catalogScope = storage.getState().profileScope;
+        expect(catalogScope).toMatchObject({ accountId: 'purpose-owner' });
+        applyConnectedAccountCatalogSnapshot(catalogScope!, 'purposes', { status: 'ready', revision: 1,
+            record: { key: 'purposes', value: { v: 1, bindings: [] } } }, true);
         const { useConnectedAccountPurposeDefaults } = await import('./useConnectedAccountPurposeDefaults');
         const hook = await renderHook(() => useConnectedAccountPurposeDefaults());
         try {
-            await waitForHomeGovernance(() => expect(hook.getCurrent().catalog.status).toBe('ready'));
+            expect(hook.getCurrent().catalog.status).toBe('ready');
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution.ready).toBe(true));
+            const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+            const { isApprovalRequiredByActionsSettings } = await import('@happier-dev/protocol/actions/actionApprovalPolicy');
+            expect(isApprovalRequiredByActionsSettings('connectedServices.accounts.purposeDefault.set',
+                normalizeActionsSettingsV1(storage.getState().settings.actionsSettingsV1),
+                { surface: 'ui', authority: 'present_user' })).toBe(true);
+            let settled = false;
+            let mutationFailure: unknown;
+            let mutation: Promise<boolean> | undefined;
             await act(async () => {
-                await expect(hook.getCurrent().mutateDefaults({ kind: 'service', input: { agentId: 'codex',
-                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, selection: { source: 'native' } } }))
-                    .rejects.toMatchObject({ code: 'approval_required' });
+                mutation = hook.getCurrent().mutateDefaults({ kind: 'service', input: { agentId: 'codex',
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, selection: { source: 'native' } } })
+                    .then(result => { settled = true; return result; }, error => { settled = true; mutationFailure = error; return false; });
             });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution.approval.approvalPending).toBe(true));
+            expect(settled).toBe(false);
             expect(home.requestsFor(path).filter(request => request.input !== null)).toEqual([]);
             expect(hook.getCurrent().catalog.value?.bindings).toEqual([]);
             expect(home.requestsFor('/v1/artifacts').some(request => request.input !== null)).toBe(true);
-        } finally { await hook.unmount(); await home.reset(); }
+            const artifactId = hook.getCurrent().execution.approval.approvalId!;
+            const approvalResult = await decideApprovalAsInbox(serverId, artifactId, 'approve');
+            expect(approvalResult, JSON.stringify(approvalResult)).toMatchObject({ ok: true, result: { status: 'executed' } });
+            await waitForHomeGovernance(() => expect(settled).toBe(true));
+            expect(mutationFailure).toBeUndefined();
+            expect(await mutation).toBe(true);
+            expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
+        } finally { await hook.unmount(); restoreMountedHome(); await home.reset(); }
     });
     it('admits the device identity-privacy effect before changing the local identity presenter', async () => {
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
-        setRuntimeFetch(home.request);
+        await prepareMountedHomeBoundary(home);
         const serverId = await home.addHome({ name: 'Identity privacy', serverUrl: 'https://identity-privacy-admission.test',
             accountId: 'privacy-owner', currentAccount: true });
         await home.requireUiApproval(serverId, 'connectedServices.identityPrivacy.set');
+        const restoreMountedHome = await publishMountedHomeFixture();
         const { storage } = await import('@/sync/domains/state/storage');
+        expect(storage.getState().profileScope).toMatchObject({ accountId: 'privacy-owner' });
         const previous = storage.getState().localSettings.hideConnectedAccountIdentities;
         storage.getState().applyLocalSettings({ hideConnectedAccountIdentities: false }, { source: 'ui' });
         const { useConnectedAccountIdentityPrivacy } = await import('@/hooks/ui/useConnectedAccountIdentityPrivacy');
-        const hook = await renderHook(() => useConnectedAccountIdentityPrivacy());
+        const hook = await renderHook(() => useConnectedAccountIdentityPrivacy({ mutation: true }));
         try {
-            await act(async () => { await hook.getCurrent().setHidden(true); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution.ready).toBe(true));
+            await act(async () => { void hook.getCurrent().setHidden(true); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution.approval.approvalPending).toBe(true));
             expect(hook.getCurrent().hidden).toBe(false);
             expect(home.requestsFor('/v1/artifacts').some(request => request.input !== null)).toBe(true);
         } finally {
             await hook.unmount();
             storage.getState().applyLocalSettings({ hideConnectedAccountIdentities: previous }, { source: 'ui' });
+            restoreMountedHome();
             await home.reset();
         }
     });
+    it('does not dismiss a successor Home when a mounted settle receives the retired Home purpose receipt', async () => {
+        const home = createHomeGovernanceHarness();
+        await prepareMountedHomeBoundary(home);
+        const serverId = await home.addHome({ name: 'Settle custody', serverUrl: 'https://settle-purpose-custody.test',
+            accountId: 'settle-owner', currentAccount: true });
+        // Establish the real viewer's Account scopes, without requiring approval for this purpose Action.
+        await home.requireUiApproval(serverId, 'connectedServices.accounts.rename');
+        home.answer(serverId, 'GET /v1/account/encryption/currentness', { body: { mode: 'plain', version: 1,
+            settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        const path = '/v1/account/entity-rows/connected-accounts/purposes';
+        home.answer(serverId, `GET ${path}`, { body: { status: 'present', revision: 1,
+            content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
+        home.answer(serverId, `POST ${path}`, { select: async () => {
+            await home.switchAccount(serverId, 'successor-owner');
+            return { body: { status: 'updated', revision: 2, cursor: 2 } };
+        } });
+        const emptyMetadata = { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } };
+        home.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/presentation', { body: emptyMetadata });
+        home.answer(serverId, `GET ${CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1}`, { body: emptyMetadata });
+        const restoreMountedHome = await publishMountedHomeFixture();
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
+        applyConnectedAccountCatalogSnapshot(storage.getState().profileScope!, 'purposes', { status: 'ready', revision: 1,
+            record: { key: 'purposes', value: { v: 1, bindings: [] } } }, true);
+        const { getResolvedAgentCatalogEntries } = await import('@/agents/backendCatalog/agentCatalogProjection');
+        const { ConnectedAccountSettled } = await import('@/components/settings/connectedServices/setup/ConnectedAccountSettled');
+        const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
+        const onDismiss = vi.fn();
+        const account = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
+        const agents = getResolvedAgentCatalogEntries({ enabledAgentIds: ['codex'], mergedProviderProjectionById: null, mergedBackendProjectionById: null });
+        const screen = await renderScreen(<ConnectedAccountSettled account={account} model={{ sheets: [], connectable: [] }} agents={agents} onDismiss={onDismiss} />);
+        try {
+            await flushHookEffects();
+            const button = screen.findAllByType(RoundButton).find(candidate => candidate.props.testID === 'connected-services-settle:use');
+            expect(button).toBeDefined();
+            await act(async () => { await button!.props.onPress(); });
+            expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
+            expect(onDismiss).not.toHaveBeenCalled();
+        } finally { await screen.unmount(); restoreMountedHome(); await home.reset(); }
+    });
     it.each(['create', 'patch', 'switchNow'] as const)('holds a mounted pool %s at the configured Action approval instead of writing the pool directly', async operation => {
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
-        setRuntimeFetch(home.request);
+        await prepareMountedHomeBoundary(home);
         const serverUrl = 'https://pool-edit-admission.test';
         const serverId = await home.addHome({ name: 'Pool edit', serverUrl, accountId: 'pool-editor', currentAccount: true });
+        await advertiseQualifiedPools(home, serverId);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         auth.credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
         const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
@@ -133,25 +245,48 @@ describe('pool deletion through its shared Action owner', () => {
             runtimeStateRevision: 3, policy: ConnectedServiceAuthGroupPolicyV1Schema.parse({}), activeConnectedAccountId: null,
             state: {}, createdAt: 0, updatedAt: 0, members: [] };
         const encodedService = encodeURIComponent(encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountServiceRefSchema, service));
-        home.answer(serverId, `/v4/connect/qualified/groups?service=${encodedService}`, { body: { groups: [group] } });
-        home.answer(serverId, 'PATCH /v4/connect/qualified/group', { body: { group: { ...group, displayName: 'Renamed', generation: 3 } } });
+        let currentGroup = group;
+        home.answer(serverId, `/v4/connect/qualified/groups?service=${encodedService}`, { select: () => ({ body: { groups: [currentGroup] } }) });
+        home.answer(serverId, 'PATCH /v4/connect/qualified/group', { select: () => {
+            currentGroup = { ...group, displayName: 'Renamed', generation: 3 };
+            return { body: { group: currentGroup } };
+        } });
         home.answer(serverId, 'POST /v4/connect/qualified/groups', { body: { group: { ...group, ref: { service, groupId: 'new-pool' } } } });
         home.answer(serverId, 'POST /v4/connect/qualified/group/active-account', { body: { group: { ...group, activeConnectedAccountId: 'work', generation: 3 } } });
         await home.requireUiApproval(serverId, `connectedServices.pools.${operation}`);
         const { useQualifiedConnectedAccountGroups } = await import('./useQualifiedConnectedAccountGroups');
-        const peer = { status: 'ready' as const, transport: { protocol: 'v4' as const }, errorCode: null };
-        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({ serverId, service, peer }));
+        const hook = await renderHook(() => useQualifiedConnectedAccountGroups({ serverId, service }));
         try {
             await waitForHomeGovernance(() => expect(hook.getCurrent().groups).toHaveLength(1));
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution?.ready).toBe(true));
+            let settled = false;
+            let mutationFailure: unknown;
+            let result: Promise<unknown> | undefined;
             await act(async () => {
                 const current = hook.getCurrent();
-                if (operation === 'create') await current.create({ groupId: 'new-pool', displayName: 'New pool' });
-                else if (operation === 'patch') await current.patch({ group: current.groups[0]!, displayName: 'Renamed' });
-                else await current.setActiveAccount({ group: current.groups[0]!, account: { service, accountId: 'work' } }).catch(() => null);
+                result = (operation === 'create' ? current.create({ groupId: 'new-pool', displayName: 'New pool' })
+                    : operation === 'patch' ? current.patch({ group: current.groups[0]!, displayName: 'Renamed' })
+                    : current.setActiveAccount({ group: current.groups[0]!, account: { service, accountId: 'work' } }))
+                    .then(receipt => { settled = true; return receipt; }, error => { settled = true; mutationFailure = error; return null; });
             });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().execution?.approval.approvalPending).toBe(true));
+            expect(settled).toBe(false);
             expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/group') && request.input !== null)).toEqual([]);
             expect(hook.getCurrent().groups[0]?.displayName).toBe('Work');
             expect(home.requestsFor('/v1/artifacts').some(request => request.input !== null)).toBe(true);
+            if (operation === 'patch') {
+                const artifactId = hook.getCurrent().execution?.approval.approvalId!;
+                expect(await decideApprovalAsInbox(serverId, artifactId, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
+                await waitForHomeGovernance(() => expect(settled).toBe(true));
+                expect(mutationFailure).toBeUndefined();
+                expect(await result).toMatchObject({ displayName: 'Renamed' });
+                expect(hook.getCurrent().groups[0]?.displayName).toBe('Renamed');
+            } else {
+                await hook.unmount();
+                expect(await result).toBeNull();
+                if (operation === 'switchNow') expect(mutationFailure).toMatchObject({ code: 'action_account_scope_changed' });
+                else expect(mutationFailure).toBeUndefined();
+            }
         } finally {
             await hook.unmount();
             await home.reset();
@@ -164,11 +299,11 @@ describe('pool deletion through its shared Action owner', () => {
         const alertEntered = createDeferred<void>();
         if (retireDuringAlert) navigationBoundary.onPending = async () => { alertEntered.resolve(); await pendingAlert.promise; };
         const home = createHomeGovernanceHarness();
-        installHomeGovernanceBoundaries(home);
-        setRuntimeFetch(home.request);
+        await prepareMountedHomeBoundary(home);
         const accountId = 'pool-metadata-owner';
         const serverUrl = `https://pool-metadata-${partialAcknowledgements}.test`;
         const serverId = await home.addHome({ name: 'Metadata', serverUrl, accountId, currentAccount: true });
+        await advertiseQualifiedPools(home, serverId);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         auth.credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
         if (!auth.credentials) throw new Error('The Home fixture did not publish its device credential');
@@ -177,7 +312,7 @@ describe('pool deletion through its shared Action owner', () => {
             const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
             const features = createRootLayoutFeaturesResponse({ features: {
                 connectedServices: { enabled: true, accountGroups: { enabled: true } },
-            } });
+            }, capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } } });
             home.answer(serverId, '/v1/features', { body: features });
             home.answer(serverId, '/v1/features/authenticated', { body: features });
             primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
@@ -253,7 +388,6 @@ describe('pool deletion through its shared Action owner', () => {
         storage.setState({ localSettings: { ...storage.getState().localSettings,
             collapsedGroupKeysV1: { ...originalLocalKeys, ...keptKeys, [targetMemberKey]: false } } });
         const { useQualifiedConnectedAccountGroups } = await import('./useQualifiedConnectedAccountGroups');
-        const peer = { status: 'ready' as const, transport: { protocol: 'v4' as const }, errorCode: null };
         let unmount: (() => Promise<void>) | undefined;
         let pending: ReturnType<UseQualifiedConnectedAccountGroupsResult['delete']> | undefined;
         try {
@@ -264,7 +398,7 @@ describe('pool deletion through its shared Action owner', () => {
                 const isControllerCurrent = controller.accountLifetime.isCurrent;
                 const { ConnectedAccountServiceContent } = await import('@/components/settings/connectedServices/account/ConnectedAccountServiceContent');
                 function PoolScreen() {
-                    const groups = useQualifiedConnectedAccountGroups({ serverId, service, peer });
+                    const groups = useQualifiedConnectedAccountGroups({ serverId, service });
                     currentGroups = groups;
                     return <ConnectedAccountServiceContent
                         serverId={serverId} title="Codex" service={service}
@@ -278,7 +412,7 @@ describe('pool deletion through its shared Action owner', () => {
                     if (!currentGroups) throw new Error('Mounted pool hook did not publish');
                     return currentGroups;
                 } };
-            })() : await renderHook(() => useQualifiedConnectedAccountGroups({ serverId, service, peer }));
+            })() : await renderHook(() => useQualifiedConnectedAccountGroups({ serverId, service }));
             unmount = rendered.unmount;
             await flushHookEffects();
             expect(rendered.getCurrent().groups).toHaveLength(1);

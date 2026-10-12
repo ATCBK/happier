@@ -7,23 +7,23 @@ import { useMountedRef } from '@/hooks/ui/useMountedRef';
 
 export type HappyActionMode = 'drop' | 'rerun_latest';
 
-export function useHappyAction(action: () => Promise<void>, options?: Readonly<{ mode?: HappyActionMode }>) {
+export function useHappyAction<Args extends unknown[]>(action: (...args: Args) => Promise<void>, options?: Readonly<{ mode?: HappyActionMode }>) {
     const [loading, setLoading] = React.useState(false);
     const loadingRef = React.useRef(false);
-    const pendingRerunRef = React.useRef(false);
+    const pendingRerunRef = React.useRef<Args | null>(null);
     const mountedRef = useMountedRef();
     const mode: HappyActionMode = options?.mode ?? 'drop';
-    const doActionRef = React.useRef<null | (() => void)>(null);
+    const doActionRef = React.useRef<null | ((...args: Args) => void)>(null);
 
     const setLoadingSafe = React.useCallback((value: boolean) => {
         if (!mountedRef.current) return;
         setLoading(value);
     }, [mountedRef]);
 
-    const doAction = React.useCallback(() => {
+    const doAction = React.useCallback((...args: Args) => {
         if (loadingRef.current) {
             if (mode === 'rerun_latest') {
-                pendingRerunRef.current = true;
+                pendingRerunRef.current = args;
             }
             return;
         }
@@ -33,7 +33,7 @@ export function useHappyAction(action: () => Promise<void>, options?: Readonly<{
             try {
                 while (true) {
                     try {
-                        await action();
+                        await action(...args);
                         break;
                     } catch (e) {
                         if (e instanceof HappyError) {
@@ -51,7 +51,7 @@ export function useHappyAction(action: () => Promise<void>, options?: Readonly<{
                             const shown = tryShowDaemonUnavailableAlertForRpcError({
                                 error: e,
                                 onRetry: () => {
-                                    void doAction();
+                                    void doAction(...args);
                                 },
                                 shouldContinue: () => mountedRef.current,
                                 titleKey: 'errors.daemonUnavailableTitle',
@@ -69,12 +69,13 @@ export function useHappyAction(action: () => Promise<void>, options?: Readonly<{
                 setLoadingSafe(false);
 
                 if (mode === 'rerun_latest' && pendingRerunRef.current) {
-                    pendingRerunRef.current = false;
+                    const pendingArgs = pendingRerunRef.current;
+                    pendingRerunRef.current = null;
                     // Rerun on a later tick so we don't recurse within the same call stack.
                     // This keeps state updates predictable and avoids surprising sync reentrancy.
                     Promise.resolve().then(() => {
                         if (!mountedRef.current) return;
-                        doActionRef.current?.();
+                        doActionRef.current?.(...pendingArgs);
                     });
                 }
             }

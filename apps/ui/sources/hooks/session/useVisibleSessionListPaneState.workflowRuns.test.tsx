@@ -1,3 +1,5 @@
+import React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkBoardV1, normalizeSessionListFilterV1 } from '@happier-dev/protocol';
@@ -6,6 +8,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { getActiveServerSnapshot, upsertAndActivateServer, upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
@@ -20,6 +23,9 @@ import { useWorkflowRunWindow, resetWorkflowLibraryReadsForTests } from '@/compo
 import { useBoardMembership } from '@/components/boards/model/useBoardContent';
 import { useVisibleSessionListPaneState } from './useVisibleSessionListPaneState';
 import { useSessionListSelectionState } from './useSessionListSelectionState';
+import { renderScreen } from '@/dev/testkit';
+import { clearSessionListViewFilterRetentionForTests } from '@/components/sessions/shell/search/useSessionListViewFilters';
+import { resetSessionListPaneRetentionForTests } from '@/components/sessions/shell/sessionListPaneRetention';
 
 const execute = vi.hoisted(() => vi.fn());
 
@@ -44,6 +50,21 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ pathname: '/' }).module;
+});
+
+// The composed destination renders through the canonical platform boundary factories.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
+    return createReactNativeWebMock(createCapturingFlatListMock().module);
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
 });
 
 let serverId: string;
@@ -73,6 +94,8 @@ beforeEach(async () => {
 
 afterEach(() => {
     standardCleanup();
+    clearSessionListViewFilterRetentionForTests();
+    resetSessionListPaneRetentionForTests();
     resetWorkflowLibraryReadsForTests();
     retireActiveServerAccountScopeLifetime();
     storage.setState(previousStorageState);
@@ -84,6 +107,50 @@ function filter(show: 'runs' | 'both' | 'sessions' = 'runs') {
 }
 
 describe('the mounted unified list feed', () => {
+    it.each(['you', 'triggers'] as const)('switches the Sessions destination from Sessions to Runs through its shared filter controller for %s', async (starter) => {
+        execute.mockResolvedValue({ ok: true, result: { runs: [
+            createWorkflowRunSummaryFixture({ id: 'user-run', startedBy: 'user' }),
+            createWorkflowRunSummaryFixture({ id: 'trigger-run', startedBy: 'trigger' }),
+        ], metadataByRunId: {} } });
+        storage.getState().mergeSessionListRowsForServerScope(serverId, [createSessionListRenderableSessionFixture()]);
+        storage.setState({
+            ordinarySessionListMembershipByServerId: { [serverId]: ['session-1'] },
+            sessionListIndexByServerId: { [serverId]: [{ type: 'session', serverId, sessionId: 'session-1', groupKey: 'sessions', groupKind: 'project' }] },
+        });
+        const { useSessionListViewFilterController } = await import('@/components/sessions/shell/search/useSessionListViewFilterController');
+        const { SessionsListPaneContent } = await import('@/components/sessions/shell/SessionsListPaneContent');
+        const { SessionsListViewWithFilterController } = await import('@/components/sessions/shell/SessionsList');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { UniversalSearchRuntimeProvider } = await import('@/components/appShell/search/UniversalSearchRuntimeContext');
+        const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+        await prepareSessionDraftPersistenceStorage();
+        const screen = await renderScreen(
+            <InjectedAuthProvider credentials={null}>
+                <UniversalSearchRuntimeProvider value={{ open: () => {}, buildCommands: () => [] }}>
+                    <SessionsListPaneContent storageKind="all" fallbackGuidanceVariant="sidebar" pathname="/" />
+                </UniversalSearchRuntimeProvider>
+            </InjectedAuthProvider>,
+        );
+        const controller = screen.findByType(SessionsListViewWithFilterController).props.filterController as ReturnType<typeof useSessionListViewFilterController>;
+        await act(async () => { controller.updateFilters(current => ({ ...current, show: 'runs', startedBy: [starter] })); });
+        await flushHookEffects();
+        const selectedRunId = starter === 'you' ? 'user-run' : 'trigger-run';
+        const excludedRunId = starter === 'you' ? 'trigger-run' : 'user-run';
+        const pane = screen.findByType(SessionsListViewWithFilterController).props.paneState;
+        expect(pane.visibleSessionListIndex.filter((item: { type: string }) => item.type !== 'header')).toEqual([
+            expect.objectContaining({ type: 'workflow_run', runId: selectedRunId, serverId }),
+        ]);
+        expect(screen.findByTestId(`workflow-run-row:${selectedRunId}`)).toBeTruthy();
+        expect(screen.findByTestId(`workflow-run-row:${excludedRunId}`)).toBeNull();
+        await act(async () => { controller.updateFilters(current => ({ ...current, show: 'sessions' })); });
+        await flushHookEffects();
+        expect(screen.findByTestId(`workflow-run-row:${selectedRunId}`)).toBeNull();
+        const sessionsPane = screen.findByType(SessionsListViewWithFilterController).props.paneState;
+        expect(sessionsPane.visibleSessionListIndex.filter((item: { type: string }) => item.type !== 'header')).toEqual([
+            expect.objectContaining({ type: 'session', sessionId: 'session-1', serverId }),
+        ]);
+    });
+
     it('renders and counts a loaded Run while the Sessions source is null', async () => {
         execute.mockResolvedValue({ ok: true, result: { runs: [createWorkflowRunSummaryFixture({ startedBy: 'user' })], metadataByRunId: {} } });
         const hook = await renderHook(() => useVisibleSessionListPaneState('all', { workFilter: filter() }));

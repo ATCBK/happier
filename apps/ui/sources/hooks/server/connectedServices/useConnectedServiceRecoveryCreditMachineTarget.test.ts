@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { ConnectedServiceId } from '@happier-dev/protocol';
 
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
     resolveConnectedServiceRecoveryCreditMachineTarget,
@@ -11,10 +12,10 @@ import {
 // Released V3 account-surface scalar id and its canonical qualified binding key.
 const CODEX_LEGACY_SERVICE_ID = 'openai-codex';
 const CODEX_SERVICE_KEY = 'happier.agent.codex/openai-codex';
-// Novel external plugin service: no bundled enum member, no generated legacy
+// Unknown bare service: no bundled enum member, no generated legacy
 // mapping, and therefore no canonical binding key. Cast is a test-harness
 // fixture for an out-of-enum runtime value the released V3 surface can carry.
-const NOVEL_SERVICE_ID = 'acme.review/reviewer-service' as ConnectedServiceId;
+const NOVEL_SERVICE_ID = 'reviewer-service' as ConnectedServiceId;
 
 function machine(id: string, active = true): Machine {
     return {
@@ -70,8 +71,40 @@ function session(params: Readonly<{
 }
 
 describe('connected-service machine targeting', () => {
+    beforeEach(() => clearMachineRequestReachabilityForTest());
+
+    it('does not offer a request-unreachable, replaced, or locked profile owner for recovery credit', () => {
+        for (const owner of [machine('owner'), { ...machine('owner'), replacedByMachineId: 'replacement' },
+            { ...machine('owner'), metadata: null, availability: { kind: 'locked', reason: 'decryption_failed' } as const }]) {
+            clearMachineRequestReachabilityForTest();
+            if (owner.metadata && !('replacedByMachineId' in owner)) {
+                recordMachineRequestFailed({ serverId: 'home-a', accountId: 'recovery-account', machineId: owner.id });
+            }
+            expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+                accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
+                serviceId: CODEX_LEGACY_SERVICE_ID,
+                profileId: 'work',
+                sessions: [session({ id: 'bound', machineId: owner.id, serviceId: CODEX_SERVICE_KEY,
+                    binding: { source: 'connected', selection: 'profile', profileId: 'work' } })],
+                machines: [owner, machine('unbound')],
+                connectedServicesV2: [],
+            })).toBeNull();
+        }
+    });
+
+    it('keeps the same Machine id reachable on a different Home', () => {
+        const owner = machine('owner');
+        recordMachineRequestFailed({ serverId: 'home-b', accountId: 'recovery-account', machineId: owner.id });
+        expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' }, serviceId: CODEX_LEGACY_SERVICE_ID, profileId: 'work',
+            sessions: [session({ id: 'bound', machineId: owner.id, serviceId: CODEX_SERVICE_KEY,
+                binding: { source: 'connected', selection: 'profile', profileId: 'work' } })],
+            machines: [owner], connectedServicesV2: [],
+        })).toBe(owner.id);
+    });
     it('resolves recovery-credit targets from the session-bound profile owner keyed by the canonical qualified key', () => {
         expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
             serviceId: CODEX_LEGACY_SERVICE_ID,
             profileId: 'work',
             sessions: [
@@ -95,6 +128,7 @@ describe('connected-service machine targeting', () => {
 
     it('resolves a group-bound owner through the released V2 group facts after qualified resolution', () => {
         expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
             serviceId: CODEX_LEGACY_SERVICE_ID,
             profileId: 'oncall',
             sessions: [
@@ -129,6 +163,7 @@ describe('connected-service machine targeting', () => {
 
     it('fails closed for a service without a canonical qualified binding key', () => {
         expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
             serviceId: NOVEL_SERVICE_ID,
             profileId: 'work',
             sessions: [
@@ -146,6 +181,7 @@ describe('connected-service machine targeting', () => {
 
     it('does not treat a Team resource selection as a personal profile binding', () => {
         expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
             serviceId: CODEX_LEGACY_SERVICE_ID,
             profileId: 'work',
             sessions: [
@@ -175,6 +211,7 @@ describe('connected-service machine targeting', () => {
 
     it('reports no bound session when no active session carries the qualified binding', () => {
         expect(resolveConnectedServiceRecoveryCreditMachineTarget({
+            accountScope: { serverId: 'home-a', accountId: 'recovery-account' },
             serviceId: CODEX_LEGACY_SERVICE_ID,
             profileId: 'work',
             sessions: [

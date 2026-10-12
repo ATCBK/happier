@@ -1,7 +1,8 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { createDeferred, renderHook } from '@/dev/testkit';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
@@ -196,6 +197,41 @@ describe('useTeamPagedList', () => {
         const currentSignal = loadPage.mock.calls[1]?.[1] as AbortSignal | undefined;
         await rendered.unmount();
         expect(currentSignal?.aborted).toBe(true);
+    });
+
+    it('ignores a held refresh continuation after switching sequences', async () => {
+        const continuation = createDeferred<TeamPageOutcome<string>>();
+        const loadPage = vi.fn()
+            .mockResolvedValueOnce(ok(['a'], 'c1'))
+            .mockResolvedValueOnce(ok(['b'], 'c2'))
+            .mockResolvedValueOnce(ok(['changed-a'], 'fresh-c1'))
+            .mockReturnValueOnce(continuation.promise)
+            .mockResolvedValueOnce(ok(['other-team'], null));
+        const rendered = await renderHook(
+            (props: Readonly<{ key: string }>) => useTeamPagedList<string>({
+                key: props.key, enabled: true, loadPage,
+            }),
+            { initialProps: { key: 'first' } },
+        );
+        await vi.waitFor(() => expect(rendered.getCurrent().status).toBe('ready'));
+        await act(async () => { await rendered.getCurrent().loadMore(); });
+        let refreshing!: Promise<void>;
+        await act(async () => {
+            refreshing = rendered.getCurrent().reload();
+            await Promise.resolve();
+        });
+        await vi.waitFor(() => expect(loadPage).toHaveBeenCalledTimes(4));
+        const oldSignal = loadPage.mock.calls[3]?.[1] as AbortSignal;
+        await rendered.rerender({ key: 'second' });
+        await vi.waitFor(() => expect(rendered.getCurrent().rows).toEqual(['other-team']));
+        expect(oldSignal.aborted).toBe(true);
+        await act(async () => {
+            continuation.resolve(ok(['stale-b'], 'stale-c2'));
+            await refreshing;
+        });
+        expect(rendered.getCurrent().rows).toEqual(['other-team']);
+        expect(rendered.getCurrent().hasMore).toBe(false);
+        await rendered.unmount();
     });
 
     it('claims nothing and asks nothing while disabled', async () => {

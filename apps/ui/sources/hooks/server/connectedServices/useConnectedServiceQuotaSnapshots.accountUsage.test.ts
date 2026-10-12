@@ -1,111 +1,54 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { sealProviderAccountUsageSnapshotCiphertext } from '@happier-dev/protocol';
-
-import {
-    fetchAccountEncryptionModeSpy,
-    getConnectedServiceQuotaSnapshotSealedSpy,
-    getConnectedServiceQuotaSnapshotPlainSpy,
-    getProviderAccountUsageSnapshotPlainSpy,
-    makeProviderAccountUsageSnapshot,
-    makeQuotaSnapshot,
-    resetConnectedServiceQuotaSnapshotsTestState,
-} from './useConnectedServiceQuotaSnapshots.testkit';
-
-function fixedRandomBytes(byte: number) {
-    return (length: number) => new Uint8Array(length).fill(byte);
-}
+import { createLegacyQuotaAuthWrapper, createLegacyQuotaTestHarness, makeProviderAccountUsageSnapshot, makeQuotaSnapshot,
+    plainQuotaResponse, resetConnectedServiceQuotaSnapshotsTestState } from './useConnectedServiceQuotaSnapshots.testkit';
 
 describe('useConnectedServiceQuotaSnapshots source-backed authority', () => {
-    beforeEach(async () => {
-        const { __resetConnectedServiceQuotaSnapshotStore } = await import('./connectedServiceQuotaSnapshotStore');
-        __resetConnectedServiceQuotaSnapshotStore();
-        resetConnectedServiceQuotaSnapshotsTestState();
-    });
+    let boundary: Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>;
+    const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
+    beforeEach(async () => { await resetConnectedServiceQuotaSnapshotsTestState(); boundary = await createLegacyQuotaTestHarness(); });
+    afterEach(async () => { standardCleanup(); await boundary.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-    it('does not project connected-service quota snapshots from cached provider-account usage', async () => {
-        const providerSnapshot = {
-            ...makeProviderAccountUsageSnapshot(),
-            subscription: {
-                status: 'subscribed' as const,
-                renewal: 'off' as const,
-                observedAtMs: 1,
-                staleAfterMs: 60_000,
-                currentPeriodEndAtMs: 86_400_000,
-            },
-        };
-        getProviderAccountUsageSnapshotPlainSpy.mockResolvedValue(providerSnapshot);
-
+    it('requires the connected-account view to bind cached provider usage to a legacy profile', async () => {
+        const providerSnapshot = { ...makeProviderAccountUsageSnapshot(), subscription: {
+            status: 'subscribed' as const, renewal: 'off' as const, observedAtMs: Date.now(), staleAfterMs: 60_000, currentPeriodEndAtMs: Date.now() + 86_400_000,
+        } };
+        boundary.usageRead.mockImplementation(async () => Response.json({ content: { t: 'plain', v: providerSnapshot },
+            metadata: { fetchedAt: providerSnapshot.fetchedAtMs, staleAfterMs: providerSnapshot.staleAfterMs, status: 'ok' }, sources: [] }));
         const { useProviderAccountUsageSnapshots } = await import('./useProviderAccountUsageSnapshots');
-        const canonicalHook = await renderHook(() => useProviderAccountUsageSnapshots([providerSnapshot.recordId]));
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(canonicalHook.getCurrent().snapshotsByRecordId[providerSnapshot.recordId]?.subscription).toEqual(providerSnapshot.subscription);
-
+        const canonical = await renderHook(() => useProviderAccountUsageSnapshots([providerSnapshot.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(canonical.getCurrent().snapshotsByRecordId[providerSnapshot.recordId]?.subscription).toEqual(providerSnapshot.subscription);
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([
-            { serviceId: 'openai-codex', profileId: 'work' },
-        ], { fetchPolicy: 'cache_only' }));
-
-        expect(hook.getCurrent().snapshotsByKey['openai-codex/work'] ?? null).toBeNull();
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).not.toHaveBeenCalled();
-        await hook.unmount();
-        await canonicalHook.unmount();
+        const cached = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'openai-codex', profileId: 'work' }], { fetchPolicy: 'cache_only' }), { wrapper: Wrapper });
+        expect(cached.getCurrent().snapshotsByKey['openai-codex/work'] ?? null).toBeNull();
+        expect(boundary.plainRead).not.toHaveBeenCalled();
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'openai-codex', meterId: 'connected-weekly' })));
+        const acquiring = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'openai-codex', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        expect(acquiring.getCurrent().snapshotsByKey['openai-codex/work']?.meters[0]?.meterId).toBe('connected-weekly');
+        expect(canonical.getCurrent().snapshotsByRecordId[providerSnapshot.recordId]?.meters[0]?.meterId).toBe('weekly');
     });
 
-    it('loads the connected-service quota view even when matching provider-account usage is cached', async () => {
-        const providerSnapshot = makeProviderAccountUsageSnapshot();
-        getProviderAccountUsageSnapshotPlainSpy.mockResolvedValue(providerSnapshot);
-        getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(
-            makeQuotaSnapshot({ serviceId: 'openai-codex', meterId: 'connected-weekly' }),
-        );
-
-        const { useProviderAccountUsageSnapshots } = await import('./useProviderAccountUsageSnapshots');
-        const canonicalHook = await renderHook(() => useProviderAccountUsageSnapshots([providerSnapshot.recordId]));
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([
-            { serviceId: 'openai-codex', profileId: 'work' },
-        ]));
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-        expect(hook.getCurrent().snapshotsByKey['openai-codex/work']?.meters[0]?.meterId).toBe('connected-weekly');
-        await hook.unmount();
-        await canonicalHook.unmount();
-    });
-
-    it('opens provider-account usage ciphertext returned by the connected-service quota view route', async () => {
-        fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'e2ee', updatedAt: 0 });
+    it('opens predecessor provider-account usage ciphertext through the connected-service quota route', async () => {
+        await boundary.dispose(); boundary = await createLegacyQuotaTestHarness({ accountMode: 'e2ee' });
         const canonicalSnapshot = makeProviderAccountUsageSnapshot();
         const ciphertext = sealProviderAccountUsageSnapshotCiphertext({
-            material: { type: 'legacy', secret: new Uint8Array(32).fill(3) },
-            payload: canonicalSnapshot,
-            randomBytes: fixedRandomBytes(6),
+            material: { type: 'legacy', secret: new Uint8Array(32).fill(3) }, payload: canonicalSnapshot,
+            randomBytes: length => new Uint8Array(length).fill(6),
         });
-        getConnectedServiceQuotaSnapshotSealedSpy.mockResolvedValue({
-            sealed: { format: 'account_scoped_v1', ciphertext },
-            metadata: {
-                fetchedAt: canonicalSnapshot.fetchedAtMs,
-                staleAfterMs: canonicalSnapshot.staleAfterMs,
-                status: 'ok',
-            },
-        });
-
+        boundary.sealedRead.mockImplementation(async () => Response.json({ sealed: { format: 'account_scoped_v1', ciphertext },
+            metadata: { fetchedAt: canonicalSnapshot.fetchedAtMs, staleAfterMs: canonicalSnapshot.staleAfterMs, status: 'ok' } }));
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([
-            { serviceId: 'openai-codex', profileId: 'work' },
-        ]));
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'openai-codex', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).not.toHaveBeenCalled();
+        expect(boundary.sealedRead).toHaveBeenCalledTimes(1);
         expect(hook.getCurrent().snapshotsByKey['openai-codex/work']).toEqual(expect.objectContaining({
-            serviceId: 'openai-codex',
-            profileId: 'work',
-            providerId: 'codex',
-            activeAccountId: 'acct_stable',
+            serviceId: 'openai-codex', profileId: 'work', providerId: 'codex', activeAccountId: 'acct_stable',
         }));
         expect(hook.getCurrent().snapshotsByKey['openai-codex/work']?.meters[0]?.meterId).toBe('weekly');
-        await hook.unmount();
     });
 });

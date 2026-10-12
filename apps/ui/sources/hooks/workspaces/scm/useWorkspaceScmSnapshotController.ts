@@ -2,6 +2,8 @@ import * as React from 'react';
 
 import { scmRepositoryService, snapshotToScmStatus } from '@/scm/scmRepositoryService';
 import { storage, useWorkspaceScmSnapshot, useWorkspaceScmSnapshotError } from '@/sync/domains/state/storage';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { t } from '@/text';
 import {
     normalizeWorkspaceScopeBase,
     type WorkspaceScopeBase,
@@ -32,9 +34,12 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
     const normalizedScope = React.useMemo(() => normalizeScope(scope), [scope?.machineId, scope?.rootPath, scope?.serverId]);
     const snapshot = useWorkspaceScmSnapshot(normalizedScope);
     const snapshotError = useWorkspaceScmSnapshotError(normalizedScope);
+    const presence = useMachinePresenceSummary(normalizedScope?.serverId, normalizedScope?.machineId);
+    const unreachable = presence.reachability === 'unreachable';
 
     const [loading, setLoading] = React.useState(false);
     const error = React.useMemo<WorkspaceScmSnapshotControllerError | null>(() => {
+        if (unreachable) return { message: t('errors.machineOffline'), errorCode: 'machine_offline' };
         if (!snapshotError) return null;
         const code =
             typeof snapshotError === 'object'
@@ -47,10 +52,10 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
             message: snapshotError.message,
             errorCode: code,
         };
-    }, [snapshotError?.message, (snapshotError as { errorCode?: unknown } | null | undefined)?.errorCode]);
+    }, [unreachable, snapshotError?.message, (snapshotError as { errorCode?: unknown } | null | undefined)?.errorCode]);
 
     const refresh = React.useCallback(async () => {
-        if (!normalizedScope) return;
+        if (!normalizedScope || unreachable) return;
         setLoading(true);
         try {
             const next = await scmRepositoryService.fetchSnapshotForMachinePath({
@@ -92,22 +97,26 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
         } finally {
             setLoading(false);
         }
-    }, [normalizedScope]);
+    }, [normalizedScope, unreachable]);
 
     const initKey = normalizedScope
         ? `${normalizedScope.serverId}:${normalizedScope.machineId}:${normalizedScope.rootPath}`
         : '';
     const didInitKeyRef = React.useRef<string>('');
     React.useEffect(() => {
+        if (unreachable) {
+            didInitKeyRef.current = '';
+            return;
+        }
         if (!normalizedScope) return;
         if (didInitKeyRef.current === initKey) return;
         didInitKeyRef.current = initKey;
         void refresh();
-    }, [initKey, normalizedScope, refresh]);
+    }, [initKey, normalizedScope, refresh, unreachable]);
 
     return {
         snapshot,
-        loading,
+        loading: loading && !unreachable,
         error,
         refresh,
     };

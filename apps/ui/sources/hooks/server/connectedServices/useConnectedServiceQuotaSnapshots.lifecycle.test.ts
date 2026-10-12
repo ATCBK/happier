@@ -1,296 +1,120 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
 import { act } from 'react-test-renderer';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { computeConnectedServiceQuotaErrorBackoffMs } from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
+import { createDeferredResponse, createLegacyQuotaAuthWrapper, createLegacyQuotaTestHarness, makeQuotaSnapshot,
+    plainQuotaResponse, resetConnectedServiceQuotaSnapshotsTestState, type ProfileRef } from './useConnectedServiceQuotaSnapshots.testkit';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+describe('useConnectedServiceQuotaSnapshots predecessor acquisition lifecycle', () => {
+    let boundary: Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>;
+    const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
+    beforeEach(async () => { await resetConnectedServiceQuotaSnapshotsTestState(); boundary = await createLegacyQuotaTestHarness(); });
+    afterEach(async () => { standardCleanup(); await boundary.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-import {
-    activeServerSnapshotState,
-    createDeferredPlainSnapshot,
-    getConnectedServiceQuotaSnapshotPlainSpy,
-    makeQuotaSnapshot,
-    resetConnectedServiceQuotaSnapshotsTestState,
-    stableCredentials,
-    type PlainQuotaSnapshotResult,
-    type ProfileRef,
-} from './useConnectedServiceQuotaSnapshots.testkit';
-
-describe('useConnectedServiceQuotaSnapshots fetch lifecycle', () => {
-    beforeEach(async () => {
-        const { __resetConnectedServiceQuotaSnapshotStore } = await import('./connectedServiceQuotaSnapshotStore');
-        __resetConnectedServiceQuotaSnapshotStore();
-        resetConnectedServiceQuotaSnapshotsTestState();
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it('does not start duplicate quota fetches when rerendered with equivalent profile refs before the first fetch settles', async () => {
-        const pendingPlain = createDeferredPlainSnapshot();
-        getConnectedServiceQuotaSnapshotPlainSpy.mockReturnValue(pendingPlain.promise);
-
-        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (props: ProfileRef) => useConnectedServiceQuotaSnapshots([props]),
-            { initialProps: { serviceId: 'anthropic', profileId: 'work' } },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        await hook.rerender({ serviceId: 'anthropic', profileId: 'work' });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            pendingPlain.resolve(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }));
-        });
-        await flushHookEffects({ cycles: 10, turns: 10 });
-
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
-        await hook.unmount();
-    });
-
-    it('does not abort an unresolved quota fetch when an equivalent rerender adds a duplicate profile ref', async () => {
-        const pendingPlain = createDeferredPlainSnapshot();
-        getConnectedServiceQuotaSnapshotPlainSpy.mockReturnValue(pendingPlain.promise);
-
-        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (profiles: ReadonlyArray<ProfileRef>) => useConnectedServiceQuotaSnapshots(profiles),
-            { initialProps: [{ serviceId: 'anthropic', profileId: 'work' }] },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(true);
-
-        await hook.rerender([
-            { serviceId: 'anthropic', profileId: 'work' },
-            { serviceId: 'anthropic', profileId: 'work' },
-        ]);
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            pendingPlain.resolve(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }));
-        });
-        await flushHookEffects({ cycles: 10, turns: 10 });
-
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
-        await hook.unmount();
-    });
-
-    it('does not abort unresolved quota fetches when equivalent profile refs are reordered', async () => {
-        const snapshotByKey = {
-            'anthropic/work': makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }),
-            'openai-codex/work': makeQuotaSnapshot({ serviceId: 'openai-codex', meterId: 'monthly' }),
-        } as const;
-        const resolvers: Partial<Record<keyof typeof snapshotByKey, (value: PlainQuotaSnapshotResult) => void>> = {};
-        getConnectedServiceQuotaSnapshotPlainSpy.mockImplementation(async (_credentials, params) => {
-            const key = `${params.serviceId}/${params.profileId}` as keyof typeof snapshotByKey;
-            return await new Promise<PlainQuotaSnapshotResult>((resolve) => {
-                resolvers[key] = resolve;
+    it.each(['equivalent', 'duplicate', 'reordered', 'removed sibling'] as const)(
+        'keeps pending acquisition stable across a %s input rerender', async change => {
+            const first = createDeferredResponse(), second = createDeferredResponse();
+            boundary.plainRead.mockImplementation(async ref => (await (ref.serviceId === 'anthropic' ? first.promise : second.promise)).clone());
+            const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
+            const initial: ProfileRef[] = [{ serviceId: 'anthropic', profileId: 'work' }, { serviceId: 'openai-codex', profileId: 'work' }];
+            const hook = await renderHook((profiles: readonly ProfileRef[]) => useConnectedServiceQuotaSnapshots(profiles),
+                { initialProps: initial, wrapper: Wrapper });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(boundary.plainRead).toHaveBeenCalledTimes(2);
+            expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(true);
+            const next = change === 'duplicate' ? [...initial, initial[0]!]
+                : change === 'reordered' ? [...initial].reverse()
+                : change === 'removed sibling' ? [initial[0]!] : initial.map(ref => ({ ...ref }));
+            await hook.rerender(next); await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(boundary.plainRead).toHaveBeenCalledTimes(2);
+            await act(async () => {
+                first.resolve(plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' })));
+                second.resolve(plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'openai-codex', meterId: 'monthly' })));
             });
-        });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
+            expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
+            if (change !== 'removed sibling') {
+                expect(hook.getCurrent().snapshotsByKey['openai-codex/work']?.meters[0]?.meterId).toBe('monthly');
+                expect(hook.getCurrent().loadingByKey['openai-codex/work']).toBe(false);
+            } else expect(hook.getCurrent().snapshotsByKey['openai-codex/work']).toBeUndefined();
+            expect(boundary.control).not.toHaveBeenCalled();
+        },
+    );
 
+    it.each([false, true])('isolates an old held response after Home replacement (same Home: %s)', async sameHome => {
+        const held = createDeferredResponse();
+        boundary.plainRead.mockImplementationOnce(() => held.promise);
+        const oldUrl = boundary.account.home.serverUrl, oldIdentity = boundary.account.home.serverIdentityId!;
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (profiles: ReadonlyArray<ProfileRef>) => useConnectedServiceQuotaSnapshots(profiles),
-            {
-                initialProps: [
-                    { serviceId: 'anthropic', profileId: 'work' },
-                    { serviceId: 'openai-codex', profileId: 'work' },
-                ],
-            },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(true);
-        expect(hook.getCurrent().loadingByKey['openai-codex/work']).toBe(true);
-
-        await hook.rerender([
-            { serviceId: 'openai-codex', profileId: 'work' },
-            { serviceId: 'anthropic', profileId: 'work' },
-        ]);
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
         await act(async () => {
-            resolvers['anthropic/work']?.(snapshotByKey['anthropic/work']);
-            resolvers['openai-codex/work']?.(snapshotByKey['openai-codex/work']);
+            await boundary.dispose();
+            boundary = await createLegacyQuotaTestHarness({ serverUrl: sameHome ? oldUrl : 'https://legacy-second-home.test',
+                serverIdentityId: sameHome ? oldIdentity : 'srv_legacy_second_home' });
+            boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'current-home' })));
         });
-        await flushHookEffects({ cycles: 10, turns: 10 });
-
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
-        expect(hook.getCurrent().snapshotsByKey['openai-codex/work']?.meters[0]?.meterId).toBe('monthly');
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
-        expect(hook.getCurrent().loadingByKey['openai-codex/work']).toBe(false);
-        await hook.unmount();
+        await hook.rerender(); await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('current-home');
+        await act(async () => { held.resolve(plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'retired-home' }))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('current-home');
     });
 
-    it('keeps an unresolved quota fetch alive when a rerender removes a different profile ref', async () => {
-        const snapshotByKey = {
-            'anthropic/work': makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }),
-            'openai-codex/work': makeQuotaSnapshot({ serviceId: 'openai-codex' }),
-        } as const;
-        const resolvers: Partial<Record<keyof typeof snapshotByKey, (value: PlainQuotaSnapshotResult) => void>> = {};
-        getConnectedServiceQuotaSnapshotPlainSpy.mockImplementation(async (_credentials, params) => {
-            const key = `${params.serviceId}/${params.profileId}` as keyof typeof snapshotByKey;
-            return await new Promise<PlainQuotaSnapshotResult>((resolve) => {
-                resolvers[key] = resolve;
-            });
-        });
-
+    it('retains predecessor acquisition cadence while sharing readers and stops after final release', async () => {
+        vi.useFakeTimers();
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (profiles: ReadonlyArray<ProfileRef>) => useConnectedServiceQuotaSnapshots(profiles),
-            {
-                initialProps: [
-                    { serviceId: 'anthropic', profileId: 'work' },
-                    { serviceId: 'openai-codex', profileId: 'work' },
-                ],
-            },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(true);
-
-        await hook.rerender([{ serviceId: 'anthropic', profileId: 'work' }]);
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-
-        await act(async () => {
-            resolvers['anthropic/work']?.(snapshotByKey['anthropic/work']);
-            resolvers['openai-codex/work']?.(snapshotByKey['openai-codex/work']);
-        });
-        await flushHookEffects({ cycles: 10, turns: 10 });
-
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
-        await hook.unmount();
+        const read = () => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]);
+        const first = await renderHook(read, { wrapper: Wrapper }), second = await renderHook(read, { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        await first.unmount();
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(2);
+        expect(second.getCurrent().snapshotsByKey['anthropic/work']).not.toBeNull();
+        await second.unmount();
+        await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(2);
     });
 
-    it('fetches a reliable session-bound quota snapshot even when no meters are pinned', async () => {
-        getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }));
+    it('preserves retained data on a failed read and recovers at the existing error deadline', async () => {
+        vi.useFakeTimers();
+        const snapshot = makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'retained' });
+        boundary.plainRead.mockImplementationOnce(async () => plainQuotaResponse(snapshot))
+            .mockImplementationOnce(async () => Response.json({ error: 'quota_unavailable' }, { status: 400 }))
+            .mockImplementation(async () => plainQuotaResponse({ ...snapshot, fetchedAt: Date.now(), meters: [{ ...snapshot.meters[0]!, meterId: 'recovered' }] }));
+        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']).toEqual(snapshot);
+        expect(hook.getCurrent().errorsByKey['anthropic/work']).not.toBeNull();
+        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
+        await act(async () => { await vi.advanceTimersByTimeAsync(computeConnectedServiceQuotaErrorBackoffMs(1)); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('recovered');
+        expect(hook.getCurrent().errorsByKey['anthropic/work']).toBeNull();
+    });
 
+    it('admits a selected manual refresh through the real daemon transport and acquires its newer observation', async () => {
+        const first = makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'before', fetchedAt: 100 });
+        boundary.plainRead.mockImplementation(async ref => plainQuotaResponse(ref.serviceId === 'anthropic' ? first : makeQuotaSnapshot({ serviceId: 'openai-codex' })));
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
         const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([
-            { serviceId: 'anthropic', profileId: 'work' },
-        ]));
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledWith(stableCredentials, {
-            serviceId: 'anthropic',
-            profileId: 'work',
-        }, {
-            expectedActiveServer: {
-                serverId: 'server-a',
-                generation: 1,
-            },
-        });
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('weekly');
-        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
-        await hook.unmount();
-    });
-
-    it('isolates the quota cache by active server even when credentials are identical', async () => {
-        getConnectedServiceQuotaSnapshotPlainSpy
-            .mockResolvedValueOnce(makeQuotaSnapshot({
-                serviceId: 'anthropic',
-                meterId: 'server-a',
-            }))
-            .mockResolvedValueOnce(makeQuotaSnapshot({
-                serviceId: 'anthropic',
-                meterId: 'server-b',
-            }));
-
-        const { useConnectedServiceQuotaSnapshots } = await import(
-            './useConnectedServiceQuotaSnapshots'
-        );
-        const hook = await renderHook(
-            () => useConnectedServiceQuotaSnapshots([
-                { serviceId: 'anthropic', profileId: 'work' },
-            ]),
-        );
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(
-            hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]
-                ?.meterId,
-        ).toBe('server-a');
-
-        activeServerSnapshotState.current = {
-            serverId: 'server-b',
-            serverUrl: 'https://server-b.example.test',
-            generation: 2,
-        };
-        await hook.rerender();
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(
-            2,
-        );
-        expect(
-            hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]
-                ?.meterId,
-        ).toBe('server-b');
-        await hook.unmount();
-    });
-
-    it('does not commit an in-flight quota snapshot after the same server reconnects', async () => {
-        const first = createDeferredPlainSnapshot();
-        getConnectedServiceQuotaSnapshotPlainSpy
-            .mockReturnValueOnce(first.promise)
-            .mockResolvedValueOnce(makeQuotaSnapshot({
-                serviceId: 'anthropic',
-                meterId: 'generation-2',
-            }));
-
-        const { useConnectedServiceQuotaSnapshots } = await import(
-            './useConnectedServiceQuotaSnapshots'
-        );
-        const hook = await renderHook(
-            () => useConnectedServiceQuotaSnapshots([
-                { serviceId: 'anthropic', profileId: 'work' },
-            ]),
-        );
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(
-            getConnectedServiceQuotaSnapshotPlainSpy,
-        ).toHaveBeenCalledTimes(1);
-
-        activeServerSnapshotState.current = {
-            serverId: 'server-a',
-            serverUrl: 'https://server-a.example.test',
-            generation: 2,
-        };
-        await hook.rerender();
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(
-            getConnectedServiceQuotaSnapshotPlainSpy,
-        ).toHaveBeenCalledTimes(2);
-        expect(
-            hook.getCurrent().snapshotsByKey['anthropic/work']
-                ?.meters[0]?.meterId,
-        ).toBe('generation-2');
-
-        await act(async () => {
-            first.resolve(makeQuotaSnapshot({
-                serviceId: 'anthropic',
-                meterId: 'generation-1',
-            }));
-        });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(
-            hook.getCurrent().snapshotsByKey['anthropic/work']
-                ?.meters[0]?.meterId,
-        ).toBe('generation-2');
-        await hook.unmount();
+            { serviceId: 'anthropic', profileId: 'work' }, { serviceId: 'openai-codex', profileId: 'work' },
+        ]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.control).not.toHaveBeenCalled();
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse({ ...first, fetchedAt: 101, meters: [{ ...first.meters[0]!, meterId: 'after' }] }));
+        await act(async () => { await hook.getCurrent().refresh(['anthropic/work']); });
+        expect(boundary.refreshRead).toHaveBeenCalledWith({ serviceId: 'anthropic', profileId: 'work' }, 'v3');
+        expect(boundary.control).toHaveBeenCalledTimes(1);
+        expect(boundary.controls[0]?.command).toEqual(expect.objectContaining({ operation: 'describeService', requiredOperation: 'quota_refresh' }));
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('after');
+        expect(hook.getCurrent().refreshingByKey['anthropic/work']).toBe(false);
     });
 });

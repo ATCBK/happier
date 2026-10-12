@@ -2,7 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +26,26 @@ vi.mock('@/text', async () => {
 });
 
 describe('useHappyAction (daemon unavailable)', () => {
+    it('keeps the latest explicit Retry intent when it joins a running automatic read', async () => {
+        const first = createDeferred<void>();
+        const admitted: Array<'automatic' | 'retry' | undefined> = [];
+        const { useHappyAction } = await import('./useHappyAction');
+        const hook = await renderHook(() => useHappyAction(async (intent?: 'automatic' | 'retry') => {
+            admitted.push(intent);
+            if (admitted.length === 1) await first.promise;
+        }, { mode: 'rerun_latest' }));
+        try {
+            await act(async () => {
+                hook.getCurrent()[1]('automatic');
+                hook.getCurrent()[1]('automatic');
+                hook.getCurrent()[1]('retry');
+            });
+            expect(admitted).toEqual(['automatic']);
+            await act(async () => { first.resolve(); });
+            expect(admitted).toEqual(['automatic', 'retry']);
+        } finally { first.resolve(); await hook.unmount(); }
+    });
+
     it('shows a daemon-unavailable alert with Retry when action throws RPC method-not-available', async () => {
         vi.resetModules();
         modalAlertSpy.mockClear();

@@ -1,10 +1,9 @@
 import * as React from 'react';
 
-import { useAuth } from '@/auth/context/AuthContext';
+import { getCurrentAuth, useAuth } from '@/auth/context/AuthContext';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useRuntimeActive } from '@/hooks/runtime/useRuntimeActive';
 import {
     getProviderAccountUsageSnapshotPlain,
     getProviderAccountUsageSnapshotSealed,
@@ -14,11 +13,10 @@ import {
     retainProviderAccountUsageCacheEntries,
     subscribeProviderAccountUsageCache,
     updateProviderAccountUsageCacheEntries,
+    type ProviderAccountUsageCacheEntry,
 } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
 import { openProviderAccountUsageSnapshot } from '@/sync/domains/connectedServices/accountUsage/openProviderAccountUsageSnapshot';
-import {
-    computeConnectedServiceQuotaErrorBackoffMs,
-} from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
+import { getUsageProjectionNextReadAtMs, observeUsageProjection } from '@/sync/api/account/usageQueryInvalidation';
 import {
     buildProviderAccountUsageScopeKey,
     readProviderAccountUsageSnapshotForMode,
@@ -30,8 +28,9 @@ import {
 import type {
     ExpectedActiveServerFetchBasis,
 } from '@/sync/http/client';
-import { fireAndForget } from '@/utils/system/fireAndForget';
 import { HappyError } from '@/utils/errors/errors';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 import type {
     ProviderAccountUsageRecordId,
@@ -47,9 +46,6 @@ export type ProviderAccountUsageSnapshotsResult = Readonly<{
     loadingByRecordId: Readonly<Record<string, boolean>>;
     stateByRecordId: Readonly<Record<string, ProviderAccountUsageStateV1>>;
 }>;
-
-const PROVIDER_ACCOUNT_USAGE_POLL_MS = 30_000;
-const PROVIDER_ACCOUNT_USAGE_MISS_RETRY_MS = 30_000;
 
 function buildRecordIdsSignature(recordIds: ReadonlyArray<string>): string {
     return normalizeProviderAccountUsageRecordIds(recordIds).join('\u0001');
@@ -89,6 +85,93 @@ async function readProviderAccountUsageSnapshot(params: Readonly<{
         },
     });
 }
+/** The existing cache retain owner shares one acquisition per credential-scoped record. */
+function createUsageRowObserver(input: Readonly<{
+    credentials: NonNullable<ReturnType<typeof useAuth>['credentials']>;
+    credentialScope: string;
+    serverBasis: ExpectedActiveServerFetchBasis;
+    resolveAccountMode(): Promise<CredentialScopedAccountMode>;
+    isCurrent(): boolean;
+}>) {
+    type Outcome = Readonly<{
+        recordId: string;
+        entry: ProviderAccountUsageCacheEntry;
+        current(): boolean;
+    }>;
+    let outcomes: Outcome[] = [];
+    let publicationScheduled = false;
+    const publish = () => {
+        publicationScheduled = false;
+        const currentOutcomes = outcomes.filter(outcome => outcome.current());
+        outcomes = [];
+        if (currentOutcomes.length === 0) return;
+        updateProviderAccountUsageCacheEntries(input.credentialScope, entries => {
+            const next = { ...entries };
+            for (const outcome of currentOutcomes) next[outcome.recordId] = outcome.entry;
+            return next;
+        });
+    };
+    const enqueue = (outcome: Outcome) => {
+        outcomes.push(outcome);
+        if (!publicationScheduled) { publicationScheduled = true; queueMicrotask(publish); }
+    };
+    return (recordId: string): (() => void) => {
+        let disposed = false;
+        let controller: AbortController | null = null;
+        let reading: Promise<void> | null = null;
+        const readEntry = () => getProviderAccountUsageCacheState().entriesByCredentialScope[input.credentialScope]?.[recordId];
+        const current = () => !disposed && input.isCurrent();
+        const observation = observeUsageProjection({
+            serverId: input.serverBasis.serverId,
+            busy: () => reading !== null || !current(),
+            nextReadAtMs: () => readEntry()?.nextFetchAtMs ?? Number.POSITIVE_INFINITY,
+            presentationDeadlineMs: () => {
+                const snapshot = readEntry()?.snapshot;
+                return snapshot ? snapshot.fetchedAtMs + snapshot.staleAfterMs + 1 : undefined;
+            },
+            publish: () => { if (current()) updateProviderAccountUsageCacheEntries(input.credentialScope, entries => ({ ...entries })); },
+            read() {
+                if (reading) return reading;
+                if (!current()) return Promise.resolve();
+                const previous = readEntry();
+                enqueue({ recordId, current, entry: { snapshot: previous?.snapshot ?? null,
+                        nextFetchAtMs: previous?.nextFetchAtMs ?? 0, consecutiveErrors: previous?.consecutiveErrors ?? 0,
+                        loading: true, hadError: previous?.hadError ?? false } });
+                const requestController = new AbortController();
+                controller = requestController;
+                reading = (async () => {
+                    let entry: Outcome['entry'];
+                    try {
+                        const mode = await input.resolveAccountMode();
+                        if (!current()) return;
+                        const opened = await readProviderAccountUsageSnapshot({ ...input, mode, recordId,
+                            signal: requestController.signal });
+                        entry = { snapshot: opened, nextFetchAtMs: getUsageProjectionNextReadAtMs({ consecutiveErrors: 0 }),
+                            consecutiveErrors: 0, loading: false, hadError: false };
+                    } catch (error) {
+                        if (!current()) return;
+                        const denied = error instanceof HappyError && (error.status === 401 || error.status === 403);
+                        const consecutiveErrors = (previous?.consecutiveErrors ?? 0) + 1;
+                        entry = { snapshot: denied ? null : previous?.snapshot ?? null,
+                            nextFetchAtMs: getUsageProjectionNextReadAtMs({ consecutiveErrors }),
+                            consecutiveErrors, loading: false, hadError: !denied && Boolean(previous?.snapshot) };
+                    } finally {
+                        reading = null;
+                        controller = null;
+                    }
+                    if (!current()) return;
+                    enqueue({ recordId, entry, current });
+                })();
+                return reading;
+            },
+        });
+        return () => {
+            disposed = true;
+            observation.dispose();
+            controller?.abort();
+        };
+    };
+}
 
 export function useProviderAccountUsageSnapshots(
     recordIds: ReadonlyArray<string>,
@@ -108,219 +191,41 @@ export function useProviderAccountUsageSnapshots(
             })
             : '';
     const fetchPolicy = options.fetchPolicy ?? 'poll';
-    const runtimeActive = useRuntimeActive();
-    const previousRuntimeActive = React.useRef(runtimeActive);
-    const [wakeSeq, setWakeSeq] = React.useState(0);
+    const activeCredentialScopeRef = React.useRef(credentialScope);
+    activeCredentialScopeRef.current = credentialScope;
     const cacheState = React.useSyncExternalStore(
         subscribeProviderAccountUsageCache,
         getProviderAccountUsageCacheState,
         getProviderAccountUsageCacheState,
     );
     const cacheByRecordId = credentialScope ? cacheState.entriesByCredentialScope[credentialScope] ?? {} : {};
-    const cacheStateRef = React.useRef({ credentialScope, entries: cacheByRecordId });
-
-    React.useEffect(() => {
-        cacheStateRef.current = { credentialScope, entries: cacheByRecordId };
-    }, [cacheByRecordId, credentialScope]);
-
     const recordIdsSignature = React.useMemo(() => buildRecordIdsSignature(recordIds), [recordIds]);
     const normalizedRecordIds = React.useMemo(() => normalizeProviderAccountUsageRecordIds(recordIds), [recordIdsSignature]);
-    const activeCredentialScopeRef = React.useRef(credentialScope);
-    activeCredentialScopeRef.current = credentialScope;
-    const activeControllersRef = React.useRef(new Set<AbortController>());
-
-    React.useEffect(() => () => {
-        activeCredentialScopeRef.current = '';
-        for (const controller of activeControllersRef.current) {
-            controller.abort();
-        }
-        activeControllersRef.current.clear();
-    }, []);
-
     const resolveAccountMode = useCredentialScopedAccountModeResolver({ credentials, credentialScope });
+
+    // Presentation retention survives changing acquisition policy or its observer.
+    React.useEffect(() => retainProviderAccountUsageCacheEntries(
+        credentialScope, normalizedRecordIds,
+    ), [credentialScope, normalizedRecordIds]);
 
     React.useEffect(() => retainProviderAccountUsageCacheEntries(
         credentialScope,
         normalizedRecordIds,
-    ), [credentialScope, normalizedRecordIds]);
-
-    React.useEffect(() => {
-        if (
-            !runtimeActive
-            || fetchPolicy === 'cache_only'
-            || !quotasEnabled
-            || !credentials
-            || !activeServer.serverId
-            || normalizedRecordIds.length === 0
-        ) return;
-
-        const now = Date.now();
-        let nextWakeAtMs = Number.POSITIVE_INFINITY;
-        let hasMissingCache = false;
-        for (const recordId of normalizedRecordIds) {
-            const cached = cacheByRecordId[recordId];
-            if (!cached) {
-                hasMissingCache = true;
-                continue;
-            }
-            nextWakeAtMs = Math.min(nextWakeAtMs, cached.nextFetchAtMs);
-        }
-        if (hasMissingCache || !Number.isFinite(nextWakeAtMs)) return;
-
-        const delayMs = Math.max(0, nextWakeAtMs - now);
-        const handle = setTimeout(() => setWakeSeq((value) => value + 1), delayMs);
-        return () => clearTimeout(handle);
-    }, [cacheByRecordId, credentials, fetchPolicy, normalizedRecordIds, quotasEnabled, runtimeActive, wakeSeq]);
-
-    React.useEffect(() => {
-        const returningToForeground = runtimeActive && !previousRuntimeActive.current;
-        previousRuntimeActive.current = runtimeActive;
-        if (!runtimeActive || fetchPolicy === 'cache_only' || !quotasEnabled || !credentials || normalizedRecordIds.length === 0) return;
-
-        const now = Date.now();
-        const toFetch = normalizedRecordIds.filter((recordId) => {
-            const cacheSnapshot = cacheStateRef.current;
-            const cached = cacheSnapshot.credentialScope === credentialScope
-                ? cacheSnapshot.entries[recordId]
-                : undefined;
-            if (!cached) return true;
-            if (cached.loading) return false;
-            return returningToForeground || now >= cached.nextFetchAtMs;
-        });
-        if (toFetch.length === 0) return;
-
-        updateProviderAccountUsageCacheEntries(credentialScope, (entries) => {
-            const next = { ...entries };
-            for (const recordId of toFetch) {
-                const existing = entries[recordId];
-                next[recordId] = {
-                    snapshot: existing?.snapshot ?? null,
-                    nextFetchAtMs: existing?.nextFetchAtMs ?? now,
-                    consecutiveErrors: existing?.consecutiveErrors ?? 0,
-                    loading: true,
-                    hadError: false,
-                };
-            }
-            return next;
-        });
-
-        const controller = new AbortController();
-        const requestCredentialScope = credentialScope;
-        activeControllersRef.current.add(controller);
-        fireAndForget((async () => {
-            type RefreshOutcome = Readonly<
-                | { recordId: string; status: 'success'; opened: ProviderAccountUsageSnapshotV1 | null }
-                | { recordId: string; status: 'error' | 'denied' }
-            >;
-            let pendingOutcomes: RefreshOutcome[] = [];
-            let publicationScheduled = false;
-            const publishPendingOutcomes = () => {
-                publicationScheduled = false;
-                const outcomes = pendingOutcomes;
-                pendingOutcomes = [];
-                if (
-                    outcomes.length === 0
-                    || controller.signal.aborted
-                    || activeCredentialScopeRef.current !== requestCredentialScope
-                ) return;
-                updateProviderAccountUsageCacheEntries(requestCredentialScope, (entries) => {
-                    const next = { ...entries };
-                    for (const outcome of outcomes) {
-                        if (outcome.status === 'success') {
-                            next[outcome.recordId] = {
-                                snapshot: outcome.opened,
-                                nextFetchAtMs: outcome.opened
-                                    ? now + Math.max(
-                                        PROVIDER_ACCOUNT_USAGE_POLL_MS,
-                                        Math.trunc(outcome.opened.staleAfterMs ?? PROVIDER_ACCOUNT_USAGE_POLL_MS),
-                                    )
-                                    : now + PROVIDER_ACCOUNT_USAGE_MISS_RETRY_MS,
-                                consecutiveErrors: 0,
-                                loading: false,
-                                hadError: false,
-                            };
-                        } else {
-                            const recordId = outcome.recordId;
-                            const existing = entries[recordId];
-                            const consecutiveErrors = (existing?.consecutiveErrors ?? 0) + 1;
-                            next[recordId] = {
-                                snapshot: outcome.status === 'denied' ? null : existing?.snapshot ?? null,
-                                nextFetchAtMs: now
-                                    + computeConnectedServiceQuotaErrorBackoffMs(
-                                        consecutiveErrors,
-                                    ),
-                                consecutiveErrors,
-                                loading: false,
-                                hadError: outcome.status !== 'denied' && Boolean(existing?.snapshot),
-                            };
-                        }
-                    }
-                    return next;
-                });
-            };
-            const enqueueOutcome = (outcome: RefreshOutcome): void => {
-                if (controller.signal.aborted || activeCredentialScopeRef.current !== requestCredentialScope) return;
-                pendingOutcomes.push(outcome);
-                if (publicationScheduled) return;
-                publicationScheduled = true;
-                queueMicrotask(publishPendingOutcomes);
-            };
-            try {
-                let mode: CredentialScopedAccountMode;
-                try {
-                    mode = await resolveAccountMode();
-                } catch {
-                    for (const recordId of toFetch) {
-                        enqueueOutcome({ recordId, status: 'error' });
-                    }
-                    if (pendingOutcomes.length > 0) publishPendingOutcomes();
-                    return;
-                }
-                if (controller.signal.aborted || activeCredentialScopeRef.current !== requestCredentialScope) return;
-                await Promise.all(toFetch.map(async (recordId) => {
-                    try {
-                        const opened = await readProviderAccountUsageSnapshot({
-                            credentials,
-                            mode,
-                            recordId,
-                            signal: controller.signal,
-                            serverBasis: {
-                                serverId: activeServer.serverId,
-                                generation: activeServer.generation,
-                            },
-                        });
-                        enqueueOutcome({ recordId, status: 'success', opened });
-                    } catch (error) {
-                        enqueueOutcome({ recordId, status: error instanceof HappyError && (error.status === 401 || error.status === 403)
-                            ? 'denied' : 'error' });
-                    }
-                }));
-                // Promise continuations that settle in the same turn share the
-                // queued publication. This final call only covers runtimes that
-                // defer that microtask past the aggregate continuation.
-                if (pendingOutcomes.length > 0) publishPendingOutcomes();
-            } finally {
-                activeControllersRef.current.delete(controller);
-            }
-        })(), { tag: 'useProviderAccountUsageSnapshots.refresh' });
-
-        return () => {
-            if (activeCredentialScopeRef.current !== requestCredentialScope) {
-                controller.abort();
-            }
-        };
-    }, [
-        activeServer.generation,
-        activeServer.serverId,
-        credentialScope,
-        credentials,
-        fetchPolicy,
-        normalizedRecordIds,
-        quotasEnabled,
-        resolveAccountMode,
-        runtimeActive,
-        wakeSeq,
-    ]);
+        fetchPolicy !== 'cache_only' && quotasEnabled && credentials && activeServer.serverId
+            ? createUsageRowObserver({ credentials, credentialScope, resolveAccountMode,
+                isCurrent: () => {
+                    if (activeCredentialScopeRef.current !== credentialScope) return false;
+                    const currentServer = getActiveServerSnapshot();
+                    const currentCredentials = getCurrentAuth()?.credentials;
+                    return currentServer.generation === activeServer.generation
+                        && areServerProfileIdentifiersEquivalent(currentServer.serverId, activeServer.serverId)
+                        && Boolean(currentCredentials && resolveAuthCredentialsScopeKey(currentCredentials)
+                            === resolveAuthCredentialsScopeKey(credentials));
+                },
+                serverBasis: { serverId: activeServer.serverId, generation: activeServer.generation } })
+            : undefined,
+    ), [credentialScope, normalizedRecordIds, fetchPolicy, quotasEnabled, credentials,
+        activeServer.serverId, activeServer.generation, resolveAccountMode]);
 
     return React.useMemo(() => {
         if (!quotasEnabled) {

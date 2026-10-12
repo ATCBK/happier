@@ -8,7 +8,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { FeaturesResponseSchema, compilePluginJsonSchema, encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
     normalizePluginAccountCollectionContractV1, PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol';
 import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
-import { replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
+import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { resetActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
@@ -79,6 +79,7 @@ async function renderModel() {
 
 describe('useInboxModel work groups (ORC R-10)', () => {
     beforeEach(async () => {
+        clearPluginAccountAvailabilityProjection();
         const runtime = await import('@/sync/domains/server/serverRuntime');
         appliedSnapshot = runtime.getActiveServerSnapshot;
         await runtime.upsertAndActivateServer({ serverUrl: 'http://inbox-home.test', name: 'Inbox Home' });
@@ -111,6 +112,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
 
     afterEach(async () => {
         standardCleanup();
+        clearPluginAccountAvailabilityProjection();
         deleteServerFeaturesSnapshot();
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
         (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
@@ -155,6 +157,28 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(model).toMatchObject({ openUsageNotices: [{ artifact: rows[1] }], hasPrimaryAttention: true });
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
         expect(await readInbox('account-b')).toMatchObject({ ok: true, result: { status: 'ready', usageNoticeIds: ['foreign'] } });
+    });
+
+    it('reads started and recovered machine notices beside Connected notices through the same private Account artifact owner', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const notice = { topic: 'resource_limit', kind: 'memory_pressure', phase: 'started', machineId: 'machine', at: 2000, since: 1000,
+            workingSessionCount: 2, guardEnabled: false, evidence: { level: 'critical', sustainMs: 60000 } };
+        const header = { v: 1, kind: 'usage_notice.v1', title: 'Machine notice', status: 'open', notice };
+        const owned = createUsageNoticeArtifactFixture({ id: 'machine-notice', header, rawHeader: header, body: JSON.stringify({ v: 1, notice }) });
+        const recovered = { ...notice, phase: 'recovered', at: 3000 };
+        const recoveredHeader = { ...header, notice: recovered };
+        const recovery = createUsageNoticeArtifactFixture({ id: 'machine-recovered', header: recoveredHeader, rawHeader: recoveredHeader, body: JSON.stringify({ v: 1, notice: recovered }) });
+        const connected = createUsageNoticeArtifactFixture();
+        storage.setState({ artifacts: { [owned.id]: owned, [recovery.id]: recovery, [connected.id]: connected,
+            foreign: { ...owned, id: 'foreign', ownerAccountId: 'account-b' },
+            shared: { ...owned, id: 'shared', access: 'view' },
+            mismatch: { ...owned, id: 'mismatch', body: JSON.stringify({ v: 1, notice: recovered }) } } });
+        await renderModel();
+        expect(model?.openUsageNotices.map(entry => entry.artifact.id)).toEqual(['machine-notice', 'machine-recovered', 'notice-owned']);
+        expect(model?.openUsageNotices.map(entry => entry.header.notice)).toEqual([notice, recovered, usageNoticeFixture]);
+        expect(model?.workGroups).toEqual([]);
+        expect(storage.getState().sessions).toEqual({});
+        expect(await readInbox()).toMatchObject({ ok: true, result: { usageNoticeIds: ['machine-notice', 'machine-recovered', 'notice-owned'] } });
     });
 
     it('retries an initially unreadable Work window through the same Action and distinguishes proven empty work', async () => {
@@ -254,7 +278,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const validate = compilePluginJsonSchema(contract.schema);
         const binding = ConversationBindingV1Schema.parse({
             v: 1, id: 'binding-1', connectionId: 'connection-1', createdAt: 1, updatedAt: 1,
-            endpoint: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-1' },
+            endpoint: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-1',
+                pullRequest: { repository: 'acme/widgets', number: 1 }, pullRequestState: { state: 'open', observedAt: 100 } },
             target: { kind: 'session', sessionId: 'session-1', pullRequestLink: { repository: 'acme/widgets', number: 1 },
                 policy: { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } },
             allowedPrincipalIds: ['principal-1'], allowBotSenders: false, inputMode: 'directMentionsOnly', inboundDebounceMs: 0,
@@ -292,7 +317,38 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         storage.setState({ sessions: { [session.id]: session } });
         await renderModel();
         expect(model?.workGroups.flatMap(group => group.items).filter(item => item.kind === 'landing'))
-            .toMatchObject([{ kind: 'landing', session, link: { sessionId: session.id, serverId: scope.serverId, number: 1 } }]);
+            .toMatchObject([{ kind: 'landing', session, link: { sessionId: session.id, serverId: scope.serverId, number: 1,
+                url: 'https://github.com/acme/widgets/pull/1', state: 'open', observedAt: 100 } }]);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', groups: [{ items: [{
+            kind: 'landing', sessionId: session.id, pullRequestNumber: 1, pullRequestUrl: 'https://github.com/acme/widgets/pull/1',
+            pullRequestState: 'open', pullRequestObservedAt: 100,
+        }] }] } });
+        expect(executed).toEqual([]); // Reading never takes over the producer's settlement lifecycle.
+        for (const state of ['unknown', 'merged'] as const) {
+            const revision = state === 'unknown' ? 2 : 3;
+            const refreshed = encodePluginCollectionLogicalValueV1({ contract,
+                isValidLogicalValue: value => isValidPluginJsonSchemaValue(validate, value),
+                value: { id, 'record-kind': 'binding', v, 'connection-id': connectionId, 'binding-id': id,
+                    'created-at': createdAt, 'updated-at': updatedAt, payload: { ...payload,
+                        endpoint: { ...payload.endpoint, pullRequestState: { state, observedAt: revision * 100 } } } },
+                encryptionMode: 'plain', material: null, randomBytes: length => new Uint8Array(length).fill(9),
+            });
+            if (refreshed.status !== 'encoded') throw new Error(refreshed.reason);
+            await act(async () => {
+                rows = [{ rowId: refreshed.rowId, revision, projection: refreshed.projection, content: refreshed.content }];
+                resetActivePluginCollectionChanges();
+            });
+            const landingItems = model?.workGroups.flatMap(group => group.items).filter(item => item.kind === 'landing');
+            if (state === 'unknown') {
+                expect(landingItems).toMatchObject([{ link: { state: 'unknown', observedAt: 200 } }]);
+                expect(await readInbox()).toMatchObject({ ok: true, result: { groups: [{ items: [{
+                    kind: 'landing', pullRequestState: 'unknown', pullRequestObservedAt: 200,
+                }] }] } });
+            } else {
+                expect(landingItems).toEqual([]);
+            }
+            expect(executed).toEqual([]);
+        }
         await act(async () => {
             rows = [];
             resetActivePluginCollectionChanges();

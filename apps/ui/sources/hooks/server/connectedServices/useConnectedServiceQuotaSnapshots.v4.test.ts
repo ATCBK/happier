@@ -12,9 +12,14 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { __resetConnectedServiceQuotaSnapshotStore } from './connectedServiceQuotaSnapshotStore';
 import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from './qualifiedConnectedAccountQuotaSnapshotStore';
-import { createQualifiedQuotaTestHarness, quotaTestRef as ref, quotaTestSnapshot, quotaTestResponse } from './qualifiedConnectedAccountQuotaTestHarness';
+import { createQualifiedQuotaTestHarness, quotaTestRef as ref, quotaTestSnapshot, quotaTestResponse,
+    quotaTestProviderUsageSnapshot, quotaTestProviderUsageResponse } from './qualifiedConnectedAccountQuotaTestHarness';
 import { useConnectedServiceQuotaSnapshots } from './useConnectedServiceQuotaSnapshots';
 import { useQualifiedConnectedAccountQuota } from './useQualifiedConnectedAccountQuota';
+import { useProviderAccountUsageSnapshots } from './useProviderAccountUsageSnapshots';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { computeConnectedServiceQuotaErrorBackoffMs } from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
 
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -101,7 +106,160 @@ describe('useConnectedServiceQuotaSnapshots V4 transport', () => {
         expectNoLegacyQuotaRequest();
     });
 
-    it('polls a novel qualified account without inventing a legacy service id', async () => {
+    it('refreshes retained quota on persisted usage changes without healthy GET polling', async () => {
+        vi.useFakeTimers();
+        try {
+            const hook = await renderHook(() => useConnectedServiceQuotaSnapshots(profileInput), { wrapper: Wrapper });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(1);
+            await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+            expect(boundary.read).toHaveBeenCalledTimes(1);
+            boundary.read.mockImplementation(async () => new Response(JSON.stringify(quotaTestResponse(fresh)), { status: 200 }));
+            await act(async () => {
+                publishHomeAccountChange(getActiveServerSnapshot().serverId,
+                    [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { changeKinds: ['account'] });
+            });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(2);
+            expect(boundary.read).toHaveBeenCalledTimes(2);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('catches up a persisted change received during the admitted read and releases the observer on unmount', async () => {
+        let finishFirst!: () => void;
+        boundary.read.mockImplementationOnce(() => new Promise<Response>(resolve => {
+            finishFirst = () => resolve(Response.json(quotaTestResponse(snapshot)));
+        }));
+        boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(fresh)));
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots(profileInput), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.read).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            publishHomeAccountChange(getActiveServerSnapshot().serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            publishHomeAccountChange(getActiveServerSnapshot().serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            finishFirst();
+        });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(2);
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+        await hook.unmount();
+        publishHomeAccountChange(getActiveServerSnapshot().serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignores foreign and exact unrelated changes but catches up the connected Home wake', async () => {
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots(profileInput), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(fresh)));
+        await act(async () => {
+            publishHomeAccountChange('foreign-home', [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            publishHomeAccountChange(getActiveServerSnapshot().serverId, ['machine'], { changeKinds: ['machine'], usageQueryAffects: false });
+        });
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(boundary.read).toHaveBeenCalledTimes(1);
+        await act(async () => { publishHomeAccountChange(getActiveServerSnapshot().serverId, undefined,
+            { source: 'connected', usageQueryAffects: false }); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(2);
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+    });
+
+    it('shares retained provider-row acquisition, ages it locally, and consumes persisted usage changes', async () => {
+        vi.useFakeTimers();
+        try {
+            const initial = quotaTestProviderUsageSnapshot();
+            boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(initial)));
+            const first = await renderHook(() => useProviderAccountUsageSnapshots([initial.recordId]), { wrapper: Wrapper });
+            const second = await renderHook(() => useProviderAccountUsageSnapshots([initial.recordId]), { wrapper: Wrapper });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(first.getCurrent().stateByRecordId[initial.recordId]).toBe('loaded_data');
+            expect(boundary.usageRead).toHaveBeenCalledTimes(1);
+            await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+            expect(first.getCurrent().stateByRecordId[initial.recordId]).toBe('stale_data');
+            expect(boundary.usageRead).toHaveBeenCalledTimes(1);
+            await first.unmount();
+            const updated = { ...initial, observedAtMs: Date.now(), fetchedAtMs: Date.now() };
+            boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(updated)));
+            await act(async () => { publishHomeAccountChange(getActiveServerSnapshot().serverId,
+                [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { changeKinds: ['account'] }); });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(second.getCurrent().snapshotsByRecordId[initial.recordId]?.fetchedAtMs).toBe(updated.fetchedAtMs);
+            expect(second.getCurrent().stateByRecordId[initial.recordId]).toBe('loaded_data');
+            expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+            await second.unmount();
+            publishHomeAccountChange(getActiveServerSnapshot().serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            await flushHookEffects({ cycles: 3, turns: 3 });
+            expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('retains the last quota on read failure and retries through the shared recovery deadline', async () => {
+        vi.useFakeTimers();
+        try {
+            const hook = await renderHook(() => useConnectedServiceQuotaSnapshots(profileInput), { wrapper: Wrapper });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            boundary.read.mockImplementationOnce(async () => new Response('{}', { status: 400 }));
+            boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(fresh)));
+            await act(async () => { publishHomeAccountChange(getActiveServerSnapshot().serverId,
+                [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(1);
+            expect(boundary.read).toHaveBeenCalledTimes(2);
+            await act(async () => { await vi.advanceTimersByTimeAsync(computeConnectedServiceQuotaErrorBackoffMs(1)); });
+            await flushHookEffects({ cycles: 8, turns: 8 });
+            expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.fetchedAt).toBe(2);
+            expect(boundary.read).toHaveBeenCalledTimes(3);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('refuses a held provider-row response after the real Home generation changes', async () => {
+        const initial = quotaTestProviderUsageSnapshot();
+        let finishOld!: () => void;
+        boundary.usageRead.mockImplementationOnce(() => new Promise<Response>(resolve => {
+            finishOld = () => resolve(Response.json(quotaTestProviderUsageResponse(initial)));
+        }));
+        const hook = await renderHook(() => useProviderAccountUsageSnapshots([initial.recordId]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).toHaveBeenCalledTimes(1);
+        const updated = { ...initial, meters: [{ ...initial.meters[0]!, used: 50 }] };
+        await act(async () => {
+            await boundary.dispose();
+            boundary = await createQualifiedQuotaTestHarness({ serverUrl: 'https://qualified-quota-second.test', serverIdentityId: 'srv_qualified_quota_second' });
+            installAccountProfile(); installFeatures(); await selectFixtureHome();
+            boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(updated)));
+        });
+        await hook.rerender();
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByRecordId[initial.recordId]?.meters[0]?.used).toBe(50);
+        await act(async () => { finishOld(); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByRecordId[initial.recordId]?.meters[0]?.used).toBe(50);
+    });
+
+    it('drains a persisted wake after manual refresh settles without another provider probe', async () => {
+        const hook = await renderHook(() => useQualifiedConnectedAccountQuota(ref), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        let finishRead!: () => void;
+        boundary.read.mockImplementationOnce(() => new Promise<Response>(resolve => {
+            finishRead = () => resolve(Response.json(quotaTestResponse(fresh)));
+        }));
+        const newest = { ...fresh, fetchedAt: 3 };
+        boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(newest)));
+        let refresh!: Promise<void>;
+        await act(async () => { refresh = hook.getCurrent().refresh(); });
+        await vi.waitFor(() => expect(boundary.read).toHaveBeenCalledTimes(2));
+        await act(async () => {
+            publishHomeAccountChange(getActiveServerSnapshot().serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+            finishRead(); await refresh;
+        });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshot?.fetchedAt).toBe(3);
+        expect(boundary.read).toHaveBeenCalledTimes(3);
+        expect(boundary.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('observes a novel qualified account without inventing a legacy service id', async () => {
         const novelRef = { service: { pluginId: 'acme.connected.accounts', localId: 'gateway' }, accountId: 'work' };
         const novelSnapshot = { ...snapshot, ref: novelRef };
         installAccountProfile(novelRef);

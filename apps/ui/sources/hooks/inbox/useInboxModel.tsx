@@ -1,6 +1,9 @@
 import * as React from 'react';
+import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { useActivityOverview } from '@/activity/source/useActivityOverview';
+import { readActivitySourceAttentionMessages } from '@/activity/source/buildActivityOverviewFromSource';
 import {
     buildInboxSessionPresentation,
     type InboxSessionPresentation,
@@ -20,11 +23,6 @@ import {
 import type { InboxActionOperationEntry } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { actionOperationAddress } from '@/sync/domains/actionOperations/qualifiedActionOperation';
-import {
-    areSessionAddressesEqual,
-    normalizeSessionAddress,
-} from '@/sync/domains/session/sessionAddress';
-import { readStoredSessionMessagesFromStateLike } from "@happier-dev/session-core/messages";
 import { useArtifacts, useFriendsLoaded, useWorkflowRunRows } from '@/sync/domains/state/storage';
 
 import {
@@ -173,7 +171,8 @@ function useCreateInboxModel(): InboxModel {
                 setPullRequestRead(previous => ({ lifetime,
                     phase: outcome.status === 'ready' ? 'loaded' : 'failed',
                     links: outcome.status === 'ready' ? outcome.sessions.flatMap(session => session.pullRequestLinks.map(link => ({
-                        sessionId: session.sessionId, serverId: lifetime.scope.serverId, number: link.number,
+                        sessionId: session.sessionId, serverId: lifetime.scope.serverId, number: link.number, url: link.url,
+                        state: link.state, observedAt: link.observedAt,
                     }))) : previous?.lifetime === lifetime ? previous.links : EMPTY_PULL_REQUEST_LINKS,
                 }));
             }).catch(() => {
@@ -217,14 +216,7 @@ function useCreateInboxModel(): InboxModel {
     const sessionPresentation = React.useMemo(
         () => buildInboxSessionPresentation({
             overview,
-            resolveMessages: (candidate) => {
-                const hydrated = source.sessionsById[candidate.sessionId];
-                const hydratedAddress = normalizeSessionAddress(hydrated?.serverId, hydrated?.id);
-                if (!areSessionAddressesEqual(hydratedAddress, candidate.address)) return undefined;
-                return readStoredSessionMessagesFromStateLike(
-                    source.sessionMessagesById?.[candidate.sessionId],
-                );
-            },
+            resolveMessages: (candidate) => readActivitySourceAttentionMessages(source, candidate.address),
         }),
         [overview, source.sessionMessagesById, source.sessionsById],
     );
@@ -250,8 +242,7 @@ function useCreateInboxModel(): InboxModel {
         const standing = session
             ? attentionStandings[buildSessionOrganizationSessionKey(session.serverId ?? '', session.id)]
             : undefined;
-        // Channels proves the PR relation, not remote open/merged state. Settle remains
-        // the person's authority; never fabricate PR state from a retained binding.
+        // The Channels observation lifecycle owns remote state and automatic settlement.
         return session && session.serverId && link.serverId
             && areServerProfileIdentifiersEquivalent(session.serverId, link.serverId)
             && link.state !== 'merged' && link.state !== 'closed' && standing?.standing !== false ? [{ session, link }] : [];
@@ -261,6 +252,9 @@ function useCreateInboxModel(): InboxModel {
         const next = buildInboxWorkGroups({
         sessionEntries: sessionPresentation.sessionsNeedingAttention,
         workflowRuns,
+        automationRuns,
+        automationServerId: automationAttention.serverId,
+        openApprovals,
         stalledSessions,
         landings,
         snoozed,
@@ -269,7 +263,7 @@ function useCreateInboxModel(): InboxModel {
         }, previousWorkGroups.current);
         previousWorkGroups.current = next;
         return next;
-    }, [landings, sessionPresentation.sessionsNeedingAttention, sessionsById, snoozed, stalledSessions, workflowRuns]);
+    }, [automationAttention.serverId, automationRuns, landings, openApprovals, sessionPresentation.sessionsNeedingAttention, sessionsById, snoozed, stalledSessions, workflowRuns]);
 
     const spansHomes = React.useMemo(
         () => new Set(overview.candidates.map((candidate) => candidate.address?.serverId ?? candidate.serverId ?? '')).size > 1,
@@ -453,9 +447,20 @@ function InboxModelContextProvider(props: Readonly<{ children: React.ReactNode }
     const model = useCreateInboxModel();
     return (
         <InboxModelContext.Provider value={model}>
+            {model.sessionPresentation.pendingRequestHydrationTargets.map(address => (
+                <InboxPendingRequestHydration key={sessionAddressKey(address)} address={address} />
+            ))}
             {props.children}
         </InboxModelContext.Provider>
     );
+}
+
+/** Summary rows use the dock's existing exact-Home hydration and retry lifecycle. */
+function InboxPendingRequestHydration({ address }: Readonly<{ address: SessionAddress }>): null {
+    useHydrateSessionForRoute(address.sessionId, 'inbox-pending-request', {
+        serverId: address.serverId, forceRefresh: true, hydrateMessages: true,
+    });
+    return null;
 }
 
 /**

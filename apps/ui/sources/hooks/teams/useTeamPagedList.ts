@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { loadTeamPageRange, type TeamPageOutcome } from '@/sync/engine/teams/loadTeamPageRange';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 /**
@@ -20,14 +21,7 @@ import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAcc
  * Home's HTTP page remains the sole data and authority source.
  */
 
-export type TeamPage<TRow> = Readonly<{
-    items: readonly TRow[];
-    nextCursor: string | null;
-}>;
-
-export type TeamPageOutcome<TRow> =
-    | Readonly<{ kind: 'succeeded'; value: TeamPage<TRow> }>
-    | Readonly<{ kind: 'failed'; failure: HomeDomainFailure }>;
+export type { TeamPage, TeamPageOutcome } from '@/sync/engine/teams/loadTeamPageRange';
 
 export type TeamPagedListStatus = 'loading' | 'loading_more' | 'ready' | 'error';
 
@@ -114,20 +108,15 @@ export function useTeamPagedList<TRow>(params: Readonly<{
         request.current = controller;
         inFlight.current = true;
         try {
-            let outcome = await loadPageRef.current(cursor, controller.signal);
-            const refreshedRows: TRow[] = [];
-            // Re-read the visible range using fresh continuation positions. The
-            // Home remains authoritative: removed rows disappear, while later
-            // loaded rows do not collapse to the first page on a background wake.
-            if (mode === 'refresh') {
-                while (outcome.kind === 'succeeded') {
-                    if (controller.signal.aborted || currentGeneration !== generation.current) return;
-                    refreshedRows.push(...outcome.value.items);
-                    if (refreshedRows.length >= previous.rows.length || outcome.value.nextCursor === null) break;
-                    outcome = await loadPageRef.current(outcome.value.nextCursor, controller.signal);
-                }
-            }
-            if (controller.signal.aborted || currentGeneration !== generation.current) return;
+            const isCancelled = () => controller.signal.aborted || currentGeneration !== generation.current;
+            const outcome = mode === 'refresh'
+                ? await loadTeamPageRange({
+                    loadedRowCount: previous.rows.length,
+                    loadPage: (freshCursor) => loadPageRef.current(freshCursor, controller.signal),
+                    isCancelled,
+                })
+                : await loadPageRef.current(cursor, controller.signal);
+            if (outcome === null || isCancelled()) return;
             const base = stateRef.current;
             if (outcome.kind === 'failed') {
                 const withdrawn = isAuthoritativeScopedSnapshotRefusalKind(outcome.failure.kind);
@@ -148,8 +137,7 @@ export function useTeamPagedList<TRow>(params: Readonly<{
             }
             inFlight.current = false;
             publish({
-                rows: mode === 'more' ? [...base.rows, ...outcome.value.items]
-                    : mode === 'refresh' ? refreshedRows : outcome.value.items,
+                rows: mode === 'more' ? [...base.rows, ...outcome.value.items] : outcome.value.items,
                 status: 'ready',
                 error: null,
                 cursor: outcome.value.nextCursor,

@@ -158,6 +158,79 @@ describe('useTeamGroups', () => {
 
 
 describe('Session audience surface binding', () => {
+    it('encodes a large audience membership once per address, rather than inside sort comparisons', async () => {
+        const serverId = (await upsertServerProfile({ serverUrl: 'https://audience-key-cost.example', name: 'Key cost' })).id;
+        runtimeFetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
+        const addresses = Array.from({ length: 2_000 }, (_, index) => ({ serverId, sessionId: `sort-session-${(index * 997) % 2_000}` }));
+        let membership = addresses;
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        // Call-through allocation instrumentation: all address/domain logic stays real.
+        const stringify = vi.spyOn(JSON, 'stringify');
+        const allocations = () => stringify.mock.calls.filter(([value]) => Array.isArray(value)
+            && value[0] === serverId && typeof value[1] === 'string' && value[1].startsWith('sort-session-')).length;
+        const start = performance.now();
+        const hook = await renderHook(() => useSessionAudienceContext(membership));
+        try {
+            const mountMs = performance.now() - start;
+            const mountAllocations = allocations();
+            stringify.mockClear();
+            const tickStart = performance.now();
+            for (let index = 0; index < 10; index++) await hook.rerender();
+            console.info('[PERF-3 audience keys]', JSON.stringify({ addresses: addresses.length,
+                mountAllocations, mountMs, rerenderAllocations: allocations(), rerenderMs: performance.now() - tickStart }));
+            expect(mountAllocations).toBe(addresses.length);
+            expect(allocations()).toBe(0);
+            // Replacing the membership must still rebuild its qualified key set.
+            // An unconditional memo would pass the unchanged-render checks above.
+            membership = [...addresses.slice(1), { serverId, sessionId: 'sort-session-added' }];
+            await hook.rerender();
+            expect(allocations()).toBe(membership.length);
+        } finally {
+            stringify.mockRestore();
+            await hook.unmount();
+            storage.setState(storage.getInitialState(), true);
+        }
+    });
+    it('does not join list labels or rescan audiences for unrelated store updates', async () => {
+        const serverId = (await upsertServerProfile({ serverUrl: 'https://audience-perf.example', name: 'Performance' })).id;
+        runtimeFetchMock.mockResolvedValue(new Response('{}', { status: 503 }));
+        const addresses = Array.from({ length: 200 }, (_, index) => ({ serverId, sessionId: `session-${index}` }));
+        let rowReads = 0;
+        let indexScans = 0;
+        const rows = new Proxy(Object.fromEntries(addresses.map(address => [address.sessionId, createSessionFixture({ id: address.sessionId })])), {
+            get(target, key, receiver) { rowReads += 1; return Reflect.get(target, key, receiver); },
+        });
+        const index = addresses.map(address => ({ type: 'session' as const, sessionId: address.sessionId }));
+        const measuredIndex = new Proxy(index, { get(target, key, receiver) {
+            if (key === 'find') indexScans += 1;
+            return Reflect.get(target, key, receiver);
+        } });
+        storage.setState({ sessionListRowsByServerId: { [serverId]: rows }, sessionListIndexByServerId: { [serverId]: measuredIndex } });
+        const hook = await renderHook(() => useSessionAudienceContext(addresses));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().credentialBindingsByServerId.size).toBe(1));
+            const before = hook.getCurrent();
+            rowReads = 0;
+            indexScans = 0;
+            const start = performance.now();
+            for (let update = 0; update < 20; update += 1) act(() => storage.setState({ isDataReady: update % 2 === 0 }));
+            console.info('[PERF-RENDER audience]', JSON.stringify({ sessions: addresses.length, updates: 20, rowReads, indexScans, ms: performance.now() - start }));
+            expect(hook.getCurrent()).toBe(before);
+            expect(indexScans).toBe(0);
+            expect(rowReads).toBe(0);
+            const session = createSessionFixture({ id: addresses[0]!.sessionId, access: {
+                role: 'recipient', level: 'view', capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
+                audienceContext: { kind: 'group', teamId: 'team-1', groupId: 'g1' },
+            } });
+            applyTeamGroupProjection({ scope: { serverId, accountId: 'account' }, address: { serverId, teamId: 'team-1' },
+                group: group('g1', 'New audience'), observedAt: Date.now() });
+            act(() => storage.setState({ sessionListRowsByServerId: { [serverId]: { ...rows, [session.id]: { ...session, presence: 'online' } } } }));
+            expect(hook.getCurrent().labelsBySessionKey.get(sessionAddressKey(addresses[0]!))).toBe('New audience');
+        } finally {
+            await hook.unmount();
+            storage.setState(storage.getInitialState(), true);
+        }
+    });
     it('keeps same-ID Home labels separate and observes shared-cache renames without a card subscription', async () => {
         const homeA = (await upsertServerProfile({ serverUrl: 'https://audience-a.example', name: 'A' })).id;
         const homeB = (await upsertServerProfile({ serverUrl: 'https://audience-b.example', name: 'B' })).id;

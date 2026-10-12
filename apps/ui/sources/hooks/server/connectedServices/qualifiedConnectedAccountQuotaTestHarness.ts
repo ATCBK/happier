@@ -8,6 +8,7 @@ import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import {
     ConnectedAccountControlCommandRequestSchema,
     CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
@@ -15,6 +16,8 @@ import {
     QualifiedConnectedAccountRefSchema,
     parseQualifiedConnectedAccountV4StructuredQueryValue,
     buildProviderAccountUsageRecordId,
+    ProviderAccountUsageSnapshotV1Schema,
+    type ProviderAccountUsageSnapshotV1,
     type ConnectedAccountDaemonControlResponse,
     type QualifiedConnectedAccountRef,
     type QualifiedConnectedAccountQuotaSnapshotV4,
@@ -39,22 +42,43 @@ export function quotaTestResponse(snapshot = quotaTestSnapshot, status: 'ok' | '
     });
 }
 
+export function quotaTestProviderUsageSnapshot(nowMs = Date.now()): ProviderAccountUsageSnapshotV1 {
+    const recordKey = { providerId: 'anthropic', accountSubjectId: 'provider-work', subjectKind: 'account', quotaScope: 'account' } as const;
+    return ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordKey, recordId: buildProviderAccountUsageRecordId(recordKey),
+        providerId: recordKey.providerId, accountSubject: { kind: 'providerSubject', id: recordKey.accountSubjectId },
+        observedAtMs: nowMs, fetchedAtMs: nowMs, staleAfterMs: 60_000, source: 'providerHttp', confidence: 'confirmed',
+        state: 'loaded_data', meters: [{ meterId: 'weekly', label: 'Weekly', used: 40, limit: 100, unit: 'count',
+            utilizationPct: null, remainingPct: 60, resetsAt: null, status: 'ok', confidence: 'exact' }] });
+}
+
+export function quotaTestProviderUsageResponse(snapshot = quotaTestProviderUsageSnapshot()) {
+    return { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: snapshot.fetchedAtMs,
+        staleAfterMs: snapshot.staleAfterMs, status: 'ok' }, sources: [] };
+}
+
 /** Genuine HTTP and socket boundaries; Account lifetime, selectors and Actions stay real. */
 export async function createQualifiedQuotaTestHarness(options: Readonly<{
     serverUrl?: string;
     serverIdentityId?: string;
     snapshot?: QualifiedConnectedAccountQuotaSnapshotV4;
+    credentials?: AuthCredentials;
+    accountMode?: 'plain' | 'e2ee';
+    /** A successful predecessor feature response has no qualified-accounts capability. */
+    qualifiedAccountsProtocol?: 4 | null;
+    request?: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']>;
 }> = {}) {
     const serverUrl = options.serverUrl ?? 'https://qualified-quota-fixture.test';
     const serverIdentityId = options.serverIdentityId ?? 'srv_qualified_quota_fixture';
     const requests: Array<{ path: string; method: string }> = [];
     const features = vi.fn(async () => new Response(JSON.stringify(createRootLayoutFeaturesResponse({
         capabilities: { serverIdentity: { serverIdentityId }, connectedServices: {
-            credentialDelete: { revisionGuard: true }, qualifiedAccounts: { protocolVersion: 4 },
+            credentialDelete: { revisionGuard: true },
+            ...(options.qualifiedAccountsProtocol === null ? {} : { qualifiedAccounts: { protocolVersion: 4 } }),
         } },
     })), { status: 200 }));
     const read = vi.fn(async (_ref: QualifiedConnectedAccountRef): Promise<Response> => new Response(JSON.stringify(quotaTestResponse(options.snapshot)), { status: 200 }));
     const refresh = vi.fn(async (_ref: QualifiedConnectedAccountRef): Promise<Response> => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    const usageRead = vi.fn(async (_recordId: string): Promise<Response> => Response.json(quotaTestProviderUsageResponse()));
     const controls: Array<{ machineId: string; command: unknown }> = [];
     const control = vi.fn(async (service: QualifiedConnectedAccountRef['service']): Promise<ConnectedAccountDaemonControlResponse> => ({
         status: 'described', service,
@@ -65,11 +89,15 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
         occurrenceId: 'occurrence-1', sourceCustody: { kind: 'managed', immutableGenerationId: 'artifact-1', installSource: 'npm' },
         accounts: [], operationTransport: { kind: 'v4' },
     }));
-    const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId: 'quota-account',
+    const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId: 'quota-account', credentials: options.credentials,
         request: async (input, init) => {
             const url = new URL(String(input));
             requests.push({ path: url.pathname, method: init?.method ?? 'GET' });
             if (url.pathname === '/v1/features') return features();
+            const customResponse = await options.request?.(input, init);
+            if (customResponse) return customResponse;
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: options.accountMode ?? 'plain', updatedAt: 0 });
+            if (url.pathname === '/v4/connect/qualified/provider-account-usage/record') return usageRead(url.searchParams.get('recordId')!);
             if (url.pathname === '/v4/connect/qualified/quotas' && (init?.method ?? 'GET') === 'GET') {
                 return read(parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountRefSchema, url.searchParams.get('ref')!));
             }
@@ -107,7 +135,7 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
             serverBasis: { serverId: current.serverId, generation: current.generation },
         };
     }
-    return { account, read, refresh, control, controls, socket, context, features, requests,
+    return { account, read, usageRead, refresh, control, controls, socket, context, features, requests,
         async dispose() { socket.mockRestore(); await account.dispose(); storage.getState().clearProfileScope(); },
     };
 }

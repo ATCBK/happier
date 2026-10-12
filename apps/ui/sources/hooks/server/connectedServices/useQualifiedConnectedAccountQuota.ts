@@ -50,7 +50,7 @@ export function useQualifiedConnectedAccountQuota(
     }), [accountId, serviceLocalId, servicePluginId]);
     // Composed exactly as `useConnectedServiceQuotaSnapshots` composes it: the
     // list and detail readers must land on ONE store entry per account, so a
-    // divergent scope here would mean two poll loops, two network reads, and a
+    // divergent scope here would mean two observers, two network reads, and a
     // refresh in one that never invalidates the other.
     const credentialScope =
         credentials && activeServer.serverId

@@ -1,205 +1,92 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { createDeferredResponse, createLegacyQuotaAuthWrapper, createLegacyQuotaTestHarness, makeQuotaSnapshot,
+    plainQuotaResponse, resetConnectedServiceQuotaSnapshotsTestState, stableCredentials } from './useConnectedServiceQuotaSnapshots.testkit';
 
-import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+describe('useConnectedServiceQuotaSnapshots credential authority', () => {
+    let boundary: Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>;
+    const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
+    beforeEach(async () => { await resetConnectedServiceQuotaSnapshotsTestState(); boundary = await createLegacyQuotaTestHarness(); });
+    afterEach(async () => { standardCleanup(); await boundary.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
-
-import type { ConnectedServiceQuotaSnapshotsResult } from './useConnectedServiceQuotaSnapshots';
-import {
-    createDeferredAccountMode,
-    createDeferredPlainSnapshot,
-    fetchAccountEncryptionModeSpy,
-    getConnectedServiceQuotaSnapshotPlainSpy,
-    getConnectedServiceQuotaSnapshotSealedSpy,
-    makeQuotaSnapshot,
-    resetConnectedServiceQuotaSnapshotsTestState,
-    setCurrentCredentials,
-    stableCredentials,
-    type ProfileRef,
-} from './useConnectedServiceQuotaSnapshots.testkit';
-
-describe('useConnectedServiceQuotaSnapshots', () => {
-    beforeEach(async () => {
-        const { __resetConnectedServiceQuotaSnapshotStore } = await import('./connectedServiceQuotaSnapshotStore');
-        __resetConnectedServiceQuotaSnapshotStore();
-        resetConnectedServiceQuotaSnapshotsTestState();
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it('refetches quota snapshots when credentials change for a cached profile', async () => {
-        getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'weekly' }));
-
+    it.each(['token', 'secret'] as const)('refetches and rejects an old in-flight read when %s changes', async field => {
+        const held = createDeferredResponse();
+        boundary.plainRead.mockImplementationOnce(() => held.promise);
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (props: ProfileRef) => useConnectedServiceQuotaSnapshots([props]),
-            { initialProps: { serviceId: 'anthropic', profileId: 'work' } },
-        );
-
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        setCurrentCredentials({ ...stableCredentials, token: 't2' });
-        await hook.rerender({ serviceId: 'anthropic', profileId: 'work' });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-        expect(getConnectedServiceQuotaSnapshotPlainSpy.mock.calls[1]?.[0].token).toBe('t2');
-        await hook.unmount();
-    });
-
-    it('does not expose cached quota snapshots during credential changes before reset effects run', async () => {
-        getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'old-token' }));
-
-        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const valuesDuringCredentialChange: ConnectedServiceQuotaSnapshotsResult[] = [];
-        let captureCredentialChangeRender = false;
-
-        function Harness() {
-            const value = useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]);
-            if (captureCredentialChangeRender) {
-                valuesDuringCredentialChange.push(value);
-            }
-            return null;
-        }
-
-        let tree!: renderer.ReactTestRenderer;
-        await act(async () => {
-            tree = renderer.create(React.createElement(Harness));
-        });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        setCurrentCredentials({ ...stableCredentials, token: 't2' });
-        captureCredentialChangeRender = true;
-        await act(async () => {
-            tree.update(React.createElement(Harness));
-        });
-
-        expect(valuesDuringCredentialChange[0]?.snapshotsByKey['anthropic/work']).toBeNull();
-        expect(valuesDuringCredentialChange[0]?.loadingByKey['anthropic/work']).toBe(false);
-
-        await act(async () => {
-            tree.unmount();
-        });
-    });
-
-    it('refetches and ignores stale quota results when credential material changes under the same token', async () => {
-        const oldCredentialSnapshot = createDeferredPlainSnapshot();
-        const newCredentialSnapshot = createDeferredPlainSnapshot();
-        getConnectedServiceQuotaSnapshotPlainSpy
-            .mockReturnValueOnce(oldCredentialSnapshot.promise)
-            .mockReturnValueOnce(newCredentialSnapshot.promise);
-
-        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (props: ProfileRef) => useConnectedServiceQuotaSnapshots([props]),
-            { initialProps: { serviceId: 'anthropic', profileId: 'work' } },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        const nextCredentials = {
-            ...stableCredentials,
-            secret: Buffer.from(new Uint8Array(32).fill(4)).toString('base64url'),
-        };
-        setCurrentCredentials(nextCredentials);
-        await hook.rerender({ serviceId: 'anthropic', profileId: 'work' });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-        expect(getConnectedServiceQuotaSnapshotPlainSpy.mock.calls[1]?.[0]).toEqual(nextCredentials);
-
-        await act(async () => {
-            oldCredentialSnapshot.resolve(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'old-secret' }));
-        });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']).toBeNull();
-
-        await act(async () => {
-            newCredentialSnapshot.resolve(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'new-secret' }));
-        });
-        await flushHookEffects({ cycles: 10, turns: 10 });
-
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('new-secret');
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        const nextCredentials = field === 'token'
+            ? { ...stableCredentials, token: stableCredentials.token + '-renewed' }
+            : { ...stableCredentials, secret: Buffer.from(new Uint8Array(32).fill(4)).toString('base64url') };
+        const basis = getActiveServerSnapshot();
+        // InjectedAuthProvider is the real controlled-credential boundary. Keep
+        // Home generation fixed so reconnect invalidation cannot prove this test.
+        boundary.account.credentials = nextCredentials;
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'new-credential' })));
+        await hook.rerender(); await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(getActiveServerSnapshot()).toEqual(basis);
+        expect(boundary.plainRead).toHaveBeenCalled();
+        expect(new Headers(boundary.plainRead.mock.lastCall?.[1]?.headers).get('Authorization')).toBe(`Bearer ${nextCredentials.token}`);
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('new-credential');
+        await act(async () => { held.resolve(plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'old-credential' }))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('new-credential');
         expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
-        await hook.unmount();
     });
 
-    it('does not let a stale account-mode response choose the quota endpoint after credentials change', async () => {
-        vi.useFakeTimers();
-        const oldMode = createDeferredAccountMode();
-        const newMode = createDeferredAccountMode();
-        fetchAccountEncryptionModeSpy
-            .mockReturnValueOnce(oldMode.promise)
-            .mockReturnValueOnce(newMode.promise);
-        getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(
-            makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'new-account', staleAfterMs: 1 }),
-        );
-
+    it('withdraws a cached snapshot in the first render after credential replacement', async () => {
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'old-account' })));
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (props: ProfileRef) => useConnectedServiceQuotaSnapshots([props]),
-            { initialProps: { serviceId: 'anthropic', profileId: 'work' } },
-        );
-
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(fetchAccountEncryptionModeSpy).toHaveBeenCalledTimes(1);
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).not.toHaveBeenCalled();
-
-        setCurrentCredentials({ ...stableCredentials, token: 't2' });
-        await hook.rerender({ serviceId: 'anthropic', profileId: 'work' });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(fetchAccountEncryptionModeSpy).toHaveBeenCalledTimes(2);
-
-        await act(async () => {
-            newMode.resolve({ mode: 'plain', updatedAt: 2 });
-        });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            oldMode.resolve({ mode: 'e2ee', updatedAt: 1 });
-        });
-        await flushHookEffects({ cycles: 3, turns: 5 });
-        await flushHookEffects({ cycles: 1, turns: 2, advanceTimersMs: 30_001 });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-        expect(getConnectedServiceQuotaSnapshotSealedSpy).not.toHaveBeenCalled();
-        await hook.unmount();
+        const rendered: Array<string | null> = [];
+        let capture = false;
+        const hook = await renderHook(() => {
+            const result = useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]);
+            if (capture) rendered.push(result.snapshotsByKey['anthropic/work']?.meters[0]?.meterId ?? null);
+            return result;
+        }, { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('old-account');
+        const held = createDeferredResponse();
+        boundary.account.credentials = { ...stableCredentials, token: stableCredentials.token + '-new' };
+        boundary.plainRead.mockImplementation(() => held.promise.then(response => response.clone())); capture = true;
+        await hook.rerender();
+        expect(rendered[0]).toBeNull();
+        await act(async () => { held.resolve(plainQuotaResponse(null)); });
     });
 
-    it('does not fall back to the sealed quota endpoint after credentials change while a plaintext miss is pending', async () => {
-        const oldCredentialSnapshot = createDeferredPlainSnapshot();
-        getConnectedServiceQuotaSnapshotPlainSpy
-            .mockReturnValueOnce(oldCredentialSnapshot.promise)
-            .mockResolvedValue(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'new-account' }));
-
+    it('does not let an old account-mode response choose the endpoint of replacement credentials', async () => {
+        const heldMode = createDeferredResponse();
+        boundary.modeRead.mockImplementation(() => heldMode.promise.then(response => response.clone()));
+        const basis = getActiveServerSnapshot();
         const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
-        const hook = await renderHook(
-            (props: ProfileRef) => useConnectedServiceQuotaSnapshots([props]),
-            { initialProps: { serviceId: 'anthropic', profileId: 'work' } },
-        );
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.modeRead).toHaveBeenCalled();
+        expect(boundary.plainRead).not.toHaveBeenCalled();
+        boundary.account.credentials = { ...stableCredentials, token: stableCredentials.token + '-new' };
+        boundary.modeRead.mockImplementation(async () => Response.json({ mode: 'plain', updatedAt: 2 }));
+        await hook.rerender(); await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(getActiveServerSnapshot()).toEqual(basis);
+        expect(boundary.plainRead).toHaveBeenCalled();
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', fetchedAt: Date.now() + 1 })));
+        await act(async () => { heldMode.resolve(Response.json({ mode: 'e2ee', updatedAt: 1 })); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        await act(async () => { await hook.getCurrent().refresh(); });
+        expect(boundary.sealedRead).not.toHaveBeenCalled();
+    });
 
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
-
-        setCurrentCredentials({ ...stableCredentials, token: 't2' });
-        await hook.rerender({ serviceId: 'anthropic', profileId: 'work' });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(2);
-
-        await act(async () => {
-            oldCredentialSnapshot.resolve(null);
-        });
-        await flushHookEffects({ cycles: 5, turns: 5 });
-
-        expect(getConnectedServiceQuotaSnapshotSealedSpy).not.toHaveBeenCalled();
-        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('new-account');
-        await hook.unmount();
+    it('treats a plaintext miss as authoritative without trying a sealed representation', async () => {
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(null));
+        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
+        const hook = await renderHook(() => useConnectedServiceQuotaSnapshots([{ serviceId: 'anthropic', profileId: 'work' }]), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        expect(boundary.sealedRead).not.toHaveBeenCalled();
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']).toBeNull();
+        expect(hook.getCurrent().readByKey['anthropic/work']).toBe(true);
+        expect(hook.getCurrent().loadingByKey['anthropic/work']).toBe(false);
     });
 });

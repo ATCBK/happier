@@ -13,7 +13,7 @@ import type {
     TeamCredentialRequestPolicySupportInputV1,
     TeamCredentialRequestPolicySupportOutputV1,
 } from '@happier-dev/protocol/teams';
-import { teamCredentialResourcesQueryKeyV1 } from '@happier-dev/protocol/teams';
+import { teamCredentialResourcesQueryKeyV1, mergeTeamCredentialUsagePages } from '@happier-dev/protocol/teams';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -485,29 +485,6 @@ export type TeamCredentialUsageProjection = Readonly<{
     loadMore: () => Promise<void>;
 }>;
 
-function mergeUsagePages(
-    previous: TeamCredentialUsageQueryResultV1,
-    next: TeamCredentialUsageQueryResultV1,
-): TeamCredentialUsageQueryResultV1 {
-    const series = new Map(previous.series.map((entry) => (
-        [`${entry.bucketStartMs}:${entry.bucketEndMs}`, entry] as const
-    )));
-    for (const entry of next.series) series.set(`${entry.bucketStartMs}:${entry.bucketEndMs}`, entry);
-
-    const previousBreakdown = previous.breakdown ?? [];
-    const nextBreakdown = next.breakdown ?? [];
-    const breakdown = new Map(previousBreakdown.map((entry) => [entry.key, entry] as const));
-    for (const entry of nextBreakdown) breakdown.set(entry.key, entry);
-
-    return Object.freeze({
-        ...next,
-        series: [...series.values()],
-        ...(previous.breakdown !== undefined || next.breakdown !== undefined
-            ? { breakdown: [...breakdown.values()] }
-            : {}),
-    });
-}
-
 /** Resource usage keeps the query shape local to the route and reuses the canonical UsageEvent query owner. */
 export function useTeamCredentialUsage(params: Readonly<{
     scope: ServerAccountScope | null;
@@ -576,7 +553,7 @@ export function useTeamCredentialUsage(params: Readonly<{
                 continuityKey,
                 resultKey: key,
                 result: continuing && previous.key === key && previous.result
-                    ? mergeUsagePages(previous.result, outcome.value)
+                    ? mergeTeamCredentialUsagePages(previous.result, outcome.value)
                     : outcome.value,
                 status: 'ready',
                 partial: false,

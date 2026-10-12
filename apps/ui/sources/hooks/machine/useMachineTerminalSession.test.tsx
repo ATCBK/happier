@@ -211,6 +211,32 @@ describe('useMachineTerminalSession', () => {
         expect(terminalOps.close).not.toHaveBeenCalled();
     });
 
+    it('issues an explicit Retry while the machine is unreachable', async () => {
+        const ensured = createDeferred<DaemonTerminalEnsureResponse>();
+        terminalOps.ensure.mockReturnValue(ensured.promise);
+        terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'retried', frames: [], nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });
+        const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+        const terminalRef = { current: { write: vi.fn(), clear: vi.fn() } satisfies EmbeddedTerminalRendererHandle };
+        let reachable = false;
+        const hook = await renderHook(() => useMachineTerminalSession({
+            machineId: 'machine', serverId: homeIds.primary, cwd: '/repo', terminalKey: 'unreachable-retry',
+            terminalRef, machineReachable: reachable, machineRpcTargetAvailable: reachable,
+        }));
+        await act(async () => hook.getCurrent().onReady(80, 24));
+        expect(terminalOps.ensure).not.toHaveBeenCalled();
+        await act(async () => hook.getCurrent().retryConnect());
+        await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
+        expect(terminalOps.ensure).toHaveBeenCalledWith('machine', expect.objectContaining({ cwd: '/repo' }), expect.any(Object));
+        reachable = true;
+        await hook.rerender();
+        expect(terminalOps.ensure).toHaveBeenCalledTimes(1);
+        await act(async () => ensured.resolve({ ok: true, terminalId: 'retried', reused: false }));
+        await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
+        expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId: 'retried' }), expect.any(Object));
+        expect(hook.getCurrent().error).toBeNull();
+        await hook.unmount();
+    });
+
     it('attributes an owned terminal ensure to its Session', async () => {
         terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'attributed', reused: false });
         terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'attributed', frames: [], nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });

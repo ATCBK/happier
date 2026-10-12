@@ -3,6 +3,11 @@ import * as React from 'react';
 import { useAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { getQualifiedConnectedAccountGroupV4 } from '@/sync/api/account/apiQualifiedConnectedAccountsV4';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
+import { resolveConnectedAccountUiNegotiation } from '@/sync/domains/connectedServices/resolveConnectedAccountUiNegotiation';
+import { parseToken } from '@/utils/auth/parseToken';
 import {
     readConnectedServiceSettingsErrorCode,
     resolveConnectedServiceSettingsErrorMessage,
@@ -12,7 +17,6 @@ import {
     isQualifiedConnectedAccountGroupRevisionCurrent as isCurrentGroupRevision,
     QualifiedConnectedAccountUiSourceError,
     type QualifiedConnectedAccountUiGroup,
-    type QualifiedConnectedAccountUiPeerTransport,
     type QualifiedConnectedAccountUiSource,
 } from '@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource';
 import {
@@ -24,19 +28,6 @@ import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happi
 import type { ConnectedServiceAuthGroupPolicyV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-
-export type QualifiedConnectedAccountPeerTransportState = Readonly<{
-    status: 'loading' | 'ready' | 'error';
-    transport: QualifiedConnectedAccountUiPeerTransport | null;
-    /**
-     * Machine-readable daemon code, never display copy: the peer arm below is
-     * the only producer of this hook's `error` that did not already run through
-     * `resolveConnectedServiceSettingsErrorMessage`, and it leaked codes such as
-     * `connected_account_daemon_unavailable` into the pool-detail error row.
-     * The field is named for what it carries so a caller cannot pass copy here.
-     */
-    errorCode: string | null;
-}>;
 
 export type QualifiedConnectedAccountGroupsStatus =
     | 'idle'
@@ -55,6 +46,7 @@ export type UseQualifiedConnectedAccountGroupsResult = Readonly<{
     groups: readonly QualifiedConnectedAccountUiGroup[];
     error: string | null;
     mutating: boolean;
+    execution?: ReturnType<typeof useMountedActionExecution>;
     refresh(): Promise<void>;
     create(params: Readonly<{
         groupId: string;
@@ -134,9 +126,17 @@ function isGroupRevisionConflict(error: unknown): boolean {
 export function useQualifiedConnectedAccountGroups(params: Readonly<{
     serverId: string;
     service: PluginContributionIdentityV1 | null;
-    peer: QualifiedConnectedAccountPeerTransportState;
 }>): UseQualifiedConnectedAccountGroupsResult {
     const credentials = useAuth().credentials;
+    const serverFeatures = useServerFeaturesSnapshotForServerId(params.serverId, { enabled: Boolean(credentials) });
+    const negotiation = resolveConnectedAccountUiNegotiation(serverFeatures);
+    const actionScope = React.useMemo(() => {
+        try {
+            const accountId = credentials ? parseToken(credentials.token) : null;
+            return accountId ? { serverId: params.serverId, accountId } : null;
+        } catch { return null; }
+    }, [credentials, params.serverId]);
+    const execution = useMountedActionExecution(actionScope);
     const refreshSignal = useConnectedServiceGroupsRefreshSignal();
     const [state, setState] = React.useState<State>(EMPTY_STATE);
     const [mutating, setMutating] = React.useState(false);
@@ -150,16 +150,8 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
         [serviceLocalId, servicePluginId],
     );
     const source = React.useMemo<QualifiedConnectedAccountUiSource | null>(
-        () => {
-            if (params.peer.status !== 'ready' || !params.peer.transport) {
-                return null;
-            }
-            if (params.peer.transport.protocol === 'v4') {
-                return { protocol: 'v4' };
-            }
-            return null;
-        },
-        [params.peer.status, params.peer.transport],
+        () => negotiation === 'advertised-v4' ? { protocol: 'v4' } : null,
+        [negotiation],
     );
     const basis = React.useMemo<LoadBasis | null>(
         () => credentials && params.serverId && service && source
@@ -172,14 +164,6 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
             : null,
         [credentials, params.serverId, service, source],
     );
-    // ONE presentation boundary for this hook's `error`: the peer arm carries a
-    // raw daemon code and every catch path already resolves through the same
-    // bounded presenter.
-    const peerErrorMessage = params.peer.errorCode === null
-        ? null
-        : resolveConnectedServiceSettingsErrorMessage({
-            code: params.peer.errorCode,
-        });
     const currentBasisRef = React.useRef(basis);
     currentBasisRef.current = basis;
     const stateRef = React.useRef(state);
@@ -243,14 +227,10 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
         if (!basis) {
             setState({
                 basis: null,
-                status: params.peer.status === 'loading'
-                    ? 'loading'
-                    : params.peer.status === 'error'
-                        ? 'error'
-                        : 'unsupported',
+                status: negotiation === 'indeterminate' ? 'loading' : 'unsupported',
                 source: null,
                 groups: [],
-                error: peerErrorMessage,
+                error: null,
             });
             return;
         }
@@ -259,7 +239,7 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
         void load(
             stateRef.current.basis === basis ? stateRef.current.groups : [],
         );
-    }, [basis, load, peerErrorMessage, params.peer.status, refreshSignal]);
+    }, [basis, load, negotiation, refreshSignal]);
 
     const visibleState: State = state.basis === basis
         ? state
@@ -273,14 +253,10 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
             }
             : {
                 basis: null,
-                status: params.peer.status === 'loading'
-                    ? 'loading'
-                    : params.peer.status === 'error'
-                        ? 'error'
-                        : 'unsupported',
+                status: negotiation === 'indeterminate' ? 'loading' : 'unsupported',
                 source: null,
                 groups: [],
-                error: peerErrorMessage,
+                error: null,
             };
 
     const client = React.useMemo(
@@ -289,9 +265,31 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
                 credentials: basis.credentials,
                 service: basis.service,
                 source: visibleState.source,
+                mutation: {
+                    execute: async (actionId, input) => {
+                        if (currentBasisRef.current !== basis) throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+                        const result = await execution.execute(actionId, input);
+                        if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
+                        return result.result;
+                    },
+                    readGroup: async group => {
+                        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+                        const account = await captureLazyActionAccountContext(basis.serverId);
+                        try {
+                            if (currentBasisRef.current !== basis || resolveAuthCredentialsScopeKey(account.credentials)
+                                !== resolveAuthCredentialsScopeKey(basis.credentials)) {
+                                throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+                            }
+                            const response = await getQualifiedConnectedAccountGroupV4(account.credentials, { group, request: account.request });
+                            account.assertCurrent();
+                            if (currentBasisRef.current !== basis) throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+                            return response.group;
+                        } finally { account.dispose(); }
+                    },
+                },
             })
             : null,
-        [basis, visibleState.source],
+        [basis, execution.execute, visibleState.source],
     );
 
     const mutate = React.useCallback(async (
@@ -302,32 +300,35 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
     ): Promise<QualifiedConnectedAccountUiGroup | null> => {
         if (!client) return null;
         const operationBasis = basis;
-        const operationEpoch = groupsEpochRef.current;
         setMutating(true);
         try {
             const group = await operation(client);
             if (
                 currentBasisRef.current !== operationBasis
-                || (
-                    currentGroup
-                        ? !isCurrentGroupRevision({
+                || (currentGroup && !isCurrentGroupRevision({
                             state: stateRef.current,
                             basis: operationBasis,
                             group: currentGroup,
-                        })
-                        : groupsEpochRef.current !== operationEpoch
-                )
+                        }))
             ) return null;
+            // A same-Account list refresh cannot revoke a successful create.
+            // Return its current revision so the draft can continue adding members.
+            const listedGroup = currentGroup ? undefined : stateRef.current.groups.find(candidate =>
+                sameQualifiedConnectedAccountGroupRef(candidate.ref, group.ref));
+            if (listedGroup && listedGroup.revision.incarnation !== group.revision.incarnation) {
+                throw Object.assign(new Error('connect_group_incarnation_conflict'), { code: 'connect_group_incarnation_conflict' });
+            }
+            const appliedGroup = listedGroup ?? group;
             groupsEpochRef.current += 1;
             setState((previous) => ({
                 ...previous,
                 basis,
                 status: 'loaded',
-                groups: upsertGroup(previous.groups, group),
+                groups: upsertGroup(previous.groups, appliedGroup),
                 error: null,
             }));
             invalidateConnectedServiceGroupsRefreshSignal();
-            return group;
+            return appliedGroup;
         } catch (error) {
             if (currentBasisRef.current !== operationBasis) return null;
             if (isGroupRevisionConflict(error)) {
@@ -349,6 +350,7 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
         groups: visibleState.groups,
         error: visibleState.error,
         mutating,
+        execution,
         refresh: React.useCallback(
             () => load(visibleState.groups),
             [load, visibleState.groups],
@@ -372,27 +374,15 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
                 })) {
                     throw new QualifiedConnectedAccountUiSourceError('qualified_connected_accounts_cross_source_ref');
                 }
-                const { withDefaultActionExecuteContext } = await import('@/sync/ops/actions/defaultActionExecutor');
-                const result = await withDefaultActionExecuteContext(undefined, {
-                    serverId: operationBasis.serverId,
-                }, async (executor, account) => {
-                    if (resolveAuthCredentialsScopeKey(account.credentials)
-                        !== resolveAuthCredentialsScopeKey(operationBasis.credentials)
-                        || currentBasisRef.current !== operationBasis) {
-                        throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
-                    }
-                    return await executor.execute('connectedServices.pools.delete', {
+                if (currentBasisRef.current !== operationBasis) {
+                    throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+                }
+                const result = await execution.execute('connectedServices.pools.delete', {
                         group: group.ref,
                         expectedIncarnation: group.revision.incarnation,
                         expectedGeneration: group.revision.generation,
                         expectedRuntimeStateRevision: group.revision.runtimeStateRevision,
-                    }, {
-                        surface: 'ui',
-                        authority: 'present_user',
-                        serverId: account.serverId,
-                        runtimeAccountId: account.accountId,
                     });
-                }, 'connectedServices.pools.delete');
                 if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
                 const receipt = CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1['connectedServices.pools.delete'].parse(result.result);
                 if (
@@ -430,7 +420,7 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
             } finally {
                 setMutating(false);
             }
-        }, [basis, client, load]),
+        }, [basis, client, execution.execute, load]),
         addMember: React.useCallback(
             (input) => mutate((activeClient) => activeClient.addMember(input), input.group),
             [mutate],
