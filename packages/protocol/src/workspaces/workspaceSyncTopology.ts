@@ -60,7 +60,7 @@ function readCurrentWorkspaceSyncChild(input: Readonly<{
   const fact = facts[0]!;
   const { observation } = fact.projection;
   const row = fact.managedMachine;
-  const normalizeRoot = input.context?.normalizeRootPath ?? normalizeWorkspaceRootPathV1;
+  const normalizeRoot = input.context?.normalizeRootPath ?? ((path: string) => normalizeWorkspaceRootPathV1(path));
   const actualRoot = normalizeRoot(workspace.rootPath, input.workspace);
   const nativeRoot = normalizeRoot(observation.workspaceFolder);
   if (!fact.installationId || !isManagedDevcontainerChildProjectionCurrentV1({ homeId: workspace.serverId,
