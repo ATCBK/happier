@@ -141,6 +141,7 @@ async function cleanupSource(input: PromptLibraryLoadInputV1, catalog: Extract<P
   for (const key of active) {
     if (key === 'coding' || key === 'voice') continue;
     const root = PROMPT_LIBRARY_RETAINED_ROOTS_V1[key];
+    if (root === null) continue;
     if (!Object.hasOwn(raw, root)) { retiredRoots.push(root); continue; }
     if (readRetainedPromptLibraryRecordV1(raw, key).status !== 'ready') {
       pending = { status: 'cleanup-pending', reason: 'source-unavailable' }; continue;
@@ -187,15 +188,18 @@ async function cleanupSource(input: PromptLibraryLoadInputV1, catalog: Extract<P
 export const PROMPT_LIBRARY_RETAINED_ROOTS_V1 = {
   coding: 'promptStacksV1', voice: 'promptStacksV1', folders: 'promptFoldersV1', invocations: 'promptInvocationsV1',
   'external-links': 'promptExternalLinksV1', 'registry-sources': 'promptRegistrySourcesV1', contexts: 'contextSelectionsV1',
-  'role-overrides': 'rolesV1',
-} as const satisfies Readonly<Record<PromptLibraryCatalogKeyV1, string>>;
+  'role-overrides': 'rolesV1', 'skill-rules': null,
+} as const satisfies Readonly<Record<PromptLibraryCatalogKeyV1, string | null>>;
 
 /** Exact source contraction shared by live cleanup and the canonical history owner. */
 export function removeTransferredPromptLibrarySourcesV1(source: Readonly<Record<string, unknown>>,
   activeKeys: readonly PromptLibraryCatalogKeyV1[]): Record<string, unknown> {
   const active = new Set(activeKeys);
   const raw = { ...source };
-  for (const key of active) if (key !== 'coding' && key !== 'voice') delete raw[PROMPT_LIBRARY_RETAINED_ROOTS_V1[key]];
+  for (const key of active) {
+    const root = PROMPT_LIBRARY_RETAINED_ROOTS_V1[key];
+    if (key !== 'coding' && key !== 'voice' && root !== null) delete raw[root];
+  }
   const stack = raw.promptStacksV1;
   if (!stack || typeof stack !== 'object' || Array.isArray(stack) || !('surfaces' in stack)) return raw;
   const originalSurfaces = stack.surfaces;
@@ -224,12 +228,14 @@ export function emptyPromptLibraryRecordV1(key: PromptLibraryCatalogKeyV1): Prom
     case 'registry-sources': return { key, value: { v: 1, sources: [] } };
     case 'contexts': return { key, value: { v: 1, selectionsByKey: {} } };
     case 'role-overrides': return { key, value: { v: 1, overrides: {} } };
+    case 'skill-rules': return { key, value: { v: 1, rules: [] } };
   }
 }
 
 export function readRetainedPromptLibraryRecordV1(raw: Readonly<Record<string, unknown>>, key: PromptLibraryCatalogKeyV1):
   Readonly<{ status: 'ready'; record: PromptLibraryRecordV1 }> | Readonly<{ status: 'unavailable'; reason: 'invalid-stored-content' }> {
-  const source = raw[PROMPT_LIBRARY_RETAINED_ROOTS_V1[key]];
+  const root = PROMPT_LIBRARY_RETAINED_ROOTS_V1[key];
+  const source = root === null ? undefined : raw[root];
   if (source === undefined) return { status: 'ready', record: emptyPromptLibraryRecordV1(key) };
   let value: unknown = source;
   if (key === 'coding' || key === 'voice') {

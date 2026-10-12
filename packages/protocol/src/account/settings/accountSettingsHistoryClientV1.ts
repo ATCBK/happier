@@ -276,7 +276,10 @@ export async function captureAccountSettingsHistoryDestinationAuthorityV1(input:
     await assertCurrent(ports);
     if (catalog.status !== 'ready' && catalog.status !== 'partial') return ports.unavailable(0, 'Prompt catalog authority cannot be opened');
     activePromptLibraryKeys = [...catalog.rows.map(row => row.record.key), ...catalog.tombstones.map(row => row.key)];
-    for (const key of activePromptLibraryKeys) if (key !== 'coding' && key !== 'voice') roots.add(PROMPT_LIBRARY_RETAINED_ROOTS_V1[key]);
+    for (const key of activePromptLibraryKeys) {
+      const root = PROMPT_LIBRARY_RETAINED_ROOTS_V1[key];
+      if (key !== 'coding' && key !== 'voice' && root !== null) roots.add(root);
+    }
   }
   const activePrivateCatalogRevisions = await capturePrivateCatalogAuthority(ports,
     input.currentness ?? await ports.readCurrentness(), roots);
