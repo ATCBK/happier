@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -8,6 +8,7 @@ vi.mock('@/text', async () => {
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { buildMachineUpdateGroups, readUpdatableInstallables } from './buildMachineUpdateGroups';
 import { buildUpdatesSummary } from './items/buildUpdatesSummary';
@@ -34,10 +35,60 @@ function machine(id: string, metadata: Partial<NonNullable<Machine['metadata']>>
 const NO_RUNS = new Map();
 
 describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () => {
+    beforeEach(clearMachineRequestReachabilityForTest);
+
+    it('retains update facts and pending runs while failed requests prevent actions, scoped to their Home', () => {
+        const studio = machine('studio', {
+            cliUpdate: {
+                currentVersion: '0.2.12', latestVersion: '0.2.13', channel: 'stable', installSource: 'managed',
+                updateCommand: 'happier self update', canUpdateRemotely: true, lastUpdate: null,
+            },
+        });
+        const params = {
+            accountScope: { serverId: 'home-a', accountId: 'updates-account' }, machines: [studio], thisMachineId: null, thisComputerItem: null,
+            runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map(),
+        };
+        recordMachineRequestFailed({ serverId: 'home-b', accountId: 'updates-account', machineId: studio.id, observedAtMs: 1 });
+        expect(buildMachineUpdateGroups(params).groups[0]?.items[0]?.action.kind).toBe('run');
+        recordMachineRequestFailed({ serverId: 'home-a', accountId: 'updates-account', machineId: studio.id, observedAtMs: 2 });
+        const unavailable = buildMachineUpdateGroups(params);
+        expect(unavailable.groups[0]).toMatchObject({ machineId: 'studio', online: false, items: [{
+            id: 'studio:happier-cli', currentVersion: '0.2.12', latestVersion: '0.2.13', action: { kind: 'none' },
+        }] });
+        expect(unavailable.uncheckedMachineCount).toBe(0);
+        const pendingRuns = new Map([['studio:happier-cli', { status: 'accepted' as const, baseline: '' }]]);
+        expect(buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" }, ...params, runs: pendingRuns }).groups[0]?.items).toHaveLength(1);
+        expect(pendingRuns.get('studio:happier-cli')).toEqual({ status: 'accepted', baseline: '' });
+        recordMachineRequestSucceeded({ serverId: 'home-a', accountId: 'updates-account', machineId: studio.id, observedAtMs: 3 });
+        expect(buildMachineUpdateGroups(params).groups[0]?.items[0]?.action.kind).toBe('run');
+    });
+
+    it.each([
+        { replacedByMachineId: 'replacement' },
+        { availability: { kind: 'locked' as const, reason: 'decryption_failed' as const } },
+    ])('retains a non-selectable machine inventory without offering execution: %j', (unavailable) => {
+        const studio = { ...machine('studio', {
+            cliUpdate: {
+                currentVersion: '0.2.12', latestVersion: '0.2.13', channel: 'stable', installSource: 'managed',
+                updateCommand: 'happier self update', canUpdateRemotely: true, lastUpdate: null,
+            },
+        }), ...unavailable };
+        const params = {
+            accountScope: { serverId: 'home-a', accountId: 'updates-account' }, machines: [studio], thisMachineId: null, thisComputerItem: null,
+            runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map(),
+        };
+        const { groups, uncheckedMachineCount } = buildMachineUpdateGroups(params);
+        expect(groups).toHaveLength(1);
+        expect(groups[0]).toMatchObject({ online: false, items: [{
+            currentVersion: '0.2.12', latestVersion: '0.2.13', action: { kind: 'none' },
+        }] });
+        expect(uncheckedMachineCount).toBe(0);
+    });
+
     it('tells two machines with the same name apart, as every other machine list does', () => {
         const first = machine('f98b1234', { host: 'lima-happier-fresh' });
         const second = { ...machine('b8fe5678', { host: 'lima-happier-fresh' }), active: false } as Machine;
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [first, second],
             thisMachineId: null,
             thisComputerItem: null,
@@ -50,7 +101,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
 
     it('carries when an offline machine was last seen, from the machine itself', () => {
         const studio = { ...machine('studio'), active: false, activeAt: 1_700_000_000_000 } as Machine;
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [studio],
             thisMachineId: null,
             thisComputerItem: null,
@@ -73,7 +124,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
             },
         });
         // No capability detect cached for that machine yet: its `tool.systemTasks` kinds are unknown.
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [studio],
             thisMachineId: null,
             thisComputerItem: null,
@@ -93,7 +144,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
         const snapshot: MachineCapabilitiesSnapshot = {
             response: { protocolVersion: 1, results: { 'tool.systemTasks': { ok: true, checkedAt: 1, data: { kinds: ['relay.runtime.status.v1'] } } } },
         };
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [studio], thisMachineId: null, thisComputerItem: null, runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map([['studio', snapshot]]),
         });
         expect(buildUpdatesSummary(groups.flatMap((group) => group.items)).actionableCount).toBe(0);
@@ -112,7 +163,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
                 },
             },
         };
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop')],
             thisMachineId: 'laptop',
             thisComputerItem: null,
@@ -136,7 +187,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
     });
 
     it('an online machine whose tools were never checked is "not checked", never "up to date"', () => {
-        const { groups, uncheckedMachineCount } = buildMachineUpdateGroups({
+        const { groups, uncheckedMachineCount } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop'), machine('studio')],
             thisMachineId: 'laptop',
             thisComputerItem: null,
@@ -152,7 +203,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
         const snapshot: MachineCapabilitiesSnapshot = {
             response: { protocolVersion: 1, results: { 'cli.claude': { ok: false, checkedAt: 1, error: { message: 'probe failed' } } } },
         };
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop')], thisMachineId: 'laptop', thisComputerItem: null, runs: NO_RUNS,
             machineAgents: new Map([['laptop', { status: 'error', lastCheckedAt: null, agents: [projectMachineAgent({ agentId: 'claude', title: 'Claude Code', facts: null, checking: false, stale: true, connectedServices: [], job: null })] }]]),
             snapshots: new Map([['laptop', snapshot]]),
@@ -175,7 +226,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
                 },
             },
         };
-        const { uncheckedMachineCount } = buildMachineUpdateGroups({
+        const { uncheckedMachineCount } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop')], thisMachineId: 'laptop', thisComputerItem: null, runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map([['laptop', snapshot]]),
         });
         expect(uncheckedMachineCount).toBe(1);
@@ -187,7 +238,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
         const snapshot: MachineCapabilitiesSnapshot = {
             response: { protocolVersion: 1, results: { [helper.capabilityId]: { ok: false, checkedAt: 1, error: { message: 'probe failed' } } } },
         };
-        const { groups } = buildMachineUpdateGroups({
+        const { groups } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop')], thisMachineId: 'laptop', thisComputerItem: null, runs: NO_RUNS, machineAgents: new Map(), snapshots: new Map([['laptop', snapshot]]),
         });
         const row = groups.flatMap((group) => group.items).find((item) => item.id === `laptop:installable:${helper.key}`);
@@ -198,7 +249,7 @@ describe('buildMachineUpdateGroups (what the always-mounted pill counts)', () =>
         const at = (checkedAt: number): MachineCapabilitiesSnapshot => ({
             response: { protocolVersion: 1, results: { 'tool.systemTasks': { ok: true, checkedAt, data: { kinds: [] } } } },
         });
-        const { checkedAt } = buildMachineUpdateGroups({
+        const { checkedAt } = buildMachineUpdateGroups({ accountScope: { serverId: "home-a", accountId: "updates-account" },
             machines: [machine('laptop'), machine('studio')], thisMachineId: 'laptop', thisComputerItem: null, runs: NO_RUNS,
             machineAgents: new Map(), snapshots: new Map([['laptop', at(1_000)], ['studio', at(5_000)]]),
         });

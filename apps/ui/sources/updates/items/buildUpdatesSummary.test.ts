@@ -35,6 +35,15 @@ describe('buildUpdatesSummary', () => {
         expect(summary).toMatchObject({ actionableCount: 2, phase: 'available', visible: true });
     });
 
+    it('counts newer versions the person installs themselves apart, so the header can name them truthfully', () => {
+        const summary = buildUpdatesSummary([
+            available('a'),
+            item({ id: 'own', state: 'available', latestVersion: '1.1.0', managedBy: 'user', action: { kind: 'manual', command: 'npm i -g x' } }),
+            item({ id: 'own-current', managedBy: 'user', action: { kind: 'manual', command: 'npm i -g y' } }),
+        ]);
+        expect(summary).toMatchObject({ actionableCount: 1, manualCount: 1 });
+    });
+
     it('does not call zero actionable "up to date" when something could not be checked or is offline', () => {
         expect(buildUpdatesSummary([item({ id: 'a' }), item({ id: 'b' })])).toMatchObject({ phase: 'none', status: 'upToDate', visible: false });
         expect(buildUpdatesSummary([item({ id: 'a' }), item({ id: 'b', state: 'unknown' })]).status).toBe('unknown');

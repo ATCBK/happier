@@ -3,6 +3,8 @@ import * as React from 'react';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
 import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 
 import { buildUpdatesSummary, isSameUpdatesSummary, type UpdatesSummary } from './items/buildUpdatesSummary';
 import { useMachinesCapabilitySnapshots } from './machineCapabilitySnapshots';
@@ -26,6 +28,8 @@ export function useUpdatesSummary(): UpdatesSummary {
     const serverId = useActiveServerSnapshot().serverId;
     const activeScope = useActiveServerAccountScope();
     const updateScope = activeScope?.serverId === serverId ? activeScope : null;
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const presenceNowMs = useMachinePresenceNowMs(machines);
     const runs = useMachineUpdateRuns(serverId);
     const completions = useUnseenUpdateCompletions(updateScope);
     // Observes (never fetches) the cached detects: K6 agent facts and helper latest versions that
@@ -36,6 +40,7 @@ export function useUpdatesSummary(): UpdatesSummary {
     const installables = React.useMemo(readUpdatableInstallables, []);
     const summary = React.useMemo(() => {
         const { groups, uncheckedMachineCount } = buildMachineUpdateGroups({
+            accountScope: updateScope,
             machines,
             thisMachineId: thisComputer.machineId,
             thisComputerItem: thisComputer.item,
@@ -45,7 +50,7 @@ export function useUpdatesSummary(): UpdatesSummary {
             installables,
         });
         return buildUpdatesSummary([app.model.item, ...groups.flatMap((group) => group.items)], completions, { uncheckedMachineCount });
-    }, [app.model.item, completions, installables, machineAgents, machines, runs, snapshots, thisComputer.item, thisComputer.machineId]);
+    }, [app.model.item, completions, installables, machineAgents, machines, runs, snapshots, thisComputer.item, thisComputer.machineId, updateScope, reachabilityRevision, presenceNowMs]);
     // Same values → same object, for every field (`isSameUpdatesSummary`), so entries re-render
     // only when something they show changed.
     const stableRef = React.useRef(summary);
@@ -55,6 +60,7 @@ export function useUpdatesSummary(): UpdatesSummary {
 
 const NOTHING_TO_SHOW: UpdatesSummary = {
     actionableCount: 0,
+    manualCount: 0,
     failedCount: 0,
     runningCount: 0,
     phase: 'none',

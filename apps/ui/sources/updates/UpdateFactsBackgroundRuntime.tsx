@@ -2,8 +2,10 @@ import * as React from 'react';
 
 import { ensureMachineUpdateFactsBackground } from '@/capabilities/ensureAgentInstallablesBackground';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { useAllMachines } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 
 /**
  * Keeps the Updates summary's coverage: asks each online machine for its tools' update facts
@@ -15,9 +17,13 @@ export function UpdateFactsBackgroundRuntime(props: Readonly<{ enabled: boolean 
     const machines = useAllMachines();
     // These machines' server: the facts land in that server's cache entries, the ones the summary reads.
     const serverId = useActiveServerSnapshot().serverId;
+    const activeScope = useActiveServerAccountScope();
+    const accountScope = activeScope?.serverId === serverId ? activeScope : null;
+    const reachabilityRevision = useMachineReachabilityRevision(props.enabled);
+    const presenceNowMs = useMachinePresenceNowMs(machines);
     const onlineKey = React.useMemo(
-        () => machines.filter((machine) => isMachineOnline(machine)).map((machine) => machine.id).sort().join('\u0000'),
-        [machines],
+        () => machines.filter((machine) => isMachineSelectableForFleet(accountScope, machine, presenceNowMs)).map((machine) => machine.id).sort().join('\u0000'),
+        [machines, accountScope, reachabilityRevision, presenceNowMs],
     );
     React.useEffect(() => {
         if (!props.enabled || !onlineKey) return;

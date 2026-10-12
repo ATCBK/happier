@@ -1,4 +1,4 @@
-import { isUpdateItemActionable, type UpdateItem } from './updateItem';
+import { isNewerVersion, isUpdateItemActionable, type UpdateItem } from './updateItem';
 
 /**
  * What the always-mounted entries (sidebar pill, collapsed rail, phone header, Settings row, tray)
@@ -22,6 +22,8 @@ export type UpdatesSummaryStatus = UpdatesSummaryPhase | 'upToDate' | 'unknown' 
 
 export type UpdatesSummary = Readonly<{
     actionableCount: number;
+    /** Newer versions Happier can't install because the person installed the tool themselves. */
+    manualCount: number;
     /** Rows whose last attempt did not finish (each offers Retry where its executor can). */
     failedCount: number;
     /** Rows with an update in flight (including a remote machine reconnecting). */
@@ -37,6 +39,7 @@ export function buildUpdatesSummary(
     coverage: Readonly<{ uncheckedMachineCount: number }> = { uncheckedMachineCount: 0 },
 ): UpdatesSummary {
     let actionableCount = 0;
+    let manualCount = 0;
     let required = false;
     let runningCount = 0;
     let failedCount = 0;
@@ -48,6 +51,8 @@ export function buildUpdatesSummary(
     let completed = false;
     for (const item of items) {
         if (isUpdateItemActionable(item)) actionableCount += 1;
+        else if ((item.state === 'available' || item.state === 'required') && item.action.kind === 'manual'
+            && isNewerVersion(item.currentVersion, item.latestVersion)) manualCount += 1;
         if (item.state === 'required' && item.action.kind === 'run') required = true;
         if (item.state === 'running') runningCount += 1;
         if (item.state === 'failed') failedCount += 1;
@@ -87,7 +92,7 @@ export function buildUpdatesSummary(
                     : offline
                         ? 'offline'
                         : 'upToDate';
-    return { actionableCount, failedCount, runningCount, phase, status, visible: phase !== 'none' };
+    return { actionableCount, manualCount, failedCount, runningCount, phase, status, visible: phase !== 'none' };
 }
 
 const SUBJECT_ORDER: Readonly<Record<UpdateItem['subject']['kind'], number>> = {

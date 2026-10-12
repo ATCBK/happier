@@ -1,7 +1,8 @@
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 
 import { buildRemoteCliUpdateItem } from './items/buildMachineUpdateItems';
@@ -30,6 +31,7 @@ export function buildRemoteMachineUpdateFacts(
     runs: ReturnType<typeof useMachineUpdateRuns>,
     /** Cached capability detects (never fetched here) — the `tool.systemTasks` kinds live there. */
     snapshots: ReadonlyMap<string, MachineCapabilitiesSnapshot | null>,
+    accountScope: ServerAccountScope | null,
 ): RemoteMachineUpdateFacts[] {
     const result: RemoteMachineUpdateFacts[] = [];
     // The one owner of names shown together: two machines that share a name get "· f98b".
@@ -37,7 +39,7 @@ export function buildRemoteMachineUpdateFacts(
     for (const machine of machines) {
         if (machine.id === thisMachineId || !machine.metadata) continue;
         const facts = machine.metadata.cliUpdate ?? null;
-        const online = isMachineOnline(machine);
+        const online = isMachineSelectableForFleet(accountScope, machine);
         const lastUpdateSignature = signatureOfLastUpdate(facts?.lastUpdate ?? null);
         const cliItem = buildRemoteCliUpdateItem({
             machineId: machine.id,

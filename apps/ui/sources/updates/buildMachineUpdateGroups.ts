@@ -3,6 +3,7 @@ import { buildMachineUpdateFactsRequest } from '@/capabilities/requests';
 import { getInstallablesRegistryEntries, type InstallableDepDataLike } from '@/capabilities/installablesRegistry';
 import type { MachineCapabilitiesSnapshot } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import { buildAgentCliUpdateItem, buildInstallableUpdateItem, buildProbeFailedItem } from './items/buildMachineUpdateItems';
 import type { UpdateItem } from './items/updateItem';
@@ -89,6 +90,7 @@ function buildMachineRows(params: Readonly<{
  * it, so the pill and the list count the same rows.
  */
 export function buildMachineUpdateGroups(params: Readonly<{
+    accountScope: ServerAccountScope | null;
     machines: readonly Machine[];
     thisMachineId: string | null;
     thisComputerItem: UpdateItem | null;
@@ -124,7 +126,7 @@ export function buildMachineUpdateGroups(params: Readonly<{
             ],
         });
     }
-    const remotes = buildRemoteMachineUpdateFacts(params.machines, machineId, params.runs, params.snapshots);
+    const remotes = buildRemoteMachineUpdateFacts(params.machines, machineId, params.runs, params.snapshots, params.accountScope);
     for (const remote of remotes) {
         groups.push({
             id: `machine:${remote.machine.id}`,

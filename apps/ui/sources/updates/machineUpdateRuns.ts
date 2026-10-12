@@ -3,8 +3,9 @@ import * as React from 'react';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
 import { buildMachineUpdateFactsRequest } from '@/capabilities/requests';
 import { prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
-import { machineCapabilitiesInvoke } from '@/sync/ops/capabilities';
-import { startAgentInstallJob, waitForAgentInstallJob } from '@/agents/machineAgents/installJobs/installJobStore';
+import { machineCapabilitiesInvoke, type MachineCapabilitiesInvokeResult } from '@/sync/ops/capabilities';
+import { startAgentInstallJob, waitForAgentInstallJob, type AgentInstallJobStartOptions } from '@/agents/machineAgents/installJobs/installJobStore';
+import type { MachineAgentJob } from '@/agents/machineAgents/machineAgentTypes';
 import { presentAgentInstallJobFailure, presentAgentInstallJobRpcFailure } from '@/agents/machineAgents/installJobs/presentAgentInstallJobFailure';
 import { MACHINE_RPC_POLL_INTERVAL_MS } from '@/sync/ops/machineRpcPollInterval';
 import { t } from '@/text';
@@ -62,7 +63,7 @@ export function stopUpdateBatch(scope: ServerAccountScope | null): void {
 export async function runUpdateBatch(
     scope: ServerAccountScope,
     items: readonly UpdateItem[],
-    executeItem: (item: UpdateItem) => Promise<void>,
+    executeItem: (item: UpdateItem) => Promise<unknown>,
     groupId: string | null = null,
 ): Promise<void> {
     const key = serverAccountScopeKeySuffix(scope);
@@ -109,7 +110,7 @@ export async function runUpdateBatch(
 export function useUpdateBatch(
     scope: ServerAccountScope | null,
     items: readonly UpdateItem[],
-    executeItem: (item: UpdateItem) => Promise<void>,
+    executeItem: (item: UpdateItem) => Promise<unknown>,
 ): Readonly<{
     batch: UpdateAllProgress | null;
     updateAll: () => Promise<void>;
@@ -335,6 +336,40 @@ export function refreshMachineUpdateFacts(serverId: string, machineId: string): 
     void prefetchMachineCapabilities({ machineId, serverId, request: { ...buildMachineUpdateFactsRequest(), bypassCache: true } });
 }
 
+/** Admission starts the existing job store; its acknowledgement and row settlement stay separate. */
+export async function startMachineAgentItemUpdate(item: UpdateItem, scope: ServerAccountScope, options: AgentInstallJobStartOptions): Promise<MachineAgentJob> {
+    if (!item.machineId || item.subject.kind !== 'agent-cli') throw new Error('update_target_unavailable');
+    const target = { ...scope, machineId: item.machineId, agentId: item.subject.agentId };
+    setRecord(scope.serverId, item.id, { status: 'running' });
+    try {
+        const job = await startAgentInstallJob(target, 'update', options);
+        // The Action returns the real job id immediately. The existing store keeps settlement
+        // observable when the row closes, and the batch can wait on that very same admitted job.
+        void (async () => {
+            try {
+                const outcome = await waitForAgentInstallJob(target);
+                if (outcome.kind === 'failed') {
+                    setRecord(scope.serverId, item.id, { status: 'failed', message: presentAgentInstallJobFailure(outcome).body });
+                } else if (outcome.version !== null && outcome.version === item.currentVersion) {
+                    setRecord(scope.serverId, item.id, { status: 'alreadyCurrent' });
+                } else {
+                    setRecord(scope.serverId, item.id, { status: 'finished' });
+                    recordUpdateCompleted(scope, item.id);
+                }
+            } catch (error) {
+                setRecord(scope.serverId, item.id, { status: 'failed', message: presentAgentInstallJobRpcFailure(error).body });
+            } finally {
+                refreshMachineUpdateFacts(scope.serverId, target.machineId);
+            }
+        })();
+        return job;
+    } catch (error) {
+        setRecord(scope.serverId, item.id, { status: 'failed', message: presentAgentInstallJobRpcFailure(error).body });
+        refreshMachineUpdateFacts(scope.serverId, target.machineId);
+        throw error;
+    }
+}
+
 /**
  * Runs one machine row's update through its canonical executor, then re-reads that machine's facts
  * on the same `serverId` (success is re-read, never taken from the call).
@@ -342,34 +377,26 @@ export function refreshMachineUpdateFacts(serverId: string, machineId: string): 
 export async function runMachineItemUpdate(
     item: UpdateItem,
     context: Readonly<{ scope: ServerAccountScope; lastUpdateSignature?: string }>,
-): Promise<void> {
+): Promise<void | MachineCapabilitiesInvokeResult> {
     const machineId = item.machineId;
     if (!machineId || item.action.kind !== 'run') return;
     // Captured once: mutation and polls authenticate as the account that initiated this row.
     const scope = context.scope;
     const serverId = scope.serverId;
     if (readScope(serverId).get(item.id)?.status === 'running') return;
+    if (item.subject.kind === 'agent-cli') {
+        try {
+            await startMachineAgentItemUpdate(item, scope, { consent: { vendorRecipe: true } });
+            await waitForAgentInstallJob({ ...scope, machineId, agentId: item.subject.agentId });
+        } catch { /* The shared projection already retains the admitted job's failure. */ }
+        return;
+    }
     setRecord(serverId, item.id, { status: 'running' });
 
     const subject = item.subject;
     try {
         if (subject.kind === 'happier-cli') {
             await runRemoteCliUpdate(scope, item.id, machineId, context.lastUpdateSignature ?? '');
-            return;
-        }
-
-        if (subject.kind === 'agent-cli') {
-            const target = { ...scope, machineId, agentId: subject.agentId };
-            await startAgentInstallJob(target, 'update', { consent: { vendorRecipe: true } });
-            const outcome = await waitForAgentInstallJob(target);
-            if (outcome.kind === 'failed') {
-                setRecord(serverId, item.id, { status: 'failed', message: presentAgentInstallJobFailure(outcome).body });
-            } else if (outcome.version !== null && outcome.version === item.currentVersion) {
-                setRecord(serverId, item.id, { status: 'alreadyCurrent' });
-            } else {
-                setRecord(serverId, item.id, { status: 'finished' });
-                recordUpdateCompleted(scope, item.id);
-            }
             return;
         }
 
@@ -389,7 +416,7 @@ export async function runMachineItemUpdate(
                 status: 'failed',
                 message: result.reason === 'not-supported' ? t('deps.installNotSupported') : t('updates.row.failedGeneric'),
             });
-            return;
+            return result;
         }
         if (!result.response.ok) {
             setRecord(serverId, item.id, {
@@ -397,17 +424,19 @@ export async function runMachineItemUpdate(
                 message: readRuntimeSentence(result.response.error.message) ?? describeInstallFailure(result.response.error.code),
                 logPath: typeof result.response.logPath === 'string' ? result.response.logPath : null,
             });
-            return;
+            return result;
         }
         const outcome = result.response.result as { alreadyCurrent?: unknown } | null | undefined;
         if (outcome?.alreadyCurrent === true) {
             setRecord(serverId, item.id, { status: 'alreadyCurrent' });
-            return;
+            return result;
         }
         setRecord(serverId, item.id, { status: 'finished' });
         recordUpdateCompleted(scope, item.id);
+        return result;
     } catch (error) {
-        setRecord(serverId, item.id, { status: 'failed', message: subject.kind === 'agent-cli' ? presentAgentInstallJobRpcFailure(error).body : t('updates.row.failedGeneric') });
+        setRecord(serverId, item.id, { status: 'failed', message: t('updates.row.failedGeneric') });
+        return { supported: false, reason: 'error' };
     } finally {
         refreshMachineUpdateFacts(serverId, machineId);
     }

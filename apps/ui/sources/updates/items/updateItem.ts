@@ -1,42 +1,9 @@
 import { compareVersions, parseVersion } from '@/utils/system/versionUtils';
-
-/**
- * K7 — the UI-only update projection. One row per updatable thing, built from the owners that
- * already decide it (the app-update owner, this computer's inspection, machine metadata and the
- * machine capability detect). Never persisted and never a second decision-maker: every field is
- * read from its producer, and an absent fact degrades that one row.
- */
-export type UpdateSubject =
-    | Readonly<{ kind: 'app' }>
-    | Readonly<{ kind: 'happier-cli' }>
-    | Readonly<{ kind: 'agent-cli'; agentId: string }>
-    | Readonly<{ kind: 'installable'; key: string }>;
-
-/**
- * - `checking`: the first answer has not arrived; nothing is known yet.
- * - `upToDate`: the producer proved the latest version runs.
- * - `available` / `required`: a newer version exists (`required`: this one no longer works).
- * - `running`: the producer reports an update in flight.
- * - `ready`: downloaded; only a restart is left (the app).
- * - `failed`: the last attempt did not finish; the row offers Retry when the executor can.
- * - `unknown`: the latest version is not known (older software, a failed lookup) — never shown as
- *   "up to date".
- * - `offline`: the machine is not connected; last-known versions only.
- */
-export type UpdateItemState =
-    | 'unchecked'
-    | 'checking'
-    | 'upToDate'
-    | 'available'
-    | 'required'
-    | 'running'
-    | 'ready'
-    | 'failed'
-    | 'unknown'
-    | 'offline';
+import type { UpdateSubject, UpdateItemState, UpdateItemActionVerb } from '@happier-dev/protocol/actions/updatesActionFamily';
+export type { UpdateSubject, UpdateItemState } from '@happier-dev/protocol/actions/updatesActionFamily';
 
 /** What the row's action button does. `none` rows have no button. */
-export type UpdateItemActionKind = 'update' | 'retry' | 'restart' | 'reload' | 'store';
+export type UpdateItemActionKind = UpdateItemActionVerb;
 
 export type UpdateItemAction =
     | Readonly<{ kind: 'none' }>
@@ -57,6 +24,12 @@ export type UpdateItemFailure =
     | Readonly<{ kind: 'rolledBack'; kept: string; target: string }>
     | Readonly<{ kind: 'latestUnknown' }>;
 
+/**
+ * K7 — the UI-only update projection. One row per updatable thing, built from the owners that
+ * already decide it (the app-update owner, this computer's inspection, machine metadata and the
+ * machine capability detect). Never persisted and never a second decision-maker: every field is
+ * read from its producer, and an absent fact degrades that one row.
+ */
 export type UpdateItem = Readonly<{
     /** Stable across refreshes: `${machineKey}:${subject}`. */
     id: string;
@@ -66,6 +39,16 @@ export type UpdateItem = Readonly<{
     title: string;
     currentVersion: string | null;
     latestVersion: string | null;
+    /**
+     * `checking`: the first answer has not arrived; nothing is known yet.
+     * `upToDate`: the producer proved the latest version runs.
+     * `available` / `required`: a newer version exists (`required`: this one no longer works).
+     * `running`: the producer reports an update in flight.
+     * `ready`: downloaded; only a restart is left (the app).
+     * `failed`: the last attempt did not finish; the row offers Retry when the executor can.
+     * `unknown`: the latest version is not known — never shown as "up to date".
+     * `offline`: the machine is not connected; last-known versions only.
+     */
     state: UpdateItemState;
     /** Whole percent, only when the producer reports a real fraction. */
     progressPercent: number | null;
