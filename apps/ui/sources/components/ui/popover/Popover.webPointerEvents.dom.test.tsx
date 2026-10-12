@@ -30,10 +30,13 @@ function rect(x: number, y: number, width: number, height: number): DOMRect {
     };
 }
 
+// Collect the component graph before the behavior-test deadline starts.
+const { Popover } = await import('./Popover');
+const { ItemList } = await import('@/components/ui/lists/ItemList');
+const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
+
 describe('Popover web pointer-events ownership', () => {
     it('keeps in-page customization controls inside its dismissal boundary until their click completes', async () => {
-        const { Popover } = await import('./Popover');
-        const { ItemList } = await import('@/components/ui/lists/ItemList');
         const container = document.createElement('div');
         document.body.append(container);
         const root = createRoot(container);
@@ -112,8 +115,6 @@ describe('Popover web pointer-events ownership', () => {
     });
 
     it('uses style-owned pointer events throughout the portaled backdrop path', async () => {
-        const { Popover } = await import('./Popover');
-        const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root: Root = createRoot(container);

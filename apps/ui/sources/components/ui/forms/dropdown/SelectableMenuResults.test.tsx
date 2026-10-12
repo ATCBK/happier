@@ -49,6 +49,27 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('SelectableMenuResults', () => {
+    it('marks the current choice of a choice row, and only that row', async () => {
+        const { SelectableMenuResults } = await import('./SelectableMenuResults');
+        const screen = await renderScreen(<SelectableMenuResults
+                    categories={[{ id: 'view', title: 'View', items: [
+                        { id: 'files', title: 'Files', checked: true },
+                        { id: 'walkthrough', title: 'Walkthrough', checked: false },
+                        { id: 'find', title: 'Find in changes' },
+                    ] }]}
+                    selectedIndex={-1}
+                    onSelectionChange={() => {}}
+                    onPressItem={() => {}}
+                    rowVariant="slim"
+                    emptyLabel="Empty"
+                />);
+        const rows = screen.findAllByType('SelectableRow' as never);
+        const rightOf = (title: string) => rows.find((row) => row.props.title === title)?.props.right ?? null;
+        expect(rightOf('Files')).not.toBeNull();
+        expect(rightOf('Walkthrough')).toBeNull();
+        expect(rightOf('Find in changes')).toBeNull();
+    });
+
     it('omits the category title row when the category title is empty', async () => {
         const { SelectableMenuResults } = await import('./SelectableMenuResults');
 

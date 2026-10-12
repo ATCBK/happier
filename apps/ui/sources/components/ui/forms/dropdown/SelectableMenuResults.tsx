@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Typography } from '@/constants/Typography';
 import { SelectableRow, type SelectableRowVariant } from '@/components/ui/lists/SelectableRow';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -10,6 +11,7 @@ import type { SelectableMenuCategory, SelectableMenuItem } from './selectableMen
 import { Text } from '@/components/ui/text/Text';
 import type { ScrollItemLayoutHandler } from '@/components/ui/scroll/useScrollRectIntoView';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { focusFirstEntryWithin } from '@/keyboard/webOverlayFocusContainment';
 
 type RowFrameStyle = React.ComponentProps<typeof View>['style'];
 
@@ -192,24 +194,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: MENU_ROW_METRICS.insetPx,
     },
     emptyContainer: {
-        padding: 48,
+        padding: theme.space.s48,
         alignItems: 'center',
     },
     emptyText: {
-        fontSize: 15,
         color: theme.colors.input.placeholder,
-        letterSpacing: -0.2,
-        ...Typography.default(),
+        ...Typography.variant('label', 'regular'),
     },
     // A group label is sentence case, quiet and on the rows' text edge ("Ask an agent to"): never an
     // uppercase eyebrow over a menu.
     categoryTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
-        lineHeight: 16,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 4,
+        ...Typography.variant('meta', 'semiBold'),
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s4,
         color: theme.colors.text.secondary,
     },
     itemRowPressable: {
@@ -229,7 +227,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export function SelectableMenuResults(props: {
+export type SelectableMenuResultsHandle = Readonly<{ focusItem: (index: number) => void }>;
+
+type SelectableMenuResultsProps = {
     /** Decorated destinations must remain mounted until press so browser dragging can start. */
     wrapItem?: (item: SelectableMenuItem, content: React.ReactNode) => React.ReactNode;
     categories: ReadonlyArray<SelectableMenuCategory>;
@@ -247,12 +247,26 @@ export function SelectableMenuResults(props: {
     registerItemLayout?: (key: string) => ScrollItemLayoutHandler;
     /** Shared DropdownMenu keyboard policy, delegated through each focusable row. */
     onKeyDown?: (event: unknown) => void;
-}) {
+};
+
+export const SelectableMenuResults = React.forwardRef<SelectableMenuResultsHandle, SelectableMenuResultsProps>(function SelectableMenuResults(props, ref) {
     const styles = stylesheet;
+    const { theme } = useUnistyles();
+    // A choice row (radio) shows which one is current; the mark yields to a row's own trailing content.
+    const checkMark = <Icon name="check" size={ICON_SIZE.sm} color={theme.colors.text.primary} />;
     const rowAnchorRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
     const submenuAnchorRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
 
     const allItems = React.useMemo(() => props.categories.flatMap((c) => c.items), [props.categories]);
+    React.useImperativeHandle(ref, () => ({
+        focusItem(index) {
+            if (Platform.OS !== 'web') return;
+            const item = allItems[index];
+            if (!item || item.disabled) return;
+            const node = rowAnchorRefs.current.get(String(item.id))?.current as unknown as HTMLElement | null;
+            if (node) focusFirstEntryWithin(node);
+        },
+    }), [allItems]);
     const getRowAnchorRef = React.useCallback((itemId: string): React.RefObject<View | null> => {
         const existing = rowAnchorRefs.current.get(itemId);
         if (existing) return existing;
@@ -308,6 +322,7 @@ export function SelectableMenuResults(props: {
                 const categoryItems = category.items.map((item, idx) => {
                     const itemIndex = categoryStartIndex + idx;
                     const isSelected = itemIndex === props.selectedIndex;
+                    const right = item.right ?? (item.checked === true ? checkMark : null);
                     currentIndex++;
                     const rowAnchorRef = getRowAnchorRef(String(item.id));
                     const submenuAnchorRef = getSubmenuAnchorRef(String(item.id));
@@ -347,7 +362,7 @@ export function SelectableMenuResults(props: {
                             webRole={item.checked === undefined ? props.itemProps?.webRole : 'radio'}
                             accessibilityChecked={item.checked ?? props.itemProps?.accessibilityChecked}
                             icon={item.left}
-                            rightElement={item.right}
+                            rightElement={right}
                             selected={isSelected}
                             disabled={item.disabled}
                             showChevron={false}
@@ -366,7 +381,7 @@ export function SelectableMenuResults(props: {
                             disabled={item.disabled}
                             left={item.left}
                             leftGap={item.leftGap}
-                            right={item.right}
+                            right={right}
                             title={item.titleNode ?? item.title}
                             subtitle={item.subtitleNode ?? item.subtitle}
                             accessibilityLabel={item.accessibilityLabel}
@@ -452,4 +467,4 @@ export function SelectableMenuResults(props: {
     }
 
     return content;
-}
+});

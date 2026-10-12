@@ -46,6 +46,7 @@ export function useSelectableMenu(params: {
     allowEmptySelection?: boolean;
     /** Use shared prefix navigation when no search input owns typed text. */
     enableTypeahead?: boolean;
+    onKeyboardSelectionChange?: (index: number) => void;
     /** Clears transient prefix navigation state while the controlled menu is closed. */
     open?: boolean;
 }) {
@@ -100,6 +101,7 @@ export function useSelectableMenu(params: {
         initialSelectedId: params.initialSelectedId,
         allowEmptySelection: params.allowEmptySelection,
         enableTypeahead: params.enableTypeahead,
+        onKeyboardSelectionChange: params.onKeyboardSelectionChange,
         // Filtering is this adapter's concern; the portable owner performs the reset.
         resetKey: allItems,
         onRequestClose: params.onRequestClose,

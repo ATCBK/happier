@@ -148,7 +148,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
     const insideSheet = React.useContext(FloatingOverlaySheetContext);
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const backdropTone = useGlassSurfaceBackdropTone('floating');
+    const backdropTone = useGlassSurfaceBackdropTone('floating', theme.colors.edge.floatingFill);
     const glassFadeColor = useGlassSurfaceColor(theme.colors.edge.floatingFill, 'floating', false);
     const { 
         children, 

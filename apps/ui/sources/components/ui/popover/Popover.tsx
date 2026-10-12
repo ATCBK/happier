@@ -177,6 +177,13 @@ type PopoverCommonProps = Readonly<{
     sheetHeaderAction?: React.ReactNode;
     /** A form summary belongs under the title in the sheet's existing header. */
     sheetSubtitle?: string;
+    /**
+     * `none`: the content carries its own header (title, live meta, controls), so the sheet keeps
+     * only its grabber; the accessibility label still names the dialog.
+     */
+    sheetHeader?: 'band' | 'none';
+    /** `solid`: an opaque sheet, for live content that must not show the screen through it. */
+    sheetMaterial?: 'glass' | 'solid';
     accessibilityLabel?: string;
     /** Move focus into the popover after it opens when the content is menu-like. */
     autoFocusOnOpen?: boolean;
@@ -219,13 +226,20 @@ type PopoverCommonProps = Readonly<{
      * opt out when retaining its explicit side is part of its presentation.
      */
     flip?: boolean;
+    /**
+     * What a top/bottom popover does when neither side of its anchor holds `maxHeightCap`.
+     * `shrink` (default, menus and pickers) takes the larger side and scrolls inside it. `shift` keeps
+     * a designed panel at its full size (up to the boundary) and slides it inside the boundary, over its
+     * trigger if it must, so a surface opened mid-page is never cramped into the leftover room.
+     */
+    fit?: 'shrink' | 'shift';
     portal?: PopoverPortalOptions;
     /**
      * Adds padding around the popover content inside the anchored container.
      * This is the easiest way to ensure the popover doesn't sit flush against
      * the anchor/container edges, especially when using `left: 0, right: 0`.
      */
-    edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number }>;
+    edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number; top?: number; bottom?: number }>;
     /** Extra styles applied to the positioned popover container. */
     containerStyle?: StyleProp<ViewStyle>;
     /**
@@ -736,8 +750,12 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             typeof edgePadding === 'number'
                 ? edgePadding
                 : (edgePadding.vertical ?? 0);
+        // `top`/`bottom` refine one edge: room kept clear of window chrome above, say, without
+        // taking the same room from below.
+        const top = typeof edgePadding === 'number' ? edgePadding : (edgePadding.top ?? vertical);
+        const bottom = typeof edgePadding === 'number' ? edgePadding : (edgePadding.bottom ?? vertical);
 
-        return { horizontal, vertical };
+        return { horizontal, top, bottom };
     }, [edgePadding]);
 
     const keyboardHeightRef = React.useRef(0);
@@ -977,9 +995,9 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             // (This also makes maxHeight/maxWidth clamping respect the margin.)
             const effectiveBoundaryRect: WindowRect = {
                 x: boundaryRect.x + edgeInsets.horizontal,
-                y: boundaryRect.y + edgeInsets.vertical,
+                y: boundaryRect.y + edgeInsets.top,
                 width: Math.max(0, boundaryRect.width - edgeInsets.horizontal * 2),
-                height: Math.max(0, boundaryRect.height - edgeInsets.vertical * 2),
+                height: Math.max(0, boundaryRect.height - edgeInsets.top - edgeInsets.bottom),
             };
 
             const availableTop = (anchorRect.y - effectiveBoundaryRect.y) - gap;
@@ -1003,8 +1021,15 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 },
             });
 
-            const maxHeightAvailable =
-                resolvedPlacement === 'bottom'
+            // A designed panel that fits on neither side keeps its size and slides inside the boundary;
+            // the bottom placement's clamp then lifts it until it ends at the boundary's bottom edge.
+            const shiftsToFit = props.fit === 'shift'
+                && (resolvedPlacement === 'top' || resolvedPlacement === 'bottom')
+                && Math.max(availableTop, availableBottom) < maxHeightCap;
+            const placementUsed = shiftsToFit ? 'bottom' : resolvedPlacement;
+            const maxHeightAvailable = shiftsToFit
+                ? effectiveBoundaryRect.height
+                : resolvedPlacement === 'bottom'
                     ? availableBottom
                     : resolvedPlacement === 'top'
                         ? availableTop
@@ -1040,7 +1065,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             }
 
             const nextComputed: PopoverLayoutProps = {
-                placement: resolvedPlacement,
+                placement: placementUsed,
                 maxHeight: nextMaxHeight,
                 maxWidth: nextMaxWidth,
             };
@@ -1097,7 +1122,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         scheduleFrame(() => {
             void measureWithRetries(0);
         });
-    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.vertical, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, windowHeight, windowWidth, portalTarget]);
+    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.top, edgeInsets.bottom, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, props.fit, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, windowHeight, windowWidth, portalTarget]);
 
     React.useLayoutEffect(() => {
         if (!open) return;
@@ -1120,17 +1145,29 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         };
 
         window.addEventListener('resize', schedule);
+        const visualViewport = window.visualViewport;
+        visualViewport?.addEventListener('resize', schedule);
+
+        // Focus and responsive reflow can move an anchor without scrolling or
+        // resizing the layout viewport. Track those changes through the same scheduler.
+        const anchorEl = resolvedAnchorMode === 'view' ? getDomElementFromNode(anchorRef.current) : null;
+        const scheduleFocusLayout = (event: FocusEvent) => {
+            if (!(event.target instanceof Node)) return;
+            if (anchorEl?.contains(event.target) || getContentDomElement()?.contains(event.target)) schedule();
+        };
+        window.addEventListener('focusin', scheduleFocusLayout);
+        const anchorLayoutObserver = anchorEl && typeof ResizeObserver === 'function'
+            ? new ResizeObserver(schedule)
+            : null;
+        for (let element: HTMLElement | null = anchorEl; element && anchorLayoutObserver; element = element.parentElement) {
+            anchorLayoutObserver.observe(element);
+        }
 
         const scrollSourceEl = shouldPortalWeb ? getScrollSourceDomElement() : null;
-        // Only subscribe to window scroll when we portal to `document.body` (fixed positioning).
-        // For portals mounted inside modal/boundary targets (absolute positioning), recomputing on
-        // every scroll can cause jank on mobile web; use `followScrollRef` to opt-in to tracking an
-        // internal scroll container when needed.
+        // A portal escapes the anchor's scrolling ancestor, including the zero-height
+        // modal-aware host used by embedded composers. Element scroll events do not
+        // bubble: capture them when no explicit scroll source owns tracking.
         const shouldSubscribeToWindowScroll = shouldPortalWeb && portalTargetOnWeb === 'body';
-
-        if (shouldSubscribeToWindowScroll) {
-            window.addEventListener('scroll', schedule, { passive: true } as any);
-        }
 
         // Prefer an explicit scroll source over boundary-derived heuristics.
         // (Boundary refs are primarily for clamping; scroll tracking should be independent.)
@@ -1138,6 +1175,19 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             !scrollSourceEl && shouldSubscribeToWindowScroll
                 ? getBoundaryDomElement()
                 : null;
+
+        const shouldCaptureAncestorScroll = shouldPortalWeb && !scrollSourceEl && !legacyBoundaryScrollEl;
+        const scheduleAncestorScroll = (event: Event) => {
+            const anchorEl = getDomElementFromNode(anchorRef.current);
+            if (event.target === window || (event.target instanceof Node && anchorEl && event.target.contains(anchorEl))) {
+                schedule();
+            }
+        };
+        if (shouldCaptureAncestorScroll) {
+            window.addEventListener('scroll', scheduleAncestorScroll, { capture: true, passive: true });
+        } else if (shouldSubscribeToWindowScroll) {
+            window.addEventListener('scroll', schedule, { passive: true } as any);
+        }
 
         if (scrollSourceEl) {
             scrollSourceEl.addEventListener('scroll', schedule, { passive: true } as any);
@@ -1149,7 +1199,12 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         return () => {
             if (timer !== null) window.clearTimeout(timer);
             window.removeEventListener('resize', schedule);
-            if (shouldSubscribeToWindowScroll) {
+            visualViewport?.removeEventListener('resize', schedule);
+            window.removeEventListener('focusin', scheduleFocusLayout);
+            anchorLayoutObserver?.disconnect();
+            if (shouldCaptureAncestorScroll) {
+                window.removeEventListener('scroll', scheduleAncestorScroll, true);
+            } else if (shouldSubscribeToWindowScroll) {
                 window.removeEventListener('scroll', schedule as any);
             }
             if (scrollSourceEl) {
@@ -1158,7 +1213,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 legacyBoundaryScrollEl.removeEventListener('scroll', schedule as any);
             }
         };
-    }, [getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, recompute, shouldPortalWeb]);
+    }, [anchorRef, getContentDomElement, getDomElementFromNode, getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, recompute, resolvedAnchorMode, shouldPortalWeb]);
 
     React.useEffect(() => {
         if (!open) return;
@@ -1385,16 +1440,32 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 // stays hidden until the measurement exists (`portalOpacity`).
                 const anchorRight = anchorRectState.x + anchorRectState.width;
                 const vertical = computed.placement === 'top' || computed.placement === 'bottom';
-                const alignEnd = vertical ? anchorAlignOnPortal === 'end' : computed.placement === 'left';
+                // An edge-aligned popover hangs from its requested edge while that edge leaves it its
+                // full width; a chip near the other window edge opens from its opposite edge instead of
+                // being squeezed into the leftover strip.
+                const startRoom = boundaryRect.x + boundaryRect.width - anchorRectState.x;
+                const endRoom = anchorRight - boundaryRect.x;
+                const fullWidth = Math.min(computed.maxWidth, CONTENT_SIZED_POPOVER_WIDTH.maxPx);
+                const requestedEnd = anchorAlignOnPortal === 'end';
+                const requestedRoom = requestedEnd ? endRoom : startRoom;
+                const otherRoom = requestedEnd ? startRoom : endRoom;
+                const alignEnd = vertical
+                    ? (requestedRoom < fullWidth && otherRoom > requestedRoom ? !requestedEnd : requestedEnd)
+                    : computed.placement === 'left';
                 const room = !vertical
                     ? computed.maxWidth
                     : centresMeasuredContent
                         ? boundaryRect.width
                         : alignEnd
-                            ? anchorRight - boundaryRect.x
-                            : boundaryRect.x + boundaryRect.width - anchorRectState.x;
+                            ? endRoom
+                            : startRoom;
                 const maxWidth = Math.max(0, Math.min(computed.maxWidth, CONTENT_SIZED_POPOVER_WIDTH.maxPx, Math.floor(room)));
-                const minWidth = Math.min(Math.max(0, contentSizedMinWidth), maxWidth);
+                // A content-sized popover that matches its anchor keeps the anchor's width as a floor, never as
+                // its width: a narrow trigger does not make a narrow menu, a wide one is not outgrown.
+                const minWidth = Math.min(
+                    Math.max(0, contentSizedMinWidth, matchAnchorWidthOnPortal ? Math.floor(anchorRectState.width) : 0),
+                    maxWidth,
+                );
                 const offsetX = position === 'absolute' ? webPortalOffsetX : 0;
                 const portalWidth = Platform.OS === 'web' && position === 'absolute'
                     ? (webPortalTargetRect?.width ?? windowWidth)
@@ -1621,7 +1692,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     }, [containerStyle, nativePortalShadowOutset, paddingStyle]);
     const contentContainerMaxWidth = computed.maxWidth + (nativePortalShadowOutset * 2);
 
-    // Must be above BaseModal (100000) and other header overlays.
+    // Body-level floating surfaces sit below dialogs; modal-local portals inherit their layer.
     const portalZ = POPOVER_PORTAL_Z_INDEX;
 
     const backdropEnabled =
@@ -1687,6 +1758,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             if (!target) return;
             const contentEl = getContentDomElement();
             if (contentEl && contentEl.contains(target)) return;
+            // Global dialogs render at their provider, outside the opening popover's
+            // React/DOM subtree. Their presses belong to that higher modal layer.
+            // A menu inside this dialog still handles presses outside its own content.
+            const modalLayer = target instanceof Element ? target.closest('[data-happy-modal-layer]') : target.parentElement?.closest('[data-happy-modal-layer]');
+            if (modalLayer && contentEl && !modalLayer.contains(contentEl)) return;
             // A popover opened from inside this one (a row's menu in a roster) handles this press itself.
             if (hasOpenNestedWebPopover(openEntry)) return;
             const anchorEl = getDomElementFromNode(anchorRef.current);
@@ -1900,9 +1976,12 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             scrollHost="body"
             accessibilityLabel={props.accessibilityLabel}
             focusReturnRef={resolvedFocusReturnRef}
+            focusReturnFallback="activation-time"
         >
             <ModalCardFrame
                 presentation="sheet"
+                header={props.sheetHeader}
+                material={props.sheetMaterial}
                 sheetBottomInset={insets.bottom}
                 title={props.accessibilityLabel}
                 subtitle={props.sheetSubtitle}

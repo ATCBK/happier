@@ -25,6 +25,9 @@ vi.mock('react-native-unistyles', async () => {
 
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
+
 afterEach(() => {
     standardCleanup();
     viewport.width = 1280;
@@ -67,6 +70,23 @@ async function renderField(params: Readonly<{
 }
 
 describe('DropdownMenu page field', () => {
+    it('opens the real menu and selects a value through the node portal boundary', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        function Field() {
+            const [open, setOpen] = React.useState(false);
+            const [value, setValue] = React.useState('priority');
+            return <DropdownMenu open={open} onOpenChange={setOpen} selectedId={value}
+                items={STRATEGIES.map((item) => ({ ...item, testID: `strategy:${item.id}` }))}
+                onSelect={setValue} itemTrigger={{ title: 'Strategy', itemProps: { testID: 'strategy-trigger' } }} />;
+        }
+        const screen = await renderScreen(<Field />);
+        await screen.pressByTestIdAsync('strategy-trigger');
+        await vi.waitFor(() => expect(screen.findAllHostsByTestId('strategy:round-robin').length).toBeGreaterThan(0));
+        await screen.pressByTestIdAsync('strategy:round-robin');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Round robin'));
+        expect(screen.findAllHostsByTestId('strategy:round-robin')).toHaveLength(0);
+    });
+
     it('shows the selected value in the field', async () => {
         const { texts, hasFieldBox } = await renderField({ selectedId: 'round-robin' });
         expect(hasFieldBox).toBe(true);

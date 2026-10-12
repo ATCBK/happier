@@ -6,6 +6,8 @@ import { DeferredAnchoredTooltip } from './DeferredAnchoredTooltip';
 /** Focusable help text with no action. Action controls keep their own interaction owner. */
 export function Tooltip(props: Readonly<{
     label: string;
+    /** What assistive tech reads when the help text alone would drop the visible text it explains. */
+    accessibilityLabel?: string;
     children: React.ReactNode;
     testID?: string;
     style?: StyleProp<ViewStyle>;
@@ -18,7 +20,7 @@ export function Tooltip(props: Readonly<{
             ref={anchorRef}
             testID={props.testID}
             accessibilityRole="text"
-            accessibilityLabel={props.label}
+            accessibilityLabel={props.accessibilityLabel ?? props.label}
             onHoverIn={() => setHovered(true)}
             onHoverOut={() => setHovered(false)}
             onFocus={() => setFocused(true)}

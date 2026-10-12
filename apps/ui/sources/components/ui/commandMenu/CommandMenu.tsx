@@ -53,6 +53,9 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
         testID = 'command-menu',
     } = props;
 
+    const pointerHighlightRef = React.useRef(false);
+    const selectedOptionIdRef = React.useRef<string | null>(null);
+
     // Build SelectionList sections from items, grouped by group field (D23).
     const sections = React.useMemo<ReadonlyArray<SelectionListSectionDescriptor>>(() => {
         if (items.length === 0) return [];
@@ -69,7 +72,7 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
                 id: item.id,
                 label: item.label,
                 subtitle: item.description,
-                onHighlight: item.onHighlight,
+                onHighlight: item.onHighlight ? () => { if (item.id !== selectedOptionIdRef.current) pointerHighlightRef.current = true; item.onHighlight?.(); } : undefined,
                 content: item.renderRow ? item.renderRow() : (
                     <CommandMenuRow
                         label={item.label}
@@ -108,6 +111,19 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
         return items[selectedIndex]?.id ?? null;
     }, [selectedIndex, items]);
 
+    // The list follows the keyboard selection. A row the pointer merely rests on is highlighted too, but
+    // scrolling to it would shift the list under the pointer (and past the first section's header when
+    // a menu opens beneath it), so a pointer-driven highlight leaves the scroll target where it was.
+    selectedOptionIdRef.current = selectedOptionId;
+    const [scrollTargetOptionId, setScrollTargetOptionId] = React.useState(selectedOptionId);
+    React.useEffect(() => {
+        if (pointerHighlightRef.current) {
+            pointerHighlightRef.current = false;
+            return;
+        }
+        setScrollTargetOptionId(selectedOptionId);
+    }, [selectedOptionId]);
+
     const handleSelect = React.useCallback(
         (id: string) => {
             const index = items.findIndex((item) => item.id === id);
@@ -138,6 +154,7 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
             preserveHostFocus={props.preserveHostFocus}
             matchAnchorWidth={props.matchAnchorWidth}
             fillHeight={props.fillHeight}
+            phoneSheetTitle={props.phoneSheetTitle}
             header={props.header}
             footer={props.footer}
             testID={testID ? `${testID}:surface` : undefined}
@@ -156,7 +173,7 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
                 <SelectionList
                     rootStep={rootStep}
                     selectedOptionId={selectedOptionId}
-                    activeScrollOptionId={selectedOptionId}
+                    activeScrollOptionId={scrollTargetOptionId}
                     onSelect={handleSelect}
                     onRequestClose={onRequestClose}
                     keyboardHintsEnabled={false}
@@ -179,8 +196,8 @@ const emptyStyles = StyleSheet.create((theme) => ({
     bodyFill: { flexDirection: 'row', minHeight: 0, flex: 1 },
     list: { flex: 1, minWidth: 0, minHeight: 0 },
     container: {
-        paddingHorizontal: 24,
-        paddingVertical: 28,
+        paddingHorizontal: theme.space.s24,
+        paddingVertical: theme.space.s24,
         alignItems: 'center',
         justifyContent: 'center',
     },

@@ -26,6 +26,31 @@ vi.mock('react-native-keyboard-controller', () => ({
 import { BaseModal } from '@/modal/components/BaseModal';
 import { DropdownMenu } from './DropdownMenu';
 
+it.each([false, true])('keeps keyboard focus on the selected row or search field (search=%s)', async (search) => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 100, width: 200, height: 40, top: 100, left: 100, right: 300, bottom: 140, toJSON: () => ({}),
+    });
+    try {
+        await act(async () => { root.render(<DropdownMenu open search={search} onOpenChange={() => {}} onSelect={() => {}}
+            items={[{ id: 'alpha', title: 'Alpha', testID: 'focus-alpha' },
+                { id: 'disabled', title: 'Unavailable', disabled: true },
+                { id: 'beta', title: 'Beta', testID: 'focus-beta' }]}
+            trigger={() => <button>Choose</button>} />); });
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="focus-alpha"]')).not.toBeNull());
+        const source = search ? document.querySelector<HTMLInputElement>('input')! : document.querySelector<HTMLElement>('[data-testid="focus-alpha"]')!;
+        await act(async () => { source.focus(); });
+        await act(async () => { source.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); });
+        expect(document.activeElement).toBe(search ? source : document.querySelector('[data-testid="focus-beta"]'));
+    } finally {
+        await act(async () => root.unmount());
+        measure.mockRestore();
+        container.remove();
+    }
+});
+
 it('dismisses only the nested dropdown on Escape, then the enclosing sheet on the next Escape', async () => {
     function Harness() {
         const [visible, setVisible] = React.useState(true);

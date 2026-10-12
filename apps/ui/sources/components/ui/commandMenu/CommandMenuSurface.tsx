@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import {
     MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS,
     Popover,
@@ -8,11 +8,17 @@ import {
     type PopoverPortalOptions,
 } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
+import { useDeviceType } from '@/utils/platform/responsive';
 import type { CommandMenuAnchor } from './commandMenuTypes';
 
 const DEFAULT_MAX_HEIGHT = 280;
 const DEFAULT_MAX_WIDTH = 400;
 const DEFAULT_GAP = 4;
+/**
+ * The list body's share of the window in a phone sheet; the sheet's title band adds to it, so the whole
+ * sheet rises about 640 of 844 points like lab `fprompts-R1p`.
+ */
+const PHONE_SHEET_HEIGHT_FRACTION = 0.66;
 let anchorWidthPortalOptions: PopoverPortalOptions | null = null;
 /** The modal-aware portal, sized to the anchor; built once, on first use, so its identity is stable. */
 function resolveAnchorWidthPortalOptions(): PopoverPortalOptions {
@@ -76,6 +82,8 @@ interface CommandMenuSurfaceProps {
     matchAnchorWidth?: boolean;
     /** Hold the full available height, so filtering never resizes the surface. */
     fillHeight?: boolean;
+    /** Present in the shared phone sheet under this title; larger screens keep the anchored popover. */
+    phoneSheetTitle?: string;
     testID?: string;
 }
 
@@ -104,6 +112,10 @@ export const CommandMenuSurface = React.memo((props: CommandMenuSurfaceProps) =>
         testID,
     } = props;
 
+    const { height: windowHeight } = useWindowDimensions();
+    const isPhone = useDeviceType() === 'phone';
+    const sheetHeight = props.phoneSheetTitle && isPhone ? Math.round(windowHeight * PHONE_SHEET_HEIGHT_FRACTION) : undefined;
+
     // For view-anchor mode we need a ref; for rect-anchor mode we pass the anchor directly.
     const anchorRef = anchor.kind === 'view' ? anchor.ref : undefined;
 
@@ -115,7 +127,10 @@ export const CommandMenuSurface = React.memo((props: CommandMenuSurfaceProps) =>
             placement={placement}
             flip={props.flip}
             gap={gap}
-            maxHeightCap={maxHeight}
+            maxHeightCap={sheetHeight ?? maxHeight}
+            phonePresentation={props.phoneSheetTitle ? 'sheet' : undefined}
+            sheetMaterial="solid"
+            accessibilityLabel={props.phoneSheetTitle}
             maxWidthCap={maxWidth}
             boundaryRef={boundaryRef}
             keyboardBottomInset={keyboardBottomInset}

@@ -17,8 +17,8 @@ describe('createBackdropWebStyle', () => {
         });
 
         expect(style.backgroundColor).toBe('rgba(0, 0, 0, 0.45)');
-        expect(style.WebkitBackdropFilter).toBe('blur(var(--happier-glass-floating-blur, 4px))');
-        expect(style.backdropFilter).toBe('blur(var(--happier-glass-floating-blur, 4px))');
+        expect(style.WebkitBackdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 4px), 4px))');
+        expect(style.backdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 4px), 4px))');
     });
 
     it('uses explicit fallback color when blur is disabled', () => {
@@ -38,6 +38,15 @@ describe('createBackdropWebStyle', () => {
         expect(style.backdropFilter).toBe('blur(var(--happier-glass-content-blur, 0px))');
     });
 
+    it('lets a material surface take its group blur, while a scrim only switches off with it', () => {
+        // A scrim keeps the page behind a popover legible: the strong floating blur belongs to the
+        // popover itself, so a scrim is capped at its own radius and only follows glass being off.
+        const surface = createBackdropWebStyle({ backgroundColor: '#fff', blurPx: 24, surfaceGroup: 'floating' });
+        const scrim = createBackdropWebStyle({ backgroundColor: 'rgba(0,0,0,0.1)', blurPx: 2 });
+        expect(surface.backdropFilter).toBe('blur(var(--happier-glass-floating-blur, 24px))');
+        expect(scrim.backdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 2px), 2px))');
+    });
+
     it('follows the live material variable rather than capturing the retired device preference', () => {
         document.documentElement.dataset.happyBackdropBlur = 'off';
 
@@ -47,7 +56,7 @@ describe('createBackdropWebStyle', () => {
         });
 
         expect(style.backgroundColor).toBe('rgba(0, 0, 0, 0.45)');
-        expect(style.WebkitBackdropFilter).toBe('blur(var(--happier-glass-floating-blur, 12px))');
-        expect(style.backdropFilter).toBe('blur(var(--happier-glass-floating-blur, 12px))');
+        expect(style.WebkitBackdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 12px), 12px))');
+        expect(style.backdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 12px), 12px))');
     });
 });

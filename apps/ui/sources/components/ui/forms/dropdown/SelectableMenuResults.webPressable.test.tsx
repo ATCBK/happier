@@ -25,10 +25,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), eyebrow: () => ({}) },
-}));
-
 vi.mock('@/components/ui/lists/Item', () => {
     const React = require('react');
     return {

@@ -38,7 +38,8 @@ export type PopoverPortalOptions = Readonly<{
     native?: boolean;
     /**
      * When true, the popover width is capped to the anchor width for top/bottom placements.
-     * Defaults to true to preserve historical behavior.
+     * Defaults to true to preserve historical behavior. With `sizeToContent` the anchor width is
+     * instead the popover's minimum width (within the content maximum), never its width.
      */
     matchAnchorWidth?: boolean;
     /**

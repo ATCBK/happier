@@ -71,6 +71,30 @@ describe('Popover phone presentation', () => {
         expect(onClose).toHaveBeenCalledTimes(1);
     });
 
+    it('lets content that carries its own header own the sheet top, closing by the grabber', async () => {
+        const { Popover } = await import('./Popover');
+        const { t } = await import('@/text');
+        const onClose = vi.fn();
+        const screen = await renderScreen(
+            <Popover open phonePresentation="sheet" sheetHeader="none" sheetMaterial="solid"
+                accessibilityLabel="Voice" onRequestClose={onClose}>
+                {(bounds) => React.createElement('GlanceContent', { presentation: bounds.presentation })}
+            </Popover>,
+        );
+
+        const dialog = screen.findAll((node) => node.props.role === 'dialog')[0];
+        expect(dialog?.props.accessibilityLabel).toBe('Voice');
+        // One title and one close affordance: the content's own header, the sheet's grabber.
+        expect(screen.findByTestId('popover-sheet.close')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('Voice');
+        expect(screen.findByType('GlanceContent')?.props.presentation).toBe('sheet');
+        const grabber = screen.findAll((node) => node.props.accessibilityRole === 'button'
+            && node.props.accessibilityLabel === t('common.close') && typeof node.props.onAccessibilityAction === 'function')[0];
+        expect(grabber).toBeTruthy();
+        grabber!.props.onAccessibilityAction({ nativeEvent: { actionName: 'activate' } });
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps the anchored presentation on a wide viewport when phone sheets are requested', async () => {
         viewport.width = 1200;
         viewport.height = 900;

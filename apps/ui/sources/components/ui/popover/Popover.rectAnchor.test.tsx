@@ -84,6 +84,98 @@ describe('Popover (rect anchor)', () => {
         expect(style.left).toBeUndefined();
     });
 
+    it('keeps the anchor width as the minimum of a content-sized popover that matches its anchor, never its width', async () => {
+        const { Popover, CONTENT_SIZED_POPOVER_WIDTH } = await import('./Popover');
+        const { OverlayPortalProvider, OverlayPortalHost } = await import('./OverlayPortal');
+        const { PopoverPortalTargetContextProvider } = await import('./PopoverPortalTarget');
+
+        const portalRootNode = {
+            measureInWindow: (cb: any) => cb(0, 0, 1000, 800),
+            measure: (cb: any) => cb(0, 0, 1000, 800, 0, 0),
+        } as any;
+        const portalTarget = { rootRef: { current: portalRootNode }, layout: { width: 1000, height: 800 } } as const;
+        const widths = async (anchorWidth: number) => {
+            const screen = await renderScreen(
+                <PopoverPortalTargetContextProvider value={portalTarget}>
+                    <OverlayPortalProvider>
+                        <Popover
+                            open
+                            anchor={{ kind: 'rect', rect: { left: 100, top: 100, width: anchorWidth, height: 32 } }}
+                            portal={{ native: true, matchAnchorWidth: true, anchorAlign: 'start', sizeToContent: true }}
+                            placement="bottom"
+                            gap={6}
+                            maxWidthCap={1024}
+                            onRequestClose={() => {}}
+                        >
+                            {() => React.createElement('PopoverChild')}
+                        </Popover>
+                        <OverlayPortalHost />
+                    </OverlayPortalProvider>
+                </PopoverPortalTargetContextProvider>,
+            );
+            await act(async () => {
+                await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+            });
+            const style = flattenStyle(findPopoverContentView(screen)?.props?.style);
+            const outset = 2 * readNumericStyle(style, 'paddingRight');
+            return {
+                min: readNumericStyle(style, 'minWidth') - outset,
+                max: readNumericStyle(style, 'maxWidth') - outset,
+                width: style.width,
+            };
+        };
+        // A 60px trigger (a Views button) does not make a 60px menu: the content floor holds.
+        const narrow = await widths(60);
+        expect(narrow.min).toBe(CONTENT_SIZED_POPOVER_WIDTH.minPx);
+        expect(narrow.width).toBeUndefined();
+        // A trigger wider than the floor is the minimum, bounded by the content maximum.
+        expect((await widths(300)).min).toBe(300);
+        expect((await widths(600)).min).toBe(CONTENT_SIZED_POPOVER_WIDTH.maxPx);
+    });
+
+    it('opens a leading-edge content-sized popover from its trailing edge when the leading edge has no room', async () => {
+        const { Popover, CONTENT_SIZED_POPOVER_WIDTH } = await import('./Popover');
+        const { OverlayPortalProvider, OverlayPortalHost } = await import('./OverlayPortal');
+        const { PopoverPortalTargetContextProvider } = await import('./PopoverPortalTarget');
+
+        const portalRootNode = {
+            measureInWindow: (cb: any) => cb(0, 0, 1000, 800),
+            measure: (cb: any) => cb(0, 0, 1000, 800, 0, 0),
+        } as any;
+        const portalTarget = { rootRef: { current: portalRootNode }, layout: { width: 1000, height: 800 } } as const;
+
+        // A chip at the trailing edge of a page (a section header's machine chip): 180px to the window edge.
+        const screen = await renderScreen(
+            <PopoverPortalTargetContextProvider value={portalTarget}>
+                <OverlayPortalProvider>
+                    <Popover
+                        open
+                        anchor={{ kind: 'rect', rect: { left: 820, top: 100, width: 140, height: 32 } }}
+                        portal={{ native: true, matchAnchorWidth: false, sizeToContent: true }}
+                        placement="bottom"
+                        gap={6}
+                        maxWidthCap={560}
+                        onRequestClose={() => {}}
+                    >
+                        {() => React.createElement('PopoverChild')}
+                    </Popover>
+                    <OverlayPortalHost />
+                </OverlayPortalProvider>
+            </PopoverPortalTargetContextProvider>,
+        );
+        await act(async () => {
+            await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+        });
+
+        const style = flattenStyle(findPopoverContentView(screen)?.props?.style);
+        // Its full width, not the 180px left beside the window edge.
+        expect(readNumericStyle(style, 'maxWidth') - 2 * readNumericStyle(style, 'paddingRight'))
+            .toBe(CONTENT_SIZED_POPOVER_WIDTH.maxPx);
+        // Right edge on the anchor's right edge (1000 - (820 + 140)).
+        expect(readNumericStyle(style, 'right') + readNumericStyle(style, 'paddingRight')).toBe(40);
+        expect(style.left).toBeUndefined();
+    });
+
     it('positions the popup below the supplied rect anchor using placement + gap', async () => {
         const { Popover } = await import('./Popover');
         const { OverlayPortalProvider, OverlayPortalHost } = await import('./OverlayPortal');

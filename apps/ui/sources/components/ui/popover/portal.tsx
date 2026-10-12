@@ -3,8 +3,9 @@ import { Platform } from 'react-native';
 
 import { requireReactDOM } from '@/utils/web/reactDomCjs';
 import { areReactNodesStructurallyEqual } from '@/utils/react/areReactNodesStructurallyEqual';
+import { POPOVER_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
 
-export const POPOVER_PORTAL_Z_INDEX = 200000;
+export const POPOVER_PORTAL_Z_INDEX = POPOVER_Z_INDEX;
 
 type OverlayPortalDispatch = Readonly<{
     setPortalNode: (id: string, node: React.ReactNode) => void;

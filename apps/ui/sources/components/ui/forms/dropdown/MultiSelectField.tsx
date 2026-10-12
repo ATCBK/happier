@@ -120,7 +120,7 @@ export const MultiSelectField = React.memo(function MultiSelectField(
     return (
         <DropdownMenu
             header={props.menuChrome ? <Item title={props.title} subtitle={props.subtitle(selectedCount, props.candidates.length, selected)} mode="info" showChevron={false} showDivider={false} /> : undefined}
-            footer={props.menuChrome ? <View style={{ padding: 12, borderTopWidth: 1, borderTopColor: theme.colors.border.default, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            footer={props.menuChrome ? <View style={{ padding: theme.space.s12, borderTopWidth: 1, borderTopColor: theme.colors.border.default, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s12 }}>
                 {props.connectAction ? <RoundButton testID={`${props.testID}:connect`} size="small" display="inverted" title={props.connectAction.label} onPress={() => { handleOpenChange(false); props.connectAction?.onPress(); }} /> : <View />}
                 <RoundButton testID={`${props.testID}:done`} size="small" display="secondary" title={t('common.done')} onPress={() => handleOpenChange(false)} />
             </View> : undefined}

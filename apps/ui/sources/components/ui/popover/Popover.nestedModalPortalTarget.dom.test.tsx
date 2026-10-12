@@ -64,9 +64,11 @@ installPopoverCommonModuleMocks({
     },
 });
 
+// Collect the component graph before the behavior-test deadline starts.
+const { Popover } = await import('./Popover');
+
 describe('Popover nested modal portal target', () => {
     it('provides a popover-local modal portal target to portaled popover content', async () => {
-        const { Popover } = await import('./Popover');
         const parentModalTarget = document.createElement('div');
         const anchor = document.createElement('button');
         const container = document.createElement('div');

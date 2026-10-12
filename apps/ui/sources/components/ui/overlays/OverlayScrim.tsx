@@ -3,7 +3,7 @@ import { Platform, StyleSheet as RNStyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
-import Color from 'color';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
@@ -129,12 +129,8 @@ function useDimGradientColors(): string[] {
 
     return React.useMemo(() => {
         const ramp = scrimRamp();
-        let base: ReturnType<typeof Color>;
-        try {
-            base = Color(ground);
-        } catch {
-            return [ground, 'transparent'];
-        }
+        const base = parseThemeColor(ground);
+        if (base === null) return [ground, 'transparent'];
         return ramp.alphas.map((strength) => base.alpha(base.alpha() * strength).rgb().string());
     }, [ground]);
 }

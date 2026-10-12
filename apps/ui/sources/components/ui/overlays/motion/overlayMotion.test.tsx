@@ -154,6 +154,18 @@ describe('panel motion', () => {
     });
 });
 
+describe('sheet motion', () => {
+    it('rises a bottom-placed dialog whole from its edge, and leaves a centered dialog fading in place', async () => {
+        const { resolveOverlayMotionPreset } = await import('./overlayMotion');
+        expect(resolveOverlayMotionPreset({ kind: 'modal', direction: 'bottom', travelPx: 640 })).toMatchObject({
+            fromTranslateY: 640, fromOpacity: 1, fromScale: 1, risesByOwnHeight: true,
+        });
+        expect(resolveOverlayMotionPreset({ kind: 'modal' })).toMatchObject({
+            fromTranslateY: motionTokens.overlay.modal.fromTranslateY, fromOpacity: 0,
+        });
+    });
+});
+
 describe('popover and dialog motion under reduced motion', () => {
     it('becomes a short cross-fade instead of a snap or a scale', async () => {
         const { resolveOverlayMotionPreset, useOverlayMotionAnimation } = await import('./overlayMotion');

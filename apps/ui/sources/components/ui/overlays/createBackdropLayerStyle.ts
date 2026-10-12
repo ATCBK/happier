@@ -18,8 +18,13 @@ export function createBackdropWebStyle(params: Readonly<{
     }
 
     const blurPx = typeof params.blurPx === 'number' ? params.blurPx : 12;
-    const group = params.surfaceGroup ?? 'floating';
-    const filter = [`blur(var(--happier-glass-${group}-blur, ${blurPx}px))`, params.backdropTone].filter(Boolean).join(' ');
+    // A material surface takes its group's live blur. A scrim (no group) keeps its own radius and only
+    // follows floating glass being switched off: the strong floating blur belongs to the popover, and
+    // a scrim inheriting it would blur the whole page behind every menu and dialog.
+    const radius = params.surfaceGroup
+        ? `var(--happier-glass-${params.surfaceGroup}-blur, ${blurPx}px)`
+        : `min(var(--happier-glass-floating-blur, ${blurPx}px), ${blurPx}px)`;
+    const filter = [`blur(${radius})`, params.backdropTone].filter(Boolean).join(' ');
     return {
         WebkitBackdropFilter: filter,
         backdropFilter: filter,

@@ -29,10 +29,6 @@ installDropdownCommonModuleMocks({
     },
 });
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), eyebrow: () => ({}) },
-}));
-
 vi.mock('@/components/ui/lists/SelectableRow', () => {
     const React = require('react');
     return {

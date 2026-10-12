@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Animated, Platform, type StyleProp, type ViewStyle } from 'react-native';
+import { Animated, Dimensions, Platform, type StyleProp, type ViewStyle } from 'react-native';
 
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -18,6 +18,8 @@ export type OverlayMotionPreset = Readonly<{
     fromTranslateY: number;
     /** Under reduced motion: `0` changes at once; otherwise the overlay only fades, over this long. */
     reducedMotionFadeMs: number;
+    /** A sheet rising from its edge: the web measures its frame and travels that far; `fromTranslateY` is the other platforms' travel. */
+    risesByOwnHeight?: boolean;
 }>;
 
 export function resolveOverlayMotionDirectionFromPlacement(placement: string): OverlayMotionDirection {
@@ -36,7 +38,7 @@ export function resolveOverlayMotionPreset(params: Readonly<{
     kind: OverlayMotionKind;
     /** Where the overlay stands relative to its source; it arrives from the source's side. */
     direction?: OverlayMotionDirection;
-    /** `panel` only: how far it travels in, usually its own size along `direction`. */
+    /** `panel`, and a `modal` that rises from `bottom`: how far it travels in, usually its own size along `direction`. */
     travelPx?: number;
 }>): OverlayMotionPreset {
     const direction = params.direction ?? 'center';
@@ -51,6 +53,20 @@ export function resolveOverlayMotionPreset(params: Readonly<{
             fromTranslateX: direction === 'left' ? travel : direction === 'right' ? -travel : 0,
             fromTranslateY: direction === 'top' ? travel : direction === 'bottom' ? -travel : 0,
             reducedMotionFadeMs: motionTokens.overlay.panel.reducedMotionFadeMs,
+        };
+    }
+
+    if (params.kind === 'modal' && direction === 'bottom') {
+        // A phone sheet rises whole, paper and content together, and is never see-through on the way.
+        return {
+            enterMs: motionTokens.overlay.modal.enterMs,
+            exitMs: motionTokens.overlay.modal.exitMs,
+            fromOpacity: 1,
+            fromScale: 1,
+            fromTranslateX: 0,
+            fromTranslateY: params.travelPx ?? 0,
+            reducedMotionFadeMs: motionTokens.durationMs.fast,
+            risesByOwnHeight: true,
         };
     }
 
@@ -139,7 +155,7 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
     preset: OverlayMotionPreset;
-    /** Web frames animate their unblurred content, leaving material paint and its ancestors still. */
+    /** Web frames animate their content and move their material paint by transform; the paint's ancestors stay still. */
     elementRef?: React.RefObject<unknown>;
 }>): Readonly<{
     exitMs: number;
@@ -199,11 +215,18 @@ export function useOverlayMotionAnimation(params: Readonly<{
 
 const GLASS_BACKDROP_SELECTOR = '[data-happy-glass-backdrop]';
 
-/** Keep the existing layout: descend only through material branches and move their content siblings. */
-function webOverlayContentTargets(element: HTMLElement): HTMLElement[] {
-    if (element.matches(GLASS_BACKDROP_SELECTOR)) return [];
-    if (!element.querySelector(GLASS_BACKDROP_SELECTOR)) return [element];
-    return Array.from(element.children).flatMap(child => child instanceof HTMLElement ? webOverlayContentTargets(child) : []);
+type WebMotionTarget = Readonly<{ element: HTMLElement; paint: boolean }>;
+
+/**
+ * Keep the existing layout: descend only through material branches. The material paint moves by
+ * transform alone, because any opacity on the paint or above it would empty the backdrop its blur
+ * samples. Its content siblings move with it and never fade either: content fading over solid paper
+ * reads as an empty card. A frame with no material paint (a plain popover) fades as its preset says.
+ */
+function webOverlayMotionTargets(element: HTMLElement): WebMotionTarget[] {
+    if (element.matches(GLASS_BACKDROP_SELECTOR)) return [{ element, paint: true }];
+    if (!element.querySelector(GLASS_BACKDROP_SELECTOR)) return [{ element, paint: false }];
+    return Array.from(element.children).flatMap(child => child instanceof HTMLElement ? webOverlayMotionTargets(child) : []);
 }
 
 type WebContentMotionTarget = {
@@ -229,7 +252,13 @@ function useWebOverlayContentMotion(params: Readonly<{
         const preset = presetRef.current;
         const fadeOnly = reducedMotion;
         const duration = reducedMotion ? preset.reducedMotionFadeMs : params.visible ? preset.enterMs : preset.exitMs;
-        for (const target of webOverlayContentTargets(element)) {
+        // A sheet rises by the height of its own frame, the same distance for the paint and every content block.
+        const rise = preset.risesByOwnHeight ? element.getBoundingClientRect().height : preset.fromTranslateY;
+        const targets = webOverlayMotionTargets(element);
+        const hasMaterial = targets.some(target => target.paint);
+        // Reduced motion cross-fades; over material paint that would show an empty card, so it changes at once.
+        if (hasMaterial && fadeOnly) return;
+        for (const { element: target, paint } of targets) {
             let state = targetsRef.current.get(target);
             if (!state) {
                 const authored = getComputedStyle(target);
@@ -241,19 +270,20 @@ function useWebOverlayContentMotion(params: Readonly<{
             }
             const shown = { opacity: state.shownOpacity, transform: state.shownTransform };
             const hidden = {
-                opacity: fadeOnly ? '0' : String(preset.fromOpacity * Number(shown.opacity)),
+                opacity: fadeOnly ? '0' : String(hasMaterial ? Number(shown.opacity) : preset.fromOpacity * Number(shown.opacity)),
                 transform: fadeOnly ? shown.transform
-                    : `translate(${preset.fromTranslateX}px, ${preset.fromTranslateY}px) scale(${preset.fromScale})${shown.transform !== 'none' ? ` ${shown.transform}` : ''}`,
+                    : `translate(${preset.fromTranslateX}px, ${rise}px) scale(${preset.fromScale})${shown.transform !== 'none' ? ` ${shown.transform}` : ''}`,
             };
             // Read the current composited frame before cancelling or changing the resting styles.
             const computed = state.animation?.playState === 'running' ? getComputedStyle(target) : null;
             const from = computed ? { opacity: computed.opacity, transform: fadeOnly ? shown.transform : computed.transform } : params.visible ? hidden : shown;
             state.animation?.cancel();
             state.animation = null;
-            target.style.opacity = params.visible ? state.opacity : hidden.opacity;
+            if (!paint) target.style.opacity = params.visible ? state.opacity : hidden.opacity;
             target.style.transform = params.visible ? state.transform : hidden.transform;
             if (duration > 0 && typeof target.animate === 'function') {
-                state.animation = target.animate([from, params.visible ? shown : hidden], {
+                const frame = (values: typeof shown): Keyframe => paint ? { transform: values.transform } : values;
+                state.animation = target.animate([frame(from), frame(params.visible ? shown : hidden)], {
                     duration,
                     easing: motionTokens.easingCss.standard,
                 });
@@ -347,9 +377,11 @@ export function OverlayMotionFrame(props: Readonly<{
     children: React.ReactNode;
 }>): React.ReactElement {
     const elementRef = React.useRef<React.ComponentRef<typeof Animated.View>>(null);
+    // A rising sheet clears the screen on the other platforms; the web measures the frame itself.
     const preset = React.useMemo(() => resolveOverlayMotionPreset({
         kind: props.kind,
         direction: props.direction,
+        travelPx: props.direction === 'bottom' ? Dimensions.get('window').height : undefined,
     }), [props.direction, props.kind]);
     const motion = useOverlayMotionAnimation({
         visible: props.visible,

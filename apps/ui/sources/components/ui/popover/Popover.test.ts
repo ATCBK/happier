@@ -23,7 +23,6 @@ const POST_LAYOUT_TICKS = 2;
 
 let mockPopoverContentDomRect: { width: number; height: number } | null = null;
 let mockPopoverContentRefKind: 'dom' | 'opaque' = 'dom';
-let capturedTimingConfigs: any[] = [];
 
 async function flushInitialPositioning() {
     await flushHookEffects({ cycles: 1, turns: INITIAL_POSITIONING_TICKS });
@@ -89,10 +88,7 @@ installPopoverCommonModuleMocks({
                     this.__value = initial;
                     this.interpolate = () => this;
                 },
-                timing: (_value: any, config: any) => {
-                    capturedTimingConfigs.push(config);
-                    return { start: () => undefined };
-                },
+                timing: () => ({ start: () => undefined }),
                 View: (props: any) => React.createElement('AnimatedView', props, props.children),
             },
         });
@@ -111,7 +107,6 @@ describe('Popover (web)', () => {
         restorePopoverWebGlobals = null;
         mockPopoverContentDomRect = null;
         mockPopoverContentRefKind = 'dom';
-        capturedTimingConfigs = [];
         vi.useRealTimers();
         vi.unstubAllGlobals();
     });
@@ -236,10 +231,9 @@ describe('Popover (web)', () => {
         expect(screen.findAllByType('DismissableLayerBranch' as any).length).toBe(1);
     });
 
-    it('starts the enter animation only after a portal popover is ready to be shown', async () => {
+    it('enables the portal motion frame only after the popover has positioning geometry', async () => {
         const { Popover } = await import('./Popover');
 
-        capturedTimingConfigs = [];
         mockPopoverContentDomRect = null;
         const anchorRef = {
             current: {
@@ -258,7 +252,8 @@ describe('Popover (web)', () => {
             },
         ));
 
-        expect(capturedTimingConfigs.some((cfg) => cfg.toValue === 1)).toBe(false);
+        const motionFrame = screen.findByType('AnimatedView');
+        expect(flattenStyle(motionFrame.props.style).pointerEvents).toBe('none');
 
         await act(async () => {
             await flushInitialPositioning();
@@ -269,7 +264,7 @@ describe('Popover (web)', () => {
             contentView?.props?.onLayout?.({ nativeEvent: { layout: { width: 220, height: 160 } } });
         });
 
-        expect(capturedTimingConfigs.some((cfg) => cfg.toValue === 1 && cfg.duration === motionTokens.overlay.popover.enterMs)).toBe(true);
+        expect(flattenStyle(motionFrame.props.style).pointerEvents).toBe('auto');
     });
 
     it('does not fall back to document.body when a boundary portal target is requested but not ready yet', async () => {
@@ -1607,7 +1602,7 @@ describe('Popover (web)', () => {
         expect(hostEffects.length).toBe(1);
 
         const style = flattenStyle(hostEffects[0]?.props?.style);
-        expect(style.backdropFilter).toBe('blur(var(--happier-glass-floating-blur, 3px))');
+        expect(style.backdropFilter).toBe('blur(min(var(--happier-glass-floating-blur, 3px), 3px))');
         expect(style.backgroundColor).toBe('rgba(255, 255, 255, 0.18)');
     });
 

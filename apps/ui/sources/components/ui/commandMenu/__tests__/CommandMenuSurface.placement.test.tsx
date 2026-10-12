@@ -38,6 +38,10 @@ describe('command menu requested side', () => {
         expect(parent).not.toBeNull();
         const style = flattenTestStyle(parent?.props.style);
         expect(style.top).toBeUndefined();
-        expect(style.bottom).toBeGreaterThanOrEqual(720);
+        // The native portal's outer box includes shadow padding below the painted menu.
+        const bottomPadding = style.paddingBottom ?? style.paddingVertical ?? style.padding ?? 0;
+        expect(typeof style.bottom).toBe('number');
+        expect(typeof bottomPadding).toBe('number');
+        expect(Number(style.bottom) + Number(bottomPadding)).toBeGreaterThanOrEqual(720);
     });
 });

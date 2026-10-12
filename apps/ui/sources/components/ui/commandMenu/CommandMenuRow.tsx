@@ -44,9 +44,9 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        gap: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        gap: theme.space.s10,
     },
     iconContainer: {
         width: 20,
@@ -58,7 +58,7 @@ const styles = StyleSheet.create((theme) => ({
     textContainer: {
         flex: 1,
         flexDirection: 'column',
-        gap: 2,
+        gap: theme.space.s2,
     },
     label: {
         color: theme.colors.text.primary,

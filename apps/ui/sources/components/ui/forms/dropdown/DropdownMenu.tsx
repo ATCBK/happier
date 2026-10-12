@@ -3,10 +3,11 @@ import { Platform, View, ViewStyle, StyleProp, TextStyle, useWindowDimensions, t
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Popover, type PopoverAnchor, type PopoverPlacement } from '@/components/ui/popover';
+import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
 import { FloatingOverlay, type FloatingOverlayArrow } from '@/components/ui/overlays/FloatingOverlay';
 import { t } from '@/text';
 import type { SelectableRowVariant } from '@/components/ui/lists/SelectableRow';
-import { SelectableMenuResults } from '@/components/ui/forms/dropdown/SelectableMenuResults';
+import { SelectableMenuResults, type SelectableMenuResultsHandle } from '@/components/ui/forms/dropdown/SelectableMenuResults';
 import type { SelectableMenuItem } from '@/components/ui/forms/dropdown/selectableMenuTypes';
 import { useSelectableMenu, CREATE_ITEM_ID } from '@/components/ui/forms/dropdown/useSelectableMenu';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -20,6 +21,7 @@ import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { useScrollRectIntoViewRegistry } from '@/components/ui/scroll/useScrollRectIntoView';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { Icon } from '@/components/ui/icons/Icon';
+import { Typography } from '@/constants/Typography';
 
 const DROPDOWN_ACTION_FRAME_FALLBACK_MS = 100;
 
@@ -254,12 +256,6 @@ function withExpandedTriggerState(trigger: React.ReactNode, open: boolean): Reac
     });
 }
 
-/**
- * The room below its trigger at which a menu still opens downward. It only chooses the side; it never
- * limits the menu's height.
- */
-const MENU_PREFERRED_ROOM_BELOW_PX = 320;
-
 export function DropdownMenu(props: DropdownMenuProps) {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
@@ -279,7 +275,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     // side); it never cuts a list off at a fixed height. A caller's explicit cap still wins.
     const { height: windowHeight } = useWindowDimensions();
     const maxHeightCap = props.maxHeightCap ?? windowHeight;
-    const placementMinSpace = props.maxHeightCap ?? MENU_PREFERRED_ROOM_BELOW_PX;
+    const placementMinSpace = props.maxHeightCap ?? POPOVER_PREFERRED_ROOM_PX;
     const emptyLabel = props.emptyLabel === undefined ? t('commandPalette.noCommandsFound') : props.emptyLabel;
     const contentPadding = rowVariant === 'slim' ? 12 : 16;
     const resultsPaddingBottom = typeof props.resultsPaddingBottom === 'number'
@@ -451,6 +447,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                     // Page triggers measure the row (R9): a narrow row puts the value under the
                     // label rather than pushing it off the side of the screen.
                     accessoryLayout={pageTrigger ? 'adaptive' : undefined}
+                    fieldAccessory={pageTrigger ? true : undefined}
                     onPress={toggle}
                     showChevron={false}
                     selected={false}
@@ -474,6 +471,8 @@ export function DropdownMenu(props: DropdownMenuProps) {
         return withExpandedTriggerState(props.trigger, props.open);
     }, [closeMenu, fieldColors, openMenu, pageSelectedItem, pageTrigger, props.itemTrigger, props.open, props.trigger, resolvedTriggerDensity, selectedItemForTrigger, theme.colors.input.placeholder, theme.colors.text.secondary, theme.colors.text.tertiary, toggle]);
 
+    const resultsRef = React.useRef<SelectableMenuResultsHandle>(null);
+    const focusKeyboardSelection = React.useCallback((index: number) => resultsRef.current?.focusItem(index), []);
     const {
         searchQuery,
         selectedIndex,
@@ -490,6 +489,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
         onCreateItem: props.onCreateItem ?? null,
         allowEmptySelection: props.allowEmptySelection ?? false,
         enableTypeahead: props.search !== true,
+        onKeyboardSelectionChange: props.search === true ? undefined : focusKeyboardSelection,
         createItemFactory: createItemDisplay
             ? ((query) => {
                 const display = createItemDisplay(query);
@@ -513,7 +513,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
 
     const resultScroll = useScrollRectIntoViewRegistry({
         activeKey: selectedIndex >= 0 ? String(selectedIndex) : null,
-        padding: 8,
+        padding: theme.space.s8,
         animated: !reducedMotion,
     });
 
@@ -684,7 +684,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                             borderColor: theme.colors.border.default,
                                             paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
                                             paddingVertical: rowVariant === 'slim' ? 8 : 10,
-                                            fontSize: rowVariant === 'slim' ? 14 : 15,
+                                            fontSize: Typography.variant('label').fontSize,
                                             color: theme.colors.text.primary,
                                         }}
                                     />
@@ -693,6 +693,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
 
                             <View style={{ paddingBottom: resultsPaddingBottom }}>
                                 <SelectableMenuResults
+                                    ref={resultsRef}
                                     wrapItem={props.wrapItem}
                                     categories={filteredCategories}
                                     selectedIndex={selectedIndex}
@@ -735,6 +736,9 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 itemRowProps={props.itemRowProps}
                                 showCategoryTitles={activeSubmenuItem.submenu.showCategoryTitles ?? props.showCategoryTitles}
                                 allowEmptySelection={props.allowEmptySelection}
+                                // A menu that is a sheet on a phone opens its submenus as sheets too.
+                                popoverPhonePresentation={props.popoverPhonePresentation}
+                                popoverAccessibilityLabel={activeSubmenuItem.title}
                             />
                         ) : null}
                     </>)}

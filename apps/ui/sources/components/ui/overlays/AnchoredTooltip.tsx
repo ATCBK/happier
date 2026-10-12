@@ -69,8 +69,8 @@ export function AnchoredTooltipBubble(props: Readonly<{ label: string; content?:
 const styles = StyleSheet.create((theme) => ({
     bubble: {
         pointerEvents: 'none',
-        paddingHorizontal: 8,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: TOOLTIP_RADIUS_PX,
         backgroundColor: theme.colors.surface.elevated,
         ...resolveThemeSurfaceChromeStyle({
@@ -81,9 +81,9 @@ const styles = StyleSheet.create((theme) => ({
         }),
     },
     label: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+
+        ...Typography.variant('meta'),
+
         color: theme.colors.text.primary,
     },
 }));

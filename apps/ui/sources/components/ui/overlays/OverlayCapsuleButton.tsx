@@ -27,7 +27,7 @@ const CAPSULE_ICON_SIZE = 16;
 export const OVERLAY_CAPSULE_BUTTON_GAP = 10;
 
 /** Total vertical space a capsule row takes above the surface it floats over. */
-export const OVERLAY_CAPSULE_ROW_HEIGHT = resolveMinimumInteractiveTargetSize(Platform.OS)
+export const OVERLAY_CAPSULE_ROW_HEIGHT = Math.max(OVERLAY_CAPSULE_BUTTON_SIZE, resolveMinimumInteractiveTargetSize(Platform.OS))
     + OVERLAY_CAPSULE_BUTTON_GAP;
 
 const styles = StyleSheet.create({
@@ -60,7 +60,7 @@ export const OverlayCapsuleButton = React.memo(function OverlayCapsuleButton(
     }>,
 ): React.ReactElement {
     const { theme } = useUnistyles();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const minimumInteractiveTargetSize = Math.max(OVERLAY_CAPSULE_BUTTON_SIZE, resolveMinimumInteractiveTargetSize(Platform.OS));
 
     return (
         <Pressable
