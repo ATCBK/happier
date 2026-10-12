@@ -45,6 +45,9 @@ export const SOCKET_RPC_EVENTS = {
 
 export type SocketRpcEvent = (typeof SOCKET_RPC_EVENTS)[keyof typeof SOCKET_RPC_EVENTS];
 
+/** An omitted deadline uses the relay default; null belongs to caller lifecycle. */
+export const SocketRpcTimeoutMsSchema = lazyZodSchema(() => z.number().finite().positive().nullable().optional());
+
 export const SOCKET_RPC_TRANSPORT_RESPONSE_ENVELOPE_VERSION_V1 = 1 as const;
 
 /**
@@ -217,7 +220,8 @@ export type SocketRpcRequestPayload = Readonly<{
   /** Current Home admission for the exact Machine receiver, distinct from Session authority. */
   machineAdmission?: SocketRpcMachineAdmissionContextV1;
   externalActionExecution?: ExternalActionMachineRpcExecutionV1;
-  timeoutMs?: number;
+  /** Omission uses the relay default; null delegates expiry to caller lifecycle. */
+  timeoutMs?: number | null;
   transportResponseEnvelopeVersion?: typeof SOCKET_RPC_TRANSPORT_RESPONSE_ENVELOPE_VERSION_V1;
 }>;
 
@@ -407,6 +411,7 @@ const SESSION_RPC_DECLARED_AUTHORITIES = Object.freeze({
   [SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION]: 'sessionOwner',
   [SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY]: 'readTranscript',
   [SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION]: 'sessionOwner',
+  [SESSION_RPC_METHODS.SESSION_GUARD_NOTICE]: 'sessionOwner',
   [SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE]: 'sessionOwner',
   [SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION]: { authority: 'submitAgentInput', actionId: 'session.model.set' },
   [SESSION_RPC_METHODS.SESSION_ROLE_SET]: 'submitAgentInput',

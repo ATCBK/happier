@@ -603,11 +603,8 @@ export const DaemonProviderConnectionMutationRequestV1Schema = lazyZodSchema(() 
   ProviderConnectionMutationBaseV1Schema.extend({
     action: z.literal('setEnabled'),
     enabled: z.boolean(),
-    scope: z.enum(['account', 'machine', 'connection']).optional(),
+    scope: z.enum(['account', 'machine', 'connection']),
   }).strict().superRefine((value, ctx) => {
-    if (!value.enabled && value.scope === undefined) {
-      ctx.addIssue({ code: 'custom', path: ['scope'], message: 'Disable requires an explicit access scope' });
-    }
     if (value.enabled && value.scope === 'connection') {
       ctx.addIssue({ code: 'custom', path: ['scope'], message: 'All-scope mutation is disable-only' });
     }

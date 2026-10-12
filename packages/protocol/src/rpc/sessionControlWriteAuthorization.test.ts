@@ -22,6 +22,11 @@ import {
  * "run mutation" family, or read projection may inherit write authority.
  */
 describe('Session-control RPC write classification', () => {
+  it('keeps guard notices under Session-owner authority', () => {
+    expect(resolveSocketRpcSessionAuthorization('session-1:session.guard.notice')).toEqual({
+      method: 'session.guard.notice', authority: 'sessionOwner', routeToSessionOwnerDaemon: true,
+    });
+  });
   it('accepts only the full strict Session Action caller origin', () => {
     const origin = { v: 1, caller: { kind: 'session', sessionId: 'lead', starterDepth: 2, turnDepth: 4 },
       callerPermissionMode: 'read-only', sourceTurnId: 'turn-original', requestId: 'action-original' };
