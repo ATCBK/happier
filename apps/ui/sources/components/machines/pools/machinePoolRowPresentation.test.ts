@@ -133,8 +133,8 @@ describe('machine pool row presentation', () => {
 
     it('names a locked member through the machine naming owner, adding a short id only between locked members', () => {
         const machines = [
-            { id: 'machine-locked-aaaa', metadata: null },
-            { id: 'machine-locked-bbbb', metadata: null },
+            { id: 'machine-locked-aaaa', metadata: null, availability: { kind: 'locked' } },
+            { id: 'machine-locked-bbbb', metadata: null, availability: { kind: 'locked' } },
         ] as unknown as typeof MACHINES;
         expect(resolveMachinePoolMemberLabel({ machineId: 'machine-locked-aaaa' }, machines)).toBe(`${t('machine.lockedMachine')} · machine-locked-a`);
         expect(resolveMachinePoolMemberLabel({ machineId: 'machine-locked-aaaa' }, [machines[0]!])).toBe(t('machine.lockedMachine'));
