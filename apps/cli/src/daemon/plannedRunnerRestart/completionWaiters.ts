@@ -1,3 +1,5 @@
+import { isSameConnectedServiceSwitchTarget } from '@/daemon/connectedServices/sessionAuthSwitch/connectedServiceSwitchDeferralQueue';
+import type { PlannedRunnerRestartIntent } from './types';
 import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
 
 export type RestartCompletionWaiter = Readonly<{
@@ -6,14 +8,15 @@ export type RestartCompletionWaiter = Readonly<{
 }>;
 
 export type RestartCompletionWaiters = Readonly<{
-  /** Registers the completion for a restart of `previousPid`, superseding any earlier waiter for it. */
-  create: (sessionId: string, previousPid: number) => RestartCompletionWaiter;
+  /** Registers one completion for a restart of `previousPid`; an existing waiter cannot be replaced. */
+  create: (sessionId: string, previousPid: number, intent: PlannedRunnerRestartIntent) => RestartCompletionWaiter;
   /** Returns the in-flight completion for a restart of `previousPid`, if one is pending. */
-  join: (sessionId: string, previousPid: number) => Promise<RestartSessionRunnerCompletion> | null;
+  join: (sessionId: string, previousPid: number, intent?: PlannedRunnerRestartIntent) => Promise<RestartSessionRunnerCompletion> | null;
   settle: (sessionId: string, previousPid: number, completion: RestartSessionRunnerCompletion) => void;
 }>;
 
 type PendingWaiter = Readonly<{
+  intent: PlannedRunnerRestartIntent;
   promise: Promise<RestartSessionRunnerCompletion>;
   settle: (completion: RestartSessionRunnerCompletion) => void;
 }>;
@@ -24,6 +27,12 @@ const CANCELLED_BEFORE_SIGNAL_REASON = 'cancelled_before_signal';
 export function isRestartCancelledBeforeSignal(completion: RestartSessionRunnerCompletion): boolean {
   return completion.ok === false
     && completion.diagnostics?.respawnTerminalReason === CANCELLED_BEFORE_SIGNAL_REASON;
+}
+
+export function isSamePlannedRunnerRestartIntent(a: PlannedRunnerRestartIntent, b: PlannedRunnerRestartIntent): boolean {
+  if (a.reason !== b.reason || a.tracked !== b.tracked) return false;
+  if (!a.target || !b.target) return !a.target && !b.target;
+  return isSameConnectedServiceSwitchTarget(a.target, b.target);
 }
 
 function waiterKey(sessionId: string, previousPid: number): string {
@@ -46,8 +55,9 @@ export function createRestartCompletionWaiters(params: Readonly<{ timeoutMs: num
     waiter.settle(completion);
   };
 
-  const create = (sessionId: string, previousPid: number): RestartCompletionWaiter => {
+  const create = (sessionId: string, previousPid: number, intent: PlannedRunnerRestartIntent): RestartCompletionWaiter => {
     const key = waiterKey(sessionId, previousPid);
+    if (waiters.has(key)) throw new Error('Restart completion is already pending for this runner');
     let resolved = false;
     let resolveCompletion!: (completion: RestartSessionRunnerCompletion) => void;
     const promise = new Promise<RestartSessionRunnerCompletion>((resolve) => {
@@ -67,12 +77,7 @@ export function createRestartCompletionWaiters(params: Readonly<{ timeoutMs: num
       clearTimeout(timer);
       resolveCompletion(completion);
     };
-    waiters.get(key)?.settle({
-      ok: false,
-      status: 'partial_failure',
-      diagnostics: { respawnTerminalReason: 'superseded_waiter' },
-    });
-    const pending: PendingWaiter = { promise, settle: settleOnce };
+    const pending: PendingWaiter = { promise, settle: settleOnce, intent };
     waiters.set(key, pending);
     return {
       promise,
@@ -88,8 +93,12 @@ export function createRestartCompletionWaiters(params: Readonly<{ timeoutMs: num
     };
   };
 
-  const join = (sessionId: string, previousPid: number): Promise<RestartSessionRunnerCompletion> | null =>
-    waiters.get(waiterKey(sessionId, previousPid))?.promise ?? null;
+  const join = (sessionId: string, previousPid: number, intent?: PlannedRunnerRestartIntent): Promise<RestartSessionRunnerCompletion> | null => {
+    const pending = waiters.get(waiterKey(sessionId, previousPid));
+    if (!pending) return null;
+    if (intent && !isSamePlannedRunnerRestartIntent(pending.intent, intent)) return null;
+    return pending.promise;
+  };
 
   return { create, join, settle };
 }
