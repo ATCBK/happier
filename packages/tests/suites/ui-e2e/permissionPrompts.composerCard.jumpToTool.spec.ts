@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { createRunDirs } from '../../src/testkit/runDir';
@@ -69,13 +69,14 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
     await server?.stop().catch(() => {});
   });
 
-  test('shows composer permission card and view-tool navigates to the tool in transcript', async ({ page }, testInfo) => {
+  test('navigates from the composer permission card and settles the native runner approval', async ({ page }, testInfo) => {
     test.setTimeout(420_000);
     if (!server || !ui) throw new Error('missing server/ui fixtures');
     if (!uiBaseUrl) throw new Error('missing ui base url');
 
     const testDir = resolve(join(suiteDir, 't1-composer-card-jump'));
     await mkdir(testDir, { recursive: true });
+    const permissionOutputPath = resolve(join(testDir, 'permission-approved.txt'));
 
     let cliLogin: StartedCliTerminalConnect | null = null;
     let thrown: unknown = null;
@@ -121,6 +122,7 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
           HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
           HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: `fake-claude-invocation-${run.runId}`,
           HAPPIER_E2E_FAKE_CLAUDE_SCENARIO: 'permission-prompt-write',
+          HAPPIER_E2E_FAKE_CLAUDE_PERMISSION_PATH: permissionOutputPath,
         },
       });
 
@@ -139,6 +141,7 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
             HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
             HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: `fake-claude-invocation-${run.runId}`,
             HAPPIER_E2E_FAKE_CLAUDE_SCENARIO: 'permission-prompt-write',
+            HAPPIER_E2E_FAKE_CLAUDE_PERMISSION_PATH: permissionOutputPath,
           },
         },
       });
@@ -162,6 +165,15 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
       }, { timeout: 120_000 });
 
       expect(page.url()).toContain(`/session/${sessionId}`);
+
+      await expect(page.getByTestId('permission-footer.allow')).toBeEnabled({ timeout: 60_000 });
+      await page.getByTestId('permission-footer.allow').click();
+      await expect(page.getByTestId('permission-prompt-card')).toHaveCount(0, { timeout: 120_000 });
+      await expect(page.getByTestId('permission-footer.action-error')).toHaveCount(0);
+      await expect.poll(
+        async () => await readFile(permissionOutputPath, 'utf8').catch(() => null),
+        { timeout: 120_000 },
+      ).toBe('hello from ui e2e 1');
     } catch (error) {
       thrown = error;
       throw error;

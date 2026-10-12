@@ -1269,13 +1269,15 @@ describe('createActionExecutor (approvals)', () => {
       { surface: 'mcp' },
     );
 
-    expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({
-      request: expect.objectContaining({
-        preview: expect.objectContaining({
-          summary: 'Send a message to the agent in a session.',
-        }),
-      }),
+    const produced = approvalsCreate.mock.calls[0]?.[0]?.request;
+    const consumed = ApprovalRequestV2Schema.parse(produced);
+    expect(consumed.preview).toEqual(expect.objectContaining({
+      summary: 'Send a message to the agent in a session.',
     }));
+    expect(ApprovalRequestV2Schema.safeParse({
+      ...produced,
+      unknownField: true,
+    }).success).toBe(false);
   });
 
   it('uses host-provided approval preview metadata for plugin installs', async () => {

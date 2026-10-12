@@ -523,7 +523,8 @@ async function runSdkStreamUntilEof() {
       emitSdk(createRuntimeDescriptorMessage());
       emitSdk(createRuntimeCapabilitiesMessage());
       const writeToolUseId = `tool_write_${turn}`;
-      const filePath = `/tmp/happier-e2e-permission-${turn}.txt`;
+      const filePath = process.env.HAPPIER_E2E_FAKE_CLAUDE_PERMISSION_PATH
+        || `/tmp/happier-e2e-permission-${turn}.txt`;
       const writeInput = { file_path: filePath, content: `hello from ui e2e ${turn}` };
 
       const assistant = createAssistantMessage([
