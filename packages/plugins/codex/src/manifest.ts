@@ -29,6 +29,7 @@ import {
   createCodexConnectedServiceRuntimeAuthAdapter,
 } from './agent/auth/services/runtime/control/runtimeAuthAdapter.js';
 import { verifyResumeReachableCodex } from './agent/auth/services/runtime/control/verifyResumeReachable.js';
+import { reconcileCodexSharedJsonlState } from './agent/auth/services/home/sync/fixedJsonlState.js';
 import { codexExternalSessionsContribution } from './agent/surfaces/sessions/external/contribution.js';
 import { codexExternalSessionHooksContribution } from './agent/surfaces/sessions/external/externalSessionHooks.js';
 import { codexExternalSessionObservationContribution } from './agent/surfaces/sessions/external/observation.js';
@@ -123,6 +124,7 @@ export const CODEX_PLUGIN = definePlugin({
           modes: [{
             id: 'oauth',
             kind: 'oauthAuthorizationCode',
+            callbackUrl: 'http://localhost:1455/auth/callback',
             scopes: [...OPENAI_CODEX_OAUTH_PROFILE.scopes],
             pkce: 'required',
             outcomeReconciliation: 'none',
@@ -131,6 +133,20 @@ export const CODEX_PLUGIN = definePlugin({
             kind: 'oauthDeviceCode',
             scopes: [...OPENAI_CODEX_OAUTH_PROFILE.scopes],
             outcomeReconciliation: 'none',
+          }, {
+            id: 'native-import',
+            kind: 'manual',
+            title: 'Import native login',
+            outcomeReconciliation: 'none',
+            fields: [{
+              id: 'source',
+              title: 'Source',
+              description: 'Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it.',
+              schema: { type: 'string', enum: ['native'] },
+              secret: false,
+              default: 'native',
+              presentation: { control: 'select', options: [{ value: 'native', title: 'Codex login' }] },
+            }],
           }],
         },
       },
@@ -237,6 +253,7 @@ export const CODEX_PLUGIN = definePlugin({
           credentialKinds: ['oauth'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
@@ -347,6 +364,7 @@ export const CODEX_PLUGIN = definePlugin({
         continuity: {
           generationApplicationScope: 'per_session_runtime',
           nativeAuthCodec: createCodexConnectedAccountNativeAuthCodec(),
+          mergeSharedStateFile: reconcileCodexSharedJsonlState,
           runtimeAuthAdapter: createCodexConnectedServiceRuntimeAuthAdapter(),
           verifyResumeReachable: verifyResumeReachableCodex,
         },
@@ -407,7 +425,7 @@ export const CODEX_PLUGIN = definePlugin({
   voiceProviders: {
     [CODEX_VOICE_PROVIDER_CONTRIBUTION_ID]: {
       declaration: {
-        title: 'Codex Realtime Voice — Experimental',
+        title: 'Codex Realtime Voice',
         mark: { kind: 'agent', agentId: 'codex' },
         kind: 'conversation',
         roles: [
@@ -488,7 +506,7 @@ export const CODEX_PLUGIN = definePlugin({
     servers: {},
     discoverySources: {
       config: {
-        declaration: { title: 'Codex MCP configuration', metadata: { agentId: 'codex' } },
+        declaration: { title: 'Codex MCP configuration', loadedInHappierSessions: false, metadata: { agentId: 'codex' } },
         discover: async () => {
           const detected = await readCodexMcpConfigServers({});
           return {

@@ -190,7 +190,7 @@
                 ]
               },
               "archiveExtractionLimits": {
-                "maxExpandedBytes": 402653184,
+                "maxExpandedBytes": 536870912,
                 "maxFileBytes": 402653184
               },
               "assetNameByPlatform": {
@@ -414,6 +414,7 @@
         "title": "Codex"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -450,6 +451,36 @@
                 "email",
                 "offline_access"
               ]
+            },
+            {
+              "fields": [
+                {
+                  "default": "native",
+                  "description": "Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it.",
+                  "id": "source",
+                  "presentation": {
+                    "control": "select",
+                    "options": [
+                      {
+                        "title": "Codex login",
+                        "value": "native"
+                      }
+                    ]
+                  },
+                  "schema": {
+                    "enum": [
+                      "native"
+                    ],
+                    "type": "string"
+                  },
+                  "secret": false,
+                  "title": "Source"
+                }
+              ],
+              "id": "native-import",
+              "kind": "manual",
+              "outcomeReconciliation": "none",
+              "title": "Import native login"
             }
           ]
         },
@@ -490,6 +521,7 @@
       }
     ],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [
       {
         "description": "Codex ACP dependency used by the Codex ACP backend",
@@ -540,6 +572,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -618,7 +651,7 @@
               "kind": "theme",
               "token": "blue"
             },
-            "ionName": "terminal-outline"
+            "ionName": "terminal"
           },
           "sections": [
             {
@@ -712,7 +745,7 @@
           "messages": {
             "agentInput.connectedServiceLabel.codex": "OpenAI Codex",
             "settingsVoice.mode.codexRealtime": "Codex Live",
-            "settingsVoice.mode.codexRealtimeSubtitle": "Parlez directement avec la session active de l’agent Codex."
+            "settingsVoice.mode.codexRealtimeSubtitle": "Parle directement avec la session active de l’agent Codex."
           }
         },
         {
@@ -828,7 +861,7 @@
           },
           "schemaVersion": 2
         },
-        "title": "Codex Realtime Voice — Experimental"
+        "title": "Codex Realtime Voice"
       }
     ],
     "webhooks": [],

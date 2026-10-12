@@ -14,6 +14,7 @@ import type {
   AgentSessionRealtimeRuntime as ExperimentalAgentSessionRealtimeRuntime,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue, PluginDiagnosticData } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
   createAgentSessionPreAdmissionBuffer,
@@ -49,7 +50,12 @@ import {
 } from '../../../protocol/runtimeDescriptorV1.js';
 import { createCodexSharedAppServer } from './sharedServer.js';
 import { buildCodexExecutionRunBaseEnv } from '../../executionRuns/environment.js';
-import { readCodexAuthTokensFromNativeHome } from '../../cli/auth/environment.js';
+import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides } from './config/overrides.js';
+import {
+  AGENT_STARTUP_FAILURE_PREVIEWS,
+  readAgentStartupFailureCode,
+  type AgentStartupFailureCode,
+} from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 type CodexSharedAppServer = NonNullable<Awaited<ReturnType<typeof createCodexSharedAppServer>>>;
 
@@ -125,7 +131,6 @@ async function applyCodexConfigurationOptions(
 
 function createNativeRuntimeAuthRefresh(params: Readonly<{
   auth: SessionAuthService;
-  nativeHome: CodexAppServerRuntimeHost['nativeHome'];
   signal: AbortSignal;
 }>): NonNullable<CodexAppServerRuntimeHost['refreshRuntimeAuth']> {
   return async (request) => {
@@ -138,16 +143,21 @@ function createNativeRuntimeAuthRefresh(params: Readonly<{
     if (!credentialRevision) {
       return { status: 'failed', reason: 'runtime_auth_credential_revision_unavailable' };
     }
-    // The daemon's proof settles only after this exact home was rematerialized.
-    // Decode native access material here; the Agent never performs a token exchange.
-    const tokens = await readCodexAuthTokensFromNativeHome(params.nativeHome);
+    // The daemon returns the exact settled revision's access material. The
+    // launch-scoped native home may still belong to a previous selected account.
+    const accessToken = proof && typeof proof === 'object' && !Array.isArray(proof)
+      && 'accessToken' in proof && typeof proof.accessToken === 'string'
+      ? proof.accessToken.trim() : null;
+    const providerAccountId = proof && typeof proof === 'object' && !Array.isArray(proof)
+      && 'providerAccountId' in proof && typeof proof.providerAccountId === 'string'
+      ? proof.providerAccountId.trim() : null;
     params.signal.throwIfAborted();
-    if (!tokens.accessToken || !tokens.accountId) {
-      return { status: 'failed', reason: 'runtime_auth_native_materialization_unavailable' };
+    if (!accessToken || !providerAccountId) {
+      return { status: 'failed', reason: 'runtime_auth_current_access_material_unavailable' };
     }
     return { status: 'refreshed', result: {
-      accessToken: tokens.accessToken,
-      chatgptAccountId: tokens.accountId,
+      accessToken,
+      chatgptAccountId: providerAccountId,
       chatgptPlanType: request.planType ?? null,
       credentialRevision,
     } };
@@ -204,6 +214,8 @@ export function createCodexNativeAppServerRuntimeHost(params: Readonly<{
           processEnv: clientRequest.processEnv,
           configOverrides: clientRequest.configOverrides,
           disableUserMcpServers: clientRequest.disableUserMcpServers,
+          toolRestrictionRequired: clientRequest.toolRestrictionRequired,
+          toolRestrictionAllowedMcpServerKeys: clientRequest.toolRestrictionAllowedMcpServerKeys,
           signal: params.context.signal,
           ...(params.appServerTransport === 'daemonProxy'
             ? { transport: { kind: 'daemonProxy' as const } }
@@ -247,7 +259,7 @@ export function createCodexNativeAppServerRuntimeHost(params: Readonly<{
       const auth = params.context.services.sessions.current?.auth;
       if (!auth) throw new Error('Codex Session-handle runtime authentication is unavailable.');
       return await createNativeRuntimeAuthRefresh({
-        auth, nativeHome: params.context.session.services.nativeHome, signal: params.context.signal,
+        auth, signal: params.context.signal,
       })(request);
     },
     ...(currentSession ? { publishGeneratedMedia: async (candidate) => {
@@ -282,7 +294,7 @@ export function createCodexNativeAppServerExecutionRunRuntimeHost(params: Readon
   const auth = params.context.executionRun.services.auth;
   const refreshRuntimeAuth: CodexAppServerRuntimeHost['refreshRuntimeAuth'] = auth
     ? createNativeRuntimeAuthRefresh({
-        auth, nativeHome: params.context.executionRun.services.nativeHome, signal: params.context.signal,
+        auth, signal: params.context.signal,
       })
     : undefined;
   return {
@@ -301,6 +313,8 @@ export function createCodexNativeAppServerExecutionRunRuntimeHost(params: Readon
           processEnv: clientRequest.processEnv,
           configOverrides: clientRequest.configOverrides,
           disableUserMcpServers: clientRequest.disableUserMcpServers,
+          toolRestrictionRequired: clientRequest.toolRestrictionRequired,
+          toolRestrictionAllowedMcpServerKeys: clientRequest.toolRestrictionAllowedMcpServerKeys,
           signal: params.context.signal,
         }),
     dispose: async () => {
@@ -338,8 +352,36 @@ function readBoundedRuntimeAuthDiagnosticDetails(
   return toJsonValue({ runtimeAuthClassification: classification });
 }
 
-function createSanitizedNativeRuntimeError(message: string, error: unknown): Error {
-  const sanitized = new Error(message);
+class CodexAppServerStartupError extends Error {
+  constructor(readonly code: AgentStartupFailureCode) {
+    // Keep the closed code in the message as well: runner loggers may render
+    // only Error's name/message/stack, rather than its own data properties.
+    super(`${code}: ${AGENT_STARTUP_FAILURE_PREVIEWS[code]}.`);
+    this.name = 'CodexAppServerStartupError';
+  }
+}
+
+function createSanitizedNativeStartupError(error: unknown): Error {
+  if (error instanceof PluginError && (
+    error.code === 'codex_tool_restriction_unsupported_runtime'
+    || error.code === 'codex_tool_restriction_unsupported_model'
+    || error.code === 'codex_tool_restriction_unsupported_auth'
+    || error.code === 'codex_tool_restriction_catalog_unavailable'
+  )) {
+    // These are closed eligibility reasons authored by this adapter. Do not
+    // carry native messages, config, process output or arbitrary error details.
+    return new PluginError({ code: error.code, message: 'Codex cannot enforce the requested native tool policy for this configuration.' });
+  }
+  const descriptor = error instanceof Error ? Object.getOwnPropertyDescriptor(error, 'code') : undefined;
+  const errorCode: unknown = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  const code = readAgentStartupFailureCode(errorCode)
+    ?? (error instanceof TypeError ? 'agent_startup_invalid_state'
+      : error instanceof Error && error.name === 'JsonRpcApplicationError' && typeof errorCode === 'number'
+        ? 'agent_startup_rpc_rejected'
+      : typeof errorCode === 'string' && ['ENOENT', 'ENAMETOOLONG', 'EACCES', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(errorCode)
+        ? 'agent_startup_transport_failed'
+        : 'agent_startup_failed');
+  const sanitized = new CodexAppServerStartupError(code);
   const classification = error instanceof Error
     ? sanitizeCodexAppServerRuntimeAuthClassification(
         (error as { runtimeAuthClassification?: unknown }).runtimeAuthClassification,
@@ -355,12 +397,6 @@ function createSanitizedNativeRuntimeError(message: string, error: unknown): Err
       .happierNativeResumeIdentityMismatch === true
   ) {
     Object.assign(sanitized, { happierNativeResumeIdentityMismatch: true });
-  }
-  if (error instanceof Error && 'code' in error && (
-    error.code === 'AGENT_RESUME_PROVIDER_STATE_MISSING'
-    || error.code === 'codex_refresh_free_auth_unsupported'
-  )) {
-    Object.assign(sanitized, { code: error.code });
   }
   return sanitized;
 }
@@ -508,6 +544,7 @@ function mapCodexAppServerEvent(event: CodexAppServerEvent): NativeSessionEventI
         source: event.source,
         scope: event.scope,
         ...(event.accounting ? { accounting: event.accounting } : {}),
+        ...(event.attribution ? { attribution: event.attribution } : {}),
         ...(event.modelId ? { modelId: event.modelId } : {}),
         ...(event.tokens ? { tokens: event.tokens } : {}),
         ...(event.cost ? { cost: event.cost } : {}),
@@ -903,6 +940,12 @@ export async function openCodexNativeAppServerSession(
     && runtimeDescriptor.appServerTransport === 'daemonProxy'
     ? 'daemonProxy' as const
     : null;
+  if (appServerTransport === 'daemonProxy' && request.configuration?.unlistedTools === 'deny') {
+    throw new PluginError({
+      code: 'codex_tool_restriction_unsupported_transport',
+      message: 'Codex daemon proxy cannot apply tool confinement to its already-running server.',
+    });
+  }
   let providerSessionId = request.kind === 'resume' ? request.providerSessionId : null;
   const continuationProviderSessionId = request.kind === 'resume'
     ? request.providerSessionId
@@ -926,6 +969,10 @@ export async function openCodexNativeAppServerSession(
       cwd: request.cwd,
       processEnv,
       signal: context.signal,
+      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, request.configuration),
+      disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
+      toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
+      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(request.mcpServers ?? {})).values()],
       // This Session action owns cancellation. Let a slow-but-live Codex initialize instead of
       // converting the generic startup budget into a false native-fork failure.
       initializeRequestOptions: { signal: context.signal, timeoutMs: null },
@@ -965,13 +1012,16 @@ export async function openCodexNativeAppServerSession(
     appServerEndpoint: sharedAppServer?.endpoint,
     appServerTransport,
     initialModelId: readInitialModelId(request),
+    connectedAccountService: request.connectedAccounts?.find(selection => selection.account.service.pluginId === 'happier.agent.codex'
+      && selection.account.service.localId === 'openai-codex')?.account.service,
     initialCollaborationModeId: request.configuration?.mode.value,
     initialWorkspaceWrites: request.configuration?.workspaceWrites,
     initialPermissionMode: readPermissionMode(request),
+    toolRestriction: request.configuration,
     ...(initialProviderBinding ? { initialProviderBinding } : {}),
     processEnv,
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
-    resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites),
+    resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites, request.configuration?.unlistedTools),
     ...(goalProjection
       ? {
           observeGoal: (() => {
@@ -999,7 +1049,7 @@ export async function openCodexNativeAppServerSession(
     }
   } catch (error) {
     await sharedAppServer?.dispose();
-    throw createSanitizedNativeRuntimeError('Codex app-server startup failed.', error);
+    throw createSanitizedNativeStartupError(error);
   }
   const sessionRuntime = createCodexNativeAppServerSessionRuntime(
     runtime,
@@ -1074,7 +1124,11 @@ export async function openCodexNativeAppServerExecutionRunConversation(
       cwd: request.cwd,
       processEnv,
       signal: context.signal,
+      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, request.configuration),
+      disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
       initializeRequestOptions: { signal: context.signal, timeoutMs: null },
+      toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
+      toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(request.mcpServers ?? {})).values()],
     });
     try {
       const forked = await forkCodexNativeAppServerConversation({
@@ -1104,10 +1158,11 @@ export async function openCodexNativeAppServerExecutionRunConversation(
     initialCollaborationModeId: request.configuration?.mode.value,
     initialWorkspaceWrites: request.configuration?.workspaceWrites,
     initialPermissionMode: readPermissionMode(request),
+    toolRestriction: request.configuration,
     ...(initialProviderBinding ? { initialProviderBinding } : {}),
     processEnv,
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
-    resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites),
+    resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites, request.configuration?.unlistedTools),
   });
   try {
     await applyCodexConfigurationOptions(runtime.updateConfig, request.configuration?.options ?? {});
@@ -1119,7 +1174,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
     }
   } catch (error) {
     await sharedAppServer?.dispose();
-    throw createSanitizedNativeRuntimeError('Codex app-server startup failed.', error);
+    throw createSanitizedNativeStartupError(error);
   }
   return createCodexNativeAppServerExecutionRunConversationRuntime(runtime, request.runId);
 }

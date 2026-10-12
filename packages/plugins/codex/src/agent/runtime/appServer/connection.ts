@@ -23,9 +23,10 @@ export async function initializeCodexAppServerClient(client: Readonly<{
     params: typeof CODEX_APP_SERVER_INITIALIZE_PARAMS,
   ): Promise<unknown>;
   notify(method: string): Promise<void>;
-}>): Promise<void> {
-  await client.request('initialize', CODEX_APP_SERVER_INITIALIZE_PARAMS);
+}>): Promise<unknown> {
+  const result = await client.request('initialize', CODEX_APP_SERVER_INITIALIZE_PARAMS);
   await client.notify('initialized');
+  return result;
 }
 
 export function buildCodexAppServerBaseArgs(

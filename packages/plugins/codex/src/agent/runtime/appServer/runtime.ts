@@ -9,13 +9,14 @@ import type {
   AgentSessionRuntimeAuthIdentityRequest,
   AgentSessionRuntimeAuthIdentityResult,
   AgentSessionRuntimeContext,
+  AgentSessionConfigurationSnapshot,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
   AgentRuntimeJsonValueSchema,
   buildAgentAccountUsageRecordId,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { isChangeTitleToolNameAlias, readPendingLocalId } from '@happier-dev/plugin-sdk/sessions';
 import type {
   AgentSessionRealtimeConversation,
@@ -61,6 +62,7 @@ import {
   readExactCodexProviderSessionId,
 } from '../../../protocol/runtimeDescriptorV1.js';
 import {
+  assertCodexToolRestrictionModelSupported,
   isCodexAppServerOversizedJsonFrameError,
   resolveCodexHome,
   type CodexAppServerRequestOptions,
@@ -77,7 +79,7 @@ import {
   readCodexAppServerResumeRecoveryTimeoutMs,
   readCodexAppServerRpcTimeoutMs,
 } from './client/timeout.js';
-import { buildCodexAppServerConfigOverrides } from './config/overrides.js';
+import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides } from './config/overrides.js';
 import {
   CODEX_APP_SERVER_REASONING_EFFORT_CONFIG_OPTION_ID,
   CODEX_APP_SERVER_SERVICE_TIER_CONFIG_OPTION_ID,
@@ -104,6 +106,7 @@ import {
 } from './connectedServiceRuntimeIdentity.js';
 import {
   createCodexAppServerTurnFailure,
+  readCodexAppServerTurnFailureDiagnostic,
   isCodexAppServerRejectedStartModelEntitlementError,
   isCodexAppServerContextWindowExhaustedError,
   isCodexAppServerWorkspaceRoutingUnauthorizedError,
@@ -135,6 +138,7 @@ import {
 } from './wire/fields.js';
 import { resolveCodexTerminalPermissionPolicy } from '../terminal/permissionPolicy.js';
 import { handleTokenUsageNotification } from '../../usage/handleTokenUsageNotification.js';
+import { isCodexRequestUsageIdentityContradicted, resolveCodexRequestUsageAttribution } from './requestUsageAttribution.js';
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { createCodexAppServerRealtimeConversation } from './realtime.js';
 import { registerCodexAppServerInteractionHandlers } from './interactions.js';
@@ -297,8 +301,10 @@ type CodexAppServerRuntimeParams = CodexAppServerRuntimeTarget & Readonly<{
   initialWorkspaceWrites?: 'allow' | 'deny';
   initialPermissionMode?: string;
   initialProviderBinding?: CodexProviderBindingEngineConfigV1 | null;
+  connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   processEnv?: Readonly<Record<string, string | undefined>>;
   mcpServers?: unknown;
+  toolRestriction?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
   resolveCurrentPolicy?: () => CodexAppServerPolicy | null;
   observeGoal?: (payload: Readonly<{ kind: 'present'; goal: Readonly<Record<string, unknown>> }> | Readonly<{ kind: 'absent' }>) => void | Promise<void>;
 }>;
@@ -316,6 +322,8 @@ export type CodexAppServerRuntimeHost = Readonly<{
     processEnv: Readonly<Record<string, string | undefined>>;
     configOverrides: readonly string[];
     disableUserMcpServers: boolean;
+    toolRestrictionRequired?: boolean;
+    toolRestrictionAllowedMcpServerKeys?: readonly string[];
   }>): Promise<DisposableCodexAppServerClient>;
   fetchRateLimitResetCredits?(params: Readonly<{
     accessToken: string;
@@ -734,6 +742,9 @@ function normalizeMcpServers(value: unknown): Readonly<Record<string, CodexAppSe
         ? config.args.filter((arg): arg is string => typeof arg === 'string')
         : [],
       env: readStringRecord(config?.env),
+      ...(Array.isArray(config?.enabledTools)
+        ? { enabledTools: config.enabledTools.filter((tool): tool is string => typeof tool === 'string') }
+        : {}),
     };
   }
   return output;
@@ -876,6 +887,8 @@ export function createCodexAppServerRuntime(
   >();
   const providerDisablesReasoning =
     params.initialProviderBinding?.config.model_reasoning_effort === 'none';
+  const requiresConfinedMcp = params.toolRestriction?.unlistedTools === 'deny'
+    && Object.keys(normalizeMcpServers(params.mcpServers)).length > 0;
   let currentReasoningEffort: string | null = null;
   let currentServiceTier: string | null = null;
   let currentPermissionPolicyOverride: CodexAppServerPolicy | null = null;
@@ -909,7 +922,13 @@ export function createCodexAppServerRuntime(
   let backgroundCompletion: Promise<void> | null = null;
   let activeChatGptAuthTokensRefreshSelection: CodexConnectedServiceRefreshSelection | null =
     resolveCodexConnectedServiceRefreshSelectionFromEnv(readRuntimeProcessEnv());
+  const assertToolRestrictionAuthSupported = (externalAuthRequested = false): void => {
+    if (requiresConfinedMcp && (externalAuthRequested || params.initialProviderBinding || activeChatGptAuthTokensRefreshSelection)) {
+      throw new PluginError({ code: 'codex_tool_restriction_unsupported_auth', message: 'Codex MCP confinement cannot establish native tool-mode support after an external account or provider binding.' });
+    }
+  };
   let activeChatGptAccessTokenFingerprint: string | null = null;
+  let appliedChatGptAccessTokens: Readonly<{ accessToken: string; accountId: string }> | null = null;
   let clientHasExternalAuthTokens = false;
   let latestConnectedServiceRuntimeIdentity: CodexConnectedServiceRuntimeIdentity | null = null;
   let publishedProvisionalProviderAccountUsageRecordId: string | null = null;
@@ -918,7 +937,15 @@ export function createCodexAppServerRuntime(
   const resolveCurrentPolicy = (): CodexAppServerPolicy | null =>
     currentPermissionPolicyOverride ?? params.resolveCurrentPolicy?.() ?? null;
 
-  const readHostOwnedAuthTokens = () => readCodexAuthTokensFromNativeHome(params.host.nativeHome);
+  const readHostOwnedAuthTokens = async () => appliedChatGptAccessTokens
+    ? { ...appliedChatGptAccessTokens, idToken: null, accountLabel: latestConnectedServiceRuntimeIdentity?.accountLabel ?? null }
+    : await readCodexAuthTokensFromNativeHome(params.host.nativeHome);
+  const recordAppliedChatGptAccessTokens = (accessToken: string, accountId: string): void => {
+    // This process's accepted access material, not its immutable launch home,
+    // serves subsequent native authentication and account-scoped observations.
+    appliedChatGptAccessTokens = { accessToken, accountId };
+    activeChatGptAccessTokenFingerprint = computeCodexAccessTokenFingerprint(accessToken);
+  };
   const readHostOwnedAuthStoreProof = async () => {
     try {
       const bytes = (await params.host.nativeHome?.readFiles(['auth.json']))?.['auth.json'];
@@ -1098,11 +1125,20 @@ export function createCodexAppServerRuntime(
 
   const readLiveProviderAccount = async (): Promise<CodexActiveProviderAccount | null> => {
     try {
-      return readCodexActiveProviderAccount(await (await ensureClient()).request(
+      const identityBeforeRead = latestConnectedServiceRuntimeIdentity;
+      const liveAccount = readCodexActiveProviderAccount(await (await ensureClient()).request(
         'account/read',
         undefined,
         { timeoutMs: null },
       ));
+      if (latestConnectedServiceRuntimeIdentity === identityBeforeRead
+        && isCodexRequestUsageIdentityContradicted(identityBeforeRead, liveAccount)) {
+        // Negative native evidence withdraws both the current attempt and future
+        // dispatch proof. A later matching read cannot restore the old attempt.
+        if (pendingTurn) pendingTurn.providerOperationIdentity = null;
+        latestConnectedServiceRuntimeIdentity = null;
+      }
+      return liveAccount;
     } catch (error) {
       params.host.logger.debug('Codex app-server live account read failed for provider-account usage snapshot (ignored)', {
         errorName: error instanceof Error ? error.name : typeof error,
@@ -1302,6 +1338,9 @@ export function createCodexAppServerRuntime(
   }> | null = null;
 
   const refreshChatGptAuthTokens = async (requestParams: unknown): Promise<unknown> => {
+    // An auth transition inside one native attempt can combine accounts.
+    // No end-state comparison (including A -> B -> A) restores that proof.
+    if (pendingTurn) pendingTurn.providerOperationIdentity = null;
     const selection = activeChatGptAuthTokensRefreshSelection;
     if (!selection) {
       throw new Error('connected_service_chatgpt_refresh_selection_unavailable');
@@ -1342,7 +1381,7 @@ export function createCodexAppServerRuntime(
       throw new Error('connected_service_chatgpt_refresh_invalid_result');
     }
     pendingChatGptRefreshAttempt = null;
-    activeChatGptAccessTokenFingerprint = computeCodexAccessTokenFingerprint(refreshed.accessToken);
+    recordAppliedChatGptAccessTokens(refreshed.accessToken, refreshed.chatgptAccountId);
     if (
       latestConnectedServiceRuntimeIdentity
       && latestConnectedServiceRuntimeIdentity.providerAccountId === refreshed.chatgptAccountId
@@ -1915,7 +1954,7 @@ export function createCodexAppServerRuntime(
     });
   };
 
-  const failPendingTurn = (error: Error): void => {
+  const failPendingTurn = (error: Error, diagnostic = readCodexAppServerTurnFailureDiagnostic(error)): void => {
     const activeTurn = pendingTurn;
     if (!activeTurn) return;
     if (activeTurn.agentTurnId) terminatedProviderTurnIds.add(activeTurn.agentTurnId);
@@ -1929,6 +1968,10 @@ export function createCodexAppServerRuntime(
     setActive(false);
     const quotaEvidence = publishImmediateProviderAccountUsageSnapshotForQuotaFailure(error);
     terminalPendingTurnFailure = error;
+    params.host.logger.warn('Codex app-server turn failed', {
+      ...diagnostic,
+      providerStartAcknowledged: activeTurn.providerStartAcknowledged,
+    });
     const agentTurnId = activeTurn.agentTurnId;
     publishRuntimeEvent({
       kind: 'turn-failed',
@@ -2055,9 +2098,15 @@ export function createCodexAppServerRuntime(
             const hostTurnId = pendingTurn && notificationMatchesPendingTurn(notificationParams)
               ? pendingTurn.sessionTurnId
               : null;
+            const attribution = hostTurnId ? resolveCodexRequestUsageAttribution({
+              turnId: hostTurnId, service: params.connectedAccountService,
+              requestIdentity: pendingTurn?.providerOperationIdentity ?? null,
+              scope: observation.scope, matchesNativeAttempt: Boolean(pendingTurn?.agentTurnId && pendingTurn.agentTurnId === _nativeTurnId),
+            }) : undefined;
             publishRuntimeEvent({
               ...sessionObservation,
               ...(hostTurnId ? { turnId: hostTurnId } : {}),
+              ...(attribution ? { attribution } : {}),
             });
           }
         },
@@ -2173,6 +2222,7 @@ export function createCodexAppServerRuntime(
 
   const ensureClient = async (): Promise<DisposableCodexAppServerClient> => {
     if (disposed) throw new Error('Codex app-server runtime has been disposed.');
+    assertToolRestrictionAuthSupported();
     if (client) return client;
     if (!clientPromise) {
       const processEnv = readRuntimeProcessEnv();
@@ -2181,8 +2231,11 @@ export function createCodexAppServerRuntime(
         processEnv,
         configOverrides: buildCodexAppServerConfigOverrides(normalizeMcpServers(params.mcpServers), {
           processEnv,
+          ...params.toolRestriction,
         }),
         disableUserMcpServers: true,
+        toolRestrictionRequired: params.toolRestriction?.unlistedTools === 'deny',
+        toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(normalizeMcpServers(params.mcpServers))).values()],
       }).then(async (createdClient) => {
         if (disposed) {
           void createdClient.dispose().catch(() => undefined);
@@ -2195,10 +2248,6 @@ export function createCodexAppServerRuntime(
           if (activeChatGptAuthTokensRefreshSelection && params.host.refreshRuntimeAuth) {
             const authTokens = await readHostOwnedAuthTokens();
             if (authTokens.accessToken && authTokens.accountId) {
-              latestConnectedServiceRuntimeIdentity ??= resolveCodexInitialConnectedServiceRuntimeIdentity(
-                processEnv, authTokens,
-              );
-              activeChatGptAccessTokenFingerprint = computeCodexAccessTokenFingerprint(authTokens.accessToken);
               const result = await applyCodexExternalAuthTokens({
                 client: createdClient,
                 accessToken: authTokens.accessToken,
@@ -2210,6 +2259,10 @@ export function createCodexAppServerRuntime(
                   reason: result.reason,
                 });
               }
+              recordAppliedChatGptAccessTokens(authTokens.accessToken, authTokens.accountId);
+              latestConnectedServiceRuntimeIdentity = resolveCodexInitialConnectedServiceRuntimeIdentity(
+                processEnv, authTokens,
+              );
               clientHasExternalAuthTokens = true;
             }
           }
@@ -2308,6 +2361,7 @@ export function createCodexAppServerRuntime(
     connectedServiceAuthApplyCount += 1;
     await previousApply;
     try {
+      if (pendingTurn) pendingTurn.providerOperationIdentity = null;
       return await apply();
     } finally {
       connectedServiceAuthApplyCount -= 1;
@@ -2316,6 +2370,7 @@ export function createCodexAppServerRuntime(
   };
 
   const openSessionOnce = async (options?: Readonly<Record<string, unknown>>): Promise<string> => {
+    assertToolRestrictionAuthSupported();
     const authTokens = await readHostOwnedAuthTokens();
     const hasLiveExternalAuth = client !== null && clientHasExternalAuthTokens;
     if (activeChatGptAuthTokensRefreshSelection
@@ -2485,6 +2540,9 @@ export function createCodexAppServerRuntime(
     startedEmptyThreadWithoutExplicitModel = !requestedThreadId && !Object.prototype.hasOwnProperty.call(commonFields, 'model');
     startedEmptyThreadPolicyKey = requestedThreadId ? null : policyKey;
     currentModelId = readModelId(response) ?? currentModelId;
+    if (requiresConfinedMcp) {
+      assertCodexToolRestrictionModelSupported(await ensureClient(), currentModelId);
+    }
     currentServiceTier = readServiceTier(response) ?? (hasServiceTierOverride ? currentServiceTier : null);
     if (requestedThreadId) {
       nativeReadyThreadId = nextThreadId;
@@ -2516,8 +2574,13 @@ export function createCodexAppServerRuntime(
 
   const ensureThreadId = async (requestedSessionId?: string | null): Promise<string> => {
     const requested = readExactCodexProviderSessionId(requestedSessionId);
-    if (threadId && (!requested || requested === threadId)) return threadId;
-    return await openSession(requested ? { existingSessionId: requested, importHistory: false } : undefined);
+    const readyThreadId = threadId && (!requested || requested === threadId)
+      ? threadId
+      : await openSession(requested ? { existingSessionId: requested, importHistory: false } : undefined);
+    if (requiresConfinedMcp) {
+      assertCodexToolRestrictionModelSupported(await ensureClient(), currentModelId);
+    }
+    return readyThreadId;
   };
 
   const prepareProviderCliAttach = async (): Promise<string> => {
@@ -2570,7 +2633,7 @@ export function createCodexAppServerRuntime(
       activeThreadId,
       readRuntimeTurnId(options) ?? createCodexAppServerTurnId(),
       pendingProviderPrompt,
-      latestConnectedServiceRuntimeIdentity,
+      null,
     );
     pendingTurn = activeTurn;
     terminalPendingTurnFailure = null;
@@ -2620,8 +2683,12 @@ export function createCodexAppServerRuntime(
             }
           : {}),
       };
-      const requestTurnStart = async (params: Record<string, unknown>): Promise<unknown> =>
-        await appServerClient.request('turn/start', params)
+      const requestTurnStart = async (params: Record<string, unknown>): Promise<unknown> => {
+        // Capture at native dispatch, after collaboration resolution and auth
+        // applications that settled while that resolution was awaiting.
+        await waitForConnectedServiceAuthApply();
+        activeTurn.providerOperationIdentity = latestConnectedServiceRuntimeIdentity;
+        return await appServerClient.request('turn/start', params)
           .then((result) => {
             if (Object.prototype.hasOwnProperty.call(params, 'permissions')) {
               permissionSupport = 'supported';
@@ -2635,11 +2702,14 @@ export function createCodexAppServerRuntime(
             permissionSupport = 'legacy';
             const retryParams = { ...params };
             delete retryParams.permissions;
+            await waitForConnectedServiceAuthApply();
+            activeTurn.providerOperationIdentity = latestConnectedServiceRuntimeIdentity;
             return await appServerClient.request('turn/start', {
               ...retryParams,
               ...buildCodexAppServerLegacyPermissionParams({ policy, target: 'turn' }),
             });
           });
+      };
       const response = await requestTurnStart(requestParams);
       const agentTurnId = readTurnId(response);
       nativeReadyThreadId = activeTurn.threadId;
@@ -2685,7 +2755,7 @@ export function createCodexAppServerRuntime(
       const failure = isCodexAppServerRejectedStartModelEntitlementError(classifiedFailure)
         ? classifiedFailure
         : error instanceof Error ? error : new Error(String(error));
-      failPendingTurn(failure);
+      failPendingTurn(failure, readCodexAppServerTurnFailureDiagnostic(classifiedFailure ?? failure));
       throw failure;
     }
   };
@@ -2942,6 +3012,7 @@ export function createCodexAppServerRuntime(
     lastActivityAtMs = null;
     backgroundCompletion = null;
     activeChatGptAuthTokensRefreshSelection = null;
+    appliedChatGptAccessTokens = null;
     latestConnectedServiceRuntimeIdentity = null;
     const currentClient = client;
     client = null;
@@ -3042,9 +3113,7 @@ export function createCodexAppServerRuntime(
     });
     if (!applied.applied) {
       if (applied.appliedVia === 'direct_live_hot_auth' && applied.activeAccountId) {
-        activeChatGptAccessTokenFingerprint = computeCodexAccessTokenFingerprint(
-          request.credential.oauth.accessToken,
-        );
+        recordAppliedChatGptAccessTokens(request.credential.oauth.accessToken, applied.activeAccountId);
         latestConnectedServiceRuntimeIdentity = buildConnectedServiceRuntimeIdentity(
           request,
           applied.activeAccountId,
@@ -3069,9 +3138,7 @@ export function createCodexAppServerRuntime(
       };
     }
 
-    activeChatGptAccessTokenFingerprint = computeCodexAccessTokenFingerprint(
-      request.credential.oauth.accessToken,
-    );
+    recordAppliedChatGptAccessTokens(request.credential.oauth.accessToken, applied.activeAccountId);
     clientHasExternalAuthTokens = true;
     const appliedRuntimeIdentity = buildConnectedServiceRuntimeIdentity(
       request,
@@ -3243,12 +3310,19 @@ export function createCodexAppServerRuntime(
     rollbackNativeConversation,
     reconcileNativeConversationRollback,
     runtimeAuth: {
-      apply: applyRuntimeAuth,
+      apply: async (request: AgentSessionRuntimeAuthApplyRequest) => {
+        assertToolRestrictionAuthSupported(true);
+        return await applyRuntimeAuth(request);
+      },
       readIdentity: readRuntimeAuthIdentity,
     },
     permissions: { capability: 'inline' },
     async updateConfig(update) {
       const updateRecord = readRecord(update);
+      const nextModelId = trimStringValue(update.modelId);
+      if (nextModelId && requiresConfinedMcp) {
+        assertCodexToolRestrictionModelSupported(await ensureClient(), nextModelId);
+      }
       if ((updateRecord?.workspaceWrites === 'allow' || updateRecord?.workspaceWrites === 'deny')
         && updateRecord.workspaceWrites !== currentWorkspaceWrites
         && (pendingTurn !== null || realtimeConversation.isActive())) {
@@ -3261,7 +3335,7 @@ export function createCodexAppServerRuntime(
         currentWorkspaceWrites = updateRecord.workspaceWrites;
       }
       if (currentPermissionMode) {
-        const nextPolicy = resolveCodexTerminalPermissionPolicy(currentPermissionMode, currentWorkspaceWrites);
+        const nextPolicy = resolveCodexTerminalPermissionPolicy(currentPermissionMode, currentWorkspaceWrites, params.toolRestriction?.unlistedTools);
         const nextPolicyKey = serializeCodexAppServerPolicy(nextPolicy);
         if (
           threadId
@@ -3280,7 +3354,6 @@ export function createCodexAppServerRuntime(
         }
         currentPermissionPolicyOverride = nextPolicy;
       }
-      const nextModelId = trimStringValue(update.modelId);
       if (nextModelId) {
         if (
           threadId

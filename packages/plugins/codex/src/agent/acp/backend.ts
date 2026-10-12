@@ -18,6 +18,13 @@ import {
 export function buildCodexNativeAcpRuntimeOptions(
   request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
 ): AgentAcpRuntimeOptions {
+  if (request.configuration?.unlistedTools === 'deny') {
+    throw new PluginError({
+      code: 'codex_tool_restriction_unsupported_transport',
+      message: 'Codex ACP cannot establish underlying native tool-confinement support. Use App Server routing for confined sessions.',
+      remediation: { kind: 'openSettings', path: '/settings/agents/codex' },
+    });
+  }
   const env = buildCodexExecutionRunBaseEnv({
     processEnv: process.env,
     isolationEnv: request.launchEnvironment?.values,

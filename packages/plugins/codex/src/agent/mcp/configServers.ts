@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseToml } from 'smol-toml';
+import { expandHomePath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 
 import type { DetectedMcpServerV1, DiscoveryWarning as McpDiscoveryWarningV1 } from '@happier-dev/plugin-sdk/mcp';
 
@@ -9,144 +10,62 @@ export type ReadCodexMcpConfigServersResult = Readonly<{
     warnings: ReadonlyArray<McpDiscoveryWarningV1>;
 }>;
 
-function resolveCodexConfigTomlPath(env: NodeJS.ProcessEnv): string {
+export function resolveCodexHome(env: NodeJS.ProcessEnv): string {
     const codexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-    if (codexHome) return join(codexHome, 'config.toml');
-    return join(homedir(), '.codex', 'config.toml');
+    const home = resolveHomeDirFromEnvironment(env);
+    return codexHome ? expandHomePath(codexHome, home) : join(home, '.codex');
 }
 
-function normalizeCodexMcpServerName(rawSectionKey: string): string | null {
-    const trimmed = rawSectionKey.trim();
-    if (!trimmed) return null;
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null;
+}
 
-    const firstChar = trimmed[0];
-    if (firstChar === '"' || firstChar === "'") {
-        const end = trimmed.indexOf(firstChar, 1);
-        if (end === -1) return null;
-        return trimmed.slice(1, end);
+function readCodexMcpConfig(env: NodeJS.ProcessEnv): Readonly<{
+    path: string;
+    entries: Readonly<Record<string, unknown>>;
+    warnings: ReadonlyArray<McpDiscoveryWarningV1>;
+}> {
+    const path = join(resolveCodexHome(env), 'config.toml');
+    if (!existsSync(path)) return { path, entries: {}, warnings: [] };
+    let text: string;
+    try {
+        text = readFileSync(path, 'utf8');
+    } catch {
+        return { path, entries: {}, warnings: [{ provider: 'codex', code: 'read_failed', path }] };
     }
-
-    const firstSegment = trimmed.split('.')[0]?.trim() ?? '';
-    return firstSegment ? firstSegment : null;
-}
-
-function parseTomlStringLiteral(rawValue: string): string | null {
-    const trimmed = rawValue.trim();
-    if (!trimmed) return null;
-    const quote = trimmed[0];
-    if (quote !== '"' && quote !== "'") return null;
-    const end = trimmed.indexOf(quote, 1);
-    if (end === -1) return null;
-    return trimmed.slice(1, end);
-}
-
-function parseArgsArray(raw: string): string[] | null {
-    const start = raw.indexOf('[');
-    const end = raw.lastIndexOf(']');
-    if (start === -1 || end === -1 || end <= start) return null;
-    const inner = raw.slice(start + 1, end);
-    const args: string[] = [];
-    const re = /"([^"]*)"|'([^']*)'/g;
-    for (;;) {
-        const match = re.exec(inner);
-        if (!match) break;
-        const value = match[1] ?? match[2] ?? '';
-        args.push(value);
+    try {
+        return { path, entries: readRecord(parseToml(text).mcp_servers) ?? {}, warnings: [] };
+    } catch {
+        return { path, entries: {}, warnings: [{ provider: 'codex', code: 'parse_failed', path }] };
     }
-    return args;
 }
 
-type ParsedCodexMcpSection = Readonly<{
-    command: string | null;
-    args: string[] | null;
-    enabled: boolean | null;
-}>;
-
-function parseCodexMcpSection(body: string): ParsedCodexMcpSection {
-    let command: string | null = null;
-    let args: string[] | null = null;
-    let enabled: boolean | null = null;
-
-    const lines = body.split(/\r?\n/);
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-
-        const idx = trimmed.indexOf('=');
-        if (idx === -1) continue;
-        const key = trimmed.slice(0, idx).trim();
-        const value = trimmed.slice(idx + 1).trim();
-
-        if (key === 'command' && command === null) {
-            command = parseTomlStringLiteral(value);
-            continue;
-        }
-
-        if (key === 'args' && args === null) {
-            args = parseArgsArray(value);
-            continue;
-        }
-
-        if (key === 'enabled' && enabled === null) {
-            if (value === 'true') enabled = true;
-            else if (value === 'false') enabled = false;
-        }
-    }
-
-    return { command, args, enabled };
+export function readCodexMcpServerKeysFromConfigToml(env: NodeJS.ProcessEnv): string[] {
+    return Object.keys(readCodexMcpConfig(env).entries).sort().map((name) => (
+        /^[A-Za-z0-9_-]+$/u.test(name) ? name : JSON.stringify(name)
+    ));
 }
 
 export async function readCodexMcpConfigServers(
     params: Readonly<{ env?: NodeJS.ProcessEnv }>,
 ): Promise<ReadCodexMcpConfigServersResult> {
-    const env = params.env ?? process.env;
-    const path = resolveCodexConfigTomlPath(env);
-    if (!existsSync(path)) return { servers: [], warnings: [] };
-
-    let text: string;
-    try {
-        text = readFileSync(path, 'utf8');
-    } catch {
-        return { servers: [], warnings: [{ provider: 'codex', code: 'read_failed', path }] };
-    }
-
+    const parsed = readCodexMcpConfig(params.env ?? process.env);
     const servers: DetectedMcpServerV1[] = [];
-    const warnings: McpDiscoveryWarningV1[] = [];
-
-    const re = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm;
-    const matches: Array<Readonly<{ key: string; headerStart: number; headerEnd: number }>> = [];
-    for (;;) {
-        const match = re.exec(text);
-        if (!match) break;
-        matches.push({
-            key: match[1] ?? '',
-            headerStart: match.index,
-            headerEnd: match.index + match[0].length,
-        });
-    }
-
-    for (let i = 0; i < matches.length; i += 1) {
-        const m = matches[i]!;
-        const name = normalizeCodexMcpServerName(m.key);
-        if (!name) continue;
-
-        const bodyStart = m.headerEnd;
-        const bodyEnd = i + 1 < matches.length ? matches[i + 1]!.headerStart : text.length;
-        const body = text.slice(bodyStart, bodyEnd);
-
-        const parsed = parseCodexMcpSection(body);
-        if (!parsed.command) continue;
+    for (const [name, value] of Object.entries(parsed.entries)) {
+        const entry = readRecord(value);
+        if (typeof entry?.command !== 'string' || !entry.command.trim()) continue;
+        const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : [];
 
         servers.push({
             provider: 'codex',
             name,
             transport: 'stdio',
-            stdio: { command: parsed.command, args: parsed.args ?? [] },
+            stdio: { command: entry.command, args },
             envKeys: [],
-            enabled: parsed.enabled,
-            source: { kind: 'user', path },
+            enabled: typeof entry.enabled === 'boolean' ? entry.enabled : null,
+            source: { kind: 'user', path: parsed.path },
         });
     }
 
-    return { servers, warnings };
+    return { servers, warnings: parsed.warnings };
 }

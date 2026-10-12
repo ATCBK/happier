@@ -15,6 +15,11 @@ import { CODEX_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js
 import { CODEX_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 
 describe('Codex plugin manifest', () => {
+  it('declares detected native MCP servers as unloaded in Happier sessions', () => {
+    expect(PLUGIN_MANIFEST.contributes.mcp.discoverySources).toEqual([
+      expect.objectContaining({ id: 'config', loadedInHappierSessions: false }),
+    ]);
+  });
   it.skipIf(process.platform !== 'linux')('installs the current Codex package size through the real bounded extractor', async () => {
     // Digest-verified rust-v0.161.0 Linux x64 package: main executable,
     // code-mode host, and an undeclared voice sidecar already exceed 384 MiB.
@@ -107,6 +112,7 @@ describe('Codex plugin manifest', () => {
         modes: [{
           id: 'oauth',
           kind: 'oauthAuthorizationCode',
+          callbackUrl: expect.any(String),
           scopes: ['openid', 'profile', 'email', 'offline_access'],
           pkce: 'required',
           outcomeReconciliation: 'none',
@@ -115,7 +121,15 @@ describe('Codex plugin manifest', () => {
           kind: 'oauthDeviceCode',
           scopes: ['openid', 'profile', 'email', 'offline_access'],
           outcomeReconciliation: 'none',
-        }],
+        }, expect.objectContaining({
+          id: 'native-import',
+          kind: 'manual',
+          outcomeReconciliation: 'none',
+          fields: [expect.objectContaining({
+            id: 'source', secret: false, default: 'native',
+            schema: { type: 'string', enum: ['native'] },
+          })],
+        })],
       },
     }]);
     expect(derivePluginDaemonContributionRegistrationRights(
@@ -163,7 +177,8 @@ describe('Codex plugin manifest', () => {
     expect(result.manifest.contributes.agents[0]?.cli.auth.nonInteractiveStatusProbe).toBe(true);
     expect(PLUGIN_MANIFEST.contributes.voiceProviders).toEqual([{
       id: 'realtime-codex',
-      title: 'Codex Realtime Voice — Experimental',
+      title: 'Codex Realtime Voice',
+      mark: { kind: 'agent', agentId: 'codex' },
       kind: 'conversation',
       roles: [
         'conversation_stt',
@@ -186,6 +201,14 @@ describe('Codex plugin manifest', () => {
         privacyDisclosure: {
           key: 'settingsVoice.realtimeProviders.codex.privacyDisclosure',
           fallback: 'Audio and the Codex Live conversation are sent from this device to OpenAI using WebRTC. The selected Codex session and Connected Services account run through the selected machine. OpenAI may receive bounded startup and session context and delegated Codex results so the conversation can continue and responses can be spoken. Happier’s server and relay do not carry Codex Live audio; the Happier daemon/app-server still carries signaling, session lifecycle, delegation, tools, and permission control. Provider-operated network relays may participate. Codex or OpenAI may retain developer instructions, realtime conversation material, and related diagnostics in provider-native runtime storage according to the selected account and provider policies; Happier does not delete or rewrite that provider-native data.',
+        },
+        privacyFacts: {
+          audioDestination: 'OpenAI',
+          processor: 'Codex Live · OpenAI',
+          retention: {
+            key: 'settingsVoice.pages.privacy.servicePolicy',
+            fallback: 'Follows your service account settings and terms.',
+          },
         },
         connectedServicesBinding: {
           id: 'globalConnectedServices',

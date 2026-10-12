@@ -518,7 +518,7 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     }
 
     expect(rejection).toBeInstanceOf(Error);
-    expect((rejection as Error).message).toBe('Codex app-server startup failed.');
+    expect(rejection).toMatchObject({ code: 'agent_startup_failed' });
     expect((rejection as Error).stack ?? '').not.toContain(request.startupInstructions.instructions);
     expect((rejection as Error).stack ?? '').not.toContain(providerCauseSentinel);
     expect(rejection).not.toHaveProperty('cause');
@@ -994,12 +994,13 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     }, { signal: controller.signal });
   });
 
-  it('refreshes runtime auth through the common Session handle without forwarding Agent identity', async () => {
-    // The common host settles authority and exact-home materialization, not a native token codec.
+  it('refreshes runtime auth from the selected account after a switch instead of the launch home', async () => {
+    // The daemon refresh result is the plugin boundary; the launch-home file intentionally remains A.
     const refreshRuntimeAuth = vi.fn(async () => ({ status: 'refreshed' as const,
-      result: { credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' } }));
+      result: { credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+        accessToken: 'synthetic-fresh-B', providerAccountId: 'account-B' } }));
     const expected = { status: 'refreshed', result: {
-      accessToken: 'synthetic-fresh', chatgptAccountId: 'account-1', chatgptPlanType: null,
+      accessToken: 'synthetic-fresh-B', chatgptAccountId: 'account-B', chatgptPlanType: null,
       credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
     } };
     const controller = new AbortController();
@@ -1017,7 +1018,7 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
       },
       session: { id: 'session-1', services: { nativeHome: {
         root: '/fixture', readFiles: async () => ({ 'auth.json': new TextEncoder().encode(JSON.stringify({
-          auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'synthetic-fresh', account_id: 'account-1' },
+          auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'launch-A', account_id: 'account-A' },
         })) }),
       } } },
       ui: { title: { set: vi.fn(async () => undefined) } },
@@ -1049,6 +1050,31 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
       classification: { kind: 'capacity_exhausted' },
       reason: 'provider_session_capacity_failure',
     }, { signal: controller.signal });
+  });
+
+  it('does not recover selected-account auth from the launch home when the refresh result has no current access material', async () => {
+    const context = {
+      signal: new AbortController().signal,
+      services: {
+        logger: { debug: vi.fn() },
+        sessions: { current: {
+          auth: { services: { refreshRuntimeAuth: async () => ({ status: 'refreshed',
+            result: { credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' } }) } },
+          media: { registerSourceRoot: vi.fn() },
+        } },
+        connectedAccounts: createConnectedAccountsFixture(),
+      },
+      session: { id: 'session-1', services: { nativeHome: {
+        readFiles: async () => ({ 'auth.json': new TextEncoder().encode(JSON.stringify({
+          auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'launch-A', account_id: 'account-A' },
+        })) }),
+      } } },
+    } as unknown as AgentSessionRuntimeContext;
+    const host = createCodexNativeAppServerRuntimeHost({
+      request: { sessionId: 'session-1' } as AgentSessionOpenRequest, context, processEnv: {},
+    });
+    await expect(host.refreshRuntimeAuth?.({ serviceId: 'openai-codex', reason: 'credential_expired' }))
+      .resolves.toMatchObject({ status: 'failed', reason: 'runtime_auth_current_access_material_unavailable' });
   });
 
   it('binds app-server MCP elicitation to the common Session handle', () => {

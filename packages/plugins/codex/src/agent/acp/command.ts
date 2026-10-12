@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { resolveManagedDependencyCommand } from '@happier-dev/plugin-sdk/managed-services/native';
 import { CODEX_ACP_MANAGED_DEPENDENCY } from '../installables/definition.js';
+import { readCodexMcpServerKeysFromConfigToml } from '../mcp/configServers.js';
 
 export type CodexAcpSpawnSpec = { command: string; args: string[] };
 
@@ -16,49 +14,6 @@ export type ResolveCodexAcpSpawnOptions = Readonly<{
 export type ResolveCodexAcpSpawnDeps = Readonly<{
   resolveExistingManagedBinPath?: (env: NodeJS.ProcessEnv) => string | null;
 }>;
-
-function resolveCodexConfigTomlPath(env: NodeJS.ProcessEnv): string {
-  const codexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-  if (codexHome) return join(codexHome, 'config.toml');
-  return join(homedir(), '.codex', 'config.toml');
-}
-
-function normalizeCodexMcpServerKeyFromConfigSection(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  const firstChar = trimmed[0];
-  if (firstChar === '"' || firstChar === "'") {
-    const end = trimmed.indexOf(firstChar, 1);
-    if (end === -1) return null;
-    return trimmed.slice(0, end + 1);
-  }
-
-  const firstSegment = trimmed.split('.')[0]?.trim() ?? '';
-  return firstSegment ? firstSegment : null;
-}
-
-function readCodexMcpServerKeysFromConfigToml(env: NodeJS.ProcessEnv): string[] {
-  const configPath = resolveCodexConfigTomlPath(env);
-  let text: string;
-  try {
-    text = readFileSync(configPath, 'utf8');
-  } catch {
-    return [];
-  }
-
-  const keys = new Set<string>();
-  const re = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm;
-  for (;;) {
-    const match = re.exec(text);
-    if (!match) break;
-    const key = normalizeCodexMcpServerKeyFromConfigSection(match[1] ?? '');
-    if (!key) continue;
-    keys.add(key);
-  }
-
-  return Array.from(keys).sort((a, b) => a.localeCompare(b));
-}
 
 function appendConfigOverridesArgs(
   spec: CodexAcpSpawnSpec,

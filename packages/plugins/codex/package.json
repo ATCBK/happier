@@ -19,18 +19,10 @@
     "./ui/voice": {
       "happier-source": "./src/ui/voice/index.ts",
       "types": "./dist/ui/voice/index.d.ts",
-      "react-native": {
-        "happier-source": "./src/ui/voice/index.native.ts",
-        "default": "./dist/ui/voice/index.native.js"
-      },
       "default": "./dist/ui/voice/index.js"
     },
     "./happier-plugin-ui/voice-runtime-web": {
       "happier-source": "./src/ui/voice/index.ts",
-      "react-native": {
-        "happier-source": "./src/ui/voice/index.native.ts",
-        "default": "./dist/ui/voice/index.native.js"
-      },
       "default": "./dist/ui/voice/index.js"
     },
     "./protocol/runtimeDescriptorV1": {
@@ -308,11 +300,6 @@
       "types": "./dist/agent/usage/tokenCountMessage.d.ts",
       "default": "./dist/agent/usage/tokenCountMessage.js"
     },
-    "./agent/usage/pricing": {
-      "happier-source": "./src/agent/usage/pricing.ts",
-      "types": "./dist/agent/usage/pricing.d.ts",
-      "default": "./dist/agent/usage/pricing.js"
-    },
     "./agent/surfaces/sessions/external/identity": {
       "happier-source": "./src/agent/surfaces/sessions/external/identity.ts",
       "types": "./dist/agent/surfaces/sessions/external/identity.d.ts",
@@ -470,12 +457,13 @@
     "build:finite": "yarn -s build",
     "project:finite": "node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs",
     "test": "../../../apps/stack/bin/hstack-exec --script=test:local",
-    "test:local": "vitest run",
+    "test:local": "vitest run && vitest run --config vitest.mcpApproval.config.ts",
     "typecheck": "../../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@happier-dev/plugin-sdk": "0.0.0",
+    "smol-toml": "^1.9.0",
     "ws": "8.21.1",
     "zod": "4.3.6"
   },

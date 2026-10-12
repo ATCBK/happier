@@ -1,6 +1,6 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
 
 import type { ExecService, PluginProcessHandle } from '@happier-dev/plugin-sdk/exec';
 
@@ -13,6 +13,7 @@ import {
   type DisposableCodexAppServerClient,
 } from './client.js';
 import { readCodexAppServerStartupRpcTimeoutMs } from './client/timeout.js';
+import { withCodexNativeStartupLock } from './nativeStartupLock.js';
 
 type CodexAppServerEnv = Readonly<Record<string, string | undefined>>;
 const SHARED_CONTROL_MIN_MINOR_UNIX = 131;
@@ -66,7 +67,9 @@ async function waitForSocket(
   void process.wait().then(() => { terminated = true; }, () => { terminated = true; });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (terminated) throw new Error('Codex shared app-server exited before its socket was ready.');
+    if (terminated) throw Object.assign(new Error('Codex shared app-server exited before its socket was ready.'), {
+      code: 'agent_startup_transport_failed',
+    });
     try {
       await stat(socketPath);
       return;
@@ -74,15 +77,24 @@ async function waitForSocket(
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
-  throw new Error(`Timed out waiting for Codex shared app-server socket at ${socketPath}`);
+  throw Object.assign(new Error('Timed out waiting for the Codex shared app-server socket.'), {
+    code: 'agent_startup_transport_failed',
+  });
 }
 
 function defaultDependencies(): Dependencies {
+  let temporary: ReturnType<typeof createSecureTempDirectorySync> | undefined;
   return {
     readCodexVersion,
-    createRuntimeDirectory: async () => await mkdtemp(join(tmpdir(), 'happier-codex-')),
+    createRuntimeDirectory: async () => {
+      // Shared control is Unix-only. A caller's TMPDIR can exceed AF_UNIX's
+      // pathname capacity; retain the SDK's private ownership/cleanup under
+      // the short native Unix temp parent instead of changing child-process env.
+      temporary = createSecureTempDirectorySync({ prefix: 'codex', tmpDir: '/tmp' });
+      return temporary.path;
+    },
     waitForSocket,
-    removeRuntimeDirectory: async (directory) => await rm(directory, { recursive: true, force: true }),
+    removeRuntimeDirectory: async () => temporary?.cleanup(),
     createClient: createCodexNativeAppServerClient,
     probeRealtime: probeCodexRealtimeConversationFeature,
   };
@@ -101,6 +113,8 @@ export async function createCodexSharedAppServer(params: Readonly<{
     processEnv: CodexAppServerEnv;
     configOverrides: readonly string[];
     disableUserMcpServers: boolean;
+    toolRestrictionRequired?: boolean;
+    toolRestrictionAllowedMcpServerKeys?: readonly string[];
   }>) => Promise<DisposableCodexAppServerClient>;
   dispose: () => Promise<void>;
 }> | null> {
@@ -120,49 +134,77 @@ export async function createCodexSharedAppServer(params: Readonly<{
   let serverProcess: PluginProcessHandle | null = null;
   let realtimeConversationAdvertised = false;
   let startPromise: Promise<void> | null = null;
+  let initialClient: DisposableCodexAppServerClient | null = null;
   let disposed = false;
 
   const ensureStarted = async (request: Readonly<{
+    cwd: string;
     processEnv: CodexAppServerEnv;
     configOverrides: readonly string[];
     disableUserMcpServers: boolean;
+    toolRestrictionRequired?: boolean;
+    toolRestrictionAllowedMcpServerKeys?: readonly string[];
   }>): Promise<void> => {
-    startPromise ??= (async () => {
-      const tool = await params.exec.systemTools.resolve({
-        toolId: 'codex-cli',
-        purpose: 'Launch the Codex shared app-server',
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      realtimeConversationAdvertised = await dependencies.probeRealtime({
-        exec: params.exec,
-        executable: tool.executable,
-        env: request.processEnv,
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      serverProcess = await params.exec.spawn({
-        executable: tool.executable,
-        args: buildCodexAppServerArgs({
+    startPromise ??= withCodexNativeStartupLock(async () => {
+      try {
+        const tool = await params.exec.systemTools.resolve({
+          toolId: 'codex-cli',
+          purpose: 'Launch the Codex shared app-server',
+          ...(params.signal ? { signal: params.signal } : {}),
+        });
+        realtimeConversationAdvertised = await dependencies.probeRealtime({
+          exec: params.exec,
+          executable: tool.executable,
           env: request.processEnv,
-          configOverrides: request.configOverrides,
-          disableUserMcpServers: request.disableUserMcpServers,
-          enableRealtimeConversation: realtimeConversationAdvertised,
-          listenUrl: endpoint,
-        }),
-        cwd: { root: 'workspace', relativePath: '' },
-        env: buildCodexAppServerEnv(request.processEnv),
-        maxStdoutBytes: 4_096,
-        maxStderrBytes: 16_384,
-      }, params.signal ? { signal: params.signal } : undefined);
-      await dependencies.waitForSocket(
-        socketPath,
-        serverProcess,
-        readCodexAppServerStartupRpcTimeoutMs(request.processEnv),
-      );
-    })();
+          ...(params.signal ? { signal: params.signal } : {}),
+        });
+        serverProcess = await params.exec.spawn({
+          executable: tool.executable,
+          args: buildCodexAppServerArgs({
+            env: request.processEnv,
+            configOverrides: request.configOverrides,
+            disableUserMcpServers: request.disableUserMcpServers,
+            enableRealtimeConversation: realtimeConversationAdvertised,
+            listenUrl: endpoint,
+          }),
+          cwd: { root: 'workspace', relativePath: '' },
+          env: buildCodexAppServerEnv(request.processEnv),
+          maxStdoutBytes: 4_096,
+          maxStderrBytes: 16_384,
+        }, params.signal ? { signal: params.signal } : undefined);
+        await dependencies.waitForSocket(
+          socketPath,
+          serverProcess,
+          readCodexAppServerStartupRpcTimeoutMs(request.processEnv),
+        );
+        // A published socket is not native SQLite/skill initialization readiness.
+        // Reuse this initialized connection for the first admitted runtime client.
+        initialClient = await dependencies.createClient({
+          exec: params.exec,
+          cwd: request.cwd,
+          processEnv: request.processEnv,
+          toolRestrictionRequired: request.toolRestrictionRequired,
+          toolRestrictionAllowedMcpServerKeys: request.toolRestrictionAllowedMcpServerKeys,
+          signal: params.signal,
+          transport: { kind: 'unixWebSocket', socketPath, realtimeConversationAdvertised },
+        });
+      } catch (error) {
+        // Initialization failure must finish native shutdown before another
+        // process is admitted to shared SQLite/skills startup resources.
+        const failures: unknown[] = [error];
+        await initialClient?.dispose().catch((cleanupError: unknown) => { failures.push(cleanupError); });
+        initialClient = null;
+        await serverProcess?.dispose().catch((cleanupError: unknown) => { failures.push(cleanupError); });
+        serverProcess = null;
+        if (failures.length > 1) {
+          throw new AggregateError(failures, 'Codex shared app-server startup and cleanup failed.');
+        }
+        throw error;
+      }
+    }, params.signal);
     try {
       await startPromise;
     } catch (error) {
-      await serverProcess?.dispose().catch(() => undefined);
       await dependencies.removeRuntimeDirectory(runtimeDirectory);
       throw error;
     }
@@ -172,10 +214,17 @@ export async function createCodexSharedAppServer(params: Readonly<{
     endpoint,
     createClient: async (request) => {
       await ensureStarted(request);
+      if (initialClient) {
+        const client = initialClient;
+        initialClient = null;
+        return client;
+      }
       return await dependencies.createClient({
         exec: params.exec,
         cwd: request.cwd,
         processEnv: request.processEnv,
+        toolRestrictionRequired: request.toolRestrictionRequired,
+        toolRestrictionAllowedMcpServerKeys: request.toolRestrictionAllowedMcpServerKeys,
         signal: params.signal,
         transport: {
           kind: 'unixWebSocket',
@@ -187,6 +236,8 @@ export async function createCodexSharedAppServer(params: Readonly<{
     dispose: async () => {
       if (disposed) return;
       disposed = true;
+      await initialClient?.dispose().catch(() => undefined);
+      initialClient = null;
       await serverProcess?.dispose().catch(() => undefined);
       await dependencies.removeRuntimeDirectory(runtimeDirectory);
     },

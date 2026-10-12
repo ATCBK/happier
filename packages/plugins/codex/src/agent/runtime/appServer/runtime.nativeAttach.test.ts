@@ -1,8 +1,99 @@
 import { describe, expect, it } from 'vitest';
+import { buildConnectedServiceCredentialRecord, StrictJsonValueSchema } from '@happier-dev/protocol';
 import { startCodexAppServerRuntime } from './runtime.js';
 import { withCodexNativeAttachFixture as withFixture } from './runtime.nativeAttach.test-support.js';
 
 describe('native Codex attachment preparation', () => {
+  it.each([
+    { initialProviderBinding: { v: 1 as const, modelProvider: 'ollama', config: {} } },
+    { processEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId: 'openai-codex', profileId: 'fixture' }]) } },
+  ])('refuses a model catalog from another provider or Connected Account authority before startup', async (externalAuthority) => {
+    await withFixture(async ({ runtime, requests }) => {
+      await expect(runtime.prepareProviderCliAttach()).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_auth' });
+      expect(requests.some(request => request.method === 'thread/start')).toBe(false);
+    }, {
+      ...externalAuthority,
+      toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+    });
+  });
+  it('refuses external account changes before native login can invalidate the tool-mode evidence', async () => {
+    await withFixture(async ({ runtime, requests }) => {
+      const credential = buildConnectedServiceCredentialRecord({
+        now: 1000, serviceId: 'openai-codex', profileId: 'fixture', kind: 'oauth', expiresAt: 2000,
+        oauth: { accessToken: 'fixture', refreshToken: 'fixture', idToken: 'fixture', scope: null, tokenType: null,
+          providerAccountId: 'fixture', providerEmail: 'fixture@example.test' },
+      });
+      await expect(runtime.runtimeAuth.apply({ serviceId: 'openai-codex', authGeneration: { credential: StrictJsonValueSchema.parse(credential) } }))
+        .rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_auth' });
+      expect(requests.some(request => request.method === 'account/login/start')).toBe(false);
+    }, {
+      toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+    });
+  });
+  it.skipIf(process.platform === 'win32')('preserves the safe typed tool-policy refusal through native startup sanitization', async () => {
+    await withFixture(async ({ openConfiguredSession }) => {
+      await expect(openConfiguredSession()).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_model' });
+    }, {
+      nativeToolMode: 'direct',
+      toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+    });
+  });
+  it.skipIf(process.platform === 'win32')('rejects a direct-tool model update before applying it to a confined MCP session', async () => {
+    await withFixture(async ({ runtime, requests }) => {
+      await expect(runtime.updateConfig?.({ modelId: 'direct-model' })).rejects.toMatchObject({
+        code: 'codex_tool_restriction_unsupported_model',
+      });
+      expect(requests.some(request => request.method === 'turn/start')).toBe(false);
+    }, {
+      toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+    });
+  });
+  it.skipIf(process.platform === 'win32')('launches the shared native server with the frozen recipe and canonical filtered MCP catalog', async () => {
+    await withFixture(async ({ openConfiguredSession, nativeLaunches }) => {
+      await openConfiguredSession();
+      expect(nativeLaunches[0]).toEqual(expect.arrayContaining([
+        'features.shell_tool=false', 'features.view_image=false', 'web_search="disabled"',
+        'mcp_servers.happier__wilson.enabled_tools=["allowed_echo"]',
+        'mcp_servers.happier__wilson.default_tools_approval_mode="approve"',
+      ]));
+    }, {
+      toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
+      mcpServers: { wilson: { command: 'fixture-bridge', enabledTools: ['allowed_echo'] } },
+    });
+  });
+  it('retains confinement when a live configuration update requests unrestricted native permissions', async () => {
+    await withFixture(async ({ runtime, requests }) => {
+      await runtime.updateConfig?.({ permissionMode: 'yolo' });
+      await runtime.prepareProviderCliAttach();
+      const nativePolicy = requests.find((request) => request.method === 'thread/start')?.params;
+      expect([':read-only', 'read-only']).toContain(nativePolicy?.permissions ?? nativePolicy?.sandbox);
+      if (!nativePolicy?.permissions) expect(nativePolicy?.approvalPolicy).toBe('never');
+    }, { toolRestriction: { unlistedTools: 'deny', allowedTools: [] } });
+  });
+  it.skipIf(process.platform === 'win32')('starts through native control with a long host temporary directory', async () => {
+    await withFixture(async ({ openConfiguredSession }) => {
+      const session = await openConfiguredSession();
+      const presentation = await session.prepareTerminalPresentation?.();
+      expect(presentation).toMatchObject({
+        kind: 'provider_attach',
+        metadata: { runtimeDescriptorV1: { agent: { providerSessionId: 'fresh-thread' } } },
+      });
+    }, { longTemporaryDirectory: true });
+  });
+  it.skipIf(process.platform === 'win32')('carries a safe typed startup rejection without provider text or tokens', async () => {
+    await withFixture(async ({ openConfiguredSession, failResume }) => {
+      failResume('provider refused startup: Bearer private-startup-token /private/config');
+      const error = await openConfiguredSession('existing-thread').catch((failure: unknown) => failure);
+      expect(error).toMatchObject({ name: 'CodexAppServerStartupError', code: 'agent_startup_rpc_rejected' });
+      expect(String(error)).not.toContain('private-startup-token');
+      expect(String(error)).not.toContain('/private/config');
+      expect(JSON.stringify(error)).not.toContain('private-startup-token');
+    });
+  });
   it.each([
     ['no rollout found for thread id missing-thread', 'AGENT_RESUME_PROVIDER_STATE_MISSING'],
     ['provider temporarily unavailable', undefined],

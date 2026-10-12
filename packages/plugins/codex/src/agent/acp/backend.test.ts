@@ -8,6 +8,30 @@ import {
 } from './backend';
 
 describe('buildCodexNativeAcpRuntimeOptions', () => {
+  it('refuses confinement before ACP launch when underlying native support cannot be established', () => {
+    expect(() => buildCodexNativeAcpRuntimeOptions({
+      kind: 'create', sessionId: 'restricted', cwd: '/workspace',
+      launchEnvironment: { values: {
+        HAPPIER_CODEX_ACP_CONFIG_OVERRIDES: 'features.shell_tool=true',
+      }, unset: [] },
+      configuration: {
+        mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: 'read-only', updatedAtMs: 0 }, options: {},
+        allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny',
+      },
+    })).toThrow(expect.objectContaining({ code: 'codex_tool_restriction_unsupported_transport' }));
+  });
+  it('refuses confined MCP inputs when ACP cannot prove the native tool filter is retained', () => {
+    expect(() => buildCodexNativeAcpRuntimeOptions({
+      kind: 'create', sessionId: 'restricted', cwd: '/workspace',
+      configuration: {
+        mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: 'read-only', updatedAtMs: 0 }, options: {},
+        allowedTools: ['mcp__wilson__*'], unlistedTools: 'deny',
+      },
+      mcpServers: { wilson: { command: 'fixture', enabledTools: ['allowed_echo'] } },
+    })).toThrow(expect.objectContaining({ code: 'codex_tool_restriction_unsupported_transport' }));
+  });
   it.each(['openai-codex', 'happier.agent.codex/openai-codex'])(
     'declines Connected Account ACP without a host-managed refresh bridge (%s)',
     (serviceId) => {

@@ -115,6 +115,70 @@ function createCapturingExec(
 }
 
 describe('createCodexAppServerClient', () => {
+    it('refuses enabled native MCP entries from the selected session cwd outside the injected subset', async () => {
+        const capture = createCapturingExec({
+            async request(method, params): Promise<JsonValue> {
+                if (method === 'initialize') return { userAgent: 'happier_cli/0.162.1 (fixture)' };
+                const selectedCwd = params !== null && typeof params === 'object' && !Array.isArray(params)
+                    && 'cwd' in params && params.cwd === '/workspace';
+                return { config: { mcp_servers: selectedCwd ? { projectOnly: { enabled: true } } : {}, features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+            },
+        }, processResult(JSON.stringify({ models: [{ slug: 'fixture', tool_mode: 'code_mode_only' }] })));
+        await expect(createCodexNativeAppServerClient({
+            exec: capture.exec, cwd: '/workspace', processEnv: {}, toolRestrictionRequired: true,
+            toolRestrictionAllowedMcpServerKeys: [],
+        })).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_runtime' });
+    });
+    it('refuses confinement when native namespace support is unknown instead of trusting echoed config', async () => {
+        const capture = createCapturingExec({
+            async request(method): Promise<JsonValue> {
+                if (method === 'initialize') return { userAgent: 'happier_cli/0.159.2 (fixture)' };
+                return { config: { features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+            },
+        });
+        await expect(createCodexNativeAppServerClient({
+            exec: capture.exec, processEnv: {},
+            toolRestrictionRequired: true,
+            configOverrides: ['features.code_mode.excluded_tool_namespaces=["functions"]'],
+        })).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_runtime' });
+    });
+    it('serializes the native spawn through initialization without locking ongoing clients', async () => {
+        // Exec is the host-owned process/protocol boundary. Simulate the native
+        // SQLite startup exclusion there, retaining the plugin's real admission.
+        let nativeInitializing = false;
+        const captures = [0, 1].map(() => createCapturingExec({
+            async request(method) {
+                if (method === 'initialize') {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    nativeInitializing = false;
+                }
+                return { ok: true };
+            },
+        }));
+        for (const capture of captures) {
+            const spawn = capture.exec.clients.spawn.bind(capture.exec.clients);
+            vi.spyOn(capture.exec.clients, 'spawn').mockImplementation(async (spec, options) => {
+                if (nativeInitializing) throw new Error('native_sqlite_startup_conflict');
+                nativeInitializing = true;
+                return await spawn(spec, options);
+            });
+        }
+        const clients: Awaited<ReturnType<typeof createCodexNativeAppServerClient>>[] = [];
+        try {
+            const outcomes = await Promise.allSettled(captures.map(async capture => {
+                const client = await createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {} });
+                clients.push(client);
+                return await client.request('test/ping');
+            }));
+            expect(outcomes).toEqual([
+                { status: 'fulfilled', value: { ok: true } },
+                { status: 'fulfilled', value: { ok: true } },
+            ]);
+        } finally {
+            await Promise.all(clients.map(client => client.dispose()));
+        }
+    });
+
     it('uses the supported Codex daemon proxy transport without probing or starting another app-server', async () => {
         const capture = createCapturingExec();
 
@@ -136,7 +200,8 @@ describe('createCodexAppServerClient', () => {
     });
 
     it('speaks JSON-RPC directly over the shared app-server Unix WebSocket', async () => {
-        const root = await mkdtemp(join(tmpdir(), 'happier-codex-websocket-test-'));
+        // AF_UNIX has an OS path capacity; worker TMPDIR can be substantially longer.
+        const root = await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'codex-ws-'));
         const socketPath = process.platform === 'win32'
             ? `\\\\.\\pipe\\happier-codex-test-${process.pid}-${Date.now()}`
             : join(root, 'app-server.sock');

@@ -17,6 +17,7 @@ import {
 } from '@happier-dev/plugin-sdk/interactions';
 
 import type { DisposableCodexAppServerClient } from './client.js';
+import { projectCodexAppServerToolEventsFromNotification } from './projection/toolEvents.js';
 import {
   buildCodexAsyncUserInputReply,
   buildCodexRequestUserInputAnswers,
@@ -309,6 +310,31 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
   ) => Promise<unknown>;
   const pendingRequests = new Map<string, AbortController>();
   const handledAsyncQuestionItemIds = new Set<string>();
+  const mcpApprovalSubjectsByItem = new Map<string, string>();
+  const toolItemKey = (raw: RecordLike, itemId: string | null): string | null => {
+    const threadId = readString(raw.threadId);
+    const turnId = readString(raw.turnId);
+    return threadId && turnId && itemId ? JSON.stringify([threadId, turnId, itemId]) : null;
+  };
+  // requestUserInput carries only itemId; the preceding tool lifecycle event
+  // supplies the canonical MCP subject through the existing tool projection.
+  for (const method of ['item/started', 'item/completed']) {
+    params.client.registerNotificationHandler(method, (raw) => {
+      if (!matchesCurrentThread(raw, params.getThreadId)) return;
+      for (const event of projectCodexAppServerToolEventsFromNotification({ method, notificationParams: raw })) {
+        const key = toolItemKey(raw, event.callId);
+        if (!key) continue;
+        if (method === 'item/completed') mcpApprovalSubjectsByItem.delete(key);
+        else if (event.type === 'tool-call' && event.name.startsWith('mcp__')) {
+          mcpApprovalSubjectsByItem.set(key, event.name);
+        }
+      }
+    });
+  }
+  params.client.registerNotificationHandler('turn/completed', (raw) => {
+    if (matchesCurrentThread(raw, params.getThreadId)) mcpApprovalSubjectsByItem.clear();
+  });
+  params.client.onExit(() => mcpApprovalSubjectsByItem.clear());
   const requestKey = (value: unknown): string | null => (
     typeof value === 'string' || typeof value === 'number'
       ? `${typeof value}:${String(value)}`
@@ -451,9 +477,11 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
         toolName: 'codex_app_server_tool',
         questions: raw.questions,
       })) {
+        const itemKey = toolItemKey(raw, readString(raw.itemId));
         const result = await requestApproval(params.ui, {
           title: 'Codex needs your approval',
-          toolName: 'codex_request_user_input_approval',
+          toolName: (itemKey ? mcpApprovalSubjectsByItem.get(itemKey) : undefined)
+            ?? `codex_request_user_input_approval:${randomUUID()}`,
           params: raw,
           allowSessionPersistence: true,
         }, signal);

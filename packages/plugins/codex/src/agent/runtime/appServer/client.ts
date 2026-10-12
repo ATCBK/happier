@@ -1,7 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type {
     ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 import type {
@@ -22,6 +19,9 @@ import {
     initializeCodexAppServerClient,
 } from './connection.js';
 import { connectCodexUnixWebSocketJsonRpc } from './client/unixWebSocket.js';
+import { withCodexNativeStartupLock } from './nativeStartupLock.js';
+import { readCodexMcpServerKeysFromConfigToml } from '../../mcp/configServers.js';
+export { resolveCodexHome } from '../../mcp/configServers.js';
 
 type CodexAppServerEnv = Readonly<Record<string, string | undefined>>;
 
@@ -52,6 +52,7 @@ export type CodexAppServerClient = Readonly<{
 export type DisposableCodexAppServerClient = CodexAppServerClient & Readonly<{
     launchFeatures: Readonly<{
         realtimeConversationAdvertised: boolean;
+        toolRestrictionSupportedModelIds?: readonly string[];
     }>;
     onExit: (listener: (result: Readonly<{
         exitCode: number | null;
@@ -59,6 +60,18 @@ export type DisposableCodexAppServerClient = CodexAppServerClient & Readonly<{
     }>) => void) => () => void;
     dispose: () => Promise<void>;
 }>;
+
+export function assertCodexToolRestrictionModelSupported(
+    client: DisposableCodexAppServerClient,
+    modelId: string | null,
+): void {
+    if (!modelId || !client.launchFeatures.toolRestrictionSupportedModelIds?.includes(modelId)) {
+        throw new PluginError({
+            code: 'codex_tool_restriction_unsupported_model',
+            message: 'Codex MCP confinement requires a native model advertising code-mode-only tools.',
+        });
+    }
+}
 
 export function isCodexAppServerOversizedJsonFrameError(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
@@ -123,51 +136,6 @@ function readJsonLineMaxChars(env: CodexAppServerEnv): number {
 
 function expandHomeDirPath(value: string, env: CodexAppServerEnv): string {
     return expandHomePath(value, resolveHomeDirFromEnvironment(env));
-}
-
-export function resolveCodexHome(env: CodexAppServerEnv): string {
-    const override = typeof env.CODEX_HOME === 'string'
-        ? expandHomeDirPath(env.CODEX_HOME, env)
-        : '';
-    return override || join(resolveHomeDirFromEnvironment(env), '.codex');
-}
-
-function resolveCodexConfigTomlPath(env: CodexAppServerEnv): string {
-    return join(resolveCodexHome(env), 'config.toml');
-}
-
-function normalizeCodexMcpServerKeyFromConfigSection(raw: string): string | null {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-
-    const firstChar = trimmed[0];
-    if (firstChar === '"' || firstChar === "'") {
-        const end = trimmed.indexOf(firstChar, 1);
-        if (end === -1) return null;
-        return trimmed.slice(0, end + 1);
-    }
-
-    const firstSegment = trimmed.split('.')[0]?.trim() ?? '';
-    return firstSegment ? firstSegment : null;
-}
-
-function readCodexMcpServerKeysFromConfigToml(env: CodexAppServerEnv): string[] {
-    let text: string;
-    try {
-        text = readFileSync(resolveCodexConfigTomlPath(env), 'utf8');
-    } catch {
-        return [];
-    }
-
-    const keys = new Set<string>();
-    const re = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm;
-    for (;;) {
-        const match = re.exec(text);
-        if (!match) break;
-        const key = normalizeCodexMcpServerKeyFromConfigSection(match[1] ?? '');
-        if (key) keys.add(key);
-    }
-    return Array.from(keys).sort((left, right) => left.localeCompare(right));
 }
 
 function appendConfigOverrides(args: readonly string[], overrides: readonly string[]): string[] {
@@ -403,16 +371,30 @@ function buildNativeCodexAppServerClientSpec(params: Readonly<{
     };
 }
 
-export async function createCodexNativeAppServerClient(params: Readonly<{
+type CodexNativeAppServerClientParams = Readonly<{
     exec: ExecService;
     processEnv?: CodexAppServerEnv;
     cwd?: string;
     configOverrides?: readonly string[];
     disableUserMcpServers?: boolean;
+    toolRestrictionRequired?: boolean;
+    toolRestrictionAllowedMcpServerKeys?: readonly string[];
     signal?: AbortSignal;
     initializeRequestOptions?: CodexAppServerRequestOptions;
     transport?: CodexAppServerTransport;
-}>): Promise<DisposableCodexAppServerClient> {
+}>;
+
+export async function createCodexNativeAppServerClient(params: CodexNativeAppServerClientParams): Promise<DisposableCodexAppServerClient> {
+    if (params.transport && params.transport.kind !== 'stdio') {
+        return await createUnlockedCodexNativeAppServerClient(params);
+    }
+    return await withCodexNativeStartupLock(
+        async () => await createUnlockedCodexNativeAppServerClient(params),
+        params.initializeRequestOptions?.signal ?? params.signal,
+    );
+}
+
+async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppServerClientParams): Promise<DisposableCodexAppServerClient> {
     const env = params.processEnv ?? process.env;
     const resolvedSystemTool = await params.exec.systemTools.resolve({
         toolId: 'codex-cli',
@@ -452,14 +434,15 @@ export async function createCodexNativeAppServerClient(params: Readonly<{
         if (params.signal?.aborted || !enableRealtimeConversation) throw error;
         throw createCodexRealtimeEnabledAppServerLaunchUnavailableError();
     }
-    const client = wrapNativeCodexAppServerClient(handle, env, {
+    const launchFeatures: { realtimeConversationAdvertised: boolean; toolRestrictionSupportedModelIds?: readonly string[] } = {
         realtimeConversationAdvertised,
-    });
+    };
+    const client = wrapNativeCodexAppServerClient(handle, env, launchFeatures);
     try {
         const initializeRequestOptions = params.initializeRequestOptions ?? (params.signal
             ? { signal: params.signal }
             : undefined);
-        await initializeCodexAppServerClient({
+        const initialized = await initializeCodexAppServerClient({
             request: async (method, requestParams) => await client.request(
                 method,
                 requestParams,
@@ -467,9 +450,53 @@ export async function createCodexNativeAppServerClient(params: Readonly<{
             ),
             notify: async (method) => await client.notify(method),
         });
+        if (params.toolRestrictionRequired) {
+            // 0.162.1 is the observed native support basis, not an invented minimum.
+            // Unknown versions fail closed because older binaries can echo ignored flags.
+            const userAgent = initialized && typeof initialized === 'object'
+                ? (initialized as Readonly<{ userAgent?: unknown }>).userAgent : null;
+            if (typeof userAgent !== 'string' || !/\/0\.162\.1(?:\s|$)/u.test(userAgent)) {
+                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'This Codex native runtime has not established tool-confinement support.' });
+            }
+            const effective = await client.request('config/read', { includeLayers: false, ...(params.cwd ? { cwd: params.cwd } : {}) });
+            const config = effective && typeof effective === 'object' ? (effective as { config?: unknown }).config : null;
+            const features = config && typeof config === 'object' ? (config as { features?: unknown }).features : null;
+            const codeMode = features && typeof features === 'object' ? (features as { code_mode?: unknown }).code_mode : null;
+            const excluded = codeMode && typeof codeMode === 'object' ? (codeMode as { excluded_tool_namespaces?: unknown }).excluded_tool_namespaces : null;
+            if (!Array.isArray(excluded) || !excluded.includes('functions')) {
+                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'Codex did not apply its native tool-namespace exclusion.' });
+            }
+            const mcpServers = config && typeof config === 'object' ? (config as { mcp_servers?: unknown }).mcp_servers : null;
+            const allowedServerKeys = new Set(params.toolRestrictionAllowedMcpServerKeys ?? []);
+            if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers) || Object.entries(mcpServers).some(([key, value]) => (
+                !allowedServerKeys.has(key) && (!value || typeof value !== 'object' || (value as { enabled?: unknown }).enabled !== false)
+            ))) {
+                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'Codex has enabled MCP servers outside the host-selected recipe.' });
+            }
+            const result = await params.exec.run({
+                executable: resolvedSystemTool.executable,
+                args: ['debug', 'models'],
+                cwd: { root: 'workspace', relativePath: '' },
+                env: buildCodexAppServerEnv(env),
+                timeoutMs: readCodexAppServerRpcTimeoutMs(env),
+            }, params.signal ? { signal: params.signal } : undefined);
+            let models: unknown;
+            if (processExitedSuccessfully(result) && result.stdoutTruncated === false && result.stderrTruncated === false) {
+                try { models = (JSON.parse(new TextDecoder().decode(result.stdout)) as { models?: unknown }).models; } catch { /* Malformed native capability evidence is unsupported. */ }
+            }
+            if (!Array.isArray(models)) {
+                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'Codex did not provide its native tool-mode catalog.' });
+            }
+            launchFeatures.toolRestrictionSupportedModelIds = models.flatMap((model: unknown) => {
+                if (!model || typeof model !== 'object') return [];
+                const entry = model as Readonly<{ slug?: unknown; tool_mode?: unknown }>;
+                return typeof entry.slug === 'string' && entry.tool_mode === 'code_mode_only' ? [entry.slug] : [];
+            });
+        }
         return client;
     } catch (error) {
         await client.dispose().catch(() => undefined);
+        if (error instanceof PluginError) throw error;
         if (params.signal?.aborted || !enableRealtimeConversation) throw error;
         throw createCodexRealtimeEnabledAppServerLaunchUnavailableError();
     }

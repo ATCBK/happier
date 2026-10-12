@@ -139,6 +139,12 @@ async function openCodexSession(
 function createCodexNativeTerminalSurface(): AgentTerminalSurface {
   return {
     resolveLaunch(request) {
+      if (request.configuration?.unlistedTools === 'deny') {
+        throw new PluginError({
+          code: 'codex_tool_restriction_unsupported_transport',
+          message: 'Codex terminal launch cannot retain the host-filtered MCP tool catalog. Continue in the remote session.',
+        });
+      }
       const runtimeDescriptor = request.metadata.runtimeDescriptorV1
         ? readCanonicalCodexAgentRuntimeDescriptorV1(request.metadata.runtimeDescriptorV1)
         : null;

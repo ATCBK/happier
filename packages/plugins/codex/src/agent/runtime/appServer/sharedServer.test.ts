@@ -1,8 +1,114 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir, userInfo } from 'node:os';
+import { dirname, join } from 'node:path';
+import { WebSocketServer } from 'ws';
+import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 
 import { createCodexSharedAppServer } from './sharedServer.js';
 
 describe('createCodexSharedAppServer', () => {
+  it.skipIf(process.platform === 'win32').each([
+    ['serializes native socket startup until the first real initialize completes', false, false],
+    ['keeps failed native socket startup exclusive through process shutdown', true, false],
+    ['preserves native initialization failure alongside failed process cleanup', true, true],
+  ] as const)('%s', async (_name, firstInitializeFails, firstCleanupFails) => {
+    const directory = await mkdtemp(join(tmpdir(), 'codex-shared-startup-'));
+    const guard = join(directory, 'native-startup');
+    const nativeStartupLock = join(userInfo().homedir, '.happier-codex-native-startup.lock');
+    const cleanupWasExclusive: boolean[] = [];
+    let spawnCount = 0;
+    const result = (stdout = ''): PluginProcessResult => ({
+      termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+      stdout: new TextEncoder().encode(stdout), stderr: new Uint8Array(),
+      stdoutTruncated: false, stderrTruncated: false,
+    });
+    // Exec is the OS/host process boundary. The actual socket and real plugin
+    // client perform the handshake; no provider orchestration is replaced.
+    const exec = {
+      systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' } }) },
+      run: async (request: Parameters<ExecService['run']>[0]) => result(request.args?.includes('--version')
+        ? 'codex-cli 0.162.1' : 'realtime_conversation under development false'),
+      spawn: async (request: Parameters<ExecService['spawn']>[0]) => {
+        const shouldFailInitialize = firstInitializeFails && spawnCount++ === 0;
+        const startupOwner = readFileSync(nativeStartupLock, 'utf8');
+        await mkdir(guard);
+        const args = request.args ?? [];
+        const endpoint = args[args.indexOf('--listen') + 1];
+        if (!endpoint?.startsWith('unix://')) throw new Error('Expected native Unix endpoint');
+        const socketPath = endpoint.slice('unix://'.length);
+        await mkdir(dirname(socketPath), { recursive: true });
+        const http = createServer();
+        const sockets = new WebSocketServer({ server: http });
+        sockets.on('connection', socket => socket.on('message', async data => {
+          const message = JSON.parse(String(data)) as { id?: number; method?: string };
+          if (message.method === 'initialize') {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            if (shouldFailInitialize) {
+              socket.send(JSON.stringify({ id: message.id, error: { code: -32000, message: 'fixture initialize failed' } }));
+              return;
+            }
+            await rm(guard, { recursive: true });
+            socket.send(JSON.stringify({ id: message.id, result: {} }));
+          } else if (message.id !== undefined) {
+            socket.send(JSON.stringify({ id: message.id, result: { pong: true } }));
+          }
+        }));
+        await new Promise<void>(resolve => http.listen(socketPath, resolve));
+        let settleExit: ((exit: PluginProcessResult) => void) | undefined;
+        const exited = new Promise<PluginProcessResult>(resolve => { settleExit = resolve; });
+        return {
+          pid: process.pid, write: async () => undefined, closeStdin: async () => undefined,
+          onOutput: () => ({ dispose: () => undefined }), wait: async () => await exited,
+          dispose: async () => {
+            if (shouldFailInitialize) {
+              let observedOwner: string | null = null;
+              try { observedOwner = readFileSync(nativeStartupLock, 'utf8'); } catch { /* An absent owner means unlocked cleanup. */ }
+              cleanupWasExclusive.push(observedOwner === startupOwner);
+            }
+            for (const socket of sockets.clients) socket.terminate();
+            await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+            sockets.close();
+            await rm(guard, { recursive: true, force: true });
+            settleExit?.(result());
+            if (shouldFailInitialize && firstCleanupFails) throw new Error('fixture native disposal failed');
+          },
+        };
+      },
+    } as unknown as ExecService; // A deliberately narrow fixture for the host-owned process boundary.
+    const servers: NonNullable<Awaited<ReturnType<typeof createCodexSharedAppServer>>>[] = [];
+    const clients: Awaited<ReturnType<(typeof servers)[number]['createClient']>>[] = [];
+    try {
+      const outcomes = await Promise.allSettled([0, 1].map(async index => {
+        const server = await createCodexSharedAppServer({
+          exec, processEnv: {}, platform: 'linux',
+          dependencies: {
+            createRuntimeDirectory: async () => await mkdtemp(join('/tmp', `c-${index}-`)),
+            removeRuntimeDirectory: async path => await rm(path, { recursive: true, force: true }),
+          },
+        });
+        if (!server) throw new Error('Expected supported shared control');
+        servers.push(server);
+        const client = await server.createClient({ cwd: directory, processEnv: {}, configOverrides: [], disableUserMcpServers: false });
+        clients.push(client);
+        return await client.request('test/ping');
+      }));
+      expect(outcomes).toEqual(expect.arrayContaining([
+        firstInitializeFails ? { status: 'rejected', reason: firstCleanupFails
+          ? expect.objectContaining({ name: 'AggregateError', errors: [expect.objectContaining({ code: -32000 }), expect.objectContaining({ message: 'fixture native disposal failed' })] })
+          : expect.any(Error) } : { status: 'fulfilled', value: { pong: true } },
+        { status: 'fulfilled', value: { pong: true } },
+      ]));
+      if (firstInitializeFails) expect(cleanupWasExclusive[0]).toBe(true);
+    } finally {
+      await Promise.all(clients.map(client => client.dispose()));
+      await Promise.all(servers.map(server => server.dispose()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses the canonical app-server startup budget for the shared-control version probe', async () => {
     const run = vi.fn(async () => ({
       stdout: new TextEncoder().encode('codex-cli 0.131.0'),

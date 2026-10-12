@@ -451,6 +451,7 @@ type CodexTestLogger = Readonly<{
 type CodexTestRuntimeAuthRefresh = (request: unknown) => Promise<unknown> | unknown;
 type CodexTestContextOverrides = Readonly<{
   logger?: CodexTestLogger;
+  runtimeFetch?: HttpService;
   writeStateField?: (request: unknown) => Promise<void>;
   auth?: Readonly<{ services: Readonly<{ refreshRuntimeAuth: CodexTestRuntimeAuthRefresh }> }>;
   sessions?: Readonly<{
@@ -494,7 +495,7 @@ function createCodexTestContextFixture(params: Readonly<{
       logger,
       env: { list: () => ({}) },
       exec,
-      runtimeFetch,
+      runtimeFetch: params.overrides?.runtimeFetch ?? runtimeFetch,
       accountUsage: params.accountUsage ?? createAccountUsageService({}),
       refreshRuntimeAuth,
       writeStateField: params.overrides?.writeStateField ?? (async (request: unknown) => {
@@ -512,6 +513,7 @@ function createRuntime(overrides: Readonly<{
   happierSessionId?: string;
   processEnv?: Readonly<Record<string, string | undefined>>;
   initialModelId?: string;
+  connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   initialCollaborationModeId?: string;
   initialProviderBinding?: typeof providerBindingMaterialization.engineConfig;
   publishGeneratedMedia?: (candidate: import('./media/generatedMedia.js').CodexGeneratedMediaCandidate) => Promise<void>;
@@ -573,6 +575,7 @@ function createRuntime(overrides: Readonly<{
       : { happierSessionId: overrides.happierSessionId ?? 'session-1' }),
     processEnv: overrides.processEnv,
     initialModelId: overrides.initialModelId,
+    connectedAccountService: overrides.connectedAccountService,
     initialCollaborationModeId: overrides.initialCollaborationModeId,
     initialProviderBinding: overrides.initialProviderBinding,
     ...(overrides.observeGoal ? { observeGoal: overrides.observeGoal } : {}),
@@ -1059,6 +1062,40 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     expect(publishGeneratedMedia).toHaveBeenCalledTimes(1);
   });
 
+  it('attributes only actual request auth and drops combined evidence after an in-turn account switch', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-request-attribution-'));
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const runtime = createRuntime({ processEnv: { CODEX_HOME: codexHome }, connectedAccountService: service });
+    const events: CodexAppServerEvent[] = [];
+    runtime.events.subscribe(event => events.push(event));
+    const apply = (profileId: string) => runtime.runtimeAuth.apply({ serviceId: service.localId,
+      authGeneration: { credential: buildConnectedCodexCredential(profileId), credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+        forcedWorkspaceId: 'acct_target', selection: { kind: 'profile', serviceId: service.localId, profileId } } });
+    const usage = (turnId: string) => emitNotification('thread/tokenUsage/updated', { threadId: 'thread-1', turnId,
+      tokenUsage: { last: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } } });
+    try {
+      expect(await apply('account-a')).toMatchObject({ ok: true });
+      await runtime.send({ v: 1, text: 'first' }, { turnId: 'host-first' });
+      usage('turn-1');
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).toMatchObject({ attribution: {
+        v: 1, turnId: 'host-first', source: { kind: 'native', connectedAccount: { service, accountId: 'account-a' } } } });
+      expect(await apply('account-b')).toMatchObject({ ok: true });
+      usage('turn-1');
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).not.toHaveProperty('attribution');
+      expect(await apply('account-a')).toMatchObject({ ok: true });
+      usage('turn-1');
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).not.toHaveProperty('attribution');
+      const completion = waitForCodexAppServerRuntimeTurnCompletion(runtime);
+      emitNotification('turn/completed', completedTurn('turn-1'));
+      await completion;
+      expect(await apply('account-b')).toMatchObject({ ok: true });
+      await runtime.send({ v: 1, text: 'next' }, { turnId: 'host-next' });
+      usage('turn-2');
+      expect(events.filter(event => event.kind === 'usage-observed').at(-1)).toMatchObject({ attribution: {
+        v: 1, turnId: 'host-next', source: { kind: 'native', connectedAccount: { service, accountId: 'account-b' } } } });
+    } finally { await runtime.dispose(); await rm(codexHome, { recursive: true, force: true }); }
+  });
+
   it('publishes app-server token usage through the canonical transcript seam', async () => {
     const runtime = createRuntime({ initialModelId: 'gpt-5.4' });
     const events: CodexAppServerEvent[] = [];
@@ -1351,6 +1388,9 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     const failure = rejection as Error & { runtimeAuthClassification?: unknown };
     expect(failure.name).toBe('CodexAppServerTurnFailure');
     expect(failure.message).toBe(safeFailurePreview);
+    expect(logger.warn.mock.calls.filter(([message]) => message === 'Codex app-server turn failed')).toEqual([
+      ['Codex app-server turn failed', expect.objectContaining({ failureReason: 'usage_limit', providerStartAcknowledged: true })],
+    ]);
     expect(failure.stack ?? '').not.toContain(providerMessageSentinel);
     expect(failure.stack ?? '').not.toContain(providerAdditionalDetailsSentinel);
     expect(failure.stack ?? '').not.toContain(hostilePlanTypeSentinel);
@@ -2572,9 +2612,11 @@ describe('Codex app-server temporary recoverable turn failures', () => {
 
   it.each([
     new Error("model 'gpt-6.1-sol' is not enabled in rustponsesapi"),
-    createCodexAppServerRpcError({ method: 'turn/start', code: -32000, message: 'Usage limit exceeded' }),
+    createCodexAppServerRpcError({ method: 'turn/start', code: -32000, message: 'Usage limit exceeded',
+      data: { codexErrorInfo: 'UsageLimitExceeded' } }),
   ])('keeps custody unknown without a definite model-entitlement application rejection (%s)', async (error) => {
-    const runtime = createRuntime();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runtime = createRuntime({ ctx: { logger } });
     clientState.rejectNextTurnStart(error);
     const native = createCodexNativeAppServerExecutionRunConversationRuntime(runtime, 'run-1');
     const events: AgentExecutionRunConversationEventV1[] = [];
@@ -2588,6 +2630,14 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       });
       expect(events.some((event) => event.kind === 'input-custody-unknown')).toBe(true);
       expect(events.some((event) => event.kind === 'input-rejected')).toBe(false);
+      expect(logger.warn.mock.calls.filter(([message]) => message === 'Codex app-server turn failed')).toEqual([
+        ['Codex app-server turn failed', {
+          failureReason: error.name === 'JsonRpcApplicationError' ? 'usage_limit' : 'unclassified_provider_error',
+          ...(error.name === 'JsonRpcApplicationError' ? { providerErrorCode: 'UsageLimitExceeded' } : {}),
+          providerStartAcknowledged: false,
+        }],
+      ]);
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(error.message);
     } finally { await native.dispose(); }
   });
 
@@ -2969,6 +3019,8 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-plugin-usage-adoption-'));
     const records: unknown[] = [];
     const adoptions: unknown[] = [];
+    let resolveAdoption!: () => void;
+    const adoptionRecorded = new Promise<void>((resolve) => { resolveAdoption = resolve; });
     try {
       const runtime = createRuntime({
         processEnv: { CODEX_HOME: codexHome },
@@ -2979,6 +3031,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
           },
           adoptProvisionalRecord: async (input: unknown) => {
             adoptions.push(input);
+            resolveAdoption();
             return { status: 'adopted' };
           },
         }),
@@ -2997,8 +3050,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       emitNotification('account/rateLimits/updated', {
         rateLimits: { primary: { used_percent: 42, resets_at: 1779019200000 } },
       });
-      await waitForUsageRecordCount(records, 2);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await adoptionRecorded;
 
       expect(records.at(-1)).toMatchObject({
         snapshot: { accountSubject: { kind: 'providerSubject', id: 'acct_adopted' } },
@@ -3222,7 +3274,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     }
   });
 
-  it('classifies a delayed turn failure with the credential identity that launched the provider turn', async () => {
+  it('withdraws credential attribution after an in-turn auth transition without blocking a later prompt', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-plugin-turn-credential-epoch-'));
     try {
       await mkdir(codexHome, { recursive: true });
@@ -3276,13 +3328,12 @@ describe('Codex app-server temporary recoverable turn failures', () => {
         failure = error;
       }
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error & { runtimeAuthClassification?: unknown }).runtimeAuthClassification).toMatchObject({
-        sourceProviderAccountId: 'acct_same',
-        failingAccessTokenFingerprint: computeCodexAccessTokenFingerprint('old-access-token'),
-      });
-      expect((failure as Error & { runtimeAuthClassification?: unknown }).runtimeAuthClassification).not.toMatchObject({
-        failingAccessTokenFingerprint: computeCodexAccessTokenFingerprint('new-access-token'),
-      });
+      const classification = (failure as Error & { runtimeAuthClassification?: unknown }).runtimeAuthClassification;
+      expect(classification).toMatchObject({ kind: 'usage_limit' });
+      expect(classification).not.toHaveProperty('sourceProviderAccountId');
+      expect(classification).not.toHaveProperty('failingAccessTokenFingerprint');
+      await expect(runtime.send({ v: 1, text: 'new explicit prompt' }, { turnId: 'later-turn' }))
+        .resolves.toEqual({ status: 'accepted' });
     } finally {
       await rm(codexHome, { recursive: true, force: true });
     }
@@ -3546,24 +3597,103 @@ describe('Codex app-server temporary recoverable turn failures', () => {
           generation: 12,
         },
       })).resolves.toEqual({
-        ok: true,
-        serviceId: 'openai-codex',
-        identity: {
-          strategy: 'provider_account_id',
-          proofStrength: 'exact',
-          providerAccountId: 'acct_seeded_stale',
-          accountLabel: 'seeded@example.test',
-          source: 'spawn_selection',
-        },
-        runtime: {
-          safeToProbe: true,
-          safeToApply: true,
-          inProviderTurn: false,
-          profileId: 'target',
-          groupId: 'team',
-          generation: 12,
-        },
+        ok: false,
+        errorCode: 'runtime_identity_probe_unavailable',
+        error: 'runtime_identity_probe_unavailable',
       });
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('records the access material actually injected during native initialization rather than an earlier home read', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-current-startup-'));
+    const selection = { kind: 'group', serviceId: 'openai-codex', groupId: 'team', activeProfileId: 'current', generation: 14 };
+    const launchAuth = JSON.stringify({ tokens: { access_token: 'launch-access', account_id: 'acct_launch' } });
+    try {
+      await writeFile(join(codexHome, 'auth.json'), launchAuth);
+      vi.mocked(createCodexAppServerClient).mockImplementationOnce(async () => {
+        await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: {
+          access_token: 'current-access', account_id: 'acct_current',
+        } }));
+        return { request: clientState.request, notify: clientState.notify,
+          registerRequestHandler: clientState.registerRequestHandler,
+          registerNotificationHandler: clientState.registerNotificationHandler,
+          onExit: clientState.onExit, dispose: async () => undefined };
+      });
+      const runtime = asConnectedServiceAuthRuntime(createRuntime({
+        processEnv: {
+          CODEX_HOME: codexHome,
+          HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{
+            ...selection,
+            credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+          }]),
+        },
+      }));
+      await startCodexAppServerRuntime(runtime);
+      expect(clientState.requests.filter(({ method }) => method === 'account/login/start')).toEqual([{
+        method: 'account/login/start', params: {
+          type: 'chatgptAuthTokens', accessToken: 'current-access', chatgptAccountId: 'acct_current',
+        },
+      }]);
+      await expect(runtime.runtimeAuth.readIdentity({ serviceId: 'openai-codex' })).resolves.toMatchObject({
+        ok: true, identity: { providerAccountId: 'acct_current' },
+        runtime: { profileId: 'current', groupId: 'team', generation: 14 },
+      });
+      expect(JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct_current' } });
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the applied current account for reset credits without rereading launch auth or refreshing per observation', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-current-credits-'));
+    const requests: unknown[] = [];
+    const refreshRuntimeAuth = vi.fn(async () => ({ status: 'refreshed', result: {
+      accessToken: 'refreshed-target-access', chatgptAccountId: 'acct_target',
+      credentialRevision: 'csr_ZYXWVUTSRQPONMLKJHGFEDCBA1',
+    } }));
+    try {
+      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: {
+        access_token: 'launch-access', account_id: 'acct_launch',
+      } }));
+      const runtime = asConnectedServiceAuthRuntime(createRuntime({
+        processEnv: { CODEX_HOME: codexHome, HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{
+          kind: 'profile', serviceId: 'openai-codex', profileId: 'launch', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+        }]) },
+        ctx: {
+          auth: { services: { refreshRuntimeAuth } },
+          runtimeFetch: { request: async (request) => {
+            requests.push(request);
+            return { status: 200, finalUrl: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: {}, body: new TextEncoder().encode('{}') };
+          } },
+        },
+      }));
+      await startCodexAppServerRuntime(runtime);
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(0));
+      requests.length = 0;
+      const refreshCount = refreshRuntimeAuth.mock.calls.length;
+      await expect(runtime.runtimeAuth.apply({ serviceId: 'openai-codex', authGeneration: {
+        credential: buildConnectedCodexCredential('target'),
+        credentialRevision: 'csr_ZYXWVUTSRQPONMLKJHGFEDCBA1',
+        selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'target' },
+      } })).resolves.toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(0));
+      expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ headers: expect.objectContaining({
+        Authorization: 'Bearer target-access', 'ChatGPT-Account-Id': 'acct_target',
+      }) })]));
+      expect(refreshRuntimeAuth.mock.calls.length).toBe(refreshCount);
+      await expect(clientState.invokeRequestHandler('account/chatgptAuthTokens/refresh', {})).resolves.toMatchObject({
+        accessToken: 'refreshed-target-access', chatgptAccountId: 'acct_target',
+      });
+      requests.length = 0;
+      const settledRefreshCount = refreshRuntimeAuth.mock.calls.length;
+      emitNotification('account/rateLimits/updated', { rateLimits: { primary: { used_percent: 42 } } });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(0));
+      expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ headers: expect.objectContaining({
+        Authorization: 'Bearer refreshed-target-access', 'ChatGPT-Account-Id': 'acct_target',
+      }) })]));
+      expect(refreshRuntimeAuth.mock.calls.length).toBe(settledRefreshCount);
     } finally {
       await rm(codexHome, { recursive: true, force: true });
     }
@@ -3853,12 +3983,10 @@ describe('Codex app-server temporary recoverable turn failures', () => {
           nativeHome: { root: codexHome, readFiles: async () => ({ 'auth.json': new Uint8Array(await readFile(join(codexHome, 'auth.json'))) }) },
           auth: { services: { refreshRuntimeAuth: async (request: unknown) => {
             refreshRequests.push(request);
-            // The daemon owns refresh and exact-home rematerialization; the plugin only decodes it.
-            await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
-              auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'synthetic-refreshed', account_id: 'acct_target' },
-            }));
+            // The daemon's settled credential is authoritative; the launch file stays unchanged.
             return { status: 'refreshed', result: {
               credentialRevision: 'csr_ZYXWVUTSRQPONMLKJHGFEDCBA1',
+              accessToken: 'synthetic-refreshed', providerAccountId: 'acct_target',
             } };
           } } },
         } },

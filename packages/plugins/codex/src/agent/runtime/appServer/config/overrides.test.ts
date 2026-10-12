@@ -1,8 +1,49 @@
 import { describe, expect, it } from 'vitest';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import { buildCodexAppServerConfigOverrides } from './overrides';
 
 describe('buildCodexAppServerConfigOverrides', () => {
+    it('removes native command, file, connector and delegation tools under an exclusive MCP recipe', () => {
+        const overrides = buildCodexAppServerConfigOverrides({}, {
+            unlistedTools: 'deny',
+            allowedTools: ['mcp__wilson-intake__*'],
+        });
+
+        expect(overrides).toEqual(expect.arrayContaining([
+            'features.shell_tool=false',
+            'features.view_image=false',
+            'features.apps=false',
+            'features.multi_agent=false',
+            'features.code_mode.enabled=false',
+            'features.code_mode.excluded_tool_namespaces=["functions"]',
+            'web_search="disabled"',
+        ]));
+    });
+
+    it('keeps explicitly listed native web search available under deny', () => {
+        const overrides = buildCodexAppServerConfigOverrides({}, {
+            unlistedTools: 'deny', allowedTools: ['WebSearch'],
+        });
+        expect(overrides).toContain('web_search="cached"');
+    });
+
+    it('retains the host-filtered native MCP tool catalog including an empty catalog', () => {
+        const overrides = buildCodexAppServerConfigOverrides({
+            'wilson-intake': { command: 'bridge', enabledTools: ['intake_lead'] },
+            happier: { command: 'bridge', enabledTools: [] },
+        });
+        expect(overrides).toContain('mcp_servers.happier__wilson-intake.enabled_tools=["intake_lead"]');
+        expect(overrides).toContain('mcp_servers.happier__wilson-intake.default_tools_approval_mode="approve"');
+        expect(overrides).toContain('mcp_servers.happier.enabled_tools=[]');
+    });
+
+    it('refuses a confined MCP server without the canonical host tool catalog', () => {
+        expect(() => buildCodexAppServerConfigOverrides({ wilson: { command: 'bridge' } }, {
+            unlistedTools: 'deny', allowedTools: ['mcp__wilson__*'],
+        })).toThrow(expect.objectContaining({ code: 'codex_tool_restriction_catalog_unavailable' }));
+    });
+
     it('translates materialized Happier MCP servers into additive app-server config overrides', () => {
         const overrides = buildCodexAppServerConfigOverrides({
             happier: {
@@ -22,14 +63,7 @@ describe('buildCodexAppServerConfigOverrides', () => {
             'mcp_servers.happier.enabled=true',
             'mcp_servers.happier.startup_timeout_sec=60',
             'mcp_servers.happier.tool_timeout_sec=2147000',
-            'mcp_servers.happier.tools.action_options_resolve.approval_mode="approve"',
-            'mcp_servers.happier.tools.action_spec_get.approval_mode="approve"',
-            'mcp_servers.happier.tools.action_spec_search.approval_mode="approve"',
-            'mcp_servers.happier.tools.change_title.approval_mode="approve"',
-            'mcp_servers.happier.tools.execution_run_get.approval_mode="approve"',
-            'mcp_servers.happier.tools.execution_run_list.approval_mode="approve"',
-            'mcp_servers.happier.tools.execution_run_wait.approval_mode="approve"',
-            'mcp_servers.happier.tools.session_title_set.approval_mode="approve"',
+            ...listHappierToolAutoApprovedNamesV1().map((name) => `mcp_servers.happier.tools.${name}.approval_mode="approve"`),
         ]);
     });
 
