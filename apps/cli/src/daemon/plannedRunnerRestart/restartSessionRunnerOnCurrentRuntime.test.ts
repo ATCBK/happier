@@ -21,6 +21,7 @@ import {
 import {
   resolveRequestAuthSourceCutoverRequirement,
 } from './requestAuthSourceCutover';
+import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
 
 function currentIdentity(version: string): SessionRunnerEntrypointIdentity {
   return {
@@ -73,6 +74,23 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it('refreshes exact recovered terminal custody before deciding an adopted stale runner is busy', async () => {
+    const tracked = trackedSession({ reattachedInterruptedTurnId: 'completed-before-adoption' });
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    const result = await restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'daemon_restart_session_runners_command', dryRun: true },
+      tracked, currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      refreshTrackedSessionRuntimeSnapshot: async () => {
+        await applyTrackedSessionTurnLifecycle({ trackedSessions: [tracked], sessionId: 'sess-1',
+          event: 'reconcile_reattached',
+          readReattachedTurnSnapshot: async () => ({ id: 'sess-1', latestTurnId: 'completed-before-adoption', latestTurnStatus: 'completed' }),
+          updateSessionMarkerActiveTurn: async () => true,
+        });
+      },
+    });
+    expect(result).toMatchObject({ ok: true, status: 'dry_run_restartable' });
+    expect(requestRestart).not.toHaveBeenCalled();
+  });
   it('requests a version runtime refresh for stale eligible runners', async () => {
     const requestRestart = vi.fn(async () => ({ signaled: true }));
 

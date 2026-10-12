@@ -58,8 +58,8 @@ export type PlannedRunnerRestartDeferralQueue = Readonly<{
     policy: PlannedRunnerRestartPolicy;
     source: PlannedRunnerRestartSource;
     target: ConnectedServiceSwitchTarget;
-    runSwitch: () => Promise<void>;
-  }>) => Promise<void>;
+    runSwitch: () => Promise<unknown>;
+  }>) => Promise<unknown>;
 }>;
 
 export type PlannedRunnerRestartDeferral =

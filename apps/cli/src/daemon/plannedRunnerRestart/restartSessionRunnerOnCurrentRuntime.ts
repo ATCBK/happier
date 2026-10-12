@@ -349,6 +349,9 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
   const tracked = input.tracked ?? null;
   const expectedRunnerProcessIdentity =
     resolveExpectedRunnerProcessIdentity(input);
+  if (tracked?.reattachedInterruptedTurnId && !tracked.activeTurnId && input.refreshTrackedSessionRuntimeSnapshot) {
+    await input.refreshTrackedSessionRuntimeSnapshot({ sessionId, tracked });
+  }
   let contextFailure = validateRestartContext({
     request: input.request,
     expectedRunnerProcessIdentity,
