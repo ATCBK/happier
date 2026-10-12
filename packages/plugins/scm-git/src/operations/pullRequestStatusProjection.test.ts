@@ -9,6 +9,8 @@ import type {
 } from '@happier-dev/plugin-sdk/scm';
 
 import { createPrStatusCache } from '../hostingProviders/prStatusCache.js';
+import { createScmHostingProviderRegistry } from '@/scm/hostingProviders/registry';
+import { createGithubScmHostingProviderAdapter } from '../../../scm-github/src/adapter.js';
 import {
     projectPullRequestStatus,
     resolveDefaultPullRequestStatusProjectionRegistry,
@@ -104,6 +106,23 @@ function createRegistry() {
 }
 
 describe('pull request status projection', () => {
+    it('preserves draft and unknown review facts from the open-review cache rather than projecting no review', () => {
+        const registry = createScmHostingProviderRegistry({ providers: [{ id: 'github', pluginId: 'happier.scm.github', kind: 'github',
+            displayName: 'GitHub', capabilities: [] }], runtimeRegistrations: [{ pluginId: 'happier.scm.github', occurrenceId: 'cache-test',
+            registration: { id: 'github', adapter: { routing: createGithubScmHostingProviderAdapter() } } }] });
+        const detected = registry.detectRemote({ remoteName: 'origin', remoteUrl: 'git@github.com:happier-dev/happier.git' });
+        if (detected.kind !== 'resolved') throw new Error('Expected the real GitHub routing contribution to resolve the fixture remote');
+        const provider = detected.provider;
+        for (const state of ['draft', 'unknown'] as const) {
+            const cache = createPrStatusCache({ now: () => 1000 });
+            const pullRequest: ScmPullRequestSummary = { provider, title: 'Review', url: 'https://github.com/happier-dev/happier/pull/42',
+                baseBranch: 'main', headBranch: 'feature/pr-cache', state };
+            cache.setSuccess({ key: { workspaceKey: 'machine-1:/repo', repoRootPath: '/repo', provider, baseBranch: 'main',
+                headBranch: 'feature/pr-cache', state: 'open' }, pullRequests: [pullRequest] });
+            expect(projectPullRequestStatus({ snapshot: createSnapshot(), registry, cache, now: () => 1000 })
+                .pullRequestStatus?.openPullRequest).toEqual(pullRequest);
+        }
+    });
     it('does not construct a second first-party SCM provider plugin registry', () => {
         const source = readFileSync(new URL('./pullRequestStatusProjection.ts', import.meta.url), 'utf8');
 

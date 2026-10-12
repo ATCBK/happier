@@ -117,7 +117,8 @@ export function projectPullRequestStatus(input: Readonly<{
         ? registry.buildCompareUrl({ provider, base: baseBranch, head: headBranch })
         : { kind: 'unsupported' as const };
     const openPullRequest = cached?.kind === 'success'
-        ? cached.pullRequests.find((pr) => pr.headBranch === headBranch && pr.state === 'open') ?? null
+        ? cached.pullRequests.find((pr) => pr.headBranch === headBranch && (pr.state === 'open' || pr.state === 'draft'))
+            ?? cached.pullRequests.find((pr) => pr.headBranch === headBranch && pr.state === 'unknown') ?? null
         : null;
     const pullRequestStatus: ScmPullRequestStatusProjection = {
         provider,
