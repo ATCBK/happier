@@ -13,6 +13,7 @@ export type ClaudePredecessorMessageMetaDefaults = Readonly<{
     claudeUnifiedTerminalResumeChoice: 'ask_every_time' | 'resume_from_summary' | 'resume_full_session';
     claudeRemoteSettingSourcesV2: readonly (typeof CLAUDE_SETTING_SOURCES_V2)[number][];
     claudeCodeExperimentalAgentTeamsEnabled: boolean;
+    claudeCodeIncludeInNativeHistory: boolean;
     claudeLocalPermissionBridgeEnabled: boolean;
     claudeLocalPermissionBridgeWaitIndefinitely: boolean;
     claudeLocalPermissionBridgeTimeoutSeconds: number;
@@ -37,6 +38,9 @@ type ClaudeDebugCategories = readonly (typeof CLAUDE_REMOTE_DEBUG_CATEGORIES)[nu
  * `packages/agents/src/providerSettings/definitions/claudeRemote.ts` and its
  * Claude CLI reads it through
  * `apps/cli/src/backends/claude/remote/claudeRemoteMetaState.ts`.
+ *
+ * The additive claudeCodeIncludeInNativeHistory field is also consumed by the moving
+ * predecessor Claude metadata owner as of issue #515.
  *
  * This private bundled bridge exists only while a supported release or the
  * moving predecessor reads these fields from persisted outbound user-message
@@ -129,6 +133,7 @@ export function buildClaudePredecessorMessageMeta(
         claudeRemoteSettingSourcesV2: settingSourcesV2,
         ...(legacySettingSources ? { claudeRemoteSettingSources: legacySettingSources } : {}),
         claudeCodeExperimentalAgentTeamsEnabled: readBoolean(defaults, settings, 'claudeCodeExperimentalAgentTeamsEnabled'),
+        claudeCodeIncludeInNativeHistory: readBoolean(defaults, settings, 'claudeCodeIncludeInNativeHistory'),
         claudeLocalPermissionBridgeEnabled: readBoolean(defaults, settings, 'claudeLocalPermissionBridgeEnabled'),
         claudeLocalPermissionBridgeWaitIndefinitely: readBoolean(defaults, settings, 'claudeLocalPermissionBridgeWaitIndefinitely'),
         claudeLocalPermissionBridgeTimeoutSeconds: readNumber(defaults, settings, 'claudeLocalPermissionBridgeTimeoutSeconds'),
