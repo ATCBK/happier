@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { PluginConnectedAccountConfigurationFieldV2Schema, PluginConnectedAccountDescriptorContributionV2Schema } from './pluginConnectedAccountAuthenticationV2.js';
+import { PluginConnectedAccountAuthenticationModeV2Schema, PluginConnectedAccountConfigurationFieldV2Schema, PluginConnectedAccountDescriptorContributionV2Schema } from './pluginConnectedAccountAuthenticationV2.js';
+
+it('refuses authorization-code descriptors that omit their callback URL', () => {
+  const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' };
+  const descriptor = { id: 'work', title: 'Work', authentication: { defaultModeId: 'oauth', modes: [mode] } };
+  expect(PluginConnectedAccountAuthenticationModeV2Schema.safeParse(mode).success).toBe(false);
+  expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse(descriptor).success).toBe(false);
+  expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse({
+    ...descriptor, authentication: { ...descriptor.authentication, modes: [{ ...mode, callbackUrl: 'https://work.example/callback' }] },
+  }).success).toBe(true);
+});
 
 it('admits configuration-only native account references without inventing a credential field', () => {
   const descriptor = { id: 'native', title: 'Existing native setup', authentication: {
@@ -13,7 +23,7 @@ it('admits configuration-only native account references without inventing a cred
 
 it('admits only HTTPS provider billing destinations without embedded credentials', () => {
   const descriptor = { id: 'work', title: 'Work', authentication: { defaultModeId: 'oauth', modes: [
-    { id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' },
+    { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://work.example/callback', pkce: 'required', outcomeReconciliation: 'none' },
   ] } };
   expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse({ ...descriptor, billingUrl: 'https://provider.test/settings/billing' }).success).toBe(true);
   for (const billingUrl of ['javascript:alert(1)', 'http://provider.test/billing', 'https://user:secret@provider.test/billing']) {
@@ -41,7 +51,7 @@ it('admits an explicitly supported reset capability while keeping the capability
 });
 
 it('admits provider-declared raw authorization codes only in the required-PKCE OAuth mode', () => {
-  const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none', allowRawAuthorizationCode: true };
+  const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://work.example/callback', pkce: 'required', outcomeReconciliation: 'none', allowRawAuthorizationCode: true };
   const descriptor = { id: 'work', title: 'Work', authentication: { defaultModeId: 'oauth', modes: [mode] } };
   expect(PluginConnectedAccountDescriptorContributionV2Schema.safeParse(descriptor).success).toBe(true);
   for (const invalidMode of [
@@ -80,6 +90,7 @@ it('makes direct export an explicit manual-mode contract that OAuth modes cannot
       modes: [{
         id: 'oauth',
         kind: 'oauthAuthorizationCode',
+        callbackUrl: 'https://work.example/callback',
         pkce: 'required',
         outcomeReconciliation: 'providerCheck',
         directExport: contract,

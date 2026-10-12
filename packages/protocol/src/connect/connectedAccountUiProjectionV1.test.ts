@@ -74,6 +74,7 @@ describe('ConnectedAccountUiProjectionEntryV1', () => {
         modes: [{
           id: 'oauth',
           kind: 'oauthAuthorizationCode',
+          callbackUrl: 'https://provider.example/oauth/callback',
           pkce: 'required',
           outcomeReconciliation: 'none',
           clientSecretEnvKey: 'OAUTH_CLIENT_SECRET',

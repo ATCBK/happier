@@ -215,7 +215,15 @@ export const PluginConnectedAccountAuthenticationModeV2Schema =
       allowRawAuthorizationCode: z.boolean().optional(),
       outcomeReconciliation: PluginConnectedAccountOutcomeReconciliationV2Schema,
       configuration: PluginConnectedAccountConfigurationV2Schema.optional(),
-    }).strict(),
+    }).strict().superRefine((mode, context) => {
+      if (mode.callbackUrl === undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: ['callbackUrl'],
+          message: 'Authorization-code authentication requires a declared callback URL.',
+        });
+      }
+    }),
     z.object({
       id: asProtocolZod(PluginContributionLocalIdSchema),
       kind: z.literal('oauthDeviceCode'),
