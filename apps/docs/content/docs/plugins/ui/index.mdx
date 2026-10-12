@@ -73,15 +73,15 @@ that artifact; it must not assume host styling, overlay, focus, or navigation
 behavior. Never construct a host provider or import a Happier-internal
 transport.
 
-The root `@happier-dev/plugin-ui` entry is the ergonomic, curated author tier
-and the normal starting point. Trusted React Native and React Native Web
+The `/components` entry is the author UI layer, re-exported by the root
+`@happier-dev/plugin-ui` entry. Trusted React Native and React Native Web
 authors who need custom composition may also import
-`@happier-dev/plugin-ui/presentation` for shared React Native/React Native Web
+`@happier-dev/plugin-ui/components` for shared React Native/React Native Web
 primitives and behavior, or `@happier-dev/plugin-ui/environment` for
 environment facts, hooks, and its standalone fact provider. The explicit
 `@happier-dev/plugin-ui/advanced` entry is reserved for isolated tests and
 complete standalone mounts that genuinely own provider/Resource lifetime.
-`/presentation` does not re-export environment contracts: import
+`/components` does not re-export environment contracts: import
 `/environment` directly for theme, localization, accessibility, platform, or
 inset facts. Those deliberate advanced tiers share the canonical core
 implementations; they are prepublication work in progress and carry no released
@@ -478,6 +478,25 @@ authority. The host retains the framed full view when a compact renderer is
 absent. These are source authoring contracts, not published-SDK or
 loaded-platform certification.
 
+### Draw a widget body's rows
+
+In current development source, `WidgetGlanceRow` is the row Happier's own
+widgets draw inside a body: a mark, a name with an optional short `tag`, an
+optional quiet `fact` beneath (`factTone="attention"` when it needs the person),
+and one `trailing` element. Give it `onPress` when the row leads somewhere; leave
+it out when the row carries its own control. `variant="fact"` draws a quiet
+one-line statement instead of a named thing. `DiffStat` draws lines added and
+removed (`+53 −5`) in the host's version-control inks and leaves out a side that
+is zero.
+
+```tsx
+import { DiffStat, WidgetGlanceRow } from '@happier-dev/plugin-ui';
+
+<WidgetGlanceRow mark="change-open" title="fix/settings" tag="Here"
+  fact="nl1 · agent working" trailing={<DiffStat added={48} removed={12} />}
+  onPress={openCheckout} />
+```
+
 While the selected Session's detail is loading, a configured widget shows its
 loading state without asking the person to select the Session again. After the
 read settles, a missing or denied target shows the existing refusal; an
@@ -584,18 +603,24 @@ widget Actions without embedding host areas. Project-aside integration separatel
 Project program's portable Source producer; an exact checkout is not that Source.
 
 Do not confuse an installed plugin's `hostedHtml` renderer with HTML authored
-directly into a Board item. Installed first-party and external plugins are trusted
-through the public SDK contract above. Caller-authored Board HTML has no plugin
+directly into a Session visual. Installed first-party and external plugins are trusted
+through the public SDK contract above. Caller-authored Session HTML has no plugin
 identity or ambient plugin capability, and its smaller Host API ceiling is limited
 to context, Resource reads and watches, Action execution, and notifications. Each
 Resource and Action still applies its own admission and approval checks.
 
-Current development source carries caller-authored Board HTML through the shared
+Current development source carries caller-authored Session HTML through the shared
 frame implementation on web/Tauri, iOS, and Android. That is implementation
 reachability, not a released support claim: loaded isolation and lifecycle proof
 remains open for each advertised realm. When a current client cannot admit its
 renderer, Happier preserves the item and shows a recoverable unavailable state
 rather than deleting, retargeting, or rewriting it.
+
+For authoring a transcript-first visual through the public Action contract and
+bundle helpers, see [Session visual authoring](/plugins/ui/ui-artifacts#session-visual-authoring-in-development).
+Pin and Unpin organize that same saved item; they do not create an installed
+plugin or a second visual. [HTML network and approval](/sessions/permissions#agent-html-network-in-development)
+describes the separate creation setting and per-request viewer admission.
 
 ## Linked Session state and permission answers
 

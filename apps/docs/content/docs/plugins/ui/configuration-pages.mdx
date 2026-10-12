@@ -5,7 +5,7 @@ description: Compose plugin settings and detail pages with the same anatomy as H
 
 A plugin page that configures something — a plugin's settings, an account it
 connects, a list of things it manages — should look and behave like Happier's
-own settings pages. `@happier-dev/plugin-ui` exposes the same page anatomy
+own settings pages. `@happier-dev/plugin-ui/components` exposes the same page anatomy
 Happier uses: the page header, sentence-case sections with their explanation
 above the rows, one hairline sheet per section, rows divided by full-width
 hairlines, the same controls and the same empty states. These components render
@@ -22,9 +22,9 @@ colour and the phone recomposition match without any local styling.
 
 ```tsx
 import * as React from 'react';
+import { defineUiSurface } from '@happier-dev/plugin-ui';
 import {
   BrandMark,
-  defineUiSurface,
   EmptyState,
   Item,
   ItemGroup,
@@ -33,7 +33,7 @@ import {
   Select,
   SelectionTiles,
   Toggle,
-} from '@happier-dev/plugin-ui';
+} from '@happier-dev/plugin-ui/components';
 
 function ReviewBotSettings() {
   const [reviewNew, setReviewNew] = React.useState(true);
@@ -73,6 +73,7 @@ function ReviewBotSettings() {
           )}
           accessoryOutsidePressable
           accessoryWraps
+          fieldAccessory
         />
         <Item
           title="Depth"
@@ -155,6 +156,12 @@ and mark a wide control (a field, a select, a segmented choice) with
 the row is too narrow for both, exactly like Happier's own rows. A switch stays
 beside its label. Rows carry no decorative icons; identity marks are fine.
 
+In the 0.3 development source contract, also set `fieldAccessory` on an `Item`
+whose accessory is a `Select presentation="field"`. When the field fits beside
+the label in a narrow desktop column, it keeps its content width; on a phone it
+moves beneath the label and spans the row. Happier's app rows and plugin rows
+consume the same shared row-field fit rule.
+
 ## Controls
 
 In the Developer Preview source contract, use `Button variant="destructive"`
@@ -174,8 +181,15 @@ Choose the control from the decision, as Happier's own pages do:
 | A longer or larger set | `Select presentation="field"` (a bordered field that opens a menu) |
 | An option that changes what you see | `SelectionTiles variant="visual"` with a real preview per option |
 | A name, number or address typed in place | `TextField presentation="field"` (with `onCommit` to save when focus leaves) |
-| A local date and time (a lease's end, an expiry) | `LocalDateTimeField`: typed, or picked with the host's own picker where it has one; read the instant with `resolveHappierFutureLocalDateTime` from `@happier-dev/plugin-ui/presentation` |
+| A local date and time (a lease's end, an expiry) | `LocalDateTimeField`: typed, or picked with the host's own picker where it has one; read the instant with `resolveHappierFutureLocalDateTime` from `@happier-dev/plugin-ui/components` |
 | Several described choices to compare | `Select` (inline) or `SelectionTiles variant="card"` |
+| A handful of operations | `SelectionTiles variant="action"` with `onPress` |
+| Quiet items folded behind a count or summary | `CountedDisclosureItem` |
+
+Action tiles run the chosen operation; they have no selected value. In a page
+section they become rows in one sheet when their measured width is narrow.
+Actions with a `renderOptionFooter` keep their cards so their status and
+controls have room. A standalone action group keeps its tile presentation.
 
 A setting typed in place keeps a local draft and saves once when focus leaves
 the field or on submit — never on every keystroke:
@@ -205,9 +219,54 @@ keyboard; an emptied number returns to the saved value unless `allowEmpty` is
 set. Return a string from `onCommit` to show a corrected value (a clamped
 number), and pass `error` to show a refusal beneath the field.
 
+In the 0.3 development source contract, `SettingRow` is the same row Happier
+draws for its own settings registries: a `title`, a `hint` under it, one
+`control`, and a `layout` of `"inline"` (a switch or short value at the end),
+`"adaptive"` (a segmented control or field that moves beneath the label when
+the row is narrow) or `"stacked"` (a wide field always beneath). Put a typed
+value in `SettingValueSlot kind="number" unit="ms"` (a compact box with its
+unit) or `kind="text"` (the width the row leaves), and say what is stored, or
+why a change was refused, with `SettingStatusLine` under a stacked control
+(`tone="danger"` announces the refusal). Drafts, validation and saving stay in
+your page; there is no second settings engine.
+
+End a section with its buttons in `Form.Actions`: Save and Cancel, or the
+quiet leave-and-destroy actions that close a page. Pass the irreversible one
+as `trailing` to push it to the far edge, and a `footnote` for one line
+beneath: the consequence of the destructive action, or (`footnoteTone="danger"`)
+why it was refused, announced as it appears. Pending state stays with the
+buttons.
+
+To hand a link to a person (a pairing, connect or webhook link), use
+`LinkDelivery`: the link in one line, its QR beside buttons that copy it through
+the host's clipboard and, with `openable`, open it through the host. Pass
+`qrActionLabel` to put the QR behind a toggle for a link people open on the
+same device. It renders, never stores, the link you give it.
+
 The switch, the field box and the segmented control are drawn by the same
 visual owners as Happier's own controls. `presentation="menu"` remains the
 compact toolbar pill that names the field and its choice.
+
+For a collection of named things, public `Collection presentation="grid"`
+owns its cards. Return `null` for an absent `anatomy.description` and omit
+unused footer slots: rows of cards without descriptions, previews or footer
+content become compact tiles. Cards in the same row keep equal heights;
+one-column cards with descriptions follow their content. Do not copy the
+card renderer into the plugin.
+
+In 0.3 development source, public `CountedDisclosureItem` from
+`@happier-dev/plugin-ui/components` folds quiet aggregate
+details behind one row. Pass `title`, optional `count` and `subtitle`, and the
+detail rows as children. Omit `count` for a word summary, rather than inventing
+a numeric value. The shared owner retains the fold while the count changes;
+the existing disclosure mounts details only when opened. Use public `List`
+controlled expansion instead when expansion belongs to a particular collection
+item. Check the package API inventory before using this new export with a
+published toolchain.
+
+Authors import adapters, domain-neutral shared renderers and metrics from
+`@happier-dev/plugin-ui/components`. Host services and mounted runtime controls
+remain private to Happier.
 
 ## Empty states
 
@@ -234,6 +293,22 @@ page. Never pass two primaries.
 
 `variant="add"` frames the state with a dashed outline; use it only for an
 invitation to add the first item.
+
+## Loading, failure and recovery
+
+`ErrorState` takes `onRetry` for the one recovery: a Retry button under the
+copy (a link in a `line`), with the host's own "Retry" label unless you pass
+`retryLabel`. A returned promise keeps it pending until the retry settles. Keep
+diagnostic codes in `details`, behind a collapsed Details disclosure.
+
+In the 0.3 development source contract, `SurfaceState` is the full state
+composition Happier's own panes use, and `LoadingState` and `ErrorState` are it
+with fewer parts. Give it a `kind` (`empty`, `loading`, `success`, `error`,
+`warning`, `unavailable` or `denied`), a `title` and `description`, then only
+what the state needs: `live` for the present ("Next try in 8 s"), a `body`
+summary, one `action` and a quiet `secondaryAction`, a `note` or `learnMore`
+link, and `details`. Reading order is fixed: copy, present, summary, actions,
+note, details. `size="line"` draws one sentence with an inline recovery.
 
 ### Scenes (development)
 

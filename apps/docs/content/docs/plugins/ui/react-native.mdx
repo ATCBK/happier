@@ -37,7 +37,7 @@ Pass `null` while the surface has no findable content. The hook returns false
 when no host registration binding is available; it does not install listeners
 or search content itself. Hidden mounts cannot receive targeted Find commands.
 
-Use `HappierFindBar` and the pure `matchFindText` from `/presentation` for shared
+Use `HappierFindBar` and the pure `matchFindText` from `/components` for shared
 chrome and matching. `HappierFindHighlightedText` draws half-open UTF-16 ranges,
 including overlapping selected matches, with caller-supplied `marks.all` and
 `marks.current` styles. `sliceFindRanges` clips those ranges for a snippet.
@@ -87,11 +87,11 @@ bridge, or navigation root, and do not assume host styling, overlay, focus, or
 navigation behavior. Never manually install a host provider, pass a
 host-internal surface or transport object, or import Happier app internals.
 
-The root `@happier-dev/plugin-ui` entry is the ergonomic, curated author tier.
+The `/components` entry is the author UI layer; the root re-exports it.
 Trusted React Native and React Native Web authors who need custom composition
-may additionally use `/presentation` for shared RN/RNW primitives and behavior
+use those same `/components` exports for shared RN/RNW primitives and behavior
 or `/environment` for theme, localization, accessibility, platform, and inset
-facts, hooks, and a standalone fact provider. `/presentation` never re-exports
+facts, hooks, and a standalone fact provider. `/components` never re-exports
 environment contracts, so import `/environment` directly for that role. Both
 advanced tiers share canonical core implementations, remain prepublication work
 in progress, and carry no released stability promise while the package is held.
@@ -105,7 +105,7 @@ state, or import app, host, or protocol internals. Keep
 
 `FloatingFrame` is the controlled frame shared with Happier's Session viewer.
 The public component supplies theme and reduced-motion defaults; the neutral
-primitive is also available from `/presentation`. Supply the frame rectangle,
+primitive is also available as `HappierFloatingFrame` from `/components`. Supply the frame rectangle,
 available space, body aspect and measured obstacles. The shared geometry owner
 handles corner placement, usable minimum width and a request to dock when the
 picture cannot fit. Your domain still owns the mode and settled rectangle.
@@ -116,14 +116,14 @@ In the native app, the host supplies finger drag through its optional
 content owns input. Controls keep their presses, and keyboard/menu placement
 remains available. A custom same-realm host can supply `nativeBinding`, a React
 component accepting `HappierFloatingFrameNativeBindingProps` from
-`/presentation`. Keep native gesture/animation dependencies in that host, not
+`/components`. Keep native gesture/animation dependencies in that host, not
 the plugin bundle. Without a native binding, placement is keyboard/menu only.
 These are 0.3 development-source interfaces, not a shipped native-device QA
 claim; Happier phone viewers continue using their sticky slot.
 
 ### Artifact presentation in development
 
-The prepublication `/presentation` tier includes `HappierArtifactPreviewCard`,
+The prepublication `/components` tier includes `HappierArtifactPreviewCard`,
 `HappierHtmlSandboxFrame`, `HappierPublicLinkCard`, and
 `HappierArtifactRevisionList`. Happier core uses these same presentation owners.
 Supply localized labels, theme facts, and their typed rendering bindings rather
@@ -138,6 +138,225 @@ admission, isolated origin, platform sandbox and navigation policy. Passing HTML
 to a frame does not establish an execution sandbox. Consult the installed API
 inventory for the exact bindings; this development surface is not a released
 stability or platform-certification promise.
+
+## Chart family (0.3 development)
+
+Use the shared chart family for hierarchical proportions, time series, capacity,
+per-core load and a compact explanatory state. This family is approved for the
+**0.3 development author API**, not shipped package availability. The author-layer
+migration carries the family and its geometry helpers together into
+`@happier-dev/plugin-ui/components`. The examples require that migration;
+check your installed API inventory for these exports before using them.
+
+Inside a `defineUiSurface` component, read `theme` with `usePluginTheme()` and
+`reducedMotion` with `usePluginAccessibility()` from the package root. These are
+public facts; none of the charts needs an app store or a host transport object.
+The examples use this shared input:
+
+```tsx
+import {
+  CapacityBar, CoreLoadBars, HappierStateLine, StackedSeriesChart, Sunburst, Treemap,
+  type HappierChartPart,
+} from '@happier-dev/plugin-ui/components';
+import { Text, usePluginAccessibility, usePluginTheme } from '@happier-dev/plugin-ui';
+
+const parts = [
+  { key: 'projects', label: 'Projects', value: 60, valueLabel: '60 GB', tone: 'accent' },
+  { key: 'archives', label: 'Archives', value: 40, valueLabel: '40 GB', tone: 'ink' },
+] satisfies readonly HappierChartPart[];
+const smallerLabel = (count: number) => `${count} smaller items`;
+// In your component:
+// const theme = usePluginTheme();
+// const { reducedMotion } = usePluginAccessibility();
+```
+
+### Treemap
+
+`Treemap` draws weighted rectangles with optional children. Its props type is
+`HappierTreemapProps`. Supply `theme`, `items`, pixel `width` and `height`,
+`minNodePx: { width, height }`, `accessibilityLabel` and a localized
+`smallerLabel(count)`. Each `HappierChartPart` has a stable unique `key`, `label`,
+nonnegative finite `value`, exact localized `valueLabel`, and `tone` (`ink`,
+`accent` or `quiet`). Optional `children` describe the next level; `hatched`,
+`dotted` and `locked` are visual facts, not permission enforcement.
+
+Use `accentColor` to override the accent. `pointedKey` controls the highlighted
+part; omit it for internal pointing, or pass `null` for no pointed part.
+`onPointAt(key | null)`, `onOpen(key)`, `onCollect(key)` and `onUp()` let your
+view own selection, drilling and collection. `renderTooltip(key)` adds context;
+`testID` identifies the chart. No callback performs a storage operation itself.
+
+The chart has one keyboard stop: arrows move between parts, Enter opens, Space
+collects, and Backspace/Escape goes up. Keep an equivalent labelled list beside
+the picture for exact values and actions; a tooltip alone is insufficient.
+`reducedMotion` overrides the environment preference; reduced motion replaces
+the level immediately rather than cross-fading it.
+
+```tsx
+<Treemap theme={theme} items={parts} width={400} height={240}
+  minNodePx={{ width: 56, height: 20 }} accessibilityLabel="Storage map"
+  smallerLabel={smallerLabel} reducedMotion={reducedMotion} />
+```
+
+For custom geometry, `layoutHappierTreemap(nodes, options)` returns `{ tiles }`
+including `key`, `parentKey`, `depth`, `rect`, `value`, `labeled` and `folded`
+keys. `HappierTreemapNode` contains only `key`, `value` and optional `children`;
+`HappierTreemapLayoutOptions` takes `width`, `height`, `minNodePx` and optional
+`gapPx`/`headerPx`. `squarifyHappierTreemap(items, bounds)` returns key/rectangle
+pairs inside a `HappierTreemapRect` (`x`, `y`, `width`, `height`).
+`createHappierTreemapHitGrid(tiles, size, cellPx?)` returns an `(x, y)` lookup
+that selects the deepest matching tile or `null`. Coordinates are chart-local
+pixels. `HAPPIER_TREEMAP_SMALLER_SUFFIX` identifies synthetic folded keys; keep
+these distinct from authored keys. These pure helpers do not render, announce,
+animate or grant actions.
+
+### Sunburst
+
+`Sunburst` shows hierarchical shares as concentric rings. `HappierSunburstProps`
+shares the Treemap's `theme`, `items`, dimensions, accent, pointing, callbacks,
+tooltip, localized smaller-items label, accessibility label and `testID`.
+Supply `minArcDegrees`, `centerLabel` and `centerValue` as well. Optional
+`upLabel` names the parent. `gapDegrees` reserves an uncounted wedge, and
+`gapLabel: { name, note }` explains it; the gap is not another observation.
+
+Keyboard arrows traverse the rings and their hierarchy, Enter opens, Space
+collects, and Backspace/Escape goes up. Keep the same exact-value list as for a
+Treemap. `reducedMotion` uses a short cross-fade instead of the normal geometry
+morph; it does not mean every transition is instantaneous.
+
+```tsx
+<Sunburst theme={theme} items={parts} width={400} height={408} minArcDegrees={2}
+  centerLabel="Storage" centerValue="100 GB" accessibilityLabel="Storage rings"
+  smallerLabel={smallerLabel} reducedMotion={reducedMotion} />
+```
+
+`layoutHappierSunburst(nodes, options)` returns `{ arcs }` with keys, parent keys,
+ring `depth`, `a0`/`a1`, value and `folded` keys (or `null`). `HappierSunburstNode`
+has `key`, `value` and optional `children`; options take `rings` (each
+`HappierSunburstRing` has `inner`/`outer` pixel radii), `minArcPx` and optional
+`gapRadians`. Geometry angles are **radians from twelve o'clock, clockwise**;
+the component's angular props are degrees. `hitHappierSunburst(arcs, rings,
+{ cx, cy }, x, y)` returns a key or `null`, including `null` in the central
+hole. `HAPPIER_SUNBURST_SMALLER_SUFFIX` marks synthetic folds. These pure
+helpers own neither motion nor interaction accessibility.
+
+### StackedSeriesChart
+
+`StackedSeriesChart` draws `bar`, `line` or `area` series at `inline`, `tile` or
+`full` size. `StackedSeriesChartProps` requires `theme`, `label`, `series`,
+`variant` and `size`. A `HappierSeries` has an `id`, `label`, optional color and
+`points`; optional `detail`, `lineStyle` (`solid`/`dashed`/`dotted`),
+`fillPattern="hatch"` and `fillOpacity` describe the series' ink and context.
+Each point has a stable `id`, `x` label/coordinate and `y` number or `null`, with
+optional `label`, `annotation`, `color` and `opacity`. Missing measurements stay
+unknown, rather than becoming zero.
+
+Use `width`/`viewportHeight` for explicit plot room. `normalized` changes share
+geometry while preserving exact numbers; `fitLine`, `minimumMaximum` and
+`domain: { min, max }` control the value scale. `strokeWidth`, `plotInset`,
+`scaleGutter`, `scaleTicks`, `axisTicks` and `valueFormatter` control its readable
+geometry and formatting. `showAxis`, `showLegend`, `showGrid`, `showScaleValues`,
+`showReadout`, `showPointLabels`, `showPeakValue` and `showAnnotations` choose
+visible context. Provide localized `summary`, `unknownLabel`, `valuesLabel`
+and `valuesCollapseLabel` where needed; `testID` identifies the chart.
+
+`bands` uses `StackedSeriesBand` (`id`, `lowerSeriesId`, `upperSeriesId`, optional
+`color`/`opacity`) to shade caller-produced line bounds. `reference` is a
+labelled value; `threshold` adds a labelled warning/error level. `mirrored`
+draws supplied negative values below zero while displaying their magnitudes.
+`bucketShading` identifies background slots; `barRanges` adds labelled
+lower/upper comparison outlines. None invents forecast or policy facts.
+Bar geometry takes `barWidth`, `barMaxWidth`, `barSlotWidth`, `barLeadingInset`,
+`barGap`, `barMinHeight`, `barTrackColor` and `barEmphasis` (`last`/`maximum`).
+
+`onSelect(bucketId)` reports bucket selection. `onSeriesPress(seriesId)`,
+`seriesPressLabel(series, selected)` and `selectedSeriesIds` support a controlled
+legend drill; `leads` supplies series-id-keyed identity marks. Advanced render
+slots (`renderLinePath`, `renderInk`, `renderBucket`, `renderFrame`,
+`renderPlotOverlay`) receive the existing geometry or visual; keep exact values
+and keyboard selection with the chart instead of recalculating its scale.
+Use the generated API inventory for their full callback signatures.
+
+Full charts expose exact values through their readout/values composition and
+keyboard selection; name the chart and retain a useful textual `summary`.
+`reducedMotion` disables chart motion. `liveMotion` takes caller-owned
+`sampleKey`, `stepPx`, `durationMs` and optional `active`; there is no chart
+polling timer. Optional `barMotion` supplies `identity` (`bucket`/`slot`),
+`entrance: { durationMs, delaysMs? }` and
+`change: { stiffness, damping, mass }`; omit it for static bars.
+
+```tsx
+<StackedSeriesChart theme={theme} label="CPU history" variant="line" size="full"
+  width={400} reducedMotion={reducedMotion} summary="CPU rose from 20 to 40 percent"
+  valueFormatter={(value) => `${value}%`}
+  series={[{ id: 'cpu', label: 'CPU', points: [
+    { id: 'first', x: '09:00', y: 20 }, { id: 'second', x: '09:01', y: 40 },
+  ] }]} />
+```
+
+### CapacityBar
+
+`CapacityBar` compares an exact `value` against `capacity`. `CapacityBarProps`
+requires `theme`, `label`, `value` and `capacity`; either number may be `null`.
+Unknown or nonpositive capacity does not produce a scaled meter. `basis` names
+the unit and `unknownLabel` localizes missing measurements. `evenPace` and
+`projected` add optional values; `projection="remaining"` overlays the projected
+remainder on the hatched current remainder, while `marker` uses a marker.
+
+`size`, `height`, `color`, `trackColor`, `markerColor`, `pattern` (`solid` or
+`hatched`), `style` and `testID` control presentation. The exact label/value/
+capacity description remains accessible; `showCaption={false}` hides only its
+visible caption, so a containing row should supply that wording. `animated`
+opts into retargetable fill and color motion; `reducedMotion` and the
+environment's preference suppress it.
+
+```tsx
+<CapacityBar theme={theme} label="Storage in use" value={100} capacity={200}
+  basis="GB" animated reducedMotion={reducedMotion} />
+```
+
+### CoreLoadBars
+
+`CoreLoadBars` draws and wraps one bar per CPU core. `CoreLoadBarsProps` requires
+`theme`, `label`, `cores` and `coreLabel(core)`. Each `CoreLoadBar` has its actual
+`index`, `busyPct` (0–100, or `null` when not reported), and optional `cluster`
+(`p` for performance or `e` for efficiency). Performance cores precede
+efficiency cores, then unclassified cores; each group sorts by index.
+
+Optional `width` fixes the available width; omission uses measured layout.
+`legend: { p?, e? }` supplies localized cluster descriptions, and `testID`
+identifies the group. `coreLabel` must name each core and its exact percentage
+or unknown state for assistive technology. This owner requests static bars and
+has no motion prop; it does not start a sampler or animation loop.
+
+```tsx
+<CoreLoadBars theme={theme} label="CPU cores" width={400}
+  cores={[{ index: 0, busyPct: 40 }, { index: 1, busyPct: null }]}
+  coreLabel={(core) => `Core ${core.index + 1}, ${core.busyPct === null
+    ? 'not reported' : `${core.busyPct}% in use`}`} />
+```
+
+### HappierStateLine
+
+`HappierStateLine` places a compact sentence beside an optional decorative
+`icon` and recovery `action`. Supply `children` containing your text; optional
+`testID` identifies the line. `accessibilitySemantics="status"` announces
+politely; `alert` announces assertively. Omit semantics for a quiet static
+sentence. Give an action its own accessible name; the icon is hidden from
+assistive technology. The line itself is static, has no reduced-motion prop,
+and leaves any child animation to that child's owner.
+
+```tsx
+<HappierStateLine accessibilitySemantics="status">
+  <Text value="Measurements are up to date" />
+</HappierStateLine>
+```
+
+The package's external-authoring fixture includes `chartFamilySurface.tsx`,
+composing all six members through public imports and `defineUiSurface`, with
+keyboard drilling, a labelled button list for the same exact storage values
+and actions, and an unknown core measurement. Use it as a composition
+example; it is not a claim of shipped or loaded-device certification.
 
 ## Personal widget areas in development
 
@@ -457,7 +676,7 @@ import { Button, Collection, Icon, Row, Stack, Step, Tabs, Text } from '@happier
 import {
   HappierDisclosure, HappierPressable, HAPPIER_INSTANT_DISCLOSURE_MOTION,
   useHappierCollection, type HappierCollectionPresentation,
-} from '@happier-dev/plugin-ui/presentation';
+} from '@happier-dev/plugin-ui/components';
 import { useHappierUiAccessibility } from '@happier-dev/plugin-ui/environment';
 
 type Item = { id: string; title: string; summary: string };
@@ -541,11 +760,31 @@ when it has one, and `glyphBadge` pins a small icon or live dot to the row's gly
 (`{ icon, tone }` or `{ live: true }`); the table shows neither, because its own
 columns say the same. Pass the narrowings in force as `search.tokens`
 (`{ key, qualifier, label, onRemove }`): they sit inside the search field, each one
-press to remove. A `Select presentation="segmented"` option may carry an `icon`
-that leads its label. The disclosure intentionally uses the public instant motion driver;
+press to remove. To put that search into your own toolbar row, pass `header` as a
+render: `header={({ search, selection, pageActions }) => <Row>{search}{selection}{trailing controls}{pageActions}</Row>}`
+receives the search field with its tokens at the toolbar's bounded width, the touch-sized
+Select control (`null` when nothing can be selected) and the host's page actions, such as
+the machine your page runs on (`CollectionHeaderSlots`). The list pane then draws none of
+them, and placing `pageActions` in your row replaces the host's separate band. An empty
+table cell reads "—". While the first rows load, a table
+keeps its column titles and its skeleton rows fill the rows region from the top; in
+every presentation the `empty` slot fills that same region. A `Select presentation="segmented"` option may carry an `icon`
+that leads its label; pass `compact` in a narrow toolbar (a List | Board switch on a
+phone) and each option that has an `icon` shows the icon alone, its `label` staying
+the accessible name. The disclosure intentionally uses the public instant motion driver;
 a custom animated composition may supply a public `HappierDisclosureMotionDriver`
 while honoring `reducedMotion`. Its header receives the toggle and expanded
 accessibility state together. Keep `defineUiSurface` as the provider boundary.
+
+In the 0.3 development contract, pass `Collection.sort` with the active `key`,
+`direction` and `onChange(key)` to make `sortable` field titles interactive.
+Optional `orders: [{ key, label }]` adds a named-order menu to the table's title
+column. The column title itself is the trigger, quiet like its neighbours, naming the
+active order ("Entry · Newest") with a caret. Its checked option follows `sort.key`;
+field sorting leaves all named options unchecked. The caller still owns the
+ordered data. The menu is absent in list and board; header controls can read
+`useHappierCollectionLayout()?.composition` to keep a toolbar Order in those
+presentations without repeating it above the table.
 
 Use `Tabs tabList="host"` when an enclosing detail frame already draws the tab
 strip and requests one panel. Use `layout="fill"` inside a bounded region for a
@@ -561,7 +800,7 @@ the state marker's `labelKey` resolve your plugin's declared translations, with
 the supplied words as fallbacks. Put reading content in its body and quiet
 context in `trailing`.
 
-`HappierDisclosure` belongs to the public `/presentation` entry, while `Step`
+`HappierDisclosure` belongs to the public `/components` entry, while `Step`
 and `Tabs` belong to the ordinary package entry. It is controlled by `expanded`
 and `onExpandedChange`; spread its `headerProps` onto the actual press target
 so toggle behavior and expanded accessibility state stay together. `keepMounted`
@@ -598,7 +837,22 @@ The actions render in the header, outside your surface's tree, and keep your
 plugin's context. Where the host mounts the surface without a pane header (a
 page or a widget), `PaneHeaderContent` renders nothing, so keep an add path in
 the body as well (an empty state's action). `triggerIcon` on `Menu` and `Popover`
-draws the trigger as a glyph alone, the way the host's own "+" and ⋯ look.
+draws the trigger as a glyph alone, the way the host's own "+" and ⋯ look. With
+`triggerAppearance="control"` or `"primary"` the glyph leads the visible words
+instead, exactly like a `Button`'s leading icon: use it for a primary action that
+opens a choice ("+ Link a PR or issue"). The primary trigger is the same button as
+`Button variant="primary"`. `triggerDisclosure` adds a caret after a plain `text`
+trigger, for a title that opens a menu (a table's column header); labelled
+appearances are buttons and ignore it.
+
+A `Popover`, `Dropdown` or `Menu` opened from anything but a field-box `Select`
+sizes to its content: the trigger's width is only its minimum, so a narrow "Views"
+button does not make a narrow menu. `Menu` and `Dropdown` take `showGroupLabels` to
+draw each named group's heading above its rows, for one menu of labelled checkbox
+groups (a Filters menu). `Status` takes `value`, a second quieter line under its
+label ("Loaded 10:42"), so one notice can carry the reason beside its `action`.
+`BrandMark size="small"` sits at text size beside a label; larger sizes keep their
+image steps.
 
 In the Developer Preview source contract, a page Collection can supply
 `detailHeader(key)` with the item's `title`, optional `subtitle` and `actions`,
@@ -607,10 +861,22 @@ plus an optional `leading` mark beside the title (the item's own glyph) and a
 `BrandMark`). Marks stand on their own: do not wrap them in a tile, border or
 fill. Happier renders them in its details band and supplies Close. `DetailsPane`
 takes the same `leading` and `subtitleLeading`. The same
-`renderDetail(key, { headerHosted })` body runs in every container; omit its
+`renderDetail(key, { headerHosted, pushed })` body runs in every container; omit its
 inline heading and close controls when `headerHosted` is true. Keep item
 selection in the page location, and pair a pushed detail location with
-`backLocation` so phone Back returns to the collection.
+`backLocation` so phone Back returns to the collection. `DetailsPane` also takes a
+`footer`: the detail's one primary, pinned in thumb reach when the detail is pushed
+inside the page (phones). It sits under a hairline above the home indicator and the
+keyboard while the detail scrolls above it. Beside the page it is not drawn, so put
+the same action in `actions`. Pass one primary, or the primary and one quiet
+secondary; never two filled buttons.
+
+A `Collection` detail is pushed by the Collection itself, so it draws that same
+footer through `DetailsPaneFooter`: when `renderDetail` receives `pushed: true`,
+end the detail's own full-height column with
+`<DetailsPaneFooter>{primary}</DetailsPaneFooter>` after the part that scrolls.
+Beside the list or in the host's details pane `pushed` is `false`: draw no footer
+and keep the primary in the details header's `actions`.
 
 A row can open in place: pass `expanded` and `expandedContent` to `List.Item`
 and toggle `expanded` from its `onPress`. Put a few calm facts in it
@@ -737,7 +1003,7 @@ const hostApi = usePluginHostApi();
 
 In a Happier window these use the app's own glass, type, buttons and motion. In
 a hosted-web realm they draw a plain solid capsule and changes land at once.
-Advanced authors find the shared owners in `/presentation`
+Advanced authors find the shared owners in `/components`
 (`HappierPresenceCapsule`, `HappierAgentCursor`, `HappierStatusCapsule`, and
 `HappierStatusDot` with its `halo` ring). These components are Developer Preview.
 
@@ -791,7 +1057,7 @@ Image reads require the plugin's declared `sessions` HostAccess **read** scope
 UI scope. The same scope owner applies on the daemon. Plain/E2EE mismatches or
 unavailable encryption material return an unavailable image, never a plaintext
 fallback. The app thumbnail and `StoredImage` share `HappierStoredImage` in
-`/presentation`. These are development-source interfaces; package publication
+`/components`. These are development-source interfaces; package publication
 and loaded-runtime verification remain separate.
 
 The daemon also verifies the exact Session artifact bucket, real file path,
@@ -805,7 +1071,7 @@ than this native artifact reference; generated-media records are not a
 A surface that shows agent work — runs your plugin started, steps it is waiting
 on, work grouped by where it stands — can draw it with the primitives Happier's
 own Work tab, Inbox and workflow maps use, from
-`@happier-dev/plugin-ui/presentation`:
+`@happier-dev/plugin-ui/components`:
 
 - `HappierWorkSection`: a group of a live work list (a compact title and a quiet
   count), or with `anatomy="page"` a configuration section laid flat on the pane.
@@ -862,7 +1128,7 @@ import {
   HappierWorkStatusWord,
   HappierWorkSummary,
   resolveHappierWorkStatusBucketLabel,
-} from '@happier-dev/plugin-ui/presentation';
+} from '@happier-dev/plugin-ui/components';
 
 function DeployWork({ deploys, onOpen }: DeployWorkProps) {
   const { translate } = useHappierUiLocalization();
@@ -917,6 +1183,59 @@ Inside a mounted surface these read the theme, page palette and text scale from
 the surface environment. The words stay yours: a row says the owner's own state
 ("Waiting for approval"), never the bucket label. A row carries no answer
 controls; open the place where the request is answered once.
+
+## Shared story components (0.3 development)
+
+Use `Timeline` for an ordered activity rail. Supply `items`, `keyForItem`,
+`accessibilityLabel` and `renderItem`; each item returns `glyph`, `heading`,
+and optional `time`, `body` and `trailing` slots. The shared List owns scrolling
+and prepend continuity. Your source still owns ordering, paging and event copy.
+
+```tsx
+<Timeline
+  items={events}
+  keyForItem={(event) => event.id}
+  accessibilityLabel="Activity"
+  renderItem={(event) => ({
+    glyph: <Icon name="file" />,
+    heading: event.title,
+    time: event.timeLabel,
+    body: <Text value={event.description} />,
+  })}
+/>
+```
+
+For quiet collection metadata, use
+`<Status presentation="inline" tone="success" label="Checks passed" />`.
+It keeps the words on one truncating line without announcing every row refresh.
+`indicator={false}` omits a quiet state's dot; `leading` can carry its decorative
+source mark. The default notice remains a polite status region.
+
+Use `Metric caption="…"` for its visible contextual line below the value;
+`label` names what the value counts for assistive technology.
+
+`<Stack grow>` and `<Row grow>` fill available space and allow their contents to
+shrink without hand-written flex styles. Use `ApprovalPrompt` for permission
+requests, with `title`, `subtitle`, body children and decision controls in
+`footer`. It shares Session chat's approval anatomy; it does not make decisions
+or grant permission. Pass `tone="attention"` when the request is waiting on the
+person: the card takes the same amber ring and tint as any work that needs them.
+Leave it neutral for requests the person started.
+
+`<MotionFeedback trigger={confirmedSequence} decorative>` acknowledges a
+confirmed result. Change the trigger only after success, and expose that result
+in words outside decorative feedback. First mount is static; reduced motion
+settles immediately. The shared motion owner supplies timing and easing.
+
+These additions describe the current 0.3 development source. Check the installed
+API inventory before using them in a published plugin.
+
+Triage source authors can import `TriageStatusRow` from
+`@happier-dev/triage-sources/ui` for checks, review and merge facts. Pass the
+source's localized `name`, optional `status` and semantic `tone`; choose
+`presentation="compact"`, `"summary"` or `"list"` for the container. Full list
+rows accept `detail` and `actions`. Filtering, state vocabulary and operations
+remain source-owned.
 
 ## Accessibility and offline snapshots
 
