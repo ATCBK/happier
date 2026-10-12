@@ -170,6 +170,22 @@ describe('session permission/user-action RPC methods', () => {
         }));
     });
 
+    it('does not attach a stale transcript turn to a loaded turnless request', async () => {
+        const session = {
+            ...buildSession('session-with-turnless-request'), serverId: 'home-b',
+            agentState: { requests: { request: { tool: 'Bash', arguments: {} } } },
+        };
+        storage.getState().applySessions([session]);
+
+        await sessionRespondToPermission(session.id, {
+            id: 'request', approved: true, turnId: 'stale-transcript-turn',
+        }, { serverId: 'home-b' });
+
+        expect(mockSessionRpcWithPreferredSessionScope).toHaveBeenLastCalledWith(expect.objectContaining({
+            serverId: 'home-b', payload: expect.objectContaining({ turnId: undefined }),
+        }));
+    });
+
     it('routes direct permission-update approvals through the canonical permission RPC method', async () => {
         const sessionId = 's_permission_updates';
         const updatedPermissions = { permission_suggestions: [{ tool: 'Bash' }] };
