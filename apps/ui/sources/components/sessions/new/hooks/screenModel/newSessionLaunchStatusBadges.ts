@@ -1,9 +1,14 @@
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { buildRequesterDisclosureStatusBadge, type RequesterDisclosureModel } from '@/components/machines/managed/managedComposerBadges';
+import type { NewSessionLaunchPresentation } from '../../modules/newSessionLaunchPresentation';
 
 type NewSessionLaunchStatusParams = Readonly<{
     isCreating: boolean;
+    /** The canonical launch presentation already carries progress when active. */
+    launchPresentation?: NewSessionLaunchPresentation;
     disabledReason?: string | null;
+    /** A cause another element of the composer already says with its own action (the agent blocker banner). */
+    causeShownElsewhere?: string | null;
     requesterDisclosure?: RequesterDisclosureModel;
     translate: (key: 'newSession.startingSession') => string;
 }>;
@@ -24,7 +29,8 @@ export function buildNewSessionLaunchStatus(params: NewSessionLaunchStatusParams
     const badges: ReadonlyArray<AgentInputStatusBadge> = params.requesterDisclosure
         ? [buildRequesterDisclosureStatusBadge(params.requesterDisclosure)] : [];
     if (params.isCreating) {
-        return { line: { kind: 'starting', text: params.translate('newSession.startingSession') }, badges };
+        return { line: params.launchPresentation && params.launchPresentation !== 'none'
+            ? null : { kind: 'starting', text: params.translate('newSession.startingSession') }, badges };
     }
-    return { line: params.disabledReason ? { kind: 'blocked', text: params.disabledReason } : null, badges };
+    return { line: params.disabledReason && params.disabledReason !== params.causeShownElsewhere ? { kind: 'blocked', text: params.disabledReason } : null, badges };
 }

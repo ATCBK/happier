@@ -29,6 +29,15 @@ describe('buildNewSessionLaunchStatus', () => {
             .toEqual({ line: null, badges: [] });
     });
 
+    it('does not say again a cause the composer already shows as its own banner', () => {
+        const reason = 'Claude · Needs sign-in';
+        // The agent blocker banner above the card says it with its action: the status line stays out of it.
+        expect(buildNewSessionLaunchStatus({ isCreating: false, disabledReason: reason, causeShownElsewhere: reason, translate: (key) => key }).line).toBeNull();
+        // Another cause is still said.
+        expect(buildNewSessionLaunchStatus({ isCreating: false, disabledReason: 'No path selected', causeShownElsewhere: reason, translate: (key) => key }).line)
+            .toEqual({ kind: 'blocked', text: 'No path selected' });
+    });
+
     it('keeps the requester disclosure as a badge with its detail popover', () => {
         const status = buildNewSessionLaunchStatus({
             isCreating: false,
@@ -52,5 +61,14 @@ describe('buildNewSessionLaunchStatus', () => {
         });
         expect(status).toEqual({ line: { kind: 'starting', text: 'newSession.startingSession' }, badges: [] });
         expect(translate).toHaveBeenCalledWith('newSession.startingSession');
+    });
+    it.each(['machine', 'temporary_computer'] as const)('leaves progress to the active %s launch presentation', (launchPresentation) => {
+        const status = buildNewSessionLaunchStatus({
+            isCreating: true, launchPresentation,
+            requesterDisclosure: { owner: 'Alice', machine: 'devbox', signIn: 'full' },
+            translate: key => key,
+        });
+        expect(status.line).toBeNull();
+        expect(status.badges.map(badge => badge.key)).toEqual(['machine-requester-disclosure']);
     });
 });
