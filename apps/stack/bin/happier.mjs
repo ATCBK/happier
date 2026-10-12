@@ -3,7 +3,9 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { isBundledWorkspaceRuntimeInvocation, refreshLocalBundledWorkspacePackages } from './localBundledWorkspacePreflight.mjs';
+import './localSourceRuntimeBootstrap.mjs';
+
+const { isBundledWorkspaceRuntimeInvocation, refreshLocalBundledWorkspacePackages } = await import('./localBundledWorkspacePreflight.mjs');
 
 const cliRootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const argv = process.argv.slice(2);

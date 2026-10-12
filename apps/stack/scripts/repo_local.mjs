@@ -3,21 +3,23 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { scrubHappierStackEnv, STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS, STACK_WRAPPER_PRESERVE_KEYS } from './utils/env/scrub_env.mjs';
-import { applyStackActiveServerScopeEnv } from './utils/auth/stable_scope_id.mjs';
-import { readExecutionHostProfile } from './utils/execution_host/config.mjs';
-import { resolveHostWorkspaceMapping } from './utils/execution_host/delegation.mjs';
-import { ensureDepsInstalled } from './utils/proc/pm.mjs';
-import { runForegroundChild } from './utils/execution_host/foreground_child.mjs';
-import { ensureEnvFileMutated } from './utils/env/env_file.mjs';
-import { parseEnvToObject } from './utils/env/dotenv.mjs';
-import { selectLocalServerPortCandidateForStack } from './utils/server/resolve_stack_server_port.mjs';
-import { resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { resolveEffectiveDbProviderTransition } from './utils/server/effective_db_provider.mjs';
-import {
+import '../bin/localSourceRuntimeBootstrap.mjs';
+
+const { scrubHappierStackEnv, STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS, STACK_WRAPPER_PRESERVE_KEYS } = await import('./utils/env/scrub_env.mjs');
+const { applyStackActiveServerScopeEnv } = await import('./utils/auth/stable_scope_id.mjs');
+const { readExecutionHostProfile } = await import('./utils/execution_host/config.mjs');
+const { resolveHostWorkspaceMapping } = await import('./utils/execution_host/delegation.mjs');
+const { ensureDepsInstalled } = await import('./utils/proc/pm.mjs');
+const { runForegroundChild } = await import('./utils/execution_host/foreground_child.mjs');
+const { ensureEnvFileMutated } = await import('./utils/env/env_file.mjs');
+const { parseEnvToObject } = await import('./utils/env/dotenv.mjs');
+const { selectLocalServerPortCandidateForStack } = await import('./utils/server/resolve_stack_server_port.mjs');
+const { resolveStackEnvPath } = await import('./utils/paths/paths.mjs');
+const { resolveEffectiveDbProviderTransition } = await import('./utils/server/effective_db_provider.mjs');
+const {
   resolveRepoStackIdentity,
   resolveStacksStorageRoot,
-} from './utils/stack/repo_stack_identity.mjs';
+} = await import('./utils/stack/repo_stack_identity.mjs');
 
 function shouldAutoInstallDepsForRepoLocalCommand(cmd) {
   const c = String(cmd ?? '').trim();

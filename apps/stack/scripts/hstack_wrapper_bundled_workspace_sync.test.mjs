@@ -28,6 +28,44 @@ function sourceProbeNodeOptions(loaderPath) {
   return `--import=${preload} --experimental-loader=${loaderPath}`;
 }
 
+test('checkout stack entries can load when a vendored cli-common helper imports a missing sibling', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-stack-stale-import-' });
+  const stackDir = stackRootDirFromMeta(import.meta.url);
+  const brokenLock = fixture.path('workspaceBundleLock.mjs');
+  writeFileSync(brokenLock, "export * from './missing-new-helper.mjs';\n");
+  const loader = fixture.path('installed-boundary.mjs');
+  writeFileSync(loader, [
+    "import { pathToFileURL } from 'node:url';",
+    'export async function resolve(specifier, context, nextResolve) {',
+    "  if (specifier === '@happier-dev/cli-common/workspaceBundleLock' || specifier === '@happier-dev/cli-common/workspaces') {",
+    `    return { url: pathToFileURL(${JSON.stringify(brokenLock)}).href, shortCircuit: true };`,
+    '  }',
+    '  return nextResolve(specifier, context);',
+    '}',
+  ].join('\n'));
+  const env = buildStackFixtureEnv({ homeDir: fixture.path('home'), storageDir: fixture.path('storage'),
+    stripStackEnv: true, extraEnv: { HAPPIER_STACK_UPDATE_CHECK: '0', HAPPIER_STACK_SYNC_BUNDLED_WORKSPACES: '0',
+      NODE_OPTIONS: `--experimental-loader=${loader}` } });
+  for (const [entry, args] of [['bin/hstack.mjs', ['stack', 'info', '--help']], ['bin/happier.mjs', ['--stack-help']]]) {
+    const result = await runNodeCapture([join(stackDir, entry), ...args], { cwd: stackDir, env });
+    assert.equal(result.code, 0, `${entry}: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /ERR_MODULE_NOT_FOUND/);
+    assert.ok(result.stdout.trim(), 'metadata must be available without building or touching a stack');
+  }
+  const repoLocal = await runNodeCapture([join(stackDir, 'scripts/repo_local.mjs'), '--dry-run', 'where'],
+    { cwd: stackDir, env });
+  assert.equal(repoLocal.code, 0, repoLocal.stderr);
+  assert.doesNotMatch(repoLocal.stderr, /ERR_MODULE_NOT_FOUND/);
+  // The inherited preload must not redirect an emitted product entry to
+  // checkout packages. Keep the genuine installed-package failure there.
+  const product = fixture.path('product.mjs');
+  writeFileSync(product, "import '@happier-dev/cli-common/workspaceBundleLock';\n");
+  const productResult = await runNodeCapture([product], { cwd: stackDir,
+    env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS} --import=${JSON.stringify(join(stackDir, 'bin/localSourceRuntimeBootstrap.mjs'))}` } });
+  assert.notEqual(productResult.code, 0);
+  assert.match(productResult.stderr, /missing-new-helper/);
+});
+
 
 function createBundledWorkspaceSyncLoaderFixture(fixtureDir, options = {}) {
   const syncMarkerPath = join(fixtureDir, 'sync.json');

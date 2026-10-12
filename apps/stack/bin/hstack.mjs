@@ -1,27 +1,28 @@
 #!/usr/bin/env node
 
-import { runForegroundChild } from '../scripts/utils/execution_host/foreground_child.mjs';
+import './localSourceRuntimeBootstrap.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commandHelpArgs, renderhstackRootHelp, resolvehstackCommand } from '../scripts/utils/cli/cli_registry.mjs';
-import { parseBuildSelection } from '../scripts/build/build_targets.mjs';
-import { shouldBuildStackArtifacts } from '../scripts/build/build_mode.mjs';
-import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/paths/canonical_home.mjs';
-import { resolveExplicitStackEnvFilePath, resolveStackEnvPath } from '../scripts/utils/paths/paths.mjs';
-import { SANDBOX_PRESERVE_KEYS, STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS, scrubHappierStackEnv } from '../scripts/utils/env/scrub_env.mjs';
-import { resolveStackHappierPassthroughEntrypoint } from '../scripts/stack/stack_happier_passthrough_entrypoint.mjs';
-import { readExecutionHostProfile } from '../scripts/utils/execution_host/config.mjs';
-import { shouldDelegateToActiveExecutionHost } from '../scripts/utils/execution_host/controller.mjs';
-import { runDelegatedHstackCommand } from '../scripts/utils/execution_host/delegation.mjs';
-import {
+const { runForegroundChild } = await import('../scripts/utils/execution_host/foreground_child.mjs');
+const { commandHelpArgs, renderhstackRootHelp, resolvehstackCommand } = await import('../scripts/utils/cli/cli_registry.mjs');
+const { parseBuildSelection } = await import('../scripts/build/build_targets.mjs');
+const { shouldBuildStackArtifacts } = await import('../scripts/build/build_mode.mjs');
+const { expandHome, getCanonicalHomeEnvPathFromEnv } = await import('../scripts/utils/paths/canonical_home.mjs');
+const { resolveExplicitStackEnvFilePath, resolveStackEnvPath } = await import('../scripts/utils/paths/paths.mjs');
+const { SANDBOX_PRESERVE_KEYS, STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS, scrubHappierStackEnv } = await import('../scripts/utils/env/scrub_env.mjs');
+const { resolveStackHappierPassthroughEntrypoint } = await import('../scripts/stack/stack_happier_passthrough_entrypoint.mjs');
+const { readExecutionHostProfile } = await import('../scripts/utils/execution_host/config.mjs');
+const { shouldDelegateToActiveExecutionHost } = await import('../scripts/utils/execution_host/controller.mjs');
+const { runDelegatedHstackCommand } = await import('../scripts/utils/execution_host/delegation.mjs');
+const {
   isBundledWorkspaceMetadataInvocation,
   isBundledWorkspaceRuntimeInvocation,
   refreshLocalBundledWorkspacePackages,
-} from './localBundledWorkspacePreflight.mjs';
+} = await import('./localBundledWorkspacePreflight.mjs');
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
