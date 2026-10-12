@@ -1,12 +1,7 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSessionFixture, renderScreen } from '@/dev/testkit';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionRouteCommonModuleMocks } from '@/__tests__/routes/(app)/session/[id]/sessionRouteTestHelpers';
-import { storage } from '@/sync/domains/state/storageStore';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,6 +13,13 @@ installSessionRouteCommonModuleMocks({
         return createExpoRouterMock({ router: { navigate: routerNavigate } }).module;
     },
 });
+// Install router boundary options before the real pane/runtime import graph
+// reaches Expo; otherwise its cached module has only the default router methods.
+const { createSessionFixture, renderScreen } = await import('@/dev/testkit');
+const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
+const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
+const { storage } = await import('@/sync/domains/state/storageStore');
 const runtime = installSessionPaneRuntimeTestHarness();
 let otherHome: Awaited<ReturnType<typeof import('@/sync/domains/server/serverProfiles').upsertServerProfile>>;
 let navigate: Navigate;

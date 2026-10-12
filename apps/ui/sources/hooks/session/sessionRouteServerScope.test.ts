@@ -43,6 +43,31 @@ describe('createSessionRouteServerScope legacy link admission', () => {
         expect(scope.hydrationOptions).toEqual({ serverId: 'home-a' });
     });
 
+    it('qualifies a cold route with the sole saved Home, deduplicating its scope ids', () => {
+        const scope = createSessionRouteServerScope({ id: 'unloaded' }, {}, { homeServerIds: ['home-a', 'home-a'] });
+        expect(scope.serverId).toBe('home-a');
+        expect(scope.hydrationOptions).toEqual({ serverId: 'home-a' });
+        expect(scope.candidateAddresses).toEqual([]);
+    });
+
+    it('keeps an unknown cold route unresolved when several Homes are saved', () => {
+        const scope = createSessionRouteServerScope({ id: 'unloaded' }, {}, { homeServerIds: ['home-a', 'home-b'] });
+        expect(scope.serverId).toBeNull();
+        expect(scope.hydrationOptions).toBeUndefined();
+    });
+
+    it('does not qualify an invalid empty Session route merely because a sole Home is saved', () => {
+        const scope = createSessionRouteServerScope({ id: ' ' }, {}, { homeServerIds: ['home-a'] });
+        expect(scope.serverId).toBeNull();
+        expect(scope.hydrationOptions).toBeUndefined();
+    });
+
+    it('does not let the sole saved Home override ambiguous Session membership', () => {
+        const scope = createSessionRouteServerScope({ id: 'same' }, known, { homeServerIds: ['home-a'] });
+        expect(scope.serverId).toBeNull();
+        expect(scope.candidateAddresses).toHaveLength(2);
+    });
+
     it('uses one current query-only Home for a legacy route', () => {
         const queryState = {
             requestedQueryKey: 'team-query', appliedQueryKey: 'team-query',

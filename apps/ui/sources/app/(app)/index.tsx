@@ -14,7 +14,7 @@ import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { isAuthenticatedRootDeepLinkRedirectAllowed } from '@/auth/routing/authenticatedRootDeepLinkRedirectAllowed';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { resolveLegacySessionDeepLinkRoute } from '@/sync/domains/server/url/consumeLegacySessionDeepLinkFromWebLocation';
 import { resolveNewSessionAuthContinuation } from '@/components/sessions/new/navigation/newSessionAuthContinuation';
 import { useVoiceSurfaceE2eFixtureComposition } from '@/dev/testkit/harness/useVoiceSurfaceE2eFixtureComposition';
 import { isPersonalHomeBootstrapRuntimeHost } from '@/components/personalHome/bootstrap/personalHomeBootstrapHost';
@@ -89,7 +89,7 @@ function Authenticated(props: Readonly<{
     const messageId = typeof params.messageId === 'string' ? params.messageId : Array.isArray(params.messageId) ? (params.messageId[0] ?? null) : null;
     const jumpChildId = typeof params.jumpChildId === 'string' ? params.jumpChildId : Array.isArray(params.jumpChildId) ? (params.jumpChildId[0] ?? null) : null;
     const shouldSuppressSetupContinuation = props.shouldSuppressSetupContinuation;
-    const sessionRouteServerScope = createSessionRouteServerScope(params);
+    const legacySessionRoute = resolveLegacySessionDeepLinkRoute({ sessionId, serverId: params.serverId, messageId, jumpChildId });
     const newSessionAuthContinuation = React.useMemo(() => {
         return resolveNewSessionAuthContinuation({
             activeServerId: props.activeServerId,
@@ -110,25 +110,10 @@ function Authenticated(props: Readonly<{
     }, [newSessionAuthContinuation, router]);
 
     React.useEffect(() => {
-        const sid = normalizeSessionId(sessionId);
-        if (!sid) return;
+        if (!legacySessionRoute) return;
         if (!isAuthenticatedRootDeepLinkRedirectAllowed()) return;
-
-        const mid = String(messageId ?? '').trim();
-        if (mid) {
-            const child = String(jumpChildId ?? '').trim();
-            router.replace(sessionRouteServerScope.buildHref(sid, {
-                suffix: `/message/${encodeURIComponent(mid)}`,
-                query: child ? { jumpChildId: child } : undefined,
-            }));
-            return;
-        }
-
-        const child = String(jumpChildId ?? '').trim();
-        router.replace(sessionRouteServerScope.buildHref(sid, {
-            query: child ? { jumpChildId: child } : undefined,
-        }));
-    }, [jumpChildId, messageId, router, sessionId, sessionRouteServerScope]);
+        router.replace(legacySessionRoute);
+    }, [legacySessionRoute, router]);
 
     React.useEffect(() => {
         if (normalizeSessionId(sessionId) || newSessionAuthContinuation) return;

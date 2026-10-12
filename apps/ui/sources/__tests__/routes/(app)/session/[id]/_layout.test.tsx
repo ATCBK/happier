@@ -1,140 +1,236 @@
 import * as React from 'react';
+import { BaseNavigationContainer, createNavigatorFactory, StackRouter, useNavigationBuilder } from '@react-navigation/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { resetSessionListPaneRetentionForTests, retainSessionListPaneState } from '@/components/sessions/shell/sessionListPaneRetention';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionRouteHomesFixture, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+
+installSessionRouteCommonModuleMocks({
+    text: async () => vi.importActual('@/text'),
+    modal: async () => vi.importActual('@/modal'),
+    nativeNavigation: async () => {
+        const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+        const core = await vi.importActual<typeof import('@react-navigation/core')>('@react-navigation/core');
+        return { ...createReactNavigationNativeMock(), useRoute: core.useRoute, useNavigationState: core.useNavigationState };
+    },
+    router: async () => {
+        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+        return { ...createExpoRouterMock().module,
+            Slot: () => {
+                routeRuntime.childHydrationServerIds.push(routeParams.value.serverId ?? 'home-a');
+                return React.createElement('SessionRouteSlot');
+            },
+            useLocalSearchParams: () => routeParams.value,
+            usePathname: () => routeRuntime.pathname,
+            useRouter: () => ({ setParams: routeRuntime.setParams, replace: routeRuntime.replace }),
+        };
+    },
+});
+const { storage } = await import('@/sync/domains/state/storage');
+const { SessionInvalidLinkFallback } = await import('@/components/sessions/shell/SessionInvalidLinkFallback');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { DestinationInstanceHost, useDestinationParams } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { WorkspaceRouteOutlet } = await import('@/components/appShell/workspace/WorkspaceRouteOutlet');
+await import('@/app/(app)/session/[id]/_layout');
+const initialStorageState = storage.getState();
+const baseMetadata = createSessionFixture().metadata;
+const homesFixture = createSessionRouteHomesFixture();
+const seedHomes = homesFixture.seed;
+if (!baseMetadata) throw new Error('The canonical Session fixture must have readable metadata');
+
+function Navigator(props: Readonly<{ children: React.ReactNode }>) {
+    const { state, descriptors, NavigationContent } = useNavigationBuilder(StackRouter, { children: props.children });
+    return <NavigationContent>{descriptors[state.routes[state.index].key].render()}</NavigationContent>;
+}
+const Root = createNavigatorFactory(Navigator)();
+let fixtureSeeded = false;
+function layoutTree(Layout: React.ComponentType) {
+    if (!fixtureSeeded) {
+        storage.setState({
+            sessions: sessionState.current ? { [sessionState.current.id]: sessionState.current } : {},
+            sessionListIndexByServerId: lookupState.sessionListIndexByServerId,
+            ordinarySessionListMembershipByServerId: lookupState.ordinarySessionListMembershipByServerId,
+        });
+        fixtureSeeded = true;
+    }
+    return <InjectedAuthProvider credentials={null}><BaseNavigationContainer><Root.Navigator><Root.Screen name="Session">{() => <Layout />}</Root.Screen></Root.Navigator></BaseNavigationContainer></InjectedAuthProvider>;
+}
 
 const routeParams = vi.hoisted(() => ({
-    value: { id: 'session-1' } as Readonly<{ id?: string; serverId?: string }>,
+    value: { id: 'session-1' } as Readonly<Record<string, string | undefined>>,
 }));
 const routeRuntime = vi.hoisted(() => ({
+    pathname: '/session/session-1',
     childHydrationServerIds: [] as string[],
     setParams: vi.fn((params: Readonly<{ serverId?: string }>) => {
         routeParams.value = { ...routeParams.value, ...params };
     }),
-}));
-const sessionState = vi.hoisted(() => ({
-    current: null as Readonly<{
-        id: string;
-        serverId?: string;
-        active: boolean;
-        metadata: unknown;
-        ownerMetadataView?: unknown;
-        metadataLayoutVersion?: number;
-    }> | null,
-}));
-const lookupState = vi.hoisted(() => ({
-    sessionListIndexByServerId: {} as Record<string, readonly Readonly<{
-        type: 'session';
-        sessionId: string;
-        serverId: string;
-    }>[]>,
-    ordinarySessionListMembershipByServerId: {} as Record<string, readonly string[]>,
-}));
-
-vi.mock('expo-router', () => ({
-    Slot: () => {
-        // A legacy child falls back to the active Home when the parent has not
-        // promoted a qualified route param before mounting it.
-        routeRuntime.childHydrationServerIds.push(routeParams.value.serverId ?? 'home-a');
-        return React.createElement('SessionRouteSlot');
-    },
-    useLocalSearchParams: () => routeParams.value,
-    useRouter: () => ({ setParams: routeRuntime.setParams }),
-}));
-
-vi.mock('@/sync/domains/state/storage', () => ({
-    useSession: () => sessionState.current,
-    storage: (selector: (state: unknown) => unknown) => selector({
-        sessions: sessionState.current ? { [sessionState.current.id]: sessionState.current } : {},
-        sessionListIndexByServerId: lookupState.sessionListIndexByServerId,
-        ordinarySessionListMembershipByServerId: lookupState.ordinarySessionListMembershipByServerId,
+    replace: vi.fn((href: string) => {
+        const url = new URL(href, 'https://app.example');
+        routeParams.value = { id: 'session-1', serverId: url.searchParams.get('serverId') ?? undefined };
     }),
 }));
-
-vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
-    SessionInvalidLinkFallback: (props: Record<string, unknown>) => React.createElement('SessionInvalidLinkFallback', props),
+const sessionState = vi.hoisted(() => ({
+    current: null as ReturnType<typeof createSessionFixture> | null,
+}));
+const lookupState = vi.hoisted(() => ({
+    sessionListIndexByServerId: {} as ReturnType<typeof storage.getState>['sessionListIndexByServerId'],
+    ordinarySessionListMembershipByServerId: {} as Record<string, readonly string[]>,
 }));
 
 describe('ordinary session route layout', () => {
     afterEach(() => {
         standardCleanup();
+        fixtureSeeded = false;
         routeParams.value = { id: 'session-1' };
+        routeRuntime.pathname = '/session/session-1';
         sessionState.current = null;
         lookupState.sessionListIndexByServerId = {};
         lookupState.ordinarySessionListMembershipByServerId = {};
         routeRuntime.childHydrationServerIds = [];
         routeRuntime.setParams.mockClear();
+        routeRuntime.replace.mockClear();
+        homesFixture.restore();
         resetSessionListPaneRetentionForTests();
+        storage.setState(initialStorageState, true);
     });
 
     it('does not mount ordinary session routes for the hidden Voice transcript history carrier', async () => {
-        sessionState.current = {
+        routeParams.value = { id: 'session-1', serverId: 'home-b' };
+        sessionState.current = createSessionFixture({
             id: 'session-1',
+            serverId: 'home-b',
             active: false,
             metadata: {
+                ...baseMetadata,
                 systemSessionV1: {
                     v: 1,
                     key: 'voice_transcript_history',
                     hidden: true,
                 },
             },
-        };
+        });
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
 
-        expect(screen.findAllByType('SessionInvalidLinkFallback')).toHaveLength(1);
+        expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(1);
         expect(screen.findAllByType('SessionRouteSlot')).toHaveLength(0);
     });
 
     it('keeps ordinary user sessions routed normally on the Home that holds them', async () => {
-        sessionState.current = {
+        sessionState.current = createSessionFixture({
             id: 'session-1',
             serverId: 'home-b',
             active: false,
             metadata: {
+                ...baseMetadata,
                 summary: {
                     text: 'Ordinary coding session',
                     updatedAt: 1,
                 },
             },
-        };
+        });
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
-        expect(routeRuntime.setParams).toHaveBeenCalledWith({ serverId: 'home-b' });
-        await screen.update(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1?serverId=home-b');
+        await screen.update(layoutTree(Layout.default));
 
-        expect(screen.findAllByType('SessionInvalidLinkFallback')).toHaveLength(0);
+        expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(0);
         expect(screen.findAllByType('SessionRouteSlot')).toHaveLength(1);
         expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
     });
 
     it('never lets the focused Home answer a bare link to a Session no Home is known to hold', async () => {
+        seedHomes(['home-a', 'home-b']);
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
 
         // No hydration against the focused Home: the Which Home? chooser asks instead.
         expect(screen.findAllByType('SessionRouteSlot')).toHaveLength(0);
         expect(routeRuntime.childHydrationServerIds).toEqual([]);
         expect(routeRuntime.setParams).not.toHaveBeenCalled();
-        expect(screen.findAllByType('SessionInvalidLinkFallback')[0]?.props).toMatchObject({
+        expect(screen.findAllByType(SessionInvalidLinkFallback)[0]?.props).toMatchObject({
             sessionId: 'session-1',
             homeChoice: 'unknown',
         });
+    });
+
+    it('qualifies a fresh direct route on its sole Home before mounting child hydration', async () => {
+        seedHomes(['home-b']);
+        const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
+        const screen = await renderScreen(layoutTree(Layout));
+        expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(0);
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1?serverId=home-b');
+        await screen.update(layoutTree(Layout));
+        expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
+    });
+
+    it('qualifies the retained destination through its navigation owner instead of Expo params', async () => {
+        seedHomes(['home-b']);
+        sessionState.current = createSessionFixture({ id: 'session-1', serverId: 'home-b' });
+        const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
+        function HostedLayout() {
+            return <DestinationInstanceHost tabId="cold-session" ref={{ kind: 'session', params: routeParams.value }}
+                pathname="/session/session-1" focused visible navigation={{ push: vi.fn(), replace: routeRuntime.replace, back: vi.fn() }}>
+                <WorkspaceRouteOutlet.Provider value={<SessionAddress />}><Layout /></WorkspaceRouteOutlet.Provider>
+            </DestinationInstanceHost>;
+        }
+        function SessionAddress() {
+            const params = useDestinationParams<{ id: string; serverId: string }>();
+            return <QualifiedSessionRoute serverId={params.serverId} />;
+        }
+        function QualifiedSessionRoute(_props: Readonly<{ serverId: string }>) { return null; }
+        const screen = await renderScreen(layoutTree(HostedLayout));
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1?serverId=home-b');
+        await screen.update(layoutTree(HostedLayout));
+        expect(screen.findAllByType(QualifiedSessionRoute)[0]?.props.serverId).toBe('home-b');
+        expect(routeRuntime.setParams).not.toHaveBeenCalled();
+    });
+
+    it('preserves the direct file subroute and its target when qualifying a sole Home', async () => {
+        seedHomes(['home-b']);
+        routeRuntime.pathname = '/session/session-1/file';
+        routeParams.value = { id: 'session-1', path: 'src/a.ts', startLine: '7' };
+        const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
+        await renderScreen(layoutTree(Layout));
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1/file?serverId=home-b&path=src%2Fa.ts&startLine=7');
     });
 
     it('opens an explicitly qualified link directly, even when no Home is known to hold it', async () => {
         routeParams.value = { id: 'session-1', serverId: 'home-b' };
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
 
-        expect(screen.findAllByType('SessionInvalidLinkFallback')).toHaveLength(0);
+        expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(0);
         expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
+    });
+
+    it('uses the selected retained Session Home instead of the outer Expo route', async () => {
+        routeParams.value = { id: 'outer-session' };
+        const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
+        function HostedLeaf() {
+            const params = useDestinationParams<{ id: string; serverId: string }>();
+            return <SessionAddress id={params.id} serverId={params.serverId} />;
+        }
+        function SessionAddress(_props: Readonly<{ id: string; serverId: string }>) { return null; }
+        function HostedLayout() {
+            return <DestinationInstanceHost tabId="selected-session" ref={{ kind: 'session', params: { id: 'unknown-session', serverId: 'home-b' } }}
+                pathname="/session/unknown-session" focused visible navigation={{ push: vi.fn(), replace: vi.fn(), back: vi.fn() }}>
+                <WorkspaceRouteOutlet.Provider value={<HostedLeaf />}><Layout /></WorkspaceRouteOutlet.Provider>
+            </DestinationInstanceHost>;
+        }
+        const screen = await renderScreen(layoutTree(HostedLayout));
+        expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(0);
+        expect(screen.findAllByType(SessionAddress)[0]?.props).toEqual({ id: 'unknown-session', serverId: 'home-b' });
+        expect(routeRuntime.childHydrationServerIds).toEqual([]);
+        expect(routeRuntime.setParams).not.toHaveBeenCalled();
     });
 
     it('opens the Which Home fallback without mounting hydration for an ambiguous legacy route', async () => {
@@ -148,10 +244,10 @@ describe('ordinary session route layout', () => {
         };
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
 
         expect(screen.findAllByType('SessionRouteSlot')).toHaveLength(0);
-        expect(screen.findAllByType('SessionInvalidLinkFallback')[0]?.props).toMatchObject({
+        expect(screen.findAllByType(SessionInvalidLinkFallback)[0]?.props).toMatchObject({
             sessionId: 'session-1',
             candidateServerIds: ['home-a', 'home-b'],
         });
@@ -180,9 +276,9 @@ describe('ordinary session route layout', () => {
             },
         });
         const Layout = await import('@/app/(app)/session/[id]/_layout');
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
         expect(screen.findAllByType('SessionRouteSlot')).toHaveLength(0);
-        expect(screen.findAllByType('SessionInvalidLinkFallback')[0]?.props).toMatchObject({
+        expect(screen.findAllByType(SessionInvalidLinkFallback)[0]?.props).toMatchObject({
             candidateServerIds: ['home-a', 'home-b'],
         });
     });
@@ -212,12 +308,12 @@ describe('ordinary session route layout', () => {
         });
         const Layout = await import('@/app/(app)/session/[id]/_layout');
 
-        const screen = await renderScreen(React.createElement(Layout.default));
+        const screen = await renderScreen(layoutTree(Layout.default));
 
         expect(routeRuntime.childHydrationServerIds).toEqual([]);
-        expect(routeRuntime.setParams).toHaveBeenCalledWith({ serverId: 'home-b' });
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1?serverId=home-b');
 
-        await screen.update(React.createElement(Layout.default));
+        await screen.update(layoutTree(Layout.default));
         expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
     });
 });

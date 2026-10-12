@@ -1,7 +1,30 @@
 import { vi } from 'vitest';
+import { MMKV } from 'react-native-mmkv';
+import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import type { ReactTestInstance } from 'react-test-renderer';
 
 type SessionRouteModuleFactory = () => unknown | Promise<unknown>;
+
+/** Seed the persistent Home boundary while keeping the profile and route owners real. */
+export function createSessionRouteHomesFixture() {
+    const persisted = new MMKV({ id: scopedStorageId('server-profiles', readStorageScopeFromEnv()) });
+    const initial = persisted.getString('server-state-v1');
+    return {
+        seed(serverIds: readonly string[]) {
+            persisted.set('server-state-v1', JSON.stringify({
+                activeServerId: serverIds[0], activeServerIdIsExplicit: true,
+                servers: Object.fromEntries(serverIds.map(id => [id, {
+                    id, name: id, serverUrl: `https://${id}.example`, source: 'manual',
+                    createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+                }])),
+            }));
+        },
+        restore() {
+            if (initial === undefined) persisted.delete('server-state-v1');
+            else persisted.set('server-state-v1', initial);
+        },
+    };
+}
 type SessionRouteImportOriginal = <T = unknown>() => Promise<T>;
 type SessionRouteStorageModuleFactory = (
     importOriginal: SessionRouteImportOriginal,

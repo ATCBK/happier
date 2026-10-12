@@ -3,7 +3,7 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 type SessionRouteServerScopeParams = Readonly<Record<string, unknown>>;
 
-type SessionRouteHrefQueryValue = string | number | boolean | null | undefined;
+type SessionRouteHrefQueryValue = string | readonly string[] | number | boolean | null | undefined;
 
 type BuildScopedSessionRouteHrefParams = Readonly<{
     sessionId: string;
@@ -66,6 +66,10 @@ export function buildScopedSessionRouteHref(params: BuildScopedSessionRouteHrefP
     for (const [key, rawValue] of Object.entries(params.query ?? {})) {
         if (key === 'serverId') continue;
         if (rawValue === null || rawValue === undefined) continue;
+        if (Array.isArray(rawValue)) {
+            for (const value of rawValue) searchParams.append(key, value);
+            continue;
+        }
         const value = String(rawValue);
         if (value.length === 0) continue;
         searchParams.set(key, value);
@@ -78,13 +82,22 @@ export function buildScopedSessionRouteHref(params: BuildScopedSessionRouteHrefP
 export function createSessionRouteServerScope(
     params: SessionRouteServerScopeParams | null | undefined,
     state?: SessionAddressLookupState | null,
-    options?: Readonly<{ queryStates?: readonly SessionAddressLookupQueryState[] }>,
+    options?: Readonly<{
+        queryStates?: readonly SessionAddressLookupQueryState[];
+        homeServerIds?: readonly string[];
+    }>,
 ): SessionRouteServerScope {
     const explicitServerId = readSessionRouteServerId(params);
+    const sessionId = normalizeRouteParam(params?.id) ?? '';
     const candidateAddresses = explicitServerId ? [] : listSessionAddressesForSessionIdFromLocalState(
-        state, normalizeRouteParam(params?.id) ?? '', options,
+        state, sessionId, options,
     );
-    const serverId = explicitServerId ?? (candidateAddresses.length === 1 ? candidateAddresses[0].serverId : null);
+    // A fresh route has no Session membership yet. Its sole saved Home is
+    // unambiguous; multiple saved Homes never let focus choose the target.
+    const homeServerIds = [...new Set(options?.homeServerIds?.map(normalizeRouteParam).filter((id): id is string => id !== null))];
+    const serverId = explicitServerId ?? (candidateAddresses.length === 1
+        ? candidateAddresses[0].serverId
+        : sessionId && candidateAddresses.length === 0 && homeServerIds.length === 1 ? homeServerIds[0] : null);
 
     return {
         serverId,

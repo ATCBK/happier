@@ -1,5 +1,7 @@
 import * as React from 'react';
-import { Slot, useLocalSearchParams, useRouter } from 'expo-router';
+import { Slot, useLocalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useNavigationState, useRoute } from '@react-navigation/native';
 import { useShallow } from 'zustand/react/shallow';
 
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
@@ -7,26 +9,66 @@ import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { storage, useSession } from '@/sync/domains/state/storage';
 import { isVoiceTranscriptHistorySession } from '@/voice/persistence/voiceTranscriptHistorySession';
-import { createSessionRouteServerScope, readSessionRouteServerId } from '@/hooks/session/sessionRouteServerScope';
+import { buildScopedSessionRouteHref, createSessionRouteServerScope, readSessionRouteServerId } from '@/hooks/session/sessionRouteServerScope';
 import { useActiveRetainedSessionListQueryStates } from '@/components/sessions/shell/sessionListPaneRetention';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
+import { listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
+
+function useSessionLayoutParams() {
+    const layoutParams = useLocalSearchParams<Record<string, string | string[] | undefined>>();
+    const hosted = useDestinationInstanceKey() !== null;
+    // The retained destination already supplies its leaf's exact params. Expo's
+    // outer branch describes another mounted route and must not lend its Home.
+    if (hosted) return layoutParams;
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- only Expo layouts have a native route branch.
+    const route = useRoute();
+    // Expo puts a cold leaf's query on the child state, not its ancestor layout.
+    // Read only this layout's branch: a retained sibling must never lend its Home.
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- only Expo layouts have a native route branch.
+    const childNavigationState = useNavigationState((state) => state.routes.find((candidate) => candidate.key === route.key)?.state);
+    const childParams: Record<string, string | string[] | undefined> = {};
+    let childState = childNavigationState;
+    while (childState?.routes.length) {
+        const child = childState.routes[childState.index ?? childState.routes.length - 1];
+        for (const [key, value] of Object.entries(child.params ?? {})) {
+            if (typeof value === 'string' || (Array.isArray(value) && value.every(part => typeof part === 'string'))) {
+                childParams[key] = value;
+            }
+        }
+        childState = child.state;
+    }
+    return { ...layoutParams, ...childParams, serverId: readSessionRouteServerId(childParams) ?? layoutParams.serverId };
+}
 
 export default function OrdinarySessionRouteLayout() {
     const router = useRouter();
-    const params = useLocalSearchParams<{ id?: string | string[]; serverId?: string | string[] }>();
-    const sessionId = normalizeSessionId(params.id);
+    const pathname = usePathname();
+    const params = useSessionLayoutParams();
+    const { id, ...routeQuery } = params;
+    const sessionId = normalizeSessionId(id);
     const queryStates = useActiveRetainedSessionListQueryStates();
-    const candidateServerIds = storage(useShallow((state) => createSessionRouteServerScope(params, state, { queryStates })
-        .candidateAddresses.map((address) => address.serverId)));
+    const profilesGeneration = useServerProfilesGeneration();
+    const homeServerIds = React.useMemo(() => listServerProfiles().map(resolveServerProfileScopeId), [profilesGeneration]);
+    const [resolvedServerId, ...candidateServerIds] = storage(useShallow((state) => {
+        const scope = createSessionRouteServerScope(params, state, { queryStates, homeServerIds });
+        return [scope.serverId, ...scope.candidateAddresses.map((address) => address.serverId)] as const;
+    }));
     const session = useSession(sessionId);
     const explicitServerId = readSessionRouteServerId(params);
-    const promotedServerId = explicitServerId === null && candidateServerIds.length === 1
-        ? candidateServerIds[0]
-        : null;
+    const promotedServerId = explicitServerId === null ? resolvedServerId : null;
+    const qualifiedHref = promotedServerId ? buildScopedSessionRouteHref({
+        sessionId,
+        serverId: promotedServerId,
+        suffix: pathname.slice(`/session/${encodeURIComponent(sessionId)}`.length),
+        query: routeQuery,
+    }) : null;
     React.useEffect(() => {
-        if (promotedServerId) {
-            router.setParams({ serverId: promotedServerId });
+        if (qualifiedHref) {
+            // The destination navigation owner must update the retained leaf,
+            // too. Expo layout setParams alone leaves that leaf unqualified.
+            router.replace(qualifiedHref);
         }
-    }, [promotedServerId, router]);
+    }, [qualifiedHref, router]);
     const isVoiceTranscriptHistory = isVoiceTranscriptHistorySession(session && (!explicitServerId || session.serverId === explicitServerId)
         ? {
             active: session.active,
@@ -45,9 +87,8 @@ export default function OrdinarySessionRouteLayout() {
         return <SessionInvalidLinkFallback sessionId={sessionId} candidateServerIds={candidateServerIds} />;
     }
 
-    // A bare link no Home is known to hold resolves only through its origin or one
-    // known address (Lane 07.1); the focused Home never answers it by default. The
-    // person picks the Home instead, and that choice opens the exact qualified route.
+    // With neither Session membership nor a sole saved Home, the person chooses
+    // the exact Home. Focus is never a tie-breaker among several Homes.
     if (explicitServerId === null && candidateServerIds.length === 0) {
         return <SessionInvalidLinkFallback sessionId={sessionId} homeChoice="unknown" />;
     }
