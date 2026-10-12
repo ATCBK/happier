@@ -48,7 +48,6 @@ export const DEVIN_ACP_RUNTIME_DECLARATION = {
         fileName: 'mcp_config.json',
         serversKey: 'mcpServers',
         serverEntryConstants: { transport: 'stdio' },
-        linkedConfigRootEntries: ['cognition'],
         projectShadowPaths: ['.devin/mcp_config.json', '.devin/mcp_config.local.json'],
       },
     },
