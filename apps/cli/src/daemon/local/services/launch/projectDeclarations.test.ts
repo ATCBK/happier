@@ -234,6 +234,21 @@ describe('accepted Project Service declaration starter', () => {
             retireRegistryProjection() { projectionLifetime.abort(); } };
     }
 
+    it('honours the Service Start waiver without a second effect confirmation while preserving explicit policy and digest checks', async () => {
+        const f = await fixture();
+        const context = { ...f.context, surface: 'agent' as const, actionsSettings: {
+            v: 1 as const, actions: {}, approvalWaivedSurfaces: { 'localServices.launcher.start': ['agent' as const] },
+        } };
+        expect(await f.routes.startTarget!({ ...f.request, expectedEffectDigest: 'stale' }, f.ingress, context))
+            .toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_changed' });
+        expect(await f.routes.startTarget!(f.request, f.ingress, { ...context, actionsSettings: {
+            ...context.actionsSettings, actions: { 'localServices.launcher.start': { approvalRequiredSurfaces: ['agent'] } },
+        } })).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
+        const started = await f.routes.startTarget!(f.request, f.ingress, context);
+        expect(started).toMatchObject({ status: 'succeeded' });
+        expect(f.owner.readResourceTargets()).toHaveLength(1);
+    });
+
     it.each(['ordinary', 'long_unicode'] as const)('emits registered launcher/Start/Stop outputs from real declaration discovery and supervision (%s)', async kind => {
         const script = `setInterval(() => {}, 1000); /* ${kind === 'long_unicode' ? '界🚀'.repeat(700) : 'service'} */`;
         const f = await fixture(false, { kind: 'command', command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}` });
