@@ -11,6 +11,7 @@ import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/req
 import type { TrackedSession } from '../types';
 import { createSessionLiveWorkProducer } from './sessionLiveWorkProducer';
 import { readTrackedSessionInputLiveWork } from './readTrackedSessionInputLiveWork';
+import { readCurrentSessionEligibility } from '../guard/sessionEligibility';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -22,6 +23,7 @@ describe('requester-qualified live Session network observation', () => {
       requesterWorkAttributionV1: attribution };
     let current = true;
     let loseAdmissionDuringRpc = false;
+    let metadata: Record<string, unknown> = { machineId: 'machine', path: '/project', flavor: 'codex' };
     const requesterBootstrap: Pick<AdmittedRequesterSessionBootstrap,
       'credentials' | 'attribution' | 'serverHttpBaseUrl' | 'getBoundSessionId' | 'isCurrent'> = {
       credentials: { token: 'bob-ordinary', encryption: null }, attribution,
@@ -34,11 +36,13 @@ describe('requester-qualified live Session network observation', () => {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
       } };
       return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId,
-        metadata: '{}', dataEncryptionKey: null, encryptionMode: 'plain' }) } };
+        metadata: JSON.stringify(metadata), metadataLayoutVersion: 0, dataEncryptionKey: null, encryptionMode: 'plain' }) } };
     });
     const queue = new MessageQueue2<string>(() => 'mode');
     const consumer = createSessionProviderInputConsumer({ messageQueue: queue, session: {
       waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+      getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }),
       readRuntimeActivitySnapshotTail: () => ({ sequence: 1, custody: null, settlement: {
         identity: { mutationKey: 'runtime:bob', admissionOrder: 1 }, desiredValue: { state: 'idle', activeCount: 0 },
         result: 'applied', committedProjection: { state: 'idle', activeCount: 0, observedAt: 1, revision: 1 }, committedRevision: 1,
@@ -70,17 +74,44 @@ describe('requester-qualified live Session network observation', () => {
     expect(transport).toMatchObject({ ok: true, sessionId, mode: 'plain' });
     expect(await source.read()).toMatchObject({ coverage: 'complete', items: [
       { category: 'session', attribution, state: 'settled' }, { category: 'input', attribution, state: 'settled' },
+      { category: 'agents', state: 'settled' }, { category: 'attention', state: 'settled' },
     ] });
     expect(rpcTokens).toEqual(['bob-ordinary']);
     expect(reads.mock.calls.every(([url, config]) => String(url).startsWith('https://bob-home.test/')
       && config?.headers?.Authorization === 'Bearer bob-ordinary')).toBe(true);
+    const posts = vi.spyOn(axios, 'post').mockResolvedValue({ data: { items: [{
+      address: { kind: 'session', sessionId }, content: { t: 'encrypted', c: 'opaque' }, revision: 1, createdAt: 1, updatedAt: 30,
+    }] } });
+    expect(await readCurrentSessionEligibility({ access: input })).toMatchObject({ eligible: false, reasons: [{ kind: 'unsent_draft' }] });
+    expect(posts.mock.calls.every(([url, , config]) => String(url).startsWith('https://bob-home.test/')
+      && config?.headers?.Authorization === 'Bearer bob-ordinary')).toBe(true);
+    posts.mockClear();
+    expect(await readCurrentSessionEligibility({ access: { ...input, requesterBootstrap: undefined } }))
+      .toMatchObject({ eligible: false });
+    expect(posts).not.toHaveBeenCalled();
+    posts.mockResolvedValue({ data: { items: [] } });
+    metadata = { machineId: 'machine', path: '/project', flavor: 'codex' };
+    expect(await readCurrentSessionEligibility({ access: input }))
+      .toMatchObject({ eligible: true, resumeOptions: { existingSessionId: sessionId, directory: '/project' } });
+    posts.mockImplementationOnce(async () => {
+      queue.pushImmediate('input received during draft read', 'mode');
+      return { data: { items: [] } };
+    });
+    expect(await readCurrentSessionEligibility({ access: input }))
+      .toMatchObject({ eligible: false, reasons: expect.arrayContaining([{ kind: 'working' }]) });
+    queue.discardMatching(() => true);
+    metadata = { machineId: 'machine', path: '/project' };
+    expect(await readCurrentSessionEligibility({ access: input }))
+      .toMatchObject({ eligible: false, reasons: expect.arrayContaining([{ kind: 'not_resumable' }]) });
     queue.pushImmediate('private input', 'mode');
     expect(await source.read()).toMatchObject({ coverage: 'complete', items: [
       { category: 'session', state: 'settled' }, { category: 'input', state: 'active' },
+      { category: 'agents', state: 'settled' }, { category: 'attention', state: 'settled' },
     ] });
     loseAdmissionDuringRpc = true;
     expect(await source.read()).toMatchObject({ coverage: 'unknown', items: [
       { category: 'session', state: 'unknown' }, { category: 'input', state: 'unknown' },
+      { category: 'agents', state: 'unknown' }, { category: 'attention', state: 'unknown' },
     ] });
     reads.mockClear();
     const callsBefore = rpcTokens.length;

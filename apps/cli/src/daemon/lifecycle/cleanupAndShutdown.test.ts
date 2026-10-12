@@ -56,6 +56,7 @@ describe('cleanupAndShutdown', () => {
                     },
                     pause: () => {},
                     resume: () => {},
+                    wake: () => {},
                     subscribeAfterTick: () => () => {},
                 },
                 apiMachine: null,
@@ -76,8 +77,8 @@ describe('cleanupAndShutdown', () => {
                 stopControlServer: async () => {
                     calls.push('controlServerStop');
                 },
-                stopCaffeinate: async () => {
-                    calls.push('caffeinateStop');
+                stopKeepAwake: async () => {
+                    calls.push('keepAwakeStop');
                 },
                 daemonLockHandle: null,
                 releaseDaemonLock: async () => {
@@ -98,7 +99,7 @@ describe('cleanupAndShutdown', () => {
                 'tailscaleStop',
                 'sshTunnelsStop',
                 'controlServerStop',
-                'caffeinateStop',
+                'keepAwakeStop',
                 'exit:0',
             ]);
             exitSpy.mockRestore();
@@ -148,7 +149,7 @@ describe('cleanupAndShutdown', () => {
                     calls.push('tailscaleStop');
                 },
                 stopControlServer: async () => {},
-                stopCaffeinate: async () => {},
+                stopKeepAwake: async () => {},
                 daemonLockHandle: null,
                 releaseDaemonLock: async () => {},
             });
@@ -211,7 +212,7 @@ describe('cleanupAndShutdown', () => {
                 stopDirectPeerServer: async () => {},
                 stopTailscaleTransferServeLifecycle: async () => {},
                 stopControlServer: async () => {},
-                stopCaffeinate: async () => {},
+                stopKeepAwake: async () => {},
                 daemonLockHandle: null,
                 releaseDaemonLock: async () => {},
                 daemonStateOwner: predecessor,

@@ -4,13 +4,76 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { registerSessionProviderInputAdmissionRpc, requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import type { RpcHandler } from '@/api/rpc/types';
 import type { TrackedSession } from '../types';
-import { createManagedActivityInventory } from './managedActivity';
+import { createManagedActivityInventory, readWorkspaceSessionIdle } from './managedActivity';
 import { createSessionLiveWorkProducer } from './sessionLiveWorkProducer';
 import { createSpawnRequestCoalescer, computeDaemonSpawnRequestKey } from '../spawn/spawnRequestCoalescer';
 import { createDeferred } from '@/testkit/async/deferred';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { buildSessionAgentActivityHeadline } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineBuild';
+import type { AgentState } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 describe('live Session producer at the host input RPC boundary', () => {
+  it.each([
+    { locationMachineId: 'machine', expectedWorkspacePath: '/repos/project', expectedIdle: false },
+    { locationMachineId: 'replaced-machine', expectedWorkspacePath: '/agent/repo', expectedIdle: true },
+  ])('uses the published same-machine workspace mapping for $locationMachineId', async ({ locationMachineId, expectedWorkspacePath, expectedIdle }) => {
+    const tracked: TrackedSession = { pid: 1, startedBy: 'daemon', happySessionId: 'session',
+      requesterWorkAttributionV1: { serverId: 'home', accountId: 'owner', machineId: 'machine', installationId: 'installation' },
+      happySessionMetadataFromLocalWebhook: createTestMetadata({ path: '/agent/repo', host: 'host', machineId: 'machine',
+        sessionWorkspaceLocationV1: { v: 1, machineId: locationMachineId, agentPath: '/agent/repo', machinePath: '/repos/project' } }),
+    };
+    const source = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: async () => ({
+      session: 'settled', input: 'settled', agents: 'active', attention: 'settled', agentsActiveCount: 1,
+    }) });
+    const inventory = await source.read();
+    expect(inventory.items.every(item => item.workspacePath === expectedWorkspacePath)).toBe(true);
+    expect(readWorkspaceSessionIdle(inventory, { workspacePath: '/repos/project', workspaceId: 'project' })).toBe(expectedIdle);
+  });
+  it('keeps background agents and waiting questions busy, and retains the runner settlement across daemon inventories', async () => {
+    let entries: Parameters<typeof buildSessionAgentActivityHeadline>[0]['entries'] = [{
+      entryId: 'background', kind: 'workflow_agent', title: 'Background work', status: 'running', updatedAt: 20,
+    }];
+    let agentState: AgentState = {};
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false,
+      getMetadataSnapshot: () => ({ sessionAgentActivityHeadlineV1: buildSessionAgentActivityHeadline({
+        backendId: 'test', updatedAt: 20, entries,
+      }) }),
+      getAgentStateSnapshot: () => agentState,
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }),
+      readRuntimeActivitySnapshotTail: () => ({ sequence: 1, custody: null, settlement: {
+        identity: { mutationKey: 'runtime:s1', admissionOrder: 1 }, desiredValue: { state: 'idle', activeCount: 0 },
+        result: 'applied', committedProjection: { state: 'idle', activeCount: 0, observedAt: 10, revision: 1 }, committedRevision: 1,
+      } }),
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    const handlers = new Map<string, RpcHandler>();
+    registerSessionProviderInputAdmissionRpc({ consumer, rpcHandlerRegistrar: {
+      registerHandler: (method, handler) => { handlers.set(method, handler); },
+    } });
+    const tracked: TrackedSession = { pid: 1, startedBy: 'daemon', happySessionId: 'session', spawnOptions: { directory: '/repo' } };
+    const source = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: () =>
+      requestSessionInputLiveWork({ callRpc: async (method, request) => handlers.get(method)!(request) }),
+    });
+    let inventory = createManagedActivityInventory({ producers: [source] });
+    expect((await inventory.read()).items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'session', ownerRef: tracked, workspacePath: '/repo' }),
+      expect.objectContaining({ category: 'agents', ownerRef: tracked, workspacePath: '/repo', state: 'active' }),
+    ]));
+    expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['agents'] });
+    entries = [];
+    agentState = { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 30 } } };
+    expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['attention'] });
+    agentState = {};
+    const settled = (await inventory.read()).items.find(item => item.category === 'session')?.settledAt;
+    expect(settled).toEqual(expect.any(Number));
+    inventory.dispose();
+    inventory = createManagedActivityInventory({ producers: [source] });
+    expect((await inventory.read()).items.find(item => item.category === 'session')?.settledAt).toBe(settled);
+    expect((await inventory.readDecision()).kind).toBe('idle');
+    inventory.dispose();
+  });
   it('keeps accepted startup preparation busy before any runner PID exists', async () => {
     const startup = createSpawnRequestCoalescer({ recentSuccessTtlMs: 0 });
     const source = createSessionLiveWorkProducer({ startup, readSessions: () => [], readActivity: async () => {
@@ -29,6 +92,9 @@ describe('live Session producer at the host input RPC boundary', () => {
     const queue = new MessageQueue2<string>(() => 'mode');
     const consumer = createSessionProviderInputConsumer({ messageQueue: queue, session: {
       waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+      getMetadataSnapshot: () => ({}),
+      getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }),
       readRuntimeActivitySnapshotTail: () => ({ sequence: 1, custody: null, settlement: {
         identity: { mutationKey: 'runtime:s1', admissionOrder: 1 }, desiredValue: { state: 'idle', activeCount: 0 },
         result: 'applied', committedProjection: { state: 'idle', activeCount: 0, observedAt: 1, revision: 1 }, committedRevision: 1,
@@ -46,8 +112,10 @@ describe('live Session producer at the host input RPC boundary', () => {
     });
     const inventory = createManagedActivityInventory({ producers: [source] });
     expect((await inventory.read()).items).toEqual([
-      { category: 'session', ownerRef: tracked, attribution, state: 'settled' },
+      { category: 'session', ownerRef: tracked, attribution, state: 'settled', settledAt: 1 },
       { category: 'input', ownerRef: tracked, attribution, state: 'settled' },
+      { category: 'agents', ownerRef: tracked, attribution, state: 'settled', activeCount: 0 },
+      { category: 'attention', ownerRef: tracked, attribution, state: 'settled' },
     ]);
     expect((await inventory.readDecision()).kind).toBe('idle');
     queue.pushImmediate('private prompt', 'mode');
@@ -64,6 +132,7 @@ describe('live Session producer at the host input RPC boundary', () => {
     const source = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: async () => { throw new Error('unreachable'); } });
     await expect(source.read()).resolves.toMatchObject({ coverage: 'unknown', items: [
       { category: 'session', state: 'unknown' }, { category: 'input', state: 'unknown' },
+      { category: 'agents', state: 'unknown' }, { category: 'attention', state: 'unknown' },
     ] });
     tracked.happySessionId = undefined;
     await expect(source.read()).resolves.toMatchObject({ coverage: 'unknown' });
@@ -74,7 +143,7 @@ describe('live Session producer at the host input RPC boundary', () => {
     let sessions = [tracked];
     const source = createSessionLiveWorkProducer({ readSessions: () => sessions, readActivity: async () => {
       sessions = [];
-      return { session: 'settled', input: 'settled' };
+      return { session: 'settled', input: 'settled', agents: 'settled', attention: 'settled' };
     } });
     await expect(source.read()).resolves.toEqual({ coverage: 'complete', items: [] });
   });
@@ -85,9 +154,10 @@ describe('live Session producer at the host input RPC boundary', () => {
     let sessions = [original];
     const source = createSessionLiveWorkProducer({ readSessions: () => sessions, readActivity: async () => {
       sessions = [replacement];
-      return { session: 'settled', input: 'settled' };
+      return { session: 'settled', input: 'settled', agents: 'settled', attention: 'settled' };
     } });
     await expect(source.read()).resolves.toMatchObject({ coverage: 'unknown', items: [
+      { ownerRef: replacement, state: 'unknown' }, { ownerRef: replacement, state: 'unknown' },
       { ownerRef: replacement, state: 'unknown' }, { ownerRef: replacement, state: 'unknown' },
     ] });
     await expect(source.read()).resolves.toMatchObject({ coverage: 'complete' });

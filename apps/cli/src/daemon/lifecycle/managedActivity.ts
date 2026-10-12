@@ -1,9 +1,10 @@
 import type { RequesterWorkAttributionV1 } from './requesterWorkAttribution';
 import type { ActivityDecisionV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { isCanonicalAbsolutePathInsideRoot, resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
 
 /** Private composition of incumbent work owners; never a persisted liveness store. */
 export type LiveWorkCategoryV1 = 'session' | 'finite' | 'terminal' | 'service'
-    | 'transfer' | 'handoff' | 'sync' | 'setup' | 'input' | 'execution_run' | 'workflow_run';
+    | 'transfer' | 'handoff' | 'sync' | 'setup' | 'input' | 'execution_run' | 'workflow_run' | 'agents' | 'attention';
 
 export type LiveWorkItemV1 = Readonly<{
     category: LiveWorkCategoryV1;
@@ -12,7 +13,13 @@ export type LiveWorkItemV1 = Readonly<{
     ownerRef: unknown;
     attribution: RequesterWorkAttributionV1 | Readonly<{ kind: 'unknown' }>;
     state: 'active' | 'settled' | 'unknown';
+    /** Owner-reported anchor; never reconstructed from daemon uptime. */
+    settledAt?: number;
+    activeCount?: number;
     associatedTerminal?: unknown;
+    /** Canonical Session workspace facts; private, not another work-state owner. */
+    workspacePath?: string;
+    workspaceId?: string;
 }>;
 
 export type LiveWorkInventoryV1 = Readonly<{
@@ -32,6 +39,28 @@ export type ManagedActivityInventory = Readonly<{
     subscribe(listener: (decision: ActivityDecisionV1) => void): () => void;
     dispose(): void;
 }>;
+
+/** Project-service eligibility reads Session facts, never the service's residency. */
+export function readWorkspaceSessionIdle(
+    inventory: LiveWorkInventoryV1,
+    workspace: Readonly<{ workspacePath: string; workspaceId?: string }>,
+): boolean | null {
+    if (inventory.coverage !== 'complete'
+        || resolveCanonicalAbsolutePathComparisonIdentity(workspace.workspacePath) === null) return null;
+    const sessionItems = inventory.items.filter(item => item.category === 'session' || item.category === 'input'
+        || item.category === 'agents' || item.category === 'attention');
+    let unknown = false;
+    for (const item of sessionItems) {
+        const sameWorkspace = workspace.workspaceId && item.workspaceId
+            ? workspace.workspaceId === item.workspaceId
+            : item.workspacePath && resolveCanonicalAbsolutePathComparisonIdentity(item.workspacePath) !== null
+                ? isCanonicalAbsolutePathInsideRoot(workspace.workspacePath, item.workspacePath) : null;
+        if (sameWorkspace === false || item.state === 'settled') continue;
+        if (sameWorkspace === null || item.state === 'unknown') unknown = true;
+        else if (item.state === 'active') return false;
+    }
+    return unknown ? null : true;
+}
 
 /** Binds late/replaced incumbent owners; retains references, never copied work state. */
 export function createLiveWorkProducerGroup(resolve: () => readonly LiveWorkProducerV1[] | null) {
@@ -105,8 +134,8 @@ export function projectManagedActivityDecision(inventory: LiveWorkInventoryV1): 
 }
 
 /**
- * The only retained fact is the aggregate settled edge's timestamp. Each read
- * still queries the original producers; a failed read cannot manufacture zero.
+ * The only retained fact is the aggregate settled edge's timestamp. Concurrent
+ * reads share a live observation; a failed read cannot manufacture zero.
  */
 export function createManagedActivityInventory(params: Readonly<{
     producers: readonly LiveWorkProducerV1[];
@@ -116,9 +145,11 @@ export function createManagedActivityInventory(params: Readonly<{
     const listeners = new Set<(decision: ActivityDecisionV1) => void>();
     let idleSince: number | undefined;
     let priorDecision: ActivityDecisionV1 | undefined;
+    let publishedOwnerEdge = -1;
     let disposed = false;
     let reads = Promise.resolve();
     let ownerEdge = 0;
+    let inFlight: Readonly<{ ownerEdge: number; result: Promise<LiveWorkInventoryV1> }> | null = null;
     let unsubscribe: Array<() => void> | null = null;
     const observe = () => {
         if (unsubscribe || disposed) return;
@@ -136,6 +167,9 @@ export function createManagedActivityInventory(params: Readonly<{
     const read = (): Promise<LiveWorkInventoryV1> => {
         observe();
         const observedEdge = ownerEdge;
+        // Concurrent readers of the same owner edge share its live observation.
+        // A new edge still captures immediately; completed results are never cached.
+        if (inFlight?.ownerEdge === observedEdge) return inFlight.result;
         // Capture synchronous owner edges immediately. Deferring the read until
         // a prior asynchronous producer settles would lose busy→idle within one turn.
         const observationsPending = Promise.allSettled(params.producers.map(producer => {
@@ -157,7 +191,8 @@ export function createManagedActivityInventory(params: Readonly<{
             idleSince = settled ? idleSince ?? now() : undefined;
             const inventory: LiveWorkInventoryV1 = { items, coverage, ...(idleSince === undefined ? {} : { idleSince }) };
             const decision = projectManagedActivityDecision(inventory);
-            if (JSON.stringify(decision) !== JSON.stringify(priorDecision)) {
+            if (observedEdge !== publishedOwnerEdge || JSON.stringify(decision) !== JSON.stringify(priorDecision)) {
+                publishedOwnerEdge = observedEdge;
                 priorDecision = decision;
                 if (!disposed) for (const listener of listeners) {
                     try { listener(decision); } catch { /* Observation cannot change work custody. */ }
@@ -165,6 +200,9 @@ export function createManagedActivityInventory(params: Readonly<{
             }
             return inventory;
         });
+        inFlight = { ownerEdge: observedEdge, result: next };
+        const release = () => { if (inFlight?.result === next) inFlight = null; };
+        void next.then(release, release);
         reads = next.then(() => {}, () => {});
         return next;
     };

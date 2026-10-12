@@ -2,6 +2,7 @@ import type { SessionInputLiveWork } from '@/agent/runtime/session/input/_types'
 import type { TrackedSession } from '../types';
 import type { LiveWorkItemV1, LiveWorkProducerV1 } from './managedActivity';
 import type { createSpawnRequestCoalescer } from '../spawn/spawnRequestCoalescer';
+import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
 
 /** Queries the live host rather than deriving idle from a nullable turn marker or process presence. */
 export function createSessionLiveWorkProducer(params: Readonly<{
@@ -27,12 +28,23 @@ export function createSessionLiveWorkProducer(params: Readonly<{
       // occurrence's reply nor an omitted new process can prove the successor idle.
       const sessionItems = params.readSessions().flatMap(tracked => {
         const observed = observationBySession.get(tracked);
-        const activity = observed && observed.sessionId === tracked.happySessionId
+        const activity: SessionInputLiveWork = observed && observed.sessionId === tracked.happySessionId
           ? observed.activity : { session: 'unknown' as const, input: 'unknown' as const };
         const attribution = tracked.requesterWorkAttributionV1 ?? { kind: 'unknown' as const };
+        const metadata = tracked.happySessionMetadataFromLocalWebhook;
+        const candidatePath = metadata?.path ?? tracked.spawnOptions?.directory;
+        const machineId = tracked.requesterWorkAttributionV1?.machineId ?? metadata?.machineId;
+        const workspacePath = candidatePath && machineId
+          ? resolveSessionWorkspaceRootForMachine({ metadata, machineId, candidatePath }).machinePath
+          : candidatePath;
+        const workspace = workspacePath ? { workspacePath } : {};
         return [
-          { category: 'session', ownerRef: tracked, attribution, state: activity.session },
-          { category: 'input', ownerRef: tracked, attribution, state: activity.input },
+          { category: 'session', ownerRef: tracked, attribution, ...workspace, state: activity.session,
+            ...(activity.settledAt !== undefined ? { settledAt: activity.settledAt } : {}) },
+          { category: 'input', ownerRef: tracked, attribution, ...workspace, state: activity.input },
+          { category: 'agents', ownerRef: tracked, attribution, ...workspace, state: activity.agents ?? 'unknown',
+            ...('agentsActiveCount' in activity ? { activeCount: activity.agentsActiveCount } : {}) },
+          { category: 'attention', ownerRef: tracked, attribution, ...workspace, state: activity.attention ?? 'unknown' },
         ] satisfies LiveWorkItemV1[];
       });
       const items: LiveWorkItemV1[] = [

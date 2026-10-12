@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createServer, type ServerResponse } from 'node:http';
+import { createDeferred } from '@/testkit/async/deferred';
+import { requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { createSessionLiveWorkProducer } from './sessionLiveWorkProducer';
+import { waitForChangeOrDeadline } from './waitForChangeOrDeadline';
 
-import { createManagedActivityInventory, createLiveWorkProducerGroup, type LiveWorkProducerV1, type LiveWorkItemV1 } from './managedActivity';
+import { createManagedActivityInventory, createLiveWorkProducerGroup, readWorkspaceSessionIdle, type LiveWorkProducerV1, type LiveWorkItemV1 } from './managedActivity';
 
 function producer() {
     let items: readonly LiveWorkItemV1[] = [];
@@ -18,6 +23,88 @@ function producer() {
 }
 
 describe('managed activity inventory', () => {
+    it('shares concurrent live Session observations and reads again after settlement', async () => {
+        // The remote Session transport is the system boundary; inventory, Session
+        // projection and RPC response validation below use their real owners.
+        const firstRequest = createDeferred();
+        const pending = new Set<ServerResponse>();
+        let requests = 0;
+        let released = false;
+        const reply = (response: ServerResponse) => {
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ session: 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: 1 }));
+        };
+        const server = createServer((_request, response) => {
+            requests++;
+            firstRequest.resolve();
+            if (released) reply(response);
+            else pending.add(response);
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('HTTP transport address unavailable');
+        const tracked = { pid: 1, startedBy: 'daemon' as const, happySessionId: 'session' };
+        const source = createSessionLiveWorkProducer({ readSessions: () => [tracked], readActivity: () =>
+            requestSessionInputLiveWork({ callRpc: async () => (await fetch(`http://127.0.0.1:${address.port}/activity`)).json() }) });
+        const inventory = createManagedActivityInventory({ producers: [source] });
+        try {
+            const readers = Array.from({ length: 12 }, () => inventory.readDecision());
+            await firstRequest.promise;
+            released = true;
+            for (const response of pending) reply(response);
+            const decisions = await Promise.all(readers);
+            expect(decisions.every(decision => decision.kind === 'idle')).toBe(true);
+            expect(requests).toBe(1);
+            expect((await inventory.readDecision()).kind).toBe('idle');
+            expect(requests).toBe(2);
+        } finally {
+            inventory.dispose();
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        }
+    });
+    it('reads workspace Session work rather than service residency or a different workspace', () => {
+        const service: LiveWorkItemV1 = { category: 'service', ownerRef: 'project-service', attribution: { kind: 'unknown' }, state: 'active' };
+        const session: LiveWorkItemV1 = { category: 'session', ownerRef: 'session', attribution: { kind: 'unknown' },
+            state: 'settled', workspacePath: '/repo/src' };
+        const workspace = { workspacePath: '/repo', workspaceId: 'workspace' };
+        const read = (items: readonly LiveWorkItemV1[]) => readWorkspaceSessionIdle({ items, coverage: 'complete' }, workspace);
+        expect(read([service, session])).toBe(true);
+        expect(read([service, { ...session, category: 'agents', state: 'active' }])).toBe(false);
+        expect(read([service, { ...session, category: 'attention', state: 'active' }])).toBe(false);
+        expect(read([service, { ...session, state: 'active', workspacePath: '/repo-other' }])).toBe(true);
+        expect(read([service, { ...session, state: 'active', workspaceId: 'other' }])).toBe(true);
+        expect(read([service, { ...session, state: 'unknown' }])).toBeNull();
+        expect(read([service, { ...session, state: 'active', workspacePath: undefined }])).toBeNull();
+        expect(readWorkspaceSessionIdle({ items: [service], coverage: 'unknown' }, workspace)).toBeNull();
+    });
+    it('uses canonical workspace path boundaries on Windows and does not borrow a sibling workspace', () => {
+        const session: LiveWorkItemV1 = { category: 'input', ownerRef: 'session', attribution: { kind: 'unknown' },
+            state: 'active', workspacePath: 'c:/Users/ALICE/repo/src' };
+        const workspace = { workspacePath: 'C:\\Users\\alice\\repo\\' };
+        expect(readWorkspaceSessionIdle({ items: [session], coverage: 'complete' }, workspace)).toBe(false);
+        expect(readWorkspaceSessionIdle({ items: [{ ...session, workspacePath: 'C:\\Users\\alice2\\repo' }], coverage: 'complete' }, workspace)).toBe(true);
+        expect(readWorkspaceSessionIdle({ items: [session], coverage: 'complete' }, { workspacePath: 'not-absolute' })).toBeNull();
+    });
+    it('wakes per-session planning on an owner edge even while another session keeps the machine busy', async () => {
+        vi.useFakeTimers();
+        const source = producer();
+        const one: LiveWorkItemV1 = { category: 'session', ownerRef: 'one', attribution: { kind: 'unknown' }, state: 'active' };
+        const two: LiveWorkItemV1 = { ...one, ownerRef: 'two' };
+        source.change([one, two]);
+        const inventory = createManagedActivityInventory({ producers: [source.source] });
+        try {
+            expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['session'] });
+            const waiting = waitForChangeOrDeadline({ remainingMs: 1000, waitForChange: signal => new Promise(resolve => {
+                const unsubscribe = inventory.subscribe(() => { unsubscribe(); resolve(); });
+                signal.addEventListener('abort', unsubscribe, { once: true });
+            }) });
+            source.change([{ ...one, state: 'settled', settledAt: 20 }, two]);
+            await inventory.read();
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(await waiting).toBe('changed');
+        } finally { inventory.dispose(); vi.useRealTimers(); }
+    });
     it('does not confirm an asynchronous settled snapshot invalidated by a real owner edge', async () => {
         let notify = () => {};
         let release = () => {};
