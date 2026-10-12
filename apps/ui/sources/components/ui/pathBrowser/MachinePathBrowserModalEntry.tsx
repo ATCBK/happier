@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -9,7 +10,7 @@ import { t } from '@/text';
 import type { MachinePathBrowserModalProps } from './MachinePathBrowserModal';
 import { PATH_BROWSER_MODAL_TEST_ID } from './pathBrowserTestIds';
 
-const LazyMachinePathBrowserModal = React.lazy(async () => {
+const LazyMachinePathBrowserModal = retryableLazy(async () => {
     const module = await import('./MachinePathBrowserModal');
     return { default: module.MachinePathBrowserModal };
 });

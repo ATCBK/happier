@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierListDetailLayout, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
@@ -53,7 +54,7 @@ const styles = StyleSheet.create((theme) => ({
 
 // The detail draws a session, a run page or an approval page: loaded when something is selected, so
 // the Inbox list (and a phone, which never shows the pane) does not carry those screens.
-const InboxItemDetail = React.lazy(() => import('@/components/inbox/detail/InboxItemDetail')
+const InboxItemDetail = retryableLazy(() => import('@/components/inbox/detail/InboxItemDetail')
     .then((module) => ({ default: module.InboxItemDetail })));
 
 /**

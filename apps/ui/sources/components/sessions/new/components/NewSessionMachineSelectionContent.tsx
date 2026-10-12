@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 
 import { SelectionList, resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -17,7 +18,7 @@ import {
 import type { MachinePoolSelectionStatus } from '@/components/sessions/new/hooks/machines/useMachinePoolSelection';
 import type { ManagedMachineDestinationProjection, ManagedMachineSelectionDraft, ManagedMachineSelectionOffer } from './machineSelection/managedMachineSelection';
 
-const ManagedMachineSelectionOffers = React.lazy(() => import('./machineSelection/ManagedMachineSelectionOffers')
+const ManagedMachineSelectionOffers = retryableLazy(() => import('./machineSelection/ManagedMachineSelectionOffers')
     .then(module => ({ default: module.ManagedMachineSelectionOffers })));
 
 /**

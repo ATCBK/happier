@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 
 import { useSetting } from '@/sync/domains/state/storage';
 import { LazyMountOnScreen } from '@/components/ui/performance/LazyMountOnScreen';
@@ -11,7 +12,7 @@ import { isPierreDiffKillSwitchEnabled, supportsPierreRuntime } from './pierre/p
 import { useInitialPresentationReadiness } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { useEffectiveDiffWrapLines } from './diffPresentationStyle';
 
-const PierreDiffViewer = React.lazy(async () => {
+const PierreDiffViewer = retryableLazy(async () => {
     const renderer = await import('./pierre/PierreDiffViewer.web');
     return { default: renderer.PierreDiffViewer };
 });

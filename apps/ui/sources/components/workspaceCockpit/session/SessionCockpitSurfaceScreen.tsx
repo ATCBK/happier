@@ -1,4 +1,5 @@
 import { useSessionCollaborationDestinationAdmitted } from '@/hooks/session/useSessionCollaborationAvailability';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSessionBoardFeatureEnabled';
 import * as React from 'react';
 import { BackHandler, Platform, View } from 'react-native';
@@ -85,8 +86,8 @@ import { SessionServicesSurfaceScreen } from './SessionServicesSurfaceScreen';
 import { useSessionCockpitSurfaceNavigation } from './SessionCockpitSurfaceNavigation';
 
 // The one Work tab host the desktop sidebar mounts too: the Work view with FIN's Triggers section in its slot.
-const SessionWorkViewWithTriggers = React.lazy(() => import('@/components/workflows/triggers/SessionWorkViewWithTriggers').then((module) => ({ default: module.SessionWorkViewWithTriggers })));
-const SessionCollaborationSurface = React.lazy(() => import('@/components/sessions/collaboration/SessionCollaborationSurface').then((module) => ({ default: module.SessionCollaborationSurface })));
+const SessionWorkViewWithTriggers = retryableLazy(() => import('@/components/workflows/triggers/SessionWorkViewWithTriggers').then((module) => ({ default: module.SessionWorkViewWithTriggers })));
+const SessionCollaborationSurface = retryableLazy(() => import('@/components/sessions/collaboration/SessionCollaborationSurface').then((module) => ({ default: module.SessionCollaborationSurface })));
 
 export type SessionCockpitSurfaceScreenProps = Readonly<{
     sessionId: string;

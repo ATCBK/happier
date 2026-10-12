@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 
 import type { DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -10,26 +11,26 @@ import { WorkspaceRouteOutlet } from './WorkspaceRouteOutlet';
 
 // Routes that share one editor loader also share its lazy identity: promotion
 // after Save must not suspend an already mounted editor on another route chunk.
-const lazyBodies = new Map<() => Promise<{ default: React.ComponentType }>, React.LazyExoticComponent<React.ComponentType>>();
+const lazyBodies = new Map<() => Promise<{ default: React.ComponentType }>, React.ComponentType>();
 const bodies = Object.fromEntries(Object.entries(workspaceRouteBodies).map(([routeKey, load]) => {
     let Body = lazyBodies.get(load);
     if (!Body) {
-        Body = React.lazy(load);
+        Body = retryableLazy(load);
         lazyBodies.set(load, Body);
     }
     return [routeKey, Body];
 }));
 // Stable component identities keep common layouts/providers mounted when their selected leaf changes.
-const layouts = new Map<string, React.LazyExoticComponent<React.ComponentType>>();
+const layouts = new Map<string, React.ComponentType>();
 function hostedLayout(key: string) {
     let Layout = layouts.get(key);
     if (!Layout) {
-        Layout = React.lazy(() => loadWorkspaceRouteLayout(key));
+        Layout = retryableLazy(() => loadWorkspaceRouteLayout(key));
         layouts.set(key, Layout);
     }
     return Layout;
 }
-const PluginAppPageScreen = React.lazy(() => import('@/components/appShell/plugins/PluginAppPageScreen')
+const PluginAppPageScreen = retryableLazy(() => import('@/components/appShell/plugins/PluginAppPageScreen')
     .then((module) => ({ default: module.PluginAppPageScreen })));
 
 /** Renders the catalog-admitted identity; the Expo entrypoint is only its URL sink. */

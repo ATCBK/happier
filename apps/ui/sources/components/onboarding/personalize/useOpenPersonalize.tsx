@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -10,7 +11,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { PersonalizePageId } from './personalizeFlowModel';
 
-const LazyPersonalizeFlowSheet = React.lazy(async () => {
+const LazyPersonalizeFlowSheet = retryableLazy(async () => {
     const module = await import('./PersonalizeFlowView');
     return { default: module.PersonalizeFlowSheet };
 });

@@ -1,10 +1,11 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { Platform, TurboModuleRegistry, UIManager, View } from 'react-native';
 import type { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 
 import type { DateTimePickerPopoverProps } from './DateTimePickerPopover';
 
-const DateTimePicker = React.lazy(() => import('@react-native-community/datetimepicker'));
+const DateTimePicker = retryableLazy(() => import('@react-native-community/datetimepicker'));
 
 export function isDateTimePickerPopoverAvailable(): boolean {
     if (Platform.OS === 'ios') return UIManager.hasViewManagerConfig('RNDateTimePicker');

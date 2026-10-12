@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPublicLinkCard } from '@happier-dev/plugin-ui/presentation';
@@ -34,7 +35,7 @@ const QR_SIZE_PX = 168;
  * The QR renderer (Skia on native) loads only when someone asks for the code, as it did behind the
  * former publication dialog, so opening Collaboration never pays for it.
  */
-const LazyQRCode = React.lazy(() => import('@/components/qr/QRCode').then((module) => ({ default: module.QRCode })));
+const LazyQRCode = retryableLazy(() => import('@/components/qr/QRCode').then((module) => ({ default: module.QRCode })));
 
 const styles = StyleSheet.create({
     line: { marginHorizontal: 4 },

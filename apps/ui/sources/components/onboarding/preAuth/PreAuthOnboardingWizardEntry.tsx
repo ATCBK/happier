@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { Platform, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -61,15 +62,18 @@ type OnboardingJourneyHostModule = typeof import('@/components/onboarding/tour/O
 let onboardingJourneyHostModulePromise: Promise<OnboardingJourneyHostModule> | null = null;
 
 function loadOnboardingJourneyHostModule(): Promise<OnboardingJourneyHostModule> {
-    onboardingJourneyHostModulePromise ??= import('@/components/onboarding/tour/OnboardingJourneyHost');
+    onboardingJourneyHostModulePromise ??= import('@/components/onboarding/tour/OnboardingJourneyHost').catch((error: unknown) => {
+        onboardingJourneyHostModulePromise = null;
+        throw error;
+    });
     return onboardingJourneyHostModulePromise;
 }
 
 export function preloadOnboardingJourneyHost(): void {
-    void loadOnboardingJourneyHostModule();
+    void loadOnboardingJourneyHostModule().catch(() => undefined);
 }
 
-const LazyOnboardingJourneyHost = React.lazy(async () => {
+const LazyOnboardingJourneyHost = retryableLazy(async () => {
     const module = await loadOnboardingJourneyHostModule();
     return { default: module.OnboardingJourneyHost };
 });

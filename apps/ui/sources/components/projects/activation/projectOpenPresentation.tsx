@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -24,7 +25,7 @@ const PROJECT_OPEN_DIALOG_DIMENSIONS = Object.freeze({
   size: 'lg' as const,
 });
 
-const LazyProjectOpenScreen = React.lazy(async () => {
+const LazyProjectOpenScreen = retryableLazy(async () => {
   const module = await import('./ProjectOpenScreen');
   return { default: module.ProjectOpenScreen };
 });

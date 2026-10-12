@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
@@ -27,8 +28,8 @@ import { resolveWorkspaceTopRowGroupIds, WorkspaceBarGeometryContext } from './t
 // The body selector shares Expo's already-loaded context, not a second lazy graph.
 import { WorkspaceDestinationBody as DestinationBody } from './WorkspaceDestinationBody';
 
-const SessionBody = React.lazy(() => import('@/components/sessions/shell/SessionDestinationBody').then((module) => ({ default: module.SessionDestinationBody })));
-const SessionDetailsBody = React.lazy(() => import('@/components/sessions/shell/SessionDetailsDestinationBody').then((module) => ({ default: module.SessionDetailsDestinationBody })));
+const SessionBody = retryableLazy(() => import('@/components/sessions/shell/SessionDestinationBody').then((module) => ({ default: module.SessionDestinationBody })));
+const SessionDetailsBody = retryableLazy(() => import('@/components/sessions/shell/SessionDetailsDestinationBody').then((module) => ({ default: module.SessionDetailsDestinationBody })));
 const renderSession = () => <SessionBody />;
 const renderSessionDetails = () => <SessionDetailsBody />;
 const leafMinimum = () => WORKSPACE_VIEW_MINIMUM;

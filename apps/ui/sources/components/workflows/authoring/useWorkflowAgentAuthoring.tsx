@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { NewSessionEmbeddedHostProvider, mergeNewSessionHostParams, type NewSessionHostParams } from '@/components/sessions/new/navigation/newSessionHost';
@@ -10,7 +11,7 @@ import { t } from '@/text';
 import type { CustomModalInjectedProps } from '@/modal';
 import type { PluginUiNewSessionSeedV1 } from '@happier-dev/protocol/plugins/ui';
 
-const NewSessionScreen = React.lazy(() => import('@/components/sessions/new/NewSessionScreen').then((module) => ({ default: module.NewSessionScreen })));
+const NewSessionScreen = retryableLazy(() => import('@/components/sessions/new/NewSessionScreen').then((module) => ({ default: module.NewSessionScreen })));
 type SessionTarget = Readonly<{ sessionId: string; serverId: string }>;
 
 export type WorkflowAgentAuthoringDraftProps = Readonly<{

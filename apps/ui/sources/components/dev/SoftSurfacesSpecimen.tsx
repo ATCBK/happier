@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { useLocalSearchParams } from 'expo-router';
 import { ScrollView, View } from 'react-native';
 import { ScopedTheme, StyleSheet, UnistylesRuntime, useUnistyles } from 'react-native-unistyles';
@@ -33,7 +34,7 @@ const noop = () => {};
 const noSuggestions = async () => [];
 const ROWS = ['Retry relay handshake', 'Review the settings modal', 'Craft pass lab'] as const;
 const FINISH_ROLES = ['card', 'floating', 'composer', 'primaryButton', 'secondaryButton'] as const;
-const QuietHabitTranscriptDemo = React.lazy(() => import('./QuietHabitTranscriptDemo'));
+const QuietHabitTranscriptDemo = retryableLazy(() => import('./QuietHabitTranscriptDemo'));
 
 /** Public dev specimen outside authenticated runtimes: real owners and inert fixture controls. */
 export default function SoftSurfacesSpecimen() {

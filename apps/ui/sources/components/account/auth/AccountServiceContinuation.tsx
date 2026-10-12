@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SecretKeyEntryForm } from '@/components/account/restore/SecretKeyEntryForm';
@@ -25,7 +26,7 @@ import { describeAccountPostAuthResultReason, describeAccountServiceFailure } fr
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 const loadRestoreScanComputerQrView = () => import('@/components/account/restore/RestoreScanComputerQrView');
-const RestoreScanComputerQrView = React.lazy(async () => ({ default: (await loadRestoreScanComputerQrView()).RestoreScanComputerQrView }));
+const RestoreScanComputerQrView = retryableLazy(async () => ({ default: (await loadRestoreScanComputerQrView()).RestoreScanComputerQrView }));
 
 type RecoveryView = 'key' | 'scan' | 'paste';
 /** Recovery views read left to right: the card, its scanner, the scanner's paste form. */
