@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -106,6 +106,12 @@ esac
     for (const name of ['spawn', 'spawnSync']) {
       const original = cp[name];
       cp[name] = function(command, args, options) {
+        // Package publication now reaches native admission through a shell
+        // worker. Keep that genuine OS boundary on this fixture's machine.
+        if (command === '/bin/sh' && args[0] === ${JSON.stringify(fileURLToPath(new URL('../../apps/stack/bin/hstack-exec', import.meta.url)))}
+          && args[1] === '--heavyweight-admission') {
+          args = [${JSON.stringify(admission.launcher)}, ...args.slice(1)];
+        }
         ${windows ? `if (args.join(' ').includes('hstack-exec')) {
           return original(process.execPath, ['-e', 'process.exit(7)'], options);
         }` : ''}
@@ -215,6 +221,84 @@ test('finite compiler accepts explicit public-owner dispatch without changing co
   assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
   assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
 });
+
+for (const windows of [false, true]) {
+  for (const failPreparation of [false, true]) {
+    test(`referenced UI declarations prepare cold CLI compilation (${windows ? 'Windows' : 'POSIX'}, ${failPreparation ? 'producer failure' : 'success'})`, async (t) => {
+      const setup = await fixture(t, { windows, exitCode: 0, compilerBody: `
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const root = process.env.DECLARATION_FIXTURE_ROOT;
+        const project = path.resolve(process.argv[process.argv.indexOf('--project') + 1]);
+        const uiDir = path.join(root, 'apps', 'ui');
+        fs.appendFileSync(path.join(root, 'compiler-projects.jsonl'), JSON.stringify(project) + '\\n');
+        if (project.startsWith(uiDir + path.sep)) {
+          if (process.env.FAIL_DECLARATION_PREPARATION === '1') process.exit(23);
+          if (path.basename(project) === 'tsconfig.source.json') {
+            fs.mkdirSync(path.join(uiDir, 'declarations'), { recursive: true });
+            fs.writeFileSync(path.join(uiDir, 'declarations', 'source.d.ts'), fs.readFileSync(path.join(uiDir, 'source.ts')));
+          }
+        } else if (path.basename(project) === 'tsconfig.test.json'
+          && !fs.existsSync(path.join(uiDir, 'declarations', 'source.d.ts'))) process.exit(24);
+        else if (path.basename(project) === 'tsconfig.test.json'
+          && fs.readFileSync(path.join(uiDir, 'declarations', 'source.d.ts'), 'utf8') !== fs.readFileSync(path.join(uiDir, 'source.ts'), 'utf8')) process.exit(25);
+      ` });
+      const cliDir = join(setup.root, 'apps', 'cli');
+      const uiDir = join(setup.root, 'apps', 'ui');
+      await mkdir(cliDir, { recursive: true });
+      await mkdir(uiDir, { recursive: true });
+      // Expo is the real installed configuration boundary used by UI preparation.
+      await mkdir(join(uiDir, 'node_modules'));
+      await symlink(fileURLToPath(new URL('../../apps/ui/node_modules/expo', import.meta.url)), join(uiDir, 'node_modules/expo'), process.platform === 'win32' ? 'junction' : 'dir');
+      await writeFile(join(uiDir, 'package.json'), JSON.stringify({ name: 'ui-declaration-fixture' }));
+      await writeFile(join(uiDir, 'app.json'), JSON.stringify({ expo: { name: 'UI declaration fixture', slug: 'ui-declaration-fixture', experiments: { typedRoutes: false } } }));
+      await writeFile(join(uiDir, 'source.ts'), 'export declare const value: true;\n');
+      await writeFile(join(uiDir, 'source.test.ts'), 'export const testValue = true;\n');
+      await writeFile(join(uiDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions: { strict: true, module: 'esnext', moduleResolution: 'bundler', target: 'es2020' },
+        files: ['source.ts', 'source.test.ts'],
+      }));
+      for (const name of ['foundation', 'core', 'source', 'test']) {
+        await writeFile(join(uiDir, `tsconfig.${name}.json`), JSON.stringify({
+          extends: './tsconfig.json', files: [name === 'test' ? 'source.test.ts' : 'source.ts'], include: [],
+          compilerOptions: name === 'test' ? { noEmit: true } : {
+            composite: true, noEmit: false, emitDeclarationOnly: true, outDir: './declarations',
+          },
+        }));
+      }
+      await writeFile(join(cliDir, 'source.ts'), 'export const cliValue = true;\n');
+      await writeFile(join(cliDir, 'source.test.ts'), 'export const cliTestValue = true;\n');
+      await writeFile(join(cliDir, 'tsconfig.source.json'), JSON.stringify({ files: ['source.ts'] }));
+      await writeFile(join(cliDir, 'tsconfig.test.json'), JSON.stringify({
+        compilerOptions: { strict: true, noEmit: true, disableSourceOfProjectReferenceRedirect: true },
+        files: ['source.test.ts'], references: [
+          { path: './tsconfig.source.json' }, { path: '../ui/tsconfig.source.json' },
+        ],
+      }));
+      await assert.rejects(readFile(join(uiDir, 'declarations', 'source.d.ts')), { code: 'ENOENT' });
+      const { child, stderr } = setup.start([runner, '--singleThreaded',
+        '--project', join(cliDir, 'tsconfig.source.json'), '--project', join(cliDir, 'tsconfig.test.json')], {
+        env: { DECLARATION_FIXTURE_ROOT: setup.root, FAIL_DECLARATION_PREPARATION: failPreparation ? '1' : '' },
+      });
+      assert.deepEqual(await once(child, 'exit'), [failPreparation ? 23 : 0, null], stderr());
+      const compiled = (await readFile(join(setup.root, 'compiler-projects.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+      assert.deepEqual(compiled, failPreparation ? [join(uiDir, 'node_modules/.cache/tsc/tsconfig.foundation.json')] : [
+        ...['foundation', 'core', 'source'].map(name => join(uiDir, `node_modules/.cache/tsc/tsconfig.${name}.json`)),
+        join(cliDir, 'tsconfig.source.json'), join(cliDir, 'node_modules/.cache/tsc/tsconfig.test.json'),
+      ]);
+      if (!failPreparation) {
+        assert.equal(await readFile(join(uiDir, 'declarations', 'source.d.ts'), 'utf8'), 'export declare const value: true;\n');
+        await writeFile(join(uiDir, 'source.ts'), 'export declare const value: false;\n');
+        const changed = setup.start([runner, '--singleThreaded',
+          '--project', join(cliDir, 'tsconfig.source.json'), '--project', join(cliDir, 'tsconfig.test.json')], {
+          env: { DECLARATION_FIXTURE_ROOT: setup.root },
+        });
+        assert.deepEqual(await once(changed.child, 'exit'), [0, null], changed.stderr());
+        assert.equal(await readFile(join(uiDir, 'declarations', 'source.d.ts'), 'utf8'), 'export declare const value: false;\n');
+      }
+    });
+  }
+}
 
 test('actual CLI and Plugin SDK direct finite Yarn entries refuse before compilation', () => {
   for (const [workspace, task] of [['apps/cli', 'typecheck:source:finite'], ['packages/plugin-sdk', 'typecheck:finite']]) {

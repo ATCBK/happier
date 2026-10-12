@@ -66,7 +66,12 @@ function syncBundledWorkspaceReferencedFiles({ srcPackageDir, destPackageDir, pa
   collectPackageJsonRelativeFileTargets(packageJsonRaw?.exports, relativeTargets);
   collectPackageJsonRelativeFileTargets(packageJsonRaw?.imports, relativeTargets);
 
-  for (const relPath of relativeTargets) {
+  // Match the canonical publisher during bootstrap: source exports need their
+  // private sibling modules, not only their directly exported leaf files.
+  const contentTargets = new Set([...relativeTargets].map((relPath) => (
+    relPath.startsWith('src/') ? 'src' : relPath
+  )));
+  for (const relPath of contentTargets) {
     // `dist/**` is synced separately with extra staging/atomicity; skip it here.
     if (relPath.startsWith('dist/')) continue;
 

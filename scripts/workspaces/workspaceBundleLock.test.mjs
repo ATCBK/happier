@@ -13,6 +13,12 @@ import {
   withWorkspaceBundleLockSync,
 } from './workspaceBundleLock.mjs';
 import { withOptionalCliSharedDepsBuildLock } from '../../apps/cli/scripts/optionalWorkspaceBundleLock.mjs';
+import { withPatchedProcessEnv } from '../../apps/stack/scripts/testkit/core/env_scope.mjs';
+
+// These temporary-lock fixtures exercise standalone contention. The routed
+// runner's charged-payload restriction belongs to its real workspace leases,
+// not these independent owners; joint admission is covered by its native suite.
+withPatchedProcessEnv(test, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
 
 test('CLI publication adapter reenters the exact inherited joint lease supplied by its environment', async () => {
   const root = mkdtempSync(join(tmpdir(), 'workspace-cli-joint-lease-'));

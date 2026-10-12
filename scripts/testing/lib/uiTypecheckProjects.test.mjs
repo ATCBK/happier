@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 
 import { resolveTypeScriptCliInvocation } from '../../workspaces/resolveTypeScriptCliInvocation.mjs';
+import { installNativeAdmissionFixture } from '../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
 const uiDir = resolve('apps/ui');
 function readProject(name, packageDir = uiDir) {
@@ -27,7 +28,7 @@ function isSharedDeclaration(file) {
       || Boolean(statement.flags & ts.NodeFlags.GlobalAugmentation)));
 }
 
-function publicFiniteCompiler(packageDir, fixtureDir, write, invocation) {
+function publicFiniteCompiler(packageDir, fixtureDir, write, invocation, admission = null) {
   const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
   const [command, owner, ...compilerArgs] = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
   assert.equal(command, 'node');
@@ -46,20 +47,24 @@ function publicFiniteCompiler(packageDir, fixtureDir, write, invocation) {
     const cp = require('node:child_process');
     const spawn = cp.spawn;
     cp.spawn = function(command, args, options) {
-      const compilerArgs = command === process.execPath && args[0] === ${JSON.stringify(invocation.argsPrefix[0])}
-        ? args.slice(1)
-        : command === 'python3' && args[3] === ${JSON.stringify(invocation.argsPrefix[0])}
-          ? args.slice(4) : null;
+      const compilerIndex = args.indexOf(${JSON.stringify(invocation.compilerPath)});
+      const compilerArgs = compilerIndex >= 0 ? args.slice(compilerIndex + 1) : null;
       if (compilerArgs) require('node:fs').appendFileSync(${JSON.stringify(spawnLog)}, JSON.stringify(compilerArgs) + '\\n');
+      ${admission ? `
+      if (args[0] === '--heavyweight-admission') command = ${JSON.stringify(admission.launcher)};
+      if (command === 'python3' && args[3] === '--heavyweight-admission') args = [args[0], args[1], ${JSON.stringify(admission.launcher)}, ...args.slice(3)];
+      ` : ''}
       return spawn(command, args, options);
     };
     require('node:module').syncBuiltinESMExports();
   `);
   return {
     projects,
-    run: () => spawnSync(process.execPath, [resolve(packageDir, owner), ...fixtureArgs], {
+    run: (extraArgs = []) => spawnSync(process.execPath, [resolve(packageDir, owner), ...fixtureArgs, ...extraArgs], {
       cwd: fixtureDir, encoding: 'utf8',
       env: { ...process.env, CI: 'true', HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: '1',
+        ...(admission ? { PATH: `${join(fixtureDir, 'bin')}:${process.env.PATH}`, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
+          HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: admission.admissionRoot } : {}),
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require=${JSON.stringify(preload)}` },
     }),
     nativeCalls: () => readFileSync(spawnLog, 'utf8').trim().split('\n').map(JSON.parse),
@@ -77,10 +82,10 @@ function assertOneCheckerInvocations(nativeCalls, projects) {
   }
 }
 
-function assertProjectCoverage(packageDir, sourceNames) {
+function assertProjectCoverage(packageDir, sourceNames, testName = 'tsconfig.test.json', peerReferences = []) {
   const original = readProject('tsconfig.json', packageDir);
   const sources = sourceNames.map((name) => readProject(name, packageDir));
-  const tests = readProject('tsconfig.test.json', packageDir);
+  const tests = readProject(testName, packageDir);
   const originalRoots = new Set(original.fileNames);
   const projects = [...sources, tests];
   const counts = new Map();
@@ -103,11 +108,14 @@ function assertProjectCoverage(packageDir, sourceNames) {
   }
   assert.equal(tests.options.noEmit, true);
   assert.equal(tests.options.disableSourceOfProjectReferenceRedirect, true);
-  assert.deepEqual(tests.projectReferences.map(({ path }) => path), [join(packageDir, 'tsconfig.source.json')]);
+  assert.deepEqual(tests.projectReferences.map(({ path }) => path),
+    [sourceNames.at(-1), ...peerReferences].map(name => resolve(packageDir, name)));
 }
 
-test('UI projects preserve every original root exactly once, except shared declarations', () => {
-  assertProjectCoverage(uiDir, ['tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json']);
+test('UI projects preserve every original root exactly once, except shared declarations', async () => {
+  const { deriveUiTypecheckProjects } = await import('../../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+  const inventory = await deriveUiTypecheckProjects(uiDir);
+  assertProjectCoverage(uiDir, inventory.slice(0, 3).map(({ configPath }) => relative(uiDir, configPath)), relative(uiDir, inventory[3].configPath));
 });
 
 test('native UI source emission leaves test-only Protocol and SDK fixtures in the noEmit project', () => {
@@ -189,7 +197,7 @@ for (const name of ['foundation', 'core']) {
         extends: join(uiDir, 'tsconfig.json'),
         compilerOptions: { ...actual.compilerOptions, types: [], paths, rootDir: '.',
           outDir: './cache', tsBuildInfoFile: './cache/types.tsbuildinfo' },
-        files: ['sources/theme.ts', 'sources/consumer.ts', 'sources/adapter.ts'], include: actual.include, exclude: [],
+        files: ['sources/theme.ts', 'sources/consumer.ts', 'sources/adapter.ts'], include: ['sources/types/*.d.ts'], exclude: [],
       }));
       for (const file of readdirSync(join(uiDir, 'sources/types')).filter((file) => file.endsWith('.d.ts'))) {
         const content = readFileSync(join(uiDir, 'sources/types', file), 'utf8');
@@ -234,7 +242,7 @@ for (const name of ['foundation', 'core']) {
 
 test('CLI projects preserve every original root and compiler strictness', () => {
   const packageDir = resolve('apps/cli');
-  assertProjectCoverage(packageDir, ['tsconfig.source.json']);
+  assertProjectCoverage(packageDir, ['tsconfig.source.json'], 'tsconfig.test.json', ['../ui/tsconfig.source.json']);
   const original = readProject('tsconfig.json', packageDir);
   const source = readProject('tsconfig.source.json', packageDir);
   const tests = readProject('tsconfig.test.json', packageDir);
@@ -338,7 +346,7 @@ function assertNativeProjectBoundary(packageDir) {
 
 test('native UI projects redirect direct and transitive imports across the complete serial boundary', () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-ui-transitive-'));
-  const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: uiDir });
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: uiDir, admissionClass: 'validation' });
   const write = (file, value) => {
     mkdirSync(dirname(join(fixtureDir, file)), { recursive: true });
     writeFileSync(join(fixtureDir, file), value);
@@ -363,7 +371,7 @@ test('native UI projects redirect direct and transitive imports across the compl
         }, rootDir: '.',
           outDir: `./cache/${name}`, tsBuildInfoFile: `./cache/${name}.tsbuildinfo` },
         ...(index ? { references: [{ path: `./tsconfig.${names[index - 1]}.json` }] } : {}),
-        files: [...files[name], 'ambient.d.ts'],
+        files: [...files[name], 'ambient.d.ts', 'sources/types/unistyles.d.ts'],
         include: name === 'foundation' || name === 'core' ? actual.include
           : name === 'source' ? [moduleDeclaration] : [], exclude: [],
       }));
@@ -444,6 +452,113 @@ test('native UI projects redirect direct and transitive imports across the compl
     }
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test('native UI serial checker derives added and removed files while preserving real diagnostics', async () => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'happier-ui-derived-'));
+  const fixtureDir = join(fixtureRoot, 'apps/ui');
+  const write = (file, value) => {
+    mkdirSync(dirname(join(fixtureDir, file)), { recursive: true });
+    writeFileSync(join(fixtureDir, file), value);
+  };
+  try {
+    mkdirSync(fixtureDir, { recursive: true });
+    const admission = await installNativeAdmissionFixture({ root: fixtureDir });
+    // This tiny native program has an isolated OS memory/admission fixture;
+    // compiler selection, native checking and process custody stay real.
+    write('bin/awk', '#!/bin/sh\ncase "$*" in\n*/proc/meminfo*) printf "67108864 100663296\\n" ;;\n*/proc/loadavg*|*/proc/pressure/*) printf "0\\n" ;;\n*) exec /usr/bin/awk "$@" ;;\nesac\n');
+    chmodSync(join(fixtureDir, 'bin/awk'), 0o755);
+    write('package.json', JSON.stringify({ name: 'ui-compiler-input-fixture' }));
+    write('app.json', JSON.stringify({ expo: { name: 'Compiler inputs', slug: 'compiler-inputs', experiments: { typedRoutes: false } } }));
+    mkdirSync(join(fixtureDir, 'node_modules'), { recursive: true });
+    symlinkSync(join(uiDir, 'node_modules/expo'), join(fixtureDir, 'node_modules/expo'), process.platform === 'win32' ? 'junction' : 'dir');
+    write('tsconfig.json', JSON.stringify({ extends: join(uiDir, 'tsconfig.json'),
+      compilerOptions: { types: [], paths: {} }, include: ['*.ts'], exclude: ['cache', 'node_modules'] }));
+    const names = ['foundation', 'core', 'source', 'test'];
+    const files = [['base.ts'], ['left.ts', 'right.ts'], ['entry.ts'], ['entry.test.ts']];
+    for (let index = 0; index < names.length; index++) {
+      const name = names[index];
+      const actual = readProject(`tsconfig.${name}.json`).raw;
+      write(`tsconfig.${name}.json`, JSON.stringify({ extends: './tsconfig.json',
+        compilerOptions: { ...actual.compilerOptions, rootDir: '.',
+          outDir: `./cache/${name}`, tsBuildInfoFile: `./cache/${name}.tsbuildinfo` },
+        ...(index ? { references: [{ path: `./tsconfig.${names[index - 1]}.json` }] } : {}),
+        files: files[index], include: [], exclude: [] }));
+    }
+    write('base.ts', "export { added } from './added';\n");
+    write('added.ts', 'export const added: string = "new";\n');
+    write('left.ts', "import { added } from './base'; import { right } from './right'; export const left = (): string => added + right();\n");
+    write('right.ts', "import { left } from './left'; export const right = (): string => left();\n");
+    write('entry.ts', "export { left } from './left';\n");
+    write('entry.test.ts', "import { left } from './entry'; const result: string = left();\n");
+    write('uiAmbient.d.ts', 'interface CliEnvironment { UI_ONLY: string }\n');
+    const invocation = resolveTypeScriptCliInvocation({ env: { CI: 'true' } });
+    const compiler = publicFiniteCompiler(uiDir, fixtureDir, write, invocation, admission);
+    const authoredConfigs = names.map(name => readFileSync(join(fixtureDir, `tsconfig.${name}.json`), 'utf8'));
+    const added = compiler.run();
+    assert.equal(added.status, 0, added.stdout + added.stderr);
+    assert.deepEqual(names.map(name => readFileSync(join(fixtureDir, `tsconfig.${name}.json`), 'utf8')), authoredConfigs,
+      'the public runner must admit new roots without rewriting authored compiler configs');
+    rmSync(join(fixtureDir, 'cache/foundation'), { recursive: true, force: true });
+    const rebuilt = compiler.run();
+    assert.equal(rebuilt.status, 0, rebuilt.stdout + rebuilt.stderr);
+    assert.ok(readFileSync(join(fixtureDir, 'cache/foundation/base.d.ts'), 'utf8').includes('added'),
+      'missing declaration outputs must regenerate despite retained incremental metadata');
+    // A rename removes an old generated root and discovers the replacement.
+    rmSync(join(fixtureDir, 'added.ts'));
+    write('replacement.ts', 'export const added: string = "moved";\n');
+    write('base.ts', "export { added } from './replacement';\n");
+    const moved = compiler.run();
+    assert.equal(moved.status, 0, moved.stdout + moved.stderr);
+    write('replacement.ts', 'export const added: string = 42;\n');
+    write('entry.test.ts', "import { left } from './entry'; const result: number = left();\n");
+    const invalid = compiler.run();
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stdout + invalid.stderr, /replacement\.ts.*TS2322/);
+    assert.match(invalid.stdout + invalid.stderr, /entry\.test\.ts.*TS2322/);
+    assert.doesNotMatch(invalid.stdout + invalid.stderr, /TS6307|TS6053/);
+    assert.deepEqual(names.map(name => readFileSync(join(fixtureDir, `tsconfig.${name}.json`), 'utf8')), authoredConfigs);
+    // A CLI consumer keeps all its own roots, but references UI declarations
+    // instead of importing the UI project's production-only globals.
+    write('replacement.ts', 'export const added: string = "restored";\n');
+    write('entry.test.ts', "import { left } from './entry'; const result: string = left();\n");
+    const cliDir = join(fixtureRoot, 'apps/cli');
+    const writeCli = (file, value) => {
+      mkdirSync(dirname(join(cliDir, file)), { recursive: true });
+      writeFileSync(join(cliDir, file), value);
+    };
+    writeCli('tsconfig.json', JSON.stringify({ compilerOptions: {
+      strict: true, types: [], target: 'es2022', module: 'esnext', moduleResolution: 'bundler',
+    }, files: ['cli.ts', 'consumer.test.ts', 'neighbor.test.ts', 'cliAmbient.d.ts'] }));
+    writeCli('tsconfig.source.json', JSON.stringify({ extends: './tsconfig.json',
+      compilerOptions: { composite: true, declaration: true, emitDeclarationOnly: true, rootDir: '.', outDir: './cache' },
+      files: ['cli.ts', 'cliAmbient.d.ts'] }));
+    writeCli('tsconfig.test.json', JSON.stringify({ extends: './tsconfig.json',
+      compilerOptions: { noEmit: true, disableSourceOfProjectReferenceRedirect: true },
+      files: ['consumer.test.ts', 'neighbor.test.ts', 'cliAmbient.d.ts'],
+      references: [{ path: './tsconfig.source.json' }, { path: '../ui/tsconfig.source.json' }] }));
+    writeCli('cli.ts', 'export const cli = true;\n');
+    writeCli('cliAmbient.d.ts', 'interface CliEnvironment {}\n');
+    writeCli('consumer.test.ts', "import { left } from '../ui/entry'; export const value: string = left(); const env: CliEnvironment = {};\n");
+    writeCli('neighbor.test.ts', 'export const neighbor: boolean = true;\n');
+    // The admission fixture's PATH is shared by these two tiny real compilers.
+    mkdirSync(join(cliDir, 'bin'));
+    symlinkSync(join(fixtureDir, 'bin/awk'), join(cliDir, 'bin/awk'));
+    const cliCompiler = publicFiniteCompiler(resolve('apps/cli'), cliDir, writeCli, invocation, admission);
+    const cli = cliCompiler.run(['--listFiles']);
+    assert.equal(cli.status, 0, cli.stdout + cli.stderr);
+    const loaded = cli.stdout.trim().split(/\r?\n/u).map(file => resolve(file.trim()));
+    assert.ok(loaded.includes(join(cliDir, 'consumer.test.ts')) && loaded.includes(join(cliDir, 'neighbor.test.ts')));
+    assert.ok(loaded.includes(join(fixtureDir, 'cache/source/entry.d.ts')));
+    assert.ok(!loaded.includes(join(fixtureDir, 'entry.ts')) && !loaded.includes(join(fixtureDir, 'uiAmbient.d.ts')),
+      'the CLI consumer must not recheck UI implementations or import UI globals');
+    writeCli('neighbor.test.ts', 'export const neighbor: boolean = 42;\n');
+    const cliInvalid = cliCompiler.run();
+    assert.notEqual(cliInvalid.status, 0);
+    assert.match(cliInvalid.stdout + cliInvalid.stderr, /neighbor\.test\.ts.*TS2322/);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
   }
 });
 

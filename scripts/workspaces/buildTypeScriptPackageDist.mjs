@@ -19,9 +19,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 import ts from 'typescript';
 import { exitWithCommandResult, runCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { resolveRemoteCommandPolicy } from '../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs';
+import { runWorkspaceBuildAdmission } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
 
 import { assertNoMissingLocalImports } from './distLocalImports.mjs';
 import { copyDirectoryContents } from './copyDirectoryContents.mjs';
@@ -33,10 +35,11 @@ import {
   resolvePackageBuildOutputTargetPath,
 } from './packageBuildOutputTargets.mjs';
 import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
-import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
+import { withWorkspaceOutputScriptArgs } from './workspaceOutputScriptArgs.mjs';
+import { requiresTypeScriptAdmission, resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { resolveTypeScriptProjectPathFromArgs } from './prepareTypeScriptProjectBuild.mjs';
 import { resolveWorkspaceBuildMode, resolveWorkspaceTypeScriptCompilerArgs, WORKSPACE_DIST_CHECK_ONLY_ENV } from './workspaceChildBuildEnv.mjs';
-import { withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
+import { callerHoldsWorkspaceBundleLock, withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
 import {
   createWorkspaceLockLeaseValue,
@@ -45,7 +48,8 @@ import {
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const STAGED_OUTPUT_SCRIPT_FLAG = '--happier-staged-output-script';
-const DIST_BUILD_ADMISSION_ENTERED_ENV = 'HAPPIER_WORKSPACE_DIST_BUILD_ADMISSION_ENTERED';
+const DIST_BUILD_WORKER_FLAG = '--happier-dist-build-worker';
+const DIST_BUILD_RESULT_PREFIX = '\u001ehappier-dist-build-result:';
 const PERSISTENT_COMPILER_WORK_DIR_NAME = '.happier';
 const PERSISTENT_COMPILER_WORK_SUBDIR = 'typescript-package-build';
 const DIST_TEST_EXCLUDES = ['test', 'spec', 'testSupport', 'test-d']
@@ -173,27 +177,29 @@ async function runStagedOutputScripts({
   resolveYarnCommandInvocationImpl,
 }) {
   for (const scriptName of stagedOutputScripts) {
-    const invocation = resolveYarnCommandInvocationImpl(['-s', scriptName], {
-      npmExecPath: env.npm_execpath,
+    await withWorkspaceOutputScriptArgs({ packageDir, scriptName, env }, async (args) => {
+      const invocation = resolveYarnCommandInvocationImpl(args, {
+        npmExecPath: env.npm_execpath,
+      });
+      const result = await runCommandImpl(invocation.command, invocation.args, {
+        ownedProcessGroup: true,
+        cwd: packageDir,
+        env,
+        stdio,
+        ...(invocation.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+          : {}),
+      });
+      if (result?.error) throw result.error;
+      if (result?.signal || (result?.status ?? 0) !== 0) {
+        const error = new Error(
+          `Staged package output script "${scriptName}" failed with code ${result?.status ?? 'unknown'}`,
+        );
+        error.exitCode = result?.status;
+        error.signal = result?.signal;
+        throw error;
+      }
     });
-    const result = await runCommandImpl(invocation.command, invocation.args, {
-      ownedProcessGroup: true,
-      cwd: packageDir,
-      env,
-      stdio,
-      ...(invocation.windowsVerbatimArguments
-        ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
-        : {}),
-    });
-    if (result?.error) throw result.error;
-    if (result?.signal || (result?.status ?? 0) !== 0) {
-      const error = new Error(
-        `Staged package output script "${scriptName}" failed with code ${result?.status ?? 'unknown'}`,
-      );
-      error.exitCode = result?.status;
-      error.signal = result?.signal;
-      throw error;
-    }
   }
 }
 
@@ -346,6 +352,56 @@ function workspaceLockLeaseTargetsPath(lockPath, leaseValue) {
     ownerToken: 'path-comparison',
   }))?.path;
   return lease.path === normalizedLockPath;
+}
+
+function authenticatedPackageLockLease(lockPath, env) {
+  const leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]');
+  if (!Array.isArray(leases)) throw new Error('Package dist worker requires inherited workspace leases');
+  return [env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...leases].find(value =>
+    workspaceLockLeaseTargetsPath(lockPath, value) && callerHoldsWorkspaceBundleLock(lockPath, value));
+}
+
+async function runAdmittedPackageDistBuild({ packageDir, args, env, stdio, lockPath, admissionClass, errorLabel }) {
+  // The finite self-worker returns the public API's result over payload stdout.
+  // Forward compiler output while keeping that final private frame invisible.
+  const decoder = new StringDecoder('utf8');
+  let pending = '', resultFrame = null;
+  const consume = text => {
+    pending += text;
+    let end;
+    while ((end = pending.indexOf('\n')) !== -1) {
+      const line = pending.slice(0, end + 1);
+      pending = pending.slice(end + 1);
+      const marker = line.indexOf(DIST_BUILD_RESULT_PREFIX);
+      if (marker !== -1) resultFrame = line.slice(marker + DIST_BUILD_RESULT_PREFIX.length).trim();
+      if (stdio === 'inherit') process.stdout.write(marker === -1 ? line : line.slice(0, marker));
+    }
+  };
+  const result = await runWorkspaceBuildAdmission({
+    dependencyInstallDir: packageDir,
+    command: process.execPath,
+    args: [fileURLToPath(import.meta.url), DIST_BUILD_WORKER_FLAG, JSON.stringify({ args, stdio })],
+    locks: [{ path: lockPath, errorLabel }], cwd: packageDir, repoDir: repoRoot, env,
+    admissionClass, admissionRequired: requiresTypeScriptAdmission({ env }),
+    stdio: [stdio === 'ignore' ? 'ignore' : 'inherit', 'pipe', 'pipe'],
+    onStdout: chunk => consume(decoder.write(chunk)),
+    onStderr: chunk => { if (stdio === 'inherit') process.stderr.write(chunk); },
+  });
+  consume(decoder.end());
+  if (stdio === 'inherit' && pending) process.stdout.write(pending);
+  if (result.error) throw result.error;
+  if (result.signal || result.status !== 0) {
+    const error = new Error(`TypeScript package build failed with code ${result.status ?? 'unknown'}${result.stderr ? `\n${result.stderr}` : ''}`);
+    error.exitCode = result.status;
+    error.signal = result.signal;
+    throw error;
+  }
+  if (resultFrame === null) throw new Error('Package dist worker completed without its build result');
+  const buildResult = JSON.parse(resultFrame);
+  if (!buildResult || typeof buildResult.outputDir !== 'string' || typeof buildResult.promoted !== 'boolean') {
+    throw new Error('Package dist worker returned an invalid build result');
+  }
+  return buildResult;
 }
 
 async function createIsolatedCompilerWorkTree(compilerWorkTree) {
@@ -634,7 +690,7 @@ export async function buildTypeScriptPackageDist({
   const buildId = `${Date.now()}.${process.pid}.${rand()}`;
   const stagedDistDir = resolve(explicitOutputDir || join(resolvedPackageDir, `.dist.build.${buildId}`));
   const backupDir = join(resolvedPackageDir, `.dist.backup.${buildId}`);
-  const commandEnv = { ...process.env, ...env };
+  let commandEnv = { ...process.env, ...env };
   const buildMode = resolveWorkspaceBuildMode({ env: commandEnv });
   // Only the package admission owner requests this after proving the existing
   // emitted tree's current input, dependency and complete output digests.
@@ -649,12 +705,30 @@ export async function buildTypeScriptPackageDist({
   const effectiveCompilerArgs = resolveWorkspaceTypeScriptCompilerArgs({
     compilerArgs: parsedArgs.compilerArgs, env: commandEnv, checkOnly,
   });
+  const lockPath = resolveWorkspacePackageBuildLockPath(resolvedPackageDir, packageJson);
+  const admissionClass = resolveRemoteCommandPolicy(
+    [process.execPath, fileURLToPath(import.meta.url), ...effectiveCompilerArgs],
+    { cwd: relative(repoRoot, resolvedPackageDir).replaceAll('\\', '/') || '.' },
+  ).heavyClass;
+  const privateWorker = process.argv[2] === DIST_BUILD_WORKER_FLAG
+    && pathToFileURL(resolve(process.argv[1] ?? '')).href === import.meta.url;
+  if (privateWorker) {
+    const heldLockValue = authenticatedPackageLockLease(lockPath, commandEnv);
+    if (!heldLockValue) throw new Error('Package dist worker requires its authenticated inherited package lease');
+    commandEnv = { ...commandEnv, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue };
+  } else if (!explicitOutputDir && runCommandImpl === runCommand
+    && resolveTypeScriptCliInvocationImpl === resolveTypeScriptCliInvocation
+    && withWorkspaceBundleLockImpl === withWorkspaceBundleLock) {
+    return await runAdmittedPackageDistBuild({
+      packageDir: resolvedPackageDir, args, env: commandEnv, stdio, lockPath, admissionClass,
+      errorLabel: `${packageJson?.name ?? resolvedPackageDir} workspace dist build lock`,
+    });
+  }
   const persistentCompilerWorkTree = resolvePersistentCompilerWorkTree({
     packageDir: resolvedPackageDir,
     compilerArgs: effectiveCompilerArgs,
     outputMode: explicitOutputDir ? 'staged' : 'promoted',
   });
-  const lockPath = resolveWorkspacePackageBuildLockPath(resolvedPackageDir, packageJson);
   const stagedBuildTargetsPackageLock = explicitOutputDir && workspaceLockLeaseTargetsPath(
     lockPath,
     commandEnv.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
@@ -691,10 +765,7 @@ export async function buildTypeScriptPackageDist({
         workspaceDir: resolvedPackageDir,
         processExecPath: process.execPath,
         env: stagedBuildEnv,
-        admissionClass: resolveRemoteCommandPolicy(
-          [process.execPath, fileURLToPath(import.meta.url), ...effectiveCompilerArgs],
-          { cwd: relative(repoRoot, resolvedPackageDir).replaceAll('\\', '/') },
-        ).heavyClass,
+        admissionClass,
       });
       try {
         await runChecked(
@@ -796,35 +867,13 @@ export async function buildTypeScriptPackageDist({
 }
 
 export async function main() {
-  const env = process.env;
-  const requiresAdmission = process.platform === 'linux'
-    && (!env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
-      || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN));
-  if (requiresAdmission && env[DIST_BUILD_ADMISSION_ENTERED_ENV] !== '1') {
-    const args = process.argv.slice(2);
-    const admissionClass = resolveRemoteCommandPolicy(
-      [process.execPath, fileURLToPath(import.meta.url), ...args],
-      { cwd: relative(repoRoot, process.cwd()).replaceAll('\\', '/') || '.' },
-    ).heavyClass;
-    const result = await runCommand(
-      resolve(repoRoot, 'apps/stack/bin/hstack-exec'),
-      [
-        '--heavyweight-admission',
-        `--class=${admissionClass}`,
-        `--machine=${env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? 'worker' : 'local'}`,
-        '--',
-        process.execPath,
-        fileURLToPath(import.meta.url),
-        ...args,
-      ],
-      {
-        cwd: process.cwd(),
-        env: { ...env, [DIST_BUILD_ADMISSION_ENTERED_ENV]: '1' },
-        stdio: 'inherit',
-        ownedProcessGroup: true,
-      },
-    );
-    exitWithCommandResult(result);
+  if (process.argv[2] === DIST_BUILD_WORKER_FLAG) {
+    const request = JSON.parse(process.argv[3] ?? '');
+    if (!Array.isArray(request?.args) || request.args.some(arg => typeof arg !== 'string')) {
+      throw new Error('Package dist worker requires compiler arguments');
+    }
+    const result = await buildTypeScriptPackageDist({ args: request.args, outputDir: '', stdio: request.stdio });
+    process.stdout.write(`${DIST_BUILD_RESULT_PREFIX}${JSON.stringify(result)}\n`);
     return;
   }
   await buildTypeScriptPackageDist();

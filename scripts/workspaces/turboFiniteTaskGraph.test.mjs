@@ -147,7 +147,7 @@ test('the finite Turbo graph is activated through the current package manager wi
   assert.equal(turbo.tasks['build:finite'].cache, false);
   assert.deepEqual(turbo.tasks['project:finite'].outputs, []);
 
-  assert.equal(pluginSdk.scripts['generated:finite'], 'yarn -s check:action-type-map');
+  assert.equal(pluginSdk.scripts['generated:finite'], 'yarn -s check:action-type-map && yarn -s check:hosted-html-guest');
   assert.equal(
     pluginSdk.scripts['prepare:finite'],
     'node ./scripts/bundleWorkspaceDeps.mjs --declarations',

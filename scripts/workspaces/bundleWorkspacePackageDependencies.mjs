@@ -66,6 +66,7 @@ export async function bundleWorkspacePackageDependencies(options) {
       includeDevDependencies: false,
       publicationMode,
       quiet,
+      signal: options.signal,
     },
   );
   const bundles = workspaceModule.resolveWorkspaceBundlesFromPackageJson({
@@ -77,6 +78,7 @@ export async function bundleWorkspacePackageDependencies(options) {
     await ensureWorkspacePackagesBuiltByName(repoRoot, packageNames, {
       quiet,
       env: baseEnv,
+      signal: options.signal,
       includeDevDependencies: false,
       publicationMode,
       ...(forceArtifactWorkspaceBuilds ? { force: true } : {}),
@@ -110,6 +112,8 @@ export async function bundleWorkspacePackageDependencies(options) {
     return { bundles };
   }, {
     lockPath: options.lockPath ?? resolveWorkspaceBundleLockPath(repoRoot),
+    env: baseEnv,
+    signal: options.signal,
     heldLockValue: String(
       options.heldLockValue
         ?? options.heldLockPath

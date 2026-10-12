@@ -1,6 +1,35 @@
 import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, readlink, rm, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { readCachedFileDigest } from '../../apps/stack/scripts/utils/fs/cached_file_digest.mjs';
+import { createHash } from 'node:crypto';
+import { resolveDependencyInstallRoot, withDependencyConsumption } from '../../apps/stack/scripts/utils/proc/dependency_refresh.mjs';
+
+/**
+ * Captures link external packages to the installed tree. Hold its existing
+ * mutation custody through the entire finite consumption, not just mounting.
+ * @template T
+ * @param {{ sourceDir: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal }} input
+ * @param {(env: NodeJS.ProcessEnv) => Promise<T>} consume
+ */
+export async function withBuildInputDependencies({ sourceDir, env = process.env, signal }, consume) {
+  return await withDependencyConsumption({ installDir: resolveDependencyInstallRoot(sourceDir), env, signal }, consume);
+}
+
+/** Identity of an admitted input view, distinct from any emitted-code digest. */
+export async function readBuildInputIdentity({ sourceDir, files, options = [] }) {
+  const hash = createHash('sha256').update(JSON.stringify(options));
+  for (const path of [...new Set(files)].sort()) {
+    const absolute = join(sourceDir, path);
+    const info = await lstat(absolute, { bigint: true }).catch(error => {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+      throw error;
+    });
+    hash.update(JSON.stringify([path, info ? String(info.mode) : null]));
+    if (info?.isFile()) hash.update(await readCachedFileDigest(absolute, info));
+    else if (info?.isSymbolicLink()) hash.update(await readlink(absolute));
+  }
+  return hash.digest('hex');
+}
 
 /**
  * Capture once, then refresh only members changed during that pass. The

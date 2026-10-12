@@ -84,7 +84,9 @@ export function createBundledPluginPublicationFailure({
   // Moving inputs are a phase failure, not optional-plugin unavailability.
   if (error instanceof BuildInputDriftError) throw error;
   try {
-    assertHostCanExcludeBundledPlugin(repoRoot, packageName, error);
+    // UI byte unavailability does not exclude a required daemon/runtime
+    // package. Its executable host dependency remains admitted separately.
+    if (code !== 'plugin_ui_artifact_invalid') assertHostCanExcludeBundledPlugin(repoRoot, packageName, error);
   } catch (requiredPluginError) {
     // Keep the host policy's diagnostic while preserving the command's
     // terminal classification for the enclosing generator request.

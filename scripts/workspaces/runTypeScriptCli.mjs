@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { constants, tmpdir } from 'node:os';
-import { dirname, relative, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitWithCommandResult, runCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 
 import { prepareTypeScriptProjectBuildFromArgs } from './prepareTypeScriptProjectBuild.mjs';
+import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import {
   resolveTypeScriptCliInvocation,
   shouldRouteTypeScriptCliThroughHstack,
@@ -42,6 +43,36 @@ function compilerProjects(args) {
   }
   if (projects.length <= 1) return [{ args, project: projects[0] ?? null }];
   return projects.map((project) => ({ args: [...sharedArgs, '--project', project], project }));
+}
+
+async function prepareReferencedUiDeclarations(projects, cwd) {
+  const consumer = projects.find(({ project }) => project && basename(project) === 'tsconfig.test.json'
+    && basename(dirname(resolve(cwd, project))) === 'cli');
+  if (!consumer) return [];
+  const authored = resolve(cwd, consumer.project);
+  const config = JSON.parse(await readFile(authored, 'utf8'));
+  const reference = config.references?.find(({ path }) => basename(path) === 'tsconfig.source.json'
+    && basename(dirname(resolve(dirname(authored), path))) === 'ui');
+  if (!reference) return [];
+  const uiDir = dirname(resolve(dirname(authored), reference.path));
+  const producers = ['foundation', 'core', 'source', 'test'].map(name => {
+    const args = ['--singleThreaded', '--project', resolve(uiDir, `tsconfig.${name}.json`)];
+    return { project: resolve(uiDir, `tsconfig.${name}.json`), args, authoredArgs: args };
+  });
+  const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+  await prepareUiTypecheckProjects(producers, cwd);
+  const target = resolve(dirname(authored), 'node_modules/.cache/tsc/tsconfig.test.json');
+  await mkdir(dirname(target), { recursive: true });
+  await writeJsonAtomic(target, {
+    extends: authored,
+    references: config.references.map(value => ({ ...value,
+      path: value === reference ? producers[2].project : resolve(dirname(authored), value.path),
+    })),
+  });
+  consumer.args = consumer.args.map((arg, index) => ['--project', '-p'].includes(consumer.args[index - 1])
+    ? target : arg.startsWith('--project=') ? `--project=${target}` : arg);
+  consumer.project = target;
+  return producers.slice(0, 3);
 }
 
 async function runCompiler(invocation, project, isCancelled) {
@@ -85,12 +116,6 @@ if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args
   });
   exitWithCommandResult(routedResult);
 } else {
-  const invocation = resolveTypeScriptCliInvocation({
-    args,
-    repoRoot,
-    workspaceDir: process.cwd(),
-    processExecPath: process.execPath,
-  });
   let result = { status: 0, signal: null };
   let cancelled = false;
   const observeCancellation = () => { cancelled = true; };
@@ -99,15 +124,30 @@ if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args
   // still stop the batch after the user cancels the containing operation.
   for (const signal of cancellationSignals) process.on(signal, observeCancellation);
   try {
-    for (const project of compilerProjects(args)) {
+    const projects = compilerProjects(args).map(project => ({ ...project, authoredArgs: project.args }));
+    if (projects.length === 4) {
+      const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+      if (!cancelled) await prepareUiTypecheckProjects(projects, process.cwd());
+    }
+    const producers = cancelled ? [] : await prepareReferencedUiDeclarations(projects, process.cwd());
+    for (const project of [...producers, ...projects]) {
       if (cancelled) break;
-      prepareTypeScriptProjectBuildFromArgs(project.args, { cwd: process.cwd() });
+      // Output paths belong to the authored config; finite projections inherit
+      // them through extends and only replace membership and references.
+      prepareTypeScriptProjectBuildFromArgs(project.authoredArgs, { cwd: process.cwd() });
+      // Declaration preparation is a UI workload. Expose its actual project
+      // to the existing classifier instead of charging it to the CLI consumer.
+      const invocation = resolveTypeScriptCliInvocation({ args: project.args, repoRoot,
+        workspaceDir: process.cwd(), processExecPath: process.execPath });
       const projectResult = await runCompiler(invocation, project, () => cancelled);
       if (projectResult.error || projectResult.signal || projectResult.status == null) {
         result = projectResult;
         break;
       }
-      if (projectResult.status !== 0) result = projectResult;
+      if (projectResult.status !== 0) {
+        result = projectResult;
+        if (producers.includes(project)) break;
+      }
     }
   } finally {
     for (const signal of cancellationSignals) process.off(signal, observeCancellation);

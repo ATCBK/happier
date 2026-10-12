@@ -24,6 +24,11 @@ export function shouldRouteTypeScriptCliThroughHstack(params) {
   return true;
 }
 
+export function requiresTypeScriptAdmission({ env = process.env, platform = process.platform } = {}) {
+  return platform === 'linux' && (!env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
+    || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN));
+}
+
 export function resolveTypeScriptCliInvocation(params) {
   const processExecPath = params.processExecPath ?? process.execPath;
   const requireResolve = params.requireResolve ?? createRequire(import.meta.url).resolve;
@@ -39,9 +44,7 @@ export function resolveTypeScriptCliInvocation(params) {
   const env = params.env ?? process.env;
   // Match the native local admission owner's ordinary CI exemption. Placed
   // workers and descendants carrying an admission token still validate it.
-  const requiresAdmission = !env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
-    || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN);
-  if ((params.platform ?? process.platform) === 'linux' && requiresAdmission) {
+  if (requiresTypeScriptAdmission({ env, platform: params.platform ?? process.platform })) {
     const admissionClass = params.admissionClass ?? resolveRemoteCommandPolicy(
       ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.args ?? [])],
       { cwd: relative(REPO_ROOT, params.workspaceDir ?? process.cwd()) || '.' },

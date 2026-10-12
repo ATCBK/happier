@@ -1,18 +1,232 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { buildTypeScriptPackageDist } from './buildTypeScriptPackageDist.mjs';
-import { BUILD_INPUT_RECORD, ensureWorkspacePackagesBuiltByName, isWorkspacePackageOutputCurrent } from './ensureWorkspacePackagesBuilt.mjs';
+import { BUILD_INPUT_RECORD, defaultWorkspaceBuildBoundary, ensureWorkspacePackagesBuiltByName, isWorkspacePackageOutputCurrent } from './ensureWorkspacePackagesBuilt.mjs';
 import { withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { runCaptureResult } from '../../apps/stack/scripts/utils/proc/proc.mjs';
+import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
+import { spawnTestProcess } from '../../apps/stack/scripts/testkit/core/spawn_test_process.mjs';
+
+async function createNativeDistBuildFixture(t) {
+  const packageDir = await createPackageFixture(t, 'native-dist-admission');
+  await writeFile(join(packageDir, 'src', 'index.ts'), 'export const built = true;\n');
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: packageDir });
+  await Promise.all(['owners', 'waiters'].map(kind => mkdir(join(admissionRoot, kind), { recursive: true })));
+  const memoryPath = join(packageDir, 'memory');
+  await writeFile(memoryPath, '1 73400320\n');
+  writeFakeBin({ root: packageDir, name: 'awk', content: `#!/bin/sh
+case "$*" in
+  */proc/meminfo*) /usr/bin/awk '{print $1, $2}' "$FIXTURE_MEMORY" ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+` });
+  writeFakeBin({ root: packageDir, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  writeFakeBin({ root: packageDir, name: 'sleep', content: '#!/bin/sh\nexec /bin/sleep 0.02\n' });
+  const compilerBoundaryPath = join(packageDir, 'compiler-boundary.mjs');
+  await writeFile(compilerBoundaryPath, `import { resolveTypeScriptCliInvocation as resolveOwner } from ${JSON.stringify(new URL('./resolveTypeScriptCliInvocation.mjs', import.meta.url).href)};
+export * from ${JSON.stringify(new URL('./resolveTypeScriptCliInvocation.mjs', import.meta.url).href)};
+export function resolveTypeScriptCliInvocation(options) {
+  const invocation = resolveOwner(options);
+  return { ...invocation, ...(invocation.command.endsWith('/hstack-exec') ? { command: ${JSON.stringify(launcher)} } : {}) };
+}
+`);
+  // Remap only the worker's physical admission/command endpoints. The public
+  // dist API, compiler policy, real compiler, leases and promotion stay real.
+  const loaderPath = join(packageDir, 'native-boundary-loader.mjs');
+  await writeFile(loaderPath, `export async function resolve(specifier, context, next) {
+  if (context.parentURL?.endsWith('/buildTypeScriptPackageDist.mjs')) {
+    if (specifier.endsWith('/proc/workspace_build_admission.mjs')) return { url: ${JSON.stringify(pathToFileURL(join(packageDir, 'native-owner/apps/stack/scripts/utils/proc/workspace_build_admission.mjs')).href)}, shortCircuit: true };
+    if (specifier === './resolveTypeScriptCliInvocation.mjs') return { url: ${JSON.stringify(pathToFileURL(compilerBoundaryPath).href)}, shortCircuit: true };
+  }
+  return next(specifier, context);
+}
+`);
+  const apiScriptPath = join(packageDir, 'api.mjs');
+  await writeFile(apiScriptPath, `import { buildTypeScriptPackageDist } from ${JSON.stringify(new URL('./buildTypeScriptPackageDist.mjs', import.meta.url).href)};
+try {
+  const result = await buildTypeScriptPackageDist({ packageDir: ${JSON.stringify(packageDir)}, args: ['-p', 'tsconfig.json', '--noCheck'], stdio: process.env.FIXTURE_STDIO || 'inherit' });
+  process.stdout.write(JSON.stringify(result));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ failed: true, exitCode: error.exitCode, signal: error.signal }));
+  process.exitCode = error.exitCode ?? 1;
+}
+`);
+  const env = { ...process.env,
+    PATH: `${join(packageDir, 'bin')}:${dirname(process.execPath)}:/usr/bin:/bin`, FIXTURE_MEMORY: memoryPath,
+    NODE_OPTIONS: `--experimental-loader=${loaderPath}`, CI: '', HAPPIER_DEV_TARGET_EXECUTION: '1',
+    HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_OUTPUT_DIR: '',
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '',
+    HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
+    HAPPIER_WORKSPACE_BUILD_MODE: 'strict',
+  };
+  const entries = kind => readdir(join(admissionRoot, kind));
+  const start = (extraEnv = {}, args = [apiScriptPath], command = process.execPath) => {
+    const child = spawnTestProcess(command, args, { cwd: packageDir, env: { ...env, ...extraEnv }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const exited = new Promise(resolveExit => child.once('close', (status, signal) => resolveExit({ status, signal })));
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGTERM');
+      await exited;
+    });
+    return { child, exited, stdout: () => stdout, stderr: () => stderr };
+  };
+  return { packageDir, launcher, admissionRoot, memoryPath, loaderPath, entries, start };
+}
+
+async function waitForNativeDistBuildState(fixture, run, condition) {
+  await new Promise((resolveReady, reject) => {
+    let checking = false;
+    const cleanup = () => {
+      for (const watcher of watchers) watcher.close();
+      run.child.stderr.off('data', check);
+      run.child.off('close', failed);
+    };
+    const failed = () => { cleanup(); reject(new Error(`dist build exited before the expected state: ${run.stderr()}`)); };
+    const check = async () => {
+      if (checking) return;
+      checking = true;
+      try { if (await condition()) { cleanup(); resolveReady(); } }
+      catch (error) { cleanup(); reject(error); }
+      finally { checking = false; }
+    };
+    const watchers = [fixture.packageDir, fixture.admissionRoot, join(fixture.admissionRoot, 'waiters')]
+      .map(path => watch(path, check));
+    run.child.stderr.on('data', check);
+    run.child.once('close', failed);
+    void check();
+  });
+}
+
+test('public hstack finite dist producer waits for its package lease without an outer admission envelope', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createNativeDistBuildFixture(t);
+  const source = new URL('./buildTypeScriptPackageDist.mjs', import.meta.url);
+  const fixtureRepo = resolve(dirname(fixture.launcher), '../../..');
+  const entry = join(fixtureRepo, 'scripts/workspaces/buildTypeScriptPackageDist.mjs');
+  await mkdir(dirname(entry), { recursive: true });
+  await cp(source, entry);
+  await symlink(fileURLToPath(new URL('../../node_modules', import.meta.url)), join(fixtureRepo, 'node_modules'), 'dir');
+  // The physical entry is the actual finite producer. Remap its relative
+  // imports back to source, retaining the existing real compiler endpoints.
+  const loader = await readFile(fixture.loaderPath, 'utf8');
+  await writeFile(fixture.loaderPath, loader.replace('  return next(specifier, context);',
+    `  if (context.parentURL === ${JSON.stringify(pathToFileURL(entry).href)} && specifier.startsWith('.')) return next(new URL(specifier, ${JSON.stringify(source.href)}).href, context);\n  return next(specifier, context);`));
+  writeFakeBin({ root: fixture.packageDir, name: 'node', content: `#!/bin/sh
+case "$*" in
+  *remote_dependency_bootstrap.mjs*|*remote_validation_preparation.mjs*) exit 0 ;;
+  *) exec '${process.execPath}' "$@" ;;
+esac
+` });
+  await writeFile(fixture.memoryPath, '31457280 73400320\n');
+  const packageJson = JSON.parse(await readFile(join(fixture.packageDir, 'package.json'), 'utf8'));
+  const lockPath = resolveWorkspacePackageBuildLockPath(fixture.packageDir, packageJson);
+  let entered, release;
+  const ready = new Promise(resolveReady => { entered = resolveReady; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolveRelease => { release = resolveRelease; }); }, { lockPath });
+  await ready;
+  const run = fixture.start({ HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '',
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '' },
+  [fixture.launcher, '--local', '--allow-local-compilation', '--', process.execPath, entry, '-p', 'tsconfig.json'], '/bin/sh');
+  try {
+    // Joint admission tries leases without waiting inside the lock owner, so it
+    // queues at the native owner rather than creating a lock priority claim.
+    await waitForNativeDistBuildState(fixture, run, async () =>
+      (await fixture.entries('waiters')).length === 1
+      && run.stderr().includes('Workspace publication lease is busy:'));
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.equal((await fixture.entries('waiters')).length, 1);
+    release();
+    await holder;
+    assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+    assert.match(await readFile(join(fixture.packageDir, 'dist/index.js'), 'utf8'), /built/);
+    assert.deepEqual(await fixture.entries('owners'), []);
+  } finally { release(); await holder; }
+});
+
+test('standalone dist API waits for package leases without reserving capacity and releases leases while capacity is unavailable', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createNativeDistBuildFixture(t);
+  const packageJson = JSON.parse(await readFile(join(fixture.packageDir, 'package.json'), 'utf8'));
+  const lockPath = resolveWorkspacePackageBuildLockPath(fixture.packageDir, packageJson);
+  let entered, release;
+  const ready = new Promise(resolveReady => { entered = resolveReady; });
+  const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolveRelease => { release = resolveRelease; }); }, { lockPath });
+  await ready;
+  const run = fixture.start();
+  try {
+    await waitForNativeDistBuildState(fixture, run, async () =>
+      (await fixture.entries('waiters')).length === 1
+      && run.stderr().includes('Workspace publication lease is busy:'));
+    assert.equal((await fixture.entries('waiters')).length, 1, 'the public API must enter joint admission before waiting for a foreign package lease');
+    assert.deepEqual(await fixture.entries('owners'), []);
+    release();
+    await holder;
+    await waitForNativeDistBuildState(fixture, run, () =>
+      run.stderr().includes('memory-available=') && !existsSync(lockPath));
+    assert.match(run.stderr(), /class=compilation/, 'effective strict options must govern outer admission despite a raw --noCheck');
+    assert.equal(existsSync(lockPath), false, 'a capacity waiter must release its package lease');
+    await withWorkspaceBundleLock(async () => {
+      assert.deepEqual(await fixture.entries('owners'), []);
+      assert.equal(run.stdout(), '');
+      await writeFile(fixture.memoryPath, '31457280 73400320\n');
+    }, { lockPath });
+    assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+    assert.deepEqual(JSON.parse(run.stdout()), { outputDir: join(fixture.packageDir, 'dist'), promoted: true });
+    assert.match(await readFile(join(fixture.packageDir, 'dist/index.js'), 'utf8'), /built/);
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.deepEqual(await fixture.entries('waiters'), []);
+    assert.equal(existsSync(lockPath), false);
+    const repeated = fixture.start({ HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' });
+    assert.deepEqual(await repeated.exited, { status: 0, signal: null }, repeated.stderr());
+    assert.deepEqual(JSON.parse(repeated.stdout()), { outputDir: join(fixture.packageDir, 'dist'), promoted: false });
+    const lastGreen = await hashFixtureDist(join(fixture.packageDir, 'dist'));
+    await writeFile(join(fixture.packageDir, 'src/index.ts'), 'export const broken: string = 1;\n');
+    const failed = fixture.start({ FIXTURE_STDIO: 'ignore' });
+    assert.deepEqual(await failed.exited, { status: 2, signal: null }, failed.stderr());
+    assert.deepEqual(JSON.parse(failed.stdout()), { failed: true, exitCode: 2, signal: null });
+    assert.equal(await hashFixtureDist(join(fixture.packageDir, 'dist')), lastGreen, 'worker failure must preserve published dist');
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.deepEqual(await fixture.entries('waiters'), []);
+    assert.equal(existsSync(lockPath), false);
+    await writeFile(fixture.memoryPath, '1 73400320\n');
+    const ci = fixture.start({ CI: '1', HAPPIER_DEV_TARGET_EXECUTION: '',
+      HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev', FIXTURE_STDIO: 'ignore' });
+    assert.deepEqual(await ci.exited, { status: 0, signal: null }, ci.stderr());
+    assert.deepEqual(JSON.parse(ci.stdout()), { outputDir: join(fixture.packageDir, 'dist'), promoted: true });
+    assert.deepEqual(await fixture.entries('owners'), []);
+    assert.deepEqual(await fixture.entries('waiters'), []);
+  } finally { release(); await holder; }
+});
+
+test('private dist worker rejects absent and unrelated inherited package leases', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createNativeDistBuildFixture(t);
+  const args = [fileURLToPath(new URL('./buildTypeScriptPackageDist.mjs', import.meta.url)), '--happier-dist-build-worker', JSON.stringify({ args: ['-p', 'tsconfig.json'], stdio: 'ignore' })];
+  const lastGreen = await hashFixtureDist(join(fixture.packageDir, 'dist'));
+  for (const heldLockValue of ['', 'forged-lease']) {
+    const run = fixture.start({ HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue }, args);
+    assert.deepEqual(await run.exited, { status: 1, signal: null }, run.stderr());
+    assert.match(run.stderr(), /requires its authenticated inherited package lease/);
+  }
+  await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+    const run = fixture.start({ HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: JSON.stringify([heldLockValue]) }, args);
+    assert.deepEqual(await run.exited, { status: 1, signal: null }, run.stderr());
+    assert.match(run.stderr(), /requires its authenticated inherited package lease/);
+  }, { lockPath: join(fixture.packageDir, 'unrelated.lock') });
+  assert.equal(await hashFixtureDist(join(fixture.packageDir, 'dist')), lastGreen);
+  assert.equal(existsSync(join(fixture.packageDir, '.happier')), false);
+  assert.deepEqual(await fixture.entries('owners'), []);
+});
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -577,6 +791,93 @@ test('buildTypeScriptPackageDist composes an explicit staged UI producer before 
     await readFile(join(packageDir, 'dist', 'happier-plugin-ui', 'ui-artifacts.json'), 'utf-8'),
     '{"version":1,"entries":["rebuilt"]}\n',
   );
+});
+
+test('buildTypeScriptPackageDist builds UI from the current staged manifest without a packaged manifest prerequisite', async (t) => {
+  for (const hasPackagedManifest of [true, false]) {
+    const packageDir = await createPackageFixtureWithUiArtifacts(t, `build-ts-package-ui-manifest-${hasPackagedManifest}`);
+    const packageJsonPath = join(packageDir, 'package.json');
+    const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
+    packageJson.scripts['build:ui'] = 'happier-plugin-build-ui';
+    packageJson.exports['./manifest'] = { default: './dist/manifest.js' };
+    await writeJson(packageJsonPath, packageJson);
+    await writeFile(join(packageDir, 'src', 'index.ts'), 'export const built = true;\n');
+    if (hasPackagedManifest) {
+      await mkdir(join(packageDir, '.happier-plugin'));
+      await writeJson(join(packageDir, '.happier-plugin', 'plugin.json'), { id: 'stale' });
+    }
+
+    await buildTypeScriptPackageDist({
+      packageDir,
+      args: ['-p', 'tsconfig.json', '--happier-staged-output-script', 'build:ui'],
+      stdio: 'ignore',
+      resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
+      resolveYarnCommandInvocationImpl: args => ({ command: 'yarn', args }),
+      // Only the external compiler/process boundary is replaced. Staging,
+      // manifest import/serialization and dist promotion remain real.
+      runCommandImpl: async (_command, args, options) => {
+        if (args.includes('--outDir')) {
+          const outputDir = writeTypeScriptFixtureOutput(args);
+          writeFileSync(join(outputDir, 'manifest.js'), 'export const PLUGIN_MANIFEST = { id: "current" };\n');
+          return { status: 0 };
+        }
+        if (args.includes('build:ui')) {
+          const manifestFlag = args.indexOf('--manifest-path');
+          const manifestPath = manifestFlag === -1
+            ? join(packageDir, '.happier-plugin', 'plugin.json') : args[manifestFlag + 1];
+          const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+          assert.equal(manifest.id, 'current');
+          const outputDir = options.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;
+          await mkdir(join(outputDir, 'happier-plugin-ui'), { recursive: true });
+          await writeJson(join(outputDir, 'happier-plugin-ui', 'ui-artifacts.json'), { entries: [manifest.id] });
+          return { status: 0 };
+        }
+        throw new Error(`Unexpected command: ${args.join(' ')}`);
+      },
+    });
+
+    assert.deepEqual(JSON.parse(await readFile(join(packageDir, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')), { entries: ['current'] });
+    assert.equal(existsSync(join(packageDir, '.happier-plugin/plugin.json')), hasPackagedManifest);
+    if (hasPackagedManifest) {
+      assert.deepEqual(JSON.parse(await readFile(join(packageDir, '.happier-plugin/plugin.json'), 'utf8')), { id: 'stale' });
+    }
+  }
+});
+
+test('workspace output-only UI refresh compiles current staged manifest facts through the real SDK compiler', async (t) => {
+  const packageDir = await createPackageFixture(t, 'build-ts-package-ui-refresh-manifest');
+  await writeJson(join(packageDir, 'package.json'), {
+    type: 'module',
+    scripts: { 'build:ui': 'happier-plugin-build-ui' },
+    exports: {
+      './manifest': { default: './dist/manifest.js' },
+      './happier-plugin-ui/first': './src/renderSurface.ts',
+      './happier-plugin-ui/second': './src/renderSurface.ts',
+    },
+  });
+  await writeFile(join(packageDir, 'src/renderSurface.ts'), 'export function renderSurface() { return null; }\n');
+  const outputDir = join(packageDir, '.refresh');
+  await mkdir(outputDir);
+  await writeFile(join(outputDir, 'manifest.js'), `import { artifact } from './manifestFacts.js';
+export const PLUGIN_MANIFEST = { contributes: { ui: { renderers: [{ kind: 'reactNative', artifact }] } } };
+`);
+  // The package-manager process boundary is replaced, not manifest discovery,
+  // compilation, artifact validation or publication inside the SDK.
+  const packageManagerShim = join(packageDir, 'package-manager.cjs');
+  await writeFile(packageManagerShim, `const { spawnSync } = require('node:child_process');
+const result = spawnSync(process.execPath, ['--import', ${JSON.stringify(fileURLToPath(new URL('../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url)))}, ${JSON.stringify(fileURLToPath(new URL('../../packages/plugin-sdk/src/ui/build/bin.ts', import.meta.url)))}, ...process.argv.slice(4)], { env: process.env, stdio: 'inherit' });
+process.exitCode = result.status ?? 1;
+`);
+  for (const artifact of ['first', 'second']) {
+    await writeFile(join(outputDir, 'manifestFacts.js'), `export const artifact = ${JSON.stringify(artifact)};\n`);
+    await defaultWorkspaceBuildBoundary.runPackageScript(packageDir, 'build:ui', {
+      env: { ...process.env, npm_execpath: packageManagerShim, HAPPIER_WORKSPACE_DIST_OUTPUT_DIR: outputDir },
+      quiet: false,
+    });
+    const inventory = JSON.parse(await readFile(join(outputDir, 'happier-plugin-ui/ui-artifacts.json'), 'utf8'));
+    assert.deepEqual(inventory.entries.map(entry => entry.artifactId), [artifact]);
+  }
+  assert.equal(existsSync(join(packageDir, '.happier-plugin/plugin.json')), false);
 });
 
 test('buildTypeScriptPackageDist preserves the complete prior dist when the staged UI producer fails', async (t) => {

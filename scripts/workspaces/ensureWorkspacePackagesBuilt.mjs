@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 
 import { buildIntoTempThenReplace } from '../../apps/stack/scripts/utils/fs/atomic_dir_swap.mjs';
 import { readCachedFileDigestSync } from '../../apps/stack/scripts/utils/fs/cached_file_digest.mjs';
@@ -11,14 +12,15 @@ import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import { readWorkspaceBuildInputs } from '../../apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs';
 export { readWorkspaceBuildInputs } from '../../apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs';
 import { coerceHappyMonorepoRootFromPath } from '../../apps/stack/scripts/utils/paths/paths.mjs';
-import { withCliDistBuildLock } from '../../apps/stack/scripts/utils/proc/cliDistBuildLock.mjs';
+import { runWorkspaceBuildAdmission, withWorkspaceBuildResources } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
 import { createWorkspaceBuildWaitNotifier } from '../../apps/stack/scripts/utils/proc/workspaceBuildWaitNotifier.mjs';
 import { run } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { collectWorkspacePackageJsonPaths } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
 import { resolveWorkspaceToolBinDirs } from '../../apps/stack/scripts/utils/proc/workspace_tool_bins.mjs';
 import { assertNoMissingLocalImports } from './distLocalImports.mjs';
 import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
-import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
+import { withWorkspaceOutputScriptArgs } from './workspaceOutputScriptArgs.mjs';
+import { resolveTypeScriptCliInvocation, requiresTypeScriptAdmission } from './resolveTypeScriptCliInvocation.mjs';
 import {
   WORKSPACE_PACKAGE_BUILD_INPUT_RECORD as BUILD_INPUT_RECORD,
   collectPackageBuildOutputTargets,
@@ -29,6 +31,7 @@ import {
 } from './packageBuildOutputTargets.mjs';
 import {
   resolveWorkspaceBundleLockPath,
+  callerHoldsWorkspaceBundleLock,
   withWorkspaceBundleLock,
 } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
@@ -37,7 +40,7 @@ export { WORKSPACE_BUILD_MODE_ENV, resolveWorkspaceBuildMode } from './workspace
 import { resolveWorkspaceBundlePublicationMode } from './workspaceBundlePublication.mjs';
 import { syncBundledWorkspacePackages } from './syncBundledWorkspacePackages.mjs';
 import { createBundledPluginPublicationFailure } from './bundledPluginPublicationFailure.mjs';
-import { BuildInputDriftError, WorkspacePackageBuildError, captureBuildInputFiles, mountCapturedWorkspaceDependencies, withSingleTrailingBuildPass } from './buildInputConvergence.mjs';
+import { BuildInputDriftError, WorkspacePackageBuildError, captureBuildInputFiles, mountCapturedWorkspaceDependencies, withSingleTrailingBuildPass, withBuildInputDependencies } from './buildInputConvergence.mjs';
 import {
   collectInternalWorkspaceDependencyNames,
   collectAdmittedInternalWorkspacePeerDependencyNames,
@@ -46,7 +49,87 @@ import {
 const GENERATED_PLUGIN_UI_ARTIFACTS_MANIFEST_RELATIVE_PATH =
   'dist/happier-plugin-ui/ui-artifacts.json';
 const DEFAULT_MAX_CONCURRENT_WORKSPACE_BUILDS = 2;
+const WORKSPACE_BUILD_EVENT_PREFIX = '[workspace-build-progress] ';
+function serializeWorkspaceBuildError(error) {
+  return { name: error.name, message: error.message, code: error.code,
+    trailingPassExhausted: error.trailingPassExhausted,
+    exitCode: error.exitCode, signal: error.signal,
+    ...(error.cause instanceof Error ? { cause: serializeWorkspaceBuildError(error.cause) } : {}) };
+}
+
+function deserializeWorkspaceBuildError(value) {
+  const cause = value.cause ? deserializeWorkspaceBuildError(value.cause) : undefined;
+  const error = value.name === 'BuildInputDriftError'
+    ? new BuildInputDriftError(value.message, { cause, trailingPassExhausted: value.trailingPassExhausted })
+    : value.name === 'WorkspacePackageBuildError'
+      ? new WorkspacePackageBuildError(cause ?? new Error(value.message))
+      : new Error(value.message, { cause });
+  if (value.code !== undefined) error.code = value.code;
+  if (value.exitCode !== undefined) error.exitCode = value.exitCode;
+  if (value.signal !== undefined) error.signal = value.signal;
+  return error;
+}
+
 export { BUILD_INPUT_RECORD };
+
+/** Startup requires runnable output, not freshness against a moving checkout.
+ * Readers describe their producer-owned output; this owner decides whether to
+ * wait. Development lifecycle owners may supply their existing refresh/reload
+ * operation instead of starting another build.
+ */
+export async function prepareWorkspaceComponentStartup({
+  readLastGreen, prepare, refresh = prepare, signal, logger = console,
+} = {}) {
+  signal?.throwIfAborted();
+  const retained = await readLastGreen();
+  signal?.throwIfAborted();
+  if (!retained) return await prepare();
+  if (!refresh) return retained;
+  const pending = Promise.resolve().then(() => {
+    signal?.throwIfAborted();
+    return refresh();
+  });
+  void pending.catch(error => {
+    if (!signal?.aborted) logger.warn(`[workspace-build] background refresh failed; retained last-green output. ${error instanceof Error ? error.message : String(error)}`);
+  });
+  return { ...retained, refresh: pending };
+}
+
+/** Inspect the recorded dependency closure, never current source fingerprints.
+ * Source consumers with an atomic generated output supply that output's paths;
+ * Metro's source graph is not described by CLI/package dist receipts.
+ */
+export async function hasUsableWorkspaceLastGreen(componentDir, { requiredFiles } = {}) {
+  if (requiredFiles) {
+    return requiredFiles.length > 0 && requiredFiles.every(path => {
+      try { return statSync(path).isFile(); } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+        throw error;
+      }
+    });
+  }
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+  if (!monorepoRoot || !existsSync(join(componentDir, 'package.json'))) return false;
+  const { packageDirsByName, packageJsonByDir, closure } = await readWorkspaceComponentDependencyGraph(componentDir, { monorepoRoot });
+  for (const name of closure) {
+    const packageDir = packageDirsByName.get(name);
+    const metadata = packageJsonByDir.get(packageDir);
+    if (collectExpectedPackageOutputTargets(metadata).length === 0) continue;
+    const dependencyDirs = collectWorkspacePackageFingerprintDependencyNames(metadata, name,
+      new Set(packageDirsByName.keys()), { packageDirsByName }).map(dependency => packageDirsByName.get(dependency));
+    if (!isWorkspacePackageOutputValid(packageDir, { monorepoRoot, dependencyDirs })) return false;
+    const record = await readJson(join(packageDir, 'dist', BUILD_INPUT_RECORD));
+    const state = await inspectWorkspacePackageOutput(packageDir, metadata, {
+      inputFingerprint: record.fingerprint,
+      builtDependencies: readWorkspaceBuiltDependencies({ monorepoRoot, dependencyDirs }),
+      allowQaFailure: true,
+      requireCompleteDigests: true,
+      env: { [WORKSPACE_BUILD_MODE_ENV]: 'qa-runtime' },
+    });
+    if (!state.complete) return false;
+  }
+  return true;
+}
 
 function compilerDiagnosticSummary(error) {
   if (!(error instanceof WorkspacePackageBuildError) || error.code !== 'EEXIT') return null;
@@ -188,6 +271,22 @@ async function collectWorkspaceDependencyClosure(packageNames, packageDirsByName
   return admitted;
 }
 
+/** Build admission, retained-output inspection and recovery watches consume
+ * the same transitive workspace graph, including compiler dependencies.
+ */
+export async function readWorkspaceComponentDependencyGraph(componentDir, {
+  monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir),
+} = {}) {
+  if (!monorepoRoot || !existsSync(join(componentDir, 'package.json'))) return null;
+  const componentPackageJson = await readJson(join(componentDir, 'package.json'));
+  const graph = await readWorkspacePackageGraph(monorepoRoot);
+  const packageNames = collectInternalWorkspaceDependencyNames(componentPackageJson, componentPackageJson.name, {
+    workspacePackageNames: graph.packageDirsByName.keys(),
+  });
+  const closure = await collectWorkspaceDependencyClosure(packageNames, graph.packageDirsByName, { packageJsonByDir: graph.packageJsonByDir });
+  return { ...graph, componentPackageJson, packageNames, closure };
+}
+
 export function collectWorkspacePackageFingerprintDependencyNames(
   packageJson,
   currentPackageName,
@@ -327,7 +426,7 @@ export function readWorkspacePackageInputFingerprint({
   includeShippedFiles = false,
   excludeGeneratedPluginManifest,
   excludeGeneratedPluginArtifacts = false,
-  identitySourceRepoDir = env.HAPPIER_STACK_REPO_DIR,
+  identitySourceRepoDir = coerceHappyMonorepoRootFromPath(packageDir) ?? env.HAPPIER_STACK_REPO_DIR,
   identityRepoDir = env.HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR,
   installedDependencyRepoDir = env.HAPPIER_WORKSPACE_CAPTURE_SOURCE_REPO_DIR,
   resolveTypeScriptCliInvocationImpl = resolveTypeScriptCliInvocation,
@@ -357,9 +456,10 @@ export function readWorkspacePackageInputFingerprint({
   const compilerInstallationDir = dirname(dirname(dirname(compilerPath)));
   const dependencyLockRepoDir = coerceHappyMonorepoRootFromPath(packageDir) || identitySourceRepoDir;
   const dependencyLockPath = dependencyLockRepoDir && join(dependencyLockRepoDir, 'yarn.lock');
-  const capturedBuildOwnerPath = identitySourceRepoDir && join(identitySourceRepoDir, 'scripts/workspaces/buildTypeScriptPackageDist.mjs');
-  const buildOwnerPath = capturedBuildOwnerPath && existsSync(capturedBuildOwnerPath)
-    ? capturedBuildOwnerPath : fileURLToPath(new URL('./buildTypeScriptPackageDist.mjs', import.meta.url));
+  const buildOwnerPaths = ['buildTypeScriptPackageDist.mjs', 'workspaceOutputScriptArgs.mjs'].map(name => {
+    const capturedPath = identitySourceRepoDir && join(identitySourceRepoDir, 'scripts/workspaces', name);
+    return capturedPath && existsSync(capturedPath) ? capturedPath : fileURLToPath(new URL(`./${name}`, import.meta.url));
+  });
   const identityPathFor = path => {
     if (!identityRepoDir || !identitySourceRepoDir) return path;
     const capturedIdentity = remapPathToDirectory(path, { sourceDir: identitySourceRepoDir, destinationDir: identityRepoDir });
@@ -374,7 +474,7 @@ export function readWorkspacePackageInputFingerprint({
     ...referencedBuildInputs,
     compilerPath,
     compilerPackageJson,
-    buildOwnerPath,
+    ...buildOwnerPaths,
     ...(dependencyLockPath && existsSync(dependencyLockPath) ? [dependencyLockPath] : []),
   ])].sort((a, b) => identityPathFor(a) < identityPathFor(b) ? -1 : identityPathFor(a) > identityPathFor(b) ? 1 : 0);
   for (const path of paths) {
@@ -717,12 +817,15 @@ async function runWorkspacePackageBuild(packageDir, { env, quiet, timeoutMs, cap
   }
 }
 
-const defaultWorkspaceBuildBoundary = {
+export const defaultWorkspaceBuildBoundary = {
+  workerModule: import.meta.url,
+  workerExport: 'defaultWorkspaceBuildBoundary',
   prepareEnv: async (packageDir, env) => prepareWorkspaceBuildEnv(packageDir, env),
   runPackageBuild: runWorkspacePackageBuild,
-  runPackageScript: (packageDir, script, options) => runYarn(['-s', script], {
-    cwd: packageDir, ...options,
-  }),
+  runPackageScript: (packageDir, script, options) => withWorkspaceOutputScriptArgs(
+    { packageDir, scriptName: script, env: options.env },
+    args => runYarn(args, { cwd: packageDir, ...options }),
+  ),
 };
 
 async function captureWorkspacePackage({ monorepoRoot, packageDir, dependencyDirs, env }) {
@@ -795,7 +898,12 @@ async function captureWorkspacePackage({ monorepoRoot, packageDir, dependencyDir
 }
 
 
-async function ensureWorkspacePackageBuiltUnderLock({
+async function ensureWorkspacePackageBuiltUnderLock(options) {
+  return await withBuildInputDependencies({ sourceDir: options.monorepoRoot, env: options.env, signal: options.signal },
+    env => consumeWorkspacePackageBuildInputs({ ...options, env }));
+}
+
+async function consumeWorkspacePackageBuildInputs({
   monorepoRoot,
   packageDir,
   packageJsonPath,
@@ -866,7 +974,9 @@ async function ensureWorkspacePackageBuiltUnderLock({
     packageDir,
     packageName: String(packageJson?.name ?? '').trim(),
   });
-  const capture = buildMode !== 'strict'
+  // Typecheck prerequisites retain strict semantic checking, but consume the
+  // same bounded input capture as source-dev instead of requiring a quiet tree.
+  const capture = buildMode !== 'strict' || env.HAPPIER_WORKSPACE_CAPTURE_INPUTS === '1'
     ? await captureWorkspacePackage({ monorepoRoot, packageDir, dependencyDirs, env }) : null;
   const buildPackageDir = capture?.packageDir ?? packageDir;
   const buildDependencyDirs = capture?.dependencyDirs ?? dependencyDirs;
@@ -943,13 +1053,13 @@ async function ensureWorkspacePackageBuiltUnderLock({
       env,
       onRetry: reportImportRetry,
     });
-    if (readWorkspacePackageInputFingerprint({ packageDir: buildPackageDir, dependencyDirs: buildDependencyDirs, env: buildEnv,
-      ...(capture ? { identitySourceRepoDir: capture.repoDir, identityRepoDir: capture.env.HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR,
-        installedDependencyRepoDir: capture.env.HAPPIER_WORKSPACE_CAPTURE_SOURCE_REPO_DIR } : {}) }) !== inputFingerprint
+    if ((!capture && readWorkspacePackageInputFingerprint({ packageDir: buildPackageDir, dependencyDirs: buildDependencyDirs, env: buildEnv }) !== inputFingerprint)
       || JSON.stringify(readWorkspaceBuiltDependencies({ monorepoRoot: capture?.repoDir ?? monorepoRoot, dependencyDirs: buildDependencyDirs })) !== JSON.stringify(builtDependencies)
       || (checkOnly && !publishedOutputsMatch(distDir, inputFingerprint, { requireCompleteDigests: true, allowQaFailure: false }))) {
-      // A successful compiler exit cannot identify which moving files it read.
-      // Do not replace the last-green tree/receipt with an unproven mixture.
+      // Uncaptured compilation still needs the live-tree fence. A private
+      // capture belongs to this build: generators may derive source there
+      // before compilation without changing the admitted producer identity.
+      // Later producer edits belong to the next build, not this publication.
       throw new BuildInputDriftError(`[workspace-build] inputs changed while building ${packageJson.name ?? packageDir}; retained the last coherent output; rerun the phase`);
     }
     const record = {
@@ -978,15 +1088,21 @@ async function ensureWorkspacePackageBuiltUnderLock({
     // Keep the phase's existing trailing pass before admitting retained bytes.
     // Drift can also reject an output-only refresh; neither case certifies the
     // moving staged output, and both use the same last-green integrity checks.
-    const diagnosticSummary = buildMode !== 'strict'
-      ? error instanceof BuildInputDriftError && trailingPass ? error.message
-        : !refreshOnly ? compilerDiagnosticSummary(error) : null
-      : null;
+    // Finite preparation may retain coherent output after exhausted drift too.
+    // Reuse capture admission; release/artifact publication still requires a
+    // fresh successful build, and strict compiler errors never admit fallback.
+    const canRetainDrift = publicationMode === 'live'
+      && resolveWorkspaceBuildMode({ buildMode: 'source-dev', env }) !== 'strict'
+      && (buildMode !== 'strict' || env.HAPPIER_WORKSPACE_CAPTURE_INPUTS === '1');
+    const diagnosticSummary = error instanceof BuildInputDriftError && trailingPass && canRetainDrift
+      ? error.message
+      : buildMode !== 'strict' && !refreshOnly ? compilerDiagnosticSummary(error) : null;
     if (!diagnosticSummary || !isWorkspacePackageOutputValid(packageDir, { monorepoRoot, dependencyDirs })) throw error;
     const recordPath = join(distDir, BUILD_INPUT_RECORD);
     const record = await readJson(recordPath);
     const lastGreen = await inspectWorkspacePackageOutput(packageDir, packageJson, {
-      env, inputFingerprint: record.fingerprint, builtDependencies, allowQaFailure: true,
+      env: { ...env, [WORKSPACE_BUILD_MODE_ENV]: 'qa-runtime' },
+      inputFingerprint: record.fingerprint, builtDependencies, allowQaFailure: true,
     });
     if (!lastGreen.complete || !Array.isArray(record.files) || record.files.some((path) => !existsSync(join(distDir, path)))) throw error;
     await writeJsonAtomic(recordPath, { ...record, qaFailure: {
@@ -994,8 +1110,9 @@ async function ensureWorkspacePackageBuiltUnderLock({
       lastGreenBuiltAt: record.builtAt ?? record.qaFailure?.lastGreenBuiltAt ?? statSync(recordPath).mtime.toISOString(),
     } });
     const stalePackage = readQaStalePackage(packageDir, packageJson.name, { monorepoRoot, dependencyDirs });
+    if (!stalePackage) throw error;
     await onPackageBuildDone?.({ packageDir, packageName: packageJson.name, stalePackage });
-    process.stderr.write(`[workspace-build] QA last-green fallback: ${packageJson.name}\n${diagnosticSummary}\n`);
+    process.stderr.write(`[workspace-build] QA last-green fallback: ${packageJson.name}; output=${stalePackage.outputIdentity}; builtAt=${stalePackage.lastGreenBuiltAt}; dist=${distDir}\n${diagnosticSummary}\n`);
     return { built: false, reason: 'qa-last-green', stalePackage };
   } finally {
     await capture?.cleanup();
@@ -1023,7 +1140,9 @@ async function ensureWorkspacePackageBuilt(packageDir, {
   buildMode,
   trailingPass,
   dependencyDirs,
+  signal,
 }) {
+  signal?.throwIfAborted();
   const packageJsonPath = join(packageDir, 'package.json');
   if (!existsSync(packageJsonPath)) return { built: false, reason: 'missing-package-json' };
 
@@ -1043,70 +1162,103 @@ async function ensureWorkspacePackageBuilt(packageDir, {
   const workspaceBundleLockPath = buildEntersWorkspaceBundleLock(packageJson)
     ? resolveWorkspaceBundleLockPath(monorepoRoot)
     : null;
-  const reportLockWait = createWorkspaceBuildWaitNotifier({
-    env,
-    label: initial.label,
-    kind: 'lock',
-  });
-  const tryResolveWaiter = force
-    ? undefined
-    : async () => {
-      const currentPackageJson = await readJson(packageJsonPath);
-      const current = await inspectWorkspacePackageOutput(packageDir, currentPackageJson, {
-        env,
-        retryImports: true,
-        inputFingerprint: readWorkspacePackageInputFingerprint({ packageDir, dependencyDirs, env }),
-        builtDependencies: readWorkspaceBuiltDependencies({ monorepoRoot, dependencyDirs }),
-        publicationMode,
-      });
-      return current.complete
-        ? {
-          resolved: true,
-          value: { built: false, reason: 'concurrent_build_already_completed' },
-        }
-        : { resolved: false };
+  // Real process adapters run the complete publication transaction beneath
+  // the joint admission owner. Injected compiler boundaries remain in-process
+  // so tests can exercise this same deterministic publisher without mocking it.
+  if (workspaceBuildBoundary.workerModule) {
+    const { resolveWorkspacePackageBuildAdmissionClass } = await import('../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs');
+    const resultDir = await mkdtemp(join(tmpdir(), 'happier-workspace-build-result-'));
+    const resultPath = join(resultDir, 'result.json');
+    const request = { monorepoRoot, packageDir, packageJsonPath, quiet, force, timeoutMs,
+      publicationMode, buildMode, trailingPass, dependencyDirs, resultPath,
+      boundaryModule: workspaceBuildBoundary.workerModule,
+      boundaryExport: workspaceBuildBoundary.workerExport,
+      locks: [...(workspaceBundleLockPath ? [workspaceBundleLockPath] : []), lockPath] };
+    // The admission adapter already transports stdout incrementally. Keep
+    // compiler output visible, while serializing callbacks before returning
+    // the worker's terminal result (including failure with an active package).
+    const decoder = new StringDecoder('utf8');
+    let buffered = '', callbackError, callbacks = Promise.resolve();
+    const consumeLine = line => {
+      if (!line.startsWith(WORKSPACE_BUILD_EVENT_PREFIX)) {
+        process.stdout.write(line);
+        return;
+      }
+      callbacks = callbacks.then(async () => {
+        const event = JSON.parse(line.slice(WORKSPACE_BUILD_EVENT_PREFIX.length));
+        if (event.kind !== 'start' && event.kind !== 'done') throw new Error('Invalid workspace build progress event');
+        await (event.kind === 'start' ? onPackageBuildStart : onPackageBuildDone)?.(event.value);
+      }).catch(error => { callbackError ??= error; });
     };
-  const buildUnderPackageLock = async (workspaceBundleLockValue = null) => (
-    await withCliDistBuildLock(
-      ({ waited, heldLockValue }) => ensureWorkspacePackageBuiltUnderLock({
-        monorepoRoot,
-        packageDir,
-        packageJsonPath,
-        quiet,
+    const consumeStdout = chunk => {
+      buffered += decoder.write(chunk);
+      for (let index; (index = buffered.indexOf('\n')) !== -1;) {
+        consumeLine(buffered.slice(0, index + 1));
+        buffered = buffered.slice(index + 1);
+      }
+    };
+    try {
+      const terminal = await runWorkspaceBuildAdmission({
+        command: process.execPath,
+        args: [fileURLToPath(import.meta.url), '--workspace-package-worker', JSON.stringify(request)],
+        locks: request.locks.map(path => ({ path })),
+        ...(workspaceBuildBoundary.workerLauncherPath ? { launcherPath: workspaceBuildBoundary.workerLauncherPath } : {}),
+        cwd: packageDir,
         env,
-        force,
-        timeoutMs,
-        onPackageBuildStart,
-        onPackageBuildDone,
-        waited,
-        // Preserve the outermost inherited publication lease through the
-        // package lifecycle. This process retains the package lock while the
-        // child runs, so replacing an inherited B lease with P would make a
-        // nested B entry wait on its own ancestor (B -> P -> B).
-        heldLockValue:
-          workspaceBundleLockValue
-          ?? env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD
-          ?? heldLockValue,
-        workspaceBuildBoundary,
-        publicationMode,
-        buildMode,
-        trailingPass,
-        dependencyDirs,
-      }),
-      { lockPath, env, onWait: reportLockWait, tryResolveWaiter },
-    )
-  );
-  if (!workspaceBundleLockPath) return await buildUnderPackageLock();
-
-  return await withWorkspaceBundleLock(
-    async ({ heldLockValue }) => await buildUnderPackageLock(heldLockValue),
-    {
-      lockPath: workspaceBundleLockPath,
-      heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
-      env,
-      onWait: reportLockWait,
-    },
-  );
+        signal,
+        dependencyInstallDir: monorepoRoot,
+        admissionRequired: requiresTypeScriptAdmission({ env }),
+        admissionClass: resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: packageDir, env }),
+        stdio: ['inherit', 'pipe', 'inherit'],
+        onStdout: consumeStdout,
+      });
+      buffered += decoder.end();
+      if (buffered) consumeLine(buffered);
+      await callbacks;
+      if (callbackError) throw callbackError;
+      if (!existsSync(resultPath)) {
+        if (terminal.error) throw terminal.error;
+        const error = new Error(`[workspace-build] preparation worker failed for ${packageJson.name ?? packageDir}`);
+        error.code = 'EEXIT';
+        error.exitCode = terminal.status;
+        error.signal = terminal.signal;
+        throw error;
+      }
+      const response = JSON.parse(await readFile(resultPath, 'utf8'));
+      if (response.error) throw deserializeWorkspaceBuildError(response.error);
+      if (terminal.error || terminal.status !== 0 || terminal.signal) {
+        throw terminal.error ?? new Error(`[workspace-build] preparation worker did not complete for ${packageJson.name ?? packageDir}`);
+      }
+      return response.result;
+    } finally {
+      await rm(resultDir, { recursive: true, force: true });
+    }
+  }
+  // The in-process compiler boundary uses the same joint resource owner.
+  // Never retain dependency/global publication custody while awaiting a
+  // package publisher. The under-lock inspection already resolves completed
+  // concurrent builds, so a second waiter-specific currentness probe is redundant.
+  return await withWorkspaceBuildResources({
+    locks: [...(workspaceBundleLockPath ? [{ path: workspaceBundleLockPath }] : []), { path: lockPath }],
+    dependencyInstallDir: monorepoRoot, env, signal,
+  }, (env, { waited }) => ensureWorkspacePackageBuiltUnderLock({
+    monorepoRoot,
+    packageDir,
+    packageJsonPath,
+    quiet,
+    env,
+    force,
+    timeoutMs,
+    onPackageBuildStart,
+    onPackageBuildDone,
+    waited,
+    heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
+    workspaceBuildBoundary,
+    publicationMode,
+    buildMode,
+    trailingPass,
+    dependencyDirs,
+  }));
 }
 
 async function ensureWorkspacePackageNamesBuilt(monorepoRoot, packageNames, options) {
@@ -1165,7 +1317,9 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
   refreshed,
   pluginFailures,
   stalePackages,
+  signal,
 }) {
+  signal?.throwIfAborted();
   const visited = new Set(visitedNames);
   const forced = new Set(forcePackageNames);
   const changedClosures = new Set();
@@ -1266,6 +1420,7 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
       let startedAt = queuedAt;
       try {
         result = await schedulePackageBuild(packageJson, async () => {
+          signal?.throwIfAborted();
           startedAt = performance.now();
           return await ensureWorkspacePackageBuilt(resolvedPackageDir, {
             monorepoRoot,
@@ -1280,12 +1435,13 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
             buildMode,
             trailingPass,
             dependencyDirs,
+            signal,
           });
         });
       } catch (error) {
         await onPackageBuildResult?.({ packageDir: resolvedPackageDir, packageName, reason: 'failed',
           elapsedMs: performance.now() - startedAt, queueWaitMs: startedAt - queuedAt });
-        if (error instanceof BuildInputDriftError) throw error;
+        if (signal?.aborted || error instanceof BuildInputDriftError) throw error;
         if (!isolatePluginFailures || publicationMode === 'artifact' || !packageName.startsWith('@happier-dev/plugins-')) throw error;
         pluginFailures.push(createBundledPluginPublicationFailure({
           repoRoot: monorepoRoot, packageName, error,
@@ -1334,7 +1490,9 @@ export async function ensureWorkspacePackagesBuiltByName(monorepoPath, packageNa
   maxConcurrentBuilds = DEFAULT_MAX_CONCURRENT_WORKSPACE_BUILDS,
   isolatePluginFailures = false,
   buildMode,
+  signal,
 } = {}) {
+  signal?.throwIfAborted();
   const monorepoRoot = coerceHappyMonorepoRootFromPath(monorepoPath);
   if (!monorepoRoot) return { ok: true, built: [], skipped: ['not-monorepo'] };
 
@@ -1359,8 +1517,46 @@ export async function ensureWorkspacePackagesBuiltByName(monorepoPath, packageNa
     buildMode: resolvedBuildMode,
     maxConcurrentBuilds,
     isolatePluginFailures,
+    signal,
   });
   return { ok: true, ...result, skipped: [] };
+}
+
+async function runWorkspacePackageWorker(rawRequest) {
+  const request = JSON.parse(rawRequest);
+  const leases = JSON.parse(process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]');
+  const values = [process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...leases];
+  if (!Array.isArray(request.locks) || request.locks.some(path =>
+    !values.some(value => callerHoldsWorkspaceBundleLock(path, value)))) {
+    throw new Error('Workspace package worker requires its exact inherited publication leases');
+  }
+  const workspaceBuildBoundary = (await import(request.boundaryModule))[request.boundaryExport];
+  const reportProgress = (kind, value) => new Promise((resolveWritten, rejectWritten) => {
+    process.stdout.write(`${WORKSPACE_BUILD_EVENT_PREFIX}${JSON.stringify({ kind, value })}\n`, error => {
+      if (error) rejectWritten(error); else resolveWritten();
+    });
+  });
+  let response;
+  try {
+    response = { result: await ensureWorkspacePackageBuiltUnderLock({ ...request,
+      env: process.env, workspaceBuildBoundary, waited: true,
+      heldLockValue: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
+      onPackageBuildStart: value => reportProgress('start', value),
+      onPackageBuildDone: value => reportProgress('done', value),
+    }) };
+  } catch (error) {
+    response = { error: serializeWorkspaceBuildError(error) };
+    process.exitCode = 1;
+  }
+  await writeFile(request.resultPath, JSON.stringify(response));
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+  && process.argv[2] === '--workspace-package-worker') {
+  runWorkspacePackageWorker(process.argv[3]).catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
 }
 
 export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
@@ -1371,7 +1567,26 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
   maxConcurrentBuilds = DEFAULT_MAX_CONCURRENT_WORKSPACE_BUILDS,
   isolatePluginFailures = false,
   buildMode,
+  signal,
+  startup = false,
+  refresh,
+  logger = console,
 } = {}) {
+  signal?.throwIfAborted();
+  if (startup && resolveWorkspaceBuildMode({ buildMode, env }) !== 'strict' && publicationMode === 'live') {
+    const prepare = () => ensureWorkspacePackagesBuiltForComponent(componentDir, {
+      quiet, env, workspaceBuildBoundary, publicationMode, maxConcurrentBuilds,
+      isolatePluginFailures, buildMode, signal,
+    });
+    return await prepareWorkspaceComponentStartup({
+      readLastGreen: async () => await hasUsableWorkspaceLastGreen(componentDir)
+        ? { ok: true, built: [], skipped: [], lastGreen: true } : null,
+      prepare,
+      refresh: refresh === undefined ? prepare : refresh,
+      signal,
+      logger,
+    });
+  }
   const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
   if (!monorepoRoot) return { ok: true, built: [], skipped: ['not-monorepo'] };
 
@@ -1380,15 +1595,11 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
     return { ok: true, built: [], skipped: ['missing-component-package-json'] };
   }
 
-  const componentPackageJson = await readJson(componentPackageJsonPath);
+  const workspaceGraph = await readWorkspaceComponentDependencyGraph(componentDir, { monorepoRoot });
+  const { componentPackageJson, packageNames } = workspaceGraph;
   const componentName = typeof componentPackageJson?.name === 'string'
     ? componentPackageJson.name
     : '';
-  const workspaceGraph = await readWorkspacePackageGraph(monorepoRoot);
-  const { packageDirsByName } = workspaceGraph;
-  const packageNames = collectInternalWorkspaceDependencyNames(componentPackageJson, componentName, {
-    workspacePackageNames: packageDirsByName.keys(),
-  });
   const resolvedPublicationMode = resolveWorkspaceBundlePublicationMode({ mode: publicationMode });
   const resolvedBuildMode = resolveWorkspaceBuildMode({ buildMode, env });
   const result = await ensureWorkspacePackageNamesBuilt(monorepoRoot, packageNames, {
@@ -1402,6 +1613,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
     buildMode: resolvedBuildMode,
     maxConcurrentBuilds,
     isolatePluginFailures,
+    signal,
   });
   if (hasBundledWorkspaceDependencies(componentPackageJson)) {
     await withWorkspaceBundleLock(
@@ -1422,6 +1634,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
         lockPath: resolveWorkspaceBundleLockPath(monorepoRoot),
         heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
         env,
+        signal,
       },
     );
   }

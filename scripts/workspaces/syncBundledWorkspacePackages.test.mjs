@@ -4,6 +4,8 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, r
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 
 import {
   bundleWorkspacePackageFallbackTransactionally,
@@ -121,14 +123,18 @@ test('bootstrap publication preserves conditional package imports without compil
     cpSync(resolve(sourceRepoRoot, 'node_modules', 'semver'), resolve(repoRoot, 'node_modules', 'semver'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'dist'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'runtime'), { recursive: true });
+    mkdirSync(resolve(sourceDir, 'src/private'), { recursive: true });
     const imports = { '#http': { node: './runtime/node.js', default: './dist/fetch.js' }, '#fs': 'fs', '#disabled': null };
-    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: { '.': './dist/connect.js' }, imports }));
+    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: { '.': { 'happier-source': './src/index.js', default: './dist/connect.js' } }, imports }));
     writeFileSync(resolve(sourceDir, 'dist/connect.js'), 'export { transport } from "#http";\n');
     writeFileSync(resolve(sourceDir, 'dist/fetch.js'), 'export const transport = "fetch";\n');
     writeFileSync(resolve(sourceDir, 'runtime/node.js'), 'export const transport = "node";\n');
+    writeFileSync(resolve(sourceDir, 'src/index.js'), 'export { selected } from "./private/value.js";\n');
+    writeFileSync(resolve(sourceDir, 'src/private/value.js'), 'export const selected = "source";\n');
     const bootstrap = await import(pathToFileURL(resolve(scriptsDir, 'syncBundledWorkspacePackages.mjs')).href);
     bootstrap.syncBundledWorkspacePackages({ repoRoot, packages: ['sdk'], hostApps: ['cli'] });
     assert.equal((await import(pathToFileURL(resolve(destinationDir, 'dist/connect.js')).href)).transport, 'node');
+    assert.equal((await import(pathToFileURL(resolve(destinationDir, 'src/index.js')).href)).selected, 'source');
     assert.deepEqual(JSON.parse(readFileSync(resolve(destinationDir, 'package.json'), 'utf8')).imports, imports);
     assert.equal(readFileSync(resolve(destinationDir, 'dist/fetch.js'), 'utf8'), 'export const transport = "fetch";\n');
   } finally {
@@ -944,9 +950,21 @@ test('syncBundledWorkspacePackages publishes cli-common package-root helpers con
   const hostPackageDir = mkdtempSync(join(testTempRoot, 'happier-sync-bundled-cli-common-helper-'));
   const bundledPackageDir = resolve(hostPackageDir, 'node_modules', '@happier-dev', 'cli-common');
   try {
+    const tsx = createRequire(import.meta.url).resolve('tsx/esm');
+    const healthOwner = pathToFileURL(resolve(sourceRepoRoot, 'packages/cli-common/src/workspaces/index.ts')).href;
+    const workspaceClosure = JSON.parse(execFileSync(process.execPath, ['--import', tsx, '--input-type=module', '--eval', `
+      const owner = await import(${JSON.stringify(healthOwner)});
+      console.log(JSON.stringify(owner.resolveInternalWorkspacePackageNameClosure({
+        repoRoot: ${JSON.stringify(sourceRepoRoot)}, packageNames: ['@happier-dev/cli-common'],
+      })));
+    `], { env: { ...process.env, NODE_OPTIONS: '' }, encoding: 'utf8' }));
+    const packages = workspaceClosure.map(name => name.slice('@happier-dev/'.length));
+    writeFileSync(join(hostPackageDir, 'package.json'), JSON.stringify({
+      name: 'cli-common-closure-consumer', bundledDependencies: workspaceClosure,
+    }));
     syncBundledWorkspacePackages({
       repoRoot: sourceRepoRoot,
-      packages: ['cli-common'],
+      packages,
       hostPackageDirs: [hostPackageDir],
     });
 
@@ -1000,6 +1018,35 @@ test('syncBundledWorkspacePackages publishes cli-common package-root helpers con
       )).href}?bundled-cli-common-helper=${Date.now()}`
     );
     assert.equal(typeof bundledComponentArtifacts.buildCliBinaryArtifactPayload, 'function');
+
+    // A fresh process must load the actual published package, without the
+    // checkout source resolver masking a missing exported or private sibling.
+    const privateStage = pathToFileURL(resolve(bundledPackageDir, 'src/componentArtifacts/stageProcessCustodyRuntime.ts')).href;
+    const coldLoad = () => execFileSync(process.execPath, ['--import', tsx, '--input-type=module', '--eval', `
+      import assert from 'node:assert/strict';
+      const observer = await import('@happier-dev/cli-common/fileChangeObserver');
+      const ownership = await import('@happier-dev/cli-common/tempDirOwnership');
+      const stage = await import(${JSON.stringify(privateStage)});
+      const health = await import(${JSON.stringify(healthOwner)});
+      assert.equal(typeof observer.createFileChangeObserver, 'function');
+      assert.equal(typeof ownership.readHappierTempDirOwnerLiveness, 'function');
+      assert.equal(typeof stage.stageProcessCustodyRuntime, 'function');
+      console.log(health.hasBundledWorkspacePackagesHealthy({
+        repoRoot: ${JSON.stringify(sourceRepoRoot)}, hostPackageDir: ${JSON.stringify(hostPackageDir)},
+      }));
+    `], { cwd: hostPackageDir, env: { ...process.env, NODE_OPTIONS: '' }, encoding: 'utf8' }).trim();
+    assert.equal(coldLoad(), 'true');
+    const privateSibling = resolve(bundledPackageDir, 'src/componentArtifacts/commands.ts');
+    rmSync(privateSibling);
+    const health = execFileSync(process.execPath, ['--import', tsx, '--input-type=module', '--eval', `
+      const owner = await import(${JSON.stringify(healthOwner)});
+      console.log(owner.hasBundledWorkspacePackagesHealthy({
+        repoRoot: ${JSON.stringify(sourceRepoRoot)}, hostPackageDir: ${JSON.stringify(hostPackageDir)},
+      }));
+    `], { cwd: hostPackageDir, env: { ...process.env, NODE_OPTIONS: '' }, encoding: 'utf8' }).trim();
+    assert.equal(health, 'false', 'preflight must reject missing privately imported source siblings');
+    syncBundledWorkspacePackages({ repoRoot: sourceRepoRoot, packages, hostPackageDirs: [hostPackageDir] });
+    assert.equal(coldLoad(), 'true', 'publication must repair the complete source closure');
   } finally {
     rmSync(hostPackageDir, { recursive: true, force: true });
   }

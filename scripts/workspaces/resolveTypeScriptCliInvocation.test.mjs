@@ -19,13 +19,15 @@ import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/
 test('compiler leaf uses the package admission policy instead of escalating CLI to the UI envelope', () => {
   const workspaceDir = fileURLToPath(new URL('../../', import.meta.url));
   for (const component of ['cli', 'ui', 'server']) {
-    const invocation = resolveTypeScriptCliInvocation({
-      workspaceDir, args: ['--noEmit', '-p', `apps/${component}/tsconfig.json`],
-      platform: 'linux', env: {},
-      requireResolve: () => '/repo/node_modules/@typescript/native/package.json',
-      readFileSyncImpl: () => JSON.stringify({ bin: { tsc: './bin/tsc' } }),
-    });
-    assert.ok(invocation.argsPrefix.includes(`--class=compilation-${component}`), invocation.argsPrefix.join(' '));
+    for (const config of ['tsconfig.json', 'node_modules/.cache/tsc/tsconfig.source.json']) {
+      const invocation = resolveTypeScriptCliInvocation({
+        workspaceDir, args: ['--noEmit', '-p', `apps/${component}/${config}`],
+        platform: 'linux', env: {},
+        requireResolve: () => '/repo/node_modules/@typescript/native/package.json',
+        readFileSyncImpl: () => JSON.stringify({ bin: { tsc: './bin/tsc' } }),
+      });
+      assert.ok(invocation.argsPrefix.includes(`--class=compilation-${component}`), invocation.argsPrefix.join(' '));
+    }
   }
 });
 
