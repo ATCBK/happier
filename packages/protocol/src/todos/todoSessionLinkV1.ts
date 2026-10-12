@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 const scopeIdentity = z.object({ serverId: z.string().min(1), accountId: z.string().min(1) }).strict();
 const sessionIdentity = scopeIdentity.extend({ sessionId: z.string().min(1) }).strict();
 const linkedSession = z.object({ title: z.string(), linkedAt: z.number(), session: sessionIdentity.optional() }).strict();
@@ -8,6 +9,7 @@ export const TodoItemV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), title: z.string(), done: z.boolean(), createdAt: z.number(), updatedAt: z.number(),
   completedAt: z.number().optional(), linkedSessions: z.record(z.string(), linkedSession).optional(),
 }).strict());
+export const TodoItemV1StoredSchema = createStoredReadSchema(TodoItemV1Schema);
 export type TodoItemV1 = z.infer<typeof TodoItemV1Schema>;
 export const TodoSessionLinkInputV1Schema = lazyZodSchema(() => z.object({
   scope: scopeIdentity, taskId: z.string().min(1), session: sessionIdentity,
@@ -44,7 +46,7 @@ export async function applyTodoSessionLinkV1(input: TodoSessionLinkInputV1, port
     const key = buildTodoSessionLinkKeyV1(input.session);
     while (true) {
       if (row.value === null) throw new TodoSessionLinkErrorV1('task_deleted');
-      const todo = TodoItemV1Schema.parse(row.value);
+      const todo = TodoItemV1StoredSchema.parse(row.value);
       if (todo.id !== input.taskId) throw new TodoSessionLinkErrorV1('task_link_failed');
       check();
       const predecessor = todo.linkedSessions?.[input.session.sessionId];
