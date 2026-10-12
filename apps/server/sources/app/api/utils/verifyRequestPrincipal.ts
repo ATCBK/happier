@@ -154,14 +154,9 @@ export async function verifyRequestPrincipal(input: Readonly<{
     const token = readBearerCredential(input.authorizationHeader);
     if (token === null) return { status: "absent" };
 
-    let disposition: Awaited<ReturnType<typeof auth.verifyTokenDisposition>>;
-    try {
-        disposition = await auth.verifyTokenDisposition(token, {
-            allowLegacyHome: input.allowLegacyHomeToken,
-        });
-    } catch {
-        return { status: "invalid" };
-    }
+    const disposition = await auth.verifyTokenDisposition(token, {
+        allowLegacyHome: input.allowLegacyHomeToken,
+    });
     if (disposition.status === "rejected_restricted") {
         return { status: "rejected_restricted", kind: disposition.authTokenKind };
     }

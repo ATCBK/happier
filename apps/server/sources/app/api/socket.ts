@@ -63,6 +63,7 @@ import {
 } from "./socket/sessionServerStartDispatcher";
 import { resolveVerifiedMachineSocketInstallationId } from "./socket/machineSocketInstallationProof";
 import { installSessionPublisherCredentialCurrentness } from "./socket/socketCredentialCurrentness";
+import { rejectSocket, resolveSocketAuthUnavailableError } from "./socket/socketAuthError";
 import { resolveMachineAdmission } from '@/app/machines/machineAccess';
 import {
     getAccountRevocationSocketRoom,
@@ -324,17 +325,6 @@ export function startSocket(app: Fastify) {
             }
             : { mode: "memory" },
     });
-
-    function rejectSocket(params: { statusCode: number; error: string; message?: string; provider?: string; data?: Record<string, unknown> }) {
-        const err: Error & { data?: Record<string, unknown> } = new Error(params.message ?? params.error);
-        err.data = {
-            error: params.error,
-            statusCode: params.statusCode,
-            ...(params.provider ? { provider: params.provider } : {}),
-            ...(params.data ?? {}),
-        };
-        return err;
-    }
 
     const machineOwnershipRegistry = createMachineSocketOwnershipRegistry({
         io,
@@ -728,8 +718,7 @@ export function startSocket(app: Fastify) {
                 },
                 "Socket authentication handshake failed unexpectedly",
             );
-            const schemaMismatch = readSharedQaSchemaMismatchDiagnostic(error);
-            return rejectHandshake({ statusCode: 503, ...(schemaMismatch ?? { error: "upstream_error" }) });
+            return rejectHandshake(resolveSocketAuthUnavailableError(error));
         }
     });
 
@@ -1098,7 +1087,10 @@ export function startSocket(app: Fastify) {
         // Broadcast daemon online status
         if (connection.connectionType === 'machine-scoped' && ephemeralRunnerAdmission?.kind !== "machine-runtime") {
             // Broadcast daemon online
-            const machineActivity = buildMachineActivityEphemeral(machineId!, true, Date.now());
+            const machineActivity = {
+                ...buildMachineActivityEphemeral(machineId!, true, Date.now()),
+                reconnected: true as const,
+            };
             eventRouter.emitEphemeral({
                 userId,
                 payload: machineActivity,

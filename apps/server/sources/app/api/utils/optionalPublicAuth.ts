@@ -16,16 +16,12 @@ export async function readOptionalPublicAuthDisposition(
 ): Promise<OptionalPublicAuthDisposition> {
     const token = readBearerCredential(authorizationHeader);
     if (token === null) return { status: "anonymous" };
-    try {
-        const verification = await auth.verifyTokenDisposition(token, { allowLegacyHome: true });
-        return resolveOptionalPublicAuthDisposition(
-            verification.status === "verified"
-                ? verification.credential
-                : verification.status === "rejected_restricted"
-                    ? verification
-                    : null,
-        );
-    } catch {
-        return { status: "anonymous" };
-    }
+    const verification = await auth.verifyTokenDisposition(token, { allowLegacyHome: true });
+    return resolveOptionalPublicAuthDisposition(
+        verification.status === "verified"
+            ? verification.credential
+            : verification.status === "rejected_restricted"
+                ? verification
+                : null,
+    );
 }

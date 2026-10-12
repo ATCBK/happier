@@ -2,6 +2,10 @@ import * as privacyKit from "privacy-kit";
 import { randomUUID } from "node:crypto";
 import tweetnacl from "tweetnacl";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import Fastify from "fastify";
+import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
+import { registerAuthEntryRoute } from "@/app/api/routes/auth/registerAuthEntryRoute";
+import { SESSION_RUNTIME_PUBLIC_AUTH_FORBIDDEN_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 
 import { auth } from "@/app/auth/auth";
 import { db } from "@/storage/db";
@@ -192,8 +196,25 @@ describe("auth token provenance (integration)", () => {
             ephemeralSessionRunnerPrincipal: principal,
         });
 
-        await db.accessKey.delete({ where: { accountId_machineId_sessionId: { accountId: account.id, machineId, sessionId } } });
-        await expect(auth.verifyToken(token)).resolves.toBeNull();
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        registerAuthEntryRoute(app, { isEmailDeliveryReady: () => false });
+        try {
+            const entry = () => app.inject({ method: "POST", url: "/v1/auth/entry",
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, scope: { kind: "home" } } });
+            const active = await entry();
+            expect(active.statusCode, active.body).toBe(403);
+            expect(active.headers["cache-control"]).toBe("no-store");
+            expect(active.json()).toEqual({ error: SESSION_RUNTIME_PUBLIC_AUTH_FORBIDDEN_ERROR });
+            await db.accessKey.delete({ where: { accountId_machineId_sessionId: { accountId: account.id, machineId, sessionId } } });
+            await expect(auth.verifyToken(token)).resolves.toBeNull();
+            const revoked = await entry();
+            expect(revoked.statusCode, revoked.body).toBe(403);
+            expect(revoked.json()).toEqual({ error: SESSION_RUNTIME_PUBLIC_AUTH_FORBIDDEN_ERROR });
+        } finally {
+            await app.close();
+        }
     });
 
     it("self-attests the restored Home signing secret without exporting the temporary token", async () => {

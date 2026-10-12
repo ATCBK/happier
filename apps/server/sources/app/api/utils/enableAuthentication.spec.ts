@@ -178,8 +178,7 @@ describe("enableAuthentication (defensive error handling)", () => {
 
         expect(invalidCredential.statusCode).toBe(401);
         expect(invalidCredential.json()).toEqual({ error: "authentication_failed" });
-        expect(unavailableVerifier.statusCode).toBe(401);
-        expect(unavailableVerifier.json()).toEqual({ error: "authentication_failed" });
+        expect(unavailableVerifier.statusCode).toBe(500);
         expect(missingCredential.statusCode).toBe(401);
         expect(missingCredential.json()).toEqual({ error: "Missing authorization header" });
 

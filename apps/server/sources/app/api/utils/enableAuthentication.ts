@@ -103,198 +103,199 @@ export function enableAuthentication(app: Fastify) {
     });
 
     app.decorate('authenticate', async function (request: any, reply: any) {
-        try {
-            const authHeader = request.headers.authorization;
-            const executionAuthorization = readScalarHeader(
-                request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER],
+        const authHeader = request.headers.authorization;
+        const executionAuthorization = readScalarHeader(
+            request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER],
+        );
+        const machineSignature = readScalarHeader(
+            request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER],
+        );
+        const effectActionId = readScalarHeader(request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER]);
+        const encodedTarget = readScalarHeader(request.headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]);
+        const hasExternalActionHeader = executionAuthorization !== null
+            || machineSignature !== null
+            || effectActionId !== null
+            || encodedTarget !== null;
+        // Never log bearer tokens or header contents.
+        const logDiagnostics = readServerConfig(await readRequestHomeEnv(request), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
+        if (logDiagnostics) {
+            log(
+                { module: 'auth-decorator' },
+                `Auth check - path: ${redactHttpRequestUrlForLog(request.url)}, has header: ${!!authHeader}`,
             );
-            const machineSignature = readScalarHeader(
-                request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER],
-            );
-            const effectActionId = readScalarHeader(request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER]);
-            const encodedTarget = readScalarHeader(request.headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]);
-            const hasExternalActionHeader = executionAuthorization !== null
-                || machineSignature !== null
-                || effectActionId !== null
-                || encodedTarget !== null;
-            // Never log bearer tokens or header contents.
-            const logDiagnostics = readServerConfig(await readRequestHomeEnv(request), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
-            if (logDiagnostics) {
-                log(
-                    { module: 'auth-decorator' },
-                    `Auth check - path: ${redactHttpRequestUrlForLog(request.url)}, has header: ${!!authHeader}`,
-                );
-            }
-            if (hasExternalActionHeader) {
-                if (
-                    authHeader !== undefined
-                    || !executionAuthorization
-                    || !machineSignature
-                    || !effectActionId
-                    || !encodedTarget
-                ) {
-                    return sendInvalidConnectionCredentialFailure(request, reply);
-                }
-                const proof = {
-                    authorizationToken: executionAuthorization,
-                    machineSignature,
-                    effectActionId,
-                    encodedTarget,
-                    method: request.method,
-                    path: request.url,
-                    body: request.body,
-                };
-                const routeActionId = typeof request.params?.actionId === "string"
-                    ? request.params.actionId
-                    : null;
-                const authorizationCurrentnessActionId = routeActionId !== null
-                    && request.routeOptions?.url
-                        === EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1
-                    ? routeActionId
-                    : null;
-                const verified = authorizationCurrentnessActionId !== null
-                    ? await verifyExternalActionExecutionAuthorizationCurrentness({
-                        ...proof,
-                        outerActionId: authorizationCurrentnessActionId,
-                        resolveCurrentSessionMachine: app.resolveCurrentSessionMachine,
-                    })
-                    : await verifyExternalActionDomainExecutionRequest({ ...proof, resolveCurrentSessionMachine: app.resolveCurrentSessionMachine });
-                if (!verified) return sendInvalidConnectionCredentialFailure(request, reply);
-                if (!isExternalActionSessionRoutePurposeAllowed(request, verified.effectActionId)) {
-                    return reply.code(403).send({ error: 'credential_scope_denied' });
-                }
-                if ('authentication' in verified.principal) {
-                    request.userId = verified.principal.accountId;
-                    request.authTokenKind = verified.principal.authentication.kind;
-                    request.authAuthority = verified.principal.authority;
-                    request.authTokenEpoch = verified.principal.authentication.tokenEpoch;
-                    request.authTokenLegacy = false;
-                    request.authTokenAuthenticationEvidence = verified.principal.authentication.evidence;
-                } else {
-                    stampApiTokenPrincipal(request, verified.principal);
-                }
-                if (isApiTokenRequestOriginDenied(request)) {
-                    return reply.code(403).send({ error: "credential_origin_denied" });
-                }
-                request.externalActionExecutionAuthorized = true;
-                request.externalActionExecutionAuthorizationBinding = verified.binding;
-                request.externalActionManagedGuestActivity = verified.managedGuestActivity;
-                // Ordinary authenticated callers have no PAT input ceiling.
-                // Carry that explicit fact through the same signed-effect
-                // projection rather than inventing a token grant.
-                request.externalActionInputConstraints = 'grant' in verified.binding ? {
-                    models: verified.binding.grant.models,
-                    permissionModes: verified.binding.grant.permissionModes,
-                } : { models: null, permissionModes: null };
-                request.externalActionEffectActionId = verified.effectActionId;
-                request.externalActionRootActionId = verified.binding.actionId;
-                request.externalActionExecutionTarget = verified.target;
-                request.externalActionExecutionRequestId = verified.binding.requestId;
-                request.externalActionExecutionRequestEnvelopeDigest = verified.binding.requestEnvelopeDigest;
-                request.externalActionExecutionMachineId = verified.binding.machineId;
-                request.externalActionExecutionCustodianAccountId = verified.binding.custodianAccountId;
-                if (isRestrictedAuthTokenDeniedForRoute(request)) {
-                    return reply.code(403).send({ error: PRESENT_USER_REQUIRED_ERROR });
-                }
-                captureAccountStoredContentCompatibilityForHttpRequest(request);
-                return;
-            }
-            if (readBearerCredential(authHeader) === null) {
-                log({ module: 'auth-decorator' }, `Auth failed - missing or invalid header`);
-                if (request.routeOptions?.config?.connectionAuthFailureError === "invalid_token") {
-                    return sendInvalidConnectionCredentialFailure(request, reply);
-                }
-                return reply.code(401).send({ error: 'Missing authorization header' });
-            }
-
-            // A pre-marker credential is an ordinary-Home compatibility input,
-            // never a Directory or Team credential. Directory routes and
-            // route families that explicitly reject legacy Home authority use
-            // only the strict current verifier; ordinary Home routes retain
-            // the explicitly named compatibility reader.
-            const verification = earlyRequestPrincipals.get(request) ?? await verifyRequestPrincipal({
-                authorizationHeader: authHeader,
-                allowLegacyHomeToken: request.routeOptions?.config?.allowAccountDirectoryToken !== true
-                    && request.routeOptions?.config?.allowLegacyHomeToken !== false,
-                env: process.env,
-            });
+        }
+        if (hasExternalActionHeader) {
             if (
-                verification.status === "absent"
-                || verification.status === "invalid"
-                || verification.status === "rejected_restricted"
+                authHeader !== undefined
+                || !executionAuthorization
+                || !machineSignature
+                || !effectActionId
+                || !encodedTarget
             ) {
-                log({ module: 'auth-decorator' }, `Auth failed - invalid token`);
                 return sendInvalidConnectionCredentialFailure(request, reply);
             }
-            if (verification.status === "ineligible") {
-                const eligibility = verification.eligibility;
-                if (eligibility.statusCode === 401) {
-                    return sendInvalidConnectionCredentialFailure(request, reply);
-                }
-                const fallback = eligibility.statusCode === 503 ? "upstream_error" : "not-eligible";
-                if (eligibility.statusCode === 403 && eligibility.error === "provider-required") {
-                    return reply.code(403).send({ error: "provider-required", provider: eligibility.provider });
-                }
-                if (eligibility.statusCode === 403 && eligibility.error === "account-disabled") {
-                    return sendInvalidConnectionCredentialFailure(request, reply);
-                }
-                return reply.code(eligibility.statusCode).send({ error: eligibility.error ?? fallback });
+            const proof = {
+                authorizationToken: executionAuthorization,
+                machineSignature,
+                effectActionId,
+                encodedTarget,
+                method: request.method,
+                path: request.url,
+                body: request.body,
+                routeInput: {
+                    ...(request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}),
+                    ...(request.query && typeof request.query === 'object' && !Array.isArray(request.query) ? request.query : {}),
+                    ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}),
+                },
+            };
+            const routeActionId = typeof request.params?.actionId === "string"
+                ? request.params.actionId
+                : null;
+            const authorizationCurrentnessActionId = routeActionId !== null
+                && request.routeOptions?.url
+                    === EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1
+                ? routeActionId
+                : null;
+            const verified = authorizationCurrentnessActionId !== null
+                ? await verifyExternalActionExecutionAuthorizationCurrentness({
+                    ...proof,
+                    outerActionId: authorizationCurrentnessActionId,
+                    resolveCurrentSessionMachine: app.resolveCurrentSessionMachine,
+                })
+                : await verifyExternalActionDomainExecutionRequest({ ...proof, resolveCurrentSessionMachine: app.resolveCurrentSessionMachine });
+            if (!verified) return sendInvalidConnectionCredentialFailure(request, reply);
+            if (!isExternalActionSessionRoutePurposeAllowed(request, verified.effectActionId)) {
+                return reply.code(403).send({ error: 'credential_scope_denied' });
             }
-
-            const principal = verification.principal;
-            const tokenKind = principal.kind;
-            request.authTokenEpoch = principal.tokenEpoch;
-            if (logDiagnostics) {
-                log({ module: 'auth-decorator' }, `Auth success - user: ${principal.accountId}`);
-            }
-            const apiTokenPrincipal = principal.apiTokenPrincipal;
-            if (tokenKind === "api_token" && !apiTokenPrincipal) {
-                return sendInvalidConnectionCredentialFailure(request, reply);
-            }
-            if (apiTokenPrincipal) {
-                stampApiTokenPrincipal(request, apiTokenPrincipal);
-                if (isApiTokenRequestOriginDenied(request)) {
-                    return reply.code(403).send({ error: "credential_origin_denied" });
-                }
-            } else if (principal.sessionRuntimePrincipal) {
-                stampSessionRuntimePrincipal(
-                    request,
-                    principal.sessionRuntimePrincipal,
-                    principal.authenticationEvidence,
-                );
+            if ('authentication' in verified.principal) {
+                request.userId = verified.principal.accountId;
+                request.authTokenKind = verified.principal.authentication.kind;
+                request.authAuthority = narrowCredentialAuthority(verified.principal.authority, request.headers[AUTHORITY_CEILING_HEADER_V1]);
+                request.authTokenEpoch = verified.principal.authentication.tokenEpoch;
+                request.authTokenLegacy = false;
+                request.authTokenAuthenticationEvidence = verified.principal.authentication.evidence;
             } else {
-                request.userId = principal.accountId;
-                request.authTokenKind = tokenKind;
-                request.authAuthority = principal.authority;
-                request.authTokenLegacy = principal.legacy;
-                request.authTokenAuthenticationEvidence = principal.authenticationEvidence;
+                stampApiTokenPrincipal(request, verified.principal);
             }
-            request.authAuthority = narrowCredentialAuthority(request.authAuthority, request.headers[AUTHORITY_CEILING_HEADER_V1]);
+            if (isApiTokenRequestOriginDenied(request)) {
+                return reply.code(403).send({ error: "credential_origin_denied" });
+            }
+            request.externalActionExecutionAuthorized = true;
+            request.externalActionExecutionAuthorizationBinding = verified.binding;
+            request.externalActionManagedGuestActivity = verified.managedGuestActivity;
+            // Ordinary authenticated callers have no PAT input ceiling.
+            // Carry that explicit fact through the same signed-effect
+            // projection rather than inventing a token grant.
+            request.externalActionInputConstraints = 'grant' in verified.binding ? {
+                models: verified.binding.grant.models,
+                permissionModes: verified.binding.grant.permissionModes,
+            } : { models: null, permissionModes: null };
+            request.externalActionEffectActionId = verified.effectActionId;
+            request.externalActionRootActionId = verified.binding.actionId;
+            request.externalActionExecutionTarget = verified.target;
+            request.externalActionExecutionRequestId = verified.binding.requestId;
+            request.externalActionExecutionRequestEnvelopeDigest = verified.binding.requestEnvelopeDigest;
+            request.externalActionExecutionMachineId = verified.binding.machineId;
+            request.externalActionExecutionCustodianAccountId = verified.binding.custodianAccountId;
             if (isRestrictedAuthTokenDeniedForRoute(request)) {
-                const error = request.routeOptions?.config?.allowAccountDirectoryToken === true
-                    ? ACCOUNT_DIRECTORY_ERROR_CODES_V1.invalidRequest
-                    : request.routeOptions?.config?.restrictedAuthFailureError
-                        ?? PRESENT_USER_REQUIRED_ERROR;
-                return reply.code(403).send({ error });
-            }
-            const sessionAction = resolveApiTokenSessionActionForRoute(request);
-            const binding = request.routeOptions.config.restrictedCredentialBinding;
-            if (apiTokenPrincipal && sessionAction && binding?.scope === "session") {
-                const sessionId = readRestrictedCredentialRouteField(request, binding.session);
-                if (typeof sessionId !== "string") {
-                    return reply.code(403).send({ error: "credential_scope_denied" });
-                }
-                const admitted = await admitApiTokenSessionOperation({
-                    principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
-                    targetMachineId: await app.resolveCurrentSessionMachine?.({
-                        accountId: apiTokenPrincipal.accountId, sessionId,
-                    }),
-                });
-                if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+                return reply.code(403).send({ error: PRESENT_USER_REQUIRED_ERROR });
             }
             captureAccountStoredContentCompatibilityForHttpRequest(request);
-        } catch {
+            return;
+        }
+        if (readBearerCredential(authHeader) === null) {
+            log({ module: 'auth-decorator' }, `Auth failed - missing or invalid header`);
+            if (request.routeOptions?.config?.connectionAuthFailureError === "invalid_token") {
+                return sendInvalidConnectionCredentialFailure(request, reply);
+            }
+            return reply.code(401).send({ error: 'Missing authorization header' });
+        }
+
+        // A pre-marker credential is an ordinary-Home compatibility input,
+        // never a Directory or Team credential. Directory routes and
+        // route families that explicitly reject legacy Home authority use
+        // only the strict current verifier; ordinary Home routes retain
+        // the explicitly named compatibility reader.
+        const verification = earlyRequestPrincipals.get(request) ?? await verifyRequestPrincipal({
+            authorizationHeader: authHeader,
+            allowLegacyHomeToken: request.routeOptions?.config?.allowAccountDirectoryToken !== true
+                && request.routeOptions?.config?.allowLegacyHomeToken !== false,
+            env: process.env,
+        });
+        if (
+            verification.status === "absent"
+            || verification.status === "invalid"
+            || verification.status === "rejected_restricted"
+        ) {
+            log({ module: 'auth-decorator' }, `Auth failed - invalid token`);
             return sendInvalidConnectionCredentialFailure(request, reply);
         }
+        if (verification.status === "ineligible") {
+            const eligibility = verification.eligibility;
+            if (eligibility.statusCode === 401) {
+                return sendInvalidConnectionCredentialFailure(request, reply);
+            }
+            const fallback = eligibility.statusCode === 503 ? "upstream_error" : "not-eligible";
+            if (eligibility.statusCode === 403 && eligibility.error === "provider-required") {
+                return reply.code(403).send({ error: "provider-required", provider: eligibility.provider });
+            }
+            if (eligibility.statusCode === 403 && eligibility.error === "account-disabled") {
+                return sendInvalidConnectionCredentialFailure(request, reply);
+            }
+            return reply.code(eligibility.statusCode).send({ error: eligibility.error ?? fallback });
+        }
+
+        const principal = verification.principal;
+        const tokenKind = principal.kind;
+        request.authTokenEpoch = principal.tokenEpoch;
+        if (logDiagnostics) {
+            log({ module: 'auth-decorator' }, `Auth success - user: ${principal.accountId}`);
+        }
+        const apiTokenPrincipal = principal.apiTokenPrincipal;
+        if (tokenKind === "api_token" && !apiTokenPrincipal) {
+            return sendInvalidConnectionCredentialFailure(request, reply);
+        }
+        if (apiTokenPrincipal) {
+            stampApiTokenPrincipal(request, apiTokenPrincipal);
+            if (isApiTokenRequestOriginDenied(request)) {
+                return reply.code(403).send({ error: "credential_origin_denied" });
+            }
+        } else if (principal.sessionRuntimePrincipal) {
+            stampSessionRuntimePrincipal(
+                request,
+                principal.sessionRuntimePrincipal,
+                principal.authenticationEvidence,
+            );
+        } else {
+            request.userId = principal.accountId;
+            request.authTokenKind = tokenKind;
+            request.authAuthority = principal.authority;
+            request.authTokenLegacy = principal.legacy;
+            request.authTokenAuthenticationEvidence = principal.authenticationEvidence;
+        }
+        request.authAuthority = narrowCredentialAuthority(request.authAuthority, request.headers[AUTHORITY_CEILING_HEADER_V1]);
+        if (isRestrictedAuthTokenDeniedForRoute(request)) {
+            const error = request.routeOptions?.config?.allowAccountDirectoryToken === true
+                ? ACCOUNT_DIRECTORY_ERROR_CODES_V1.invalidRequest
+                : request.routeOptions?.config?.restrictedAuthFailureError
+                    ?? PRESENT_USER_REQUIRED_ERROR;
+            return reply.code(403).send({ error });
+        }
+        const sessionAction = resolveApiTokenSessionActionForRoute(request);
+        const binding = request.routeOptions.config.restrictedCredentialBinding;
+        if (apiTokenPrincipal && sessionAction && binding?.scope === "session") {
+            const sessionId = readRestrictedCredentialRouteField(request, binding.session);
+            if (typeof sessionId !== "string") {
+                return reply.code(403).send({ error: "credential_scope_denied" });
+            }
+            const admitted = await admitApiTokenSessionOperation({
+                principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
+                targetMachineId: await app.resolveCurrentSessionMachine?.({
+                    accountId: apiTokenPrincipal.accountId, sessionId,
+                }),
+            });
+            if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+        }
+        captureAccountStoredContentCompatibilityForHttpRequest(request);
     });
 }

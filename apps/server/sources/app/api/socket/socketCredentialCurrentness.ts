@@ -2,6 +2,7 @@ import { Socket } from "socket.io";
 import { auth } from "@/app/auth/auth";
 import { isRestrictedAuthTokenKind } from "@/app/api/utils/apiTokenRouteAdmission";
 import type { RestrictedSocketAdmission } from "./restrictedSocketAdmission";
+import { rejectSocket, resolveSocketAuthUnavailableError } from "./socketAuthError";
 
 /**
  * Re-runs the socket's own connect-time credential admission, once, at a socket
@@ -58,9 +59,13 @@ export function installSessionPublisherCredentialCurrentness(userId: string, soc
                 next();
                 return;
             }
-        } catch {
-            // Unverifiable authentication cannot admit an effect. Reconnection
-            // goes through the same credential owner as ordinary admission.
+        } catch (error) {
+            // Middleware errors are server-local and never settle the packet's
+            // ACK. Retire the transport so existing connection supervision can
+            // reoffer incumbent operations, without treating storage as revocation.
+            next(rejectSocket(resolveSocketAuthUnavailableError(error)));
+            socket.conn.close();
+            return;
         }
         next(new Error("invalid_token"));
         socket.disconnect(true);

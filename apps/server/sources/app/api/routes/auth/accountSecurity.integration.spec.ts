@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { emailPasswordAuthMethodModule } from "@/app/auth/methods/modules/emailPasswordAuthMethodModule";
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
-import { hashPasswordMaterial, verifyPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
+import { hashPasswordMaterial, setPasswordHashAdmissionForTesting, verifyPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
 import { parseAccountPasswordCredentialV1, type E2eeAccountPasswordCredentialV1 } from "@happier-dev/protocol";
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
@@ -20,6 +20,8 @@ import { createMtlsClaimCode } from "@/app/auth/providers/mtls/mtlsClaimCode";
 import { HOME_GOVERNANCE_POLICY_ID } from "@/app/home/governance/governancePolicy";
 import { setTeamPolicyInTx } from "@/app/teams/policy";
 import { registerAuthEntryRoute } from "./registerAuthEntryRoute";
+import { createPasswordHashAdmission } from "@/app/auth/password/passwordHashAdmission";
+import { ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1, NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1 } from "@happier-dev/protocol";
 
 describe("Account Security native password lifecycle", () => {
     let harness: LightSqliteHarness;
@@ -35,6 +37,56 @@ describe("Account Security native password lifecycle", () => {
                 HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test", HAPPIER_SERVER_IDENTITY_ID: "srv_security_home" } });
     }, 120_000);
     afterAll(async () => { await harness.close(); });
+
+    it("maps real password-hash admission pressure to a retryable failure after reading the Home settings", async () => {
+        const account = await db.account.create({ data: { publicKey: crypto.randomUUID() } });
+        const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
+        const admission = createPasswordHashAdmission({ maxConcurrent: 1, maxQueued: 0 });
+        setPasswordHashAdmissionForTesting(admission);
+        let releaseSlot = () => {};
+        const holder = admission.run(() => new Promise<void>((resolve) => { releaseSlot = resolve; }));
+        await new Promise((resolve) => setImmediate(resolve));
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        registerAccountSecurityRoutes(app);
+        try {
+            const response = await app.inject({ method: "POST", url: ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1,
+                headers: { authorization: `Bearer ${token}` }, payload: {
+                    v: 1, action: "change", expectedCredentialRevision: 1,
+                    normalizedNativeEmail: "alice@example.test", newPlainPassword: "replacement password value",
+                } });
+            expect(response.statusCode, response.body).toBe(503);
+            expect(response.json()).toEqual({ error: "password_hash_overloaded" });
+        } finally {
+            releaseSlot();
+            await holder;
+            setPasswordHashAdmissionForTesting(null);
+            await app.close();
+        }
+    });
+
+    it("does not relabel a persistence transaction failure as an invalid password-reset bearer", async () => {
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        registerAccountSecurityRoutes(app);
+        // SQLite read-only snapshots keep the Home read real; only the write
+        // transaction persistence boundary fails, as it can under contention.
+        const originalTransaction = db.$transaction;
+        db.$transaction = (async () => { throw new Error("database is locked"); }) as typeof db.$transaction;
+        try {
+            const response = await app.inject({ method: "POST", url: NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1,
+                payload: { v: 1, token: "A".repeat(43), password: "replacement password value" } });
+            expect(response.statusCode, response.body).toBe(500);
+            expect(response.json()).not.toMatchObject({ error: "invalid_reset" });
+        } finally {
+            db.$transaction = originalTransaction;
+            await app.close();
+        }
+    });
 
     it("lets a terminal credential read a re-allowed policy under its stale automation ceiling", async () => {
         const signing = tweetnacl.sign.keyPair();
@@ -722,6 +774,7 @@ describe("Account Security native password lifecycle", () => {
                 encryptionMode: "plain",
                 nativeEmail: "automation-security@example.test",
                 password: { status: "enrolled", revision: 1 },
+                terminalPresentUserPolicy: "allowed",
             });
             expect(response.body).not.toMatch(/plain_password_hash|hash|salt|digest|envelope|authVerifier|authenticationEvidence|repeatKey|operation/i);
 
@@ -732,6 +785,7 @@ describe("Account Security native password lifecycle", () => {
                 encryptionMode: "e2ee",
                 nativeEmail: "other-security@example.test",
                 password: { status: "not_enrolled", revision: null },
+                terminalPresentUserPolicy: "allowed",
             });
             expect(otherResponse.body).not.toContain("automation-security@example.test");
 
