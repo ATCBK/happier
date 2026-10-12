@@ -23,7 +23,7 @@ import {
 import {
   createTriageSourceSettingsSurface,
   type TriageSourceSettingsDraftEditorPropsV1,
-} from '@happier-dev/triage-sources';
+} from '@happier-dev/triage-sources/ui';
 import {
   Banner,
   Button,

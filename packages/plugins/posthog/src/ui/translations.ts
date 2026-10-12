@@ -58,7 +58,7 @@ const POSTHOG_CODE_VARIABLE_TRANSLATIONS = Object.freeze({
     'plugins.posthog.ui.codeVariables.loading': 'Lecture des variables capturées',
     'plugins.posthog.ui.codeVariables.title': 'Variables capturées',
     'plugins.posthog.ui.codeVariables.truncated': 'La réponse du fournisseur dépassait l’enveloppe de l’action ; la valeur visible a donc été raccourcie.',
-    'plugins.posthog.ui.codeVariables.discardNotice': 'Ces valeurs ne sont visibles que dans cet onglet de pile et sont supprimées lorsque vous le quittez.',
+    'plugins.posthog.ui.codeVariables.discardNotice': 'Ces valeurs ne sont visibles que dans cet onglet de pile et sont supprimées lorsque tu le quittes.',
     'plugins.posthog.ui.codeVariables.unavailable': 'Les variables capturées sont indisponibles',
   }),
   it: Object.freeze({
@@ -177,7 +177,7 @@ export const POSTHOG_UI_TRANSLATIONS = Object.freeze({
     ...POSTHOG_CODE_VARIABLE_TRANSLATIONS.fr,
     'plugins.posthog.detail.fallback.body': 'Les détails du problème PostHog ne sont pas disponibles sur cette surface.',
     'plugins.posthog.account.title': 'Compte PostHog', 'plugins.posthog.account.description': 'Déploiement PostHog et clé API personnelle utilisés pour lire les données de suivi des erreurs.',
-    'plugins.posthog.auth.origin.title': 'URL PostHog', 'plugins.posthog.auth.origin.description': 'L’origine API de votre déploiement PostHog, par exemple https://eu.posthog.com, https://us.posthog.com ou votre URL auto-hébergée.',
+    'plugins.posthog.auth.origin.title': 'URL PostHog', 'plugins.posthog.auth.origin.description': 'L’origine API de ton déploiement PostHog, par exemple https://eu.posthog.com, https://us.posthog.com ou ton URL auto-hébergée.',
     'plugins.posthog.auth.personalApiKey.title': 'Clé API personnelle PostHog', 'plugins.posthog.auth.personalApiKey.description': 'Une clé API personnelle avec les portées error_tracking:read, organization:read, project:read et activity_log:read.', 'plugins.posthog.auth.personalApiKey.mode': 'Clé API personnelle',
   }),
   it: Object.freeze({

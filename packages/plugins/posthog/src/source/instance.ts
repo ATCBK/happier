@@ -16,6 +16,10 @@
  */
 
 import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
+import {
+    createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolNumber,
+    defineProtocolObject, defineProtocolString, defineProtocolUnion,
+} from '@happier-dev/plugin-sdk/protocol';
 
 import { utf8ByteLength } from './map/bounds.js';
 import type { PosthogResolvedWindow } from './scan/request.js';
@@ -59,6 +63,20 @@ export type PosthogConfigurationRejection =
     | 'duplicateEnvironment'
     | 'invalidWindowPolicy'
     | 'tokenTooLarge';
+
+const PosthogWindowPolicySchema = defineProtocolUnion([
+    defineProtocolObject({ kind: defineProtocolLiteral('exact'), from: defineProtocolString(), to: defineProtocolString() }, { policy: 'closed' }),
+    defineProtocolObject({ kind: defineProtocolLiteral('relative'), durationMs: defineProtocolNumber() }, { policy: 'closed' }),
+]);
+const PosthogConfigurationTokenV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1), organizationUuid: defineProtocolString(),
+    environments: defineProtocolArray(defineProtocolObject({
+        teamPathId: defineProtocolNumber(), teamUuid: defineProtocolString(),
+        parentProjectId: defineProtocolNumber().optional(), displayName: defineProtocolString(),
+    }, { policy: 'closed' })),
+    scanWindowPolicy: PosthogWindowPolicySchema, detailWindowPolicy: PosthogWindowPolicySchema,
+}, { policy: 'closed' });
+const storedConfiguration = createProtocolStoredReadSchema(PosthogConfigurationTokenV1Schema);
 
 export type PosthogConfigurationEncoding =
     | Readonly<{ ok: true; token: string; utf8Bytes: number }>
@@ -232,19 +250,10 @@ export function decodePosthogConfiguration(
     } catch {
         return null;
     }
-    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
-        return null;
-    }
-    const raw = decoded as Readonly<Record<string, unknown>>;
-    if (!hasExactKeys(raw, [
-        'v',
-        'organizationUuid',
-        'environments',
-        'scanWindowPolicy',
-        'detailWindowPolicy',
-    ]) || raw['v'] !== 1 || !isUuid(raw['organizationUuid'])) {
-        return null;
-    }
+    const result = storedConfiguration.safeParse(decoded);
+    if (!result.success) return null;
+    const raw = result.data;
+    if (!isUuid(raw.organizationUuid)) return null;
     const rawEnvironments = raw['environments'];
     if (!Array.isArray(rawEnvironments) || rawEnvironments.length === 0) {
         return null;

@@ -186,6 +186,10 @@ export const POSTHOG_PLUGIN = definePlugin({
     version: '0.0.0',
     displayName: 'PostHog',
     description: 'Brings PostHog error issues into PRs & Issues with their own detail body.',
+    brand: { iconResourceId: 'brand-icon', monochrome: true },
+    resources: {
+      'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+    },
     engines: { happier: '^0.0.0' },
     runtime: { apiVersion: 1 },
     entrypoints: { daemon: './.happier-plugin/daemon.js' },
@@ -296,7 +300,7 @@ export const POSTHOG_PLUGIN = definePlugin({
         }, {
             locale: 'es', messages: { ...POSTHOG_UI_TRANSLATIONS.es, 'plugins.posthog.settings.group': 'PostHog', 'plugins.posthog.settings.sources': 'PR e incidencias', 'plugins.posthog.settings.sources.subtitle': 'Elige qué organizaciones y proyectos de PostHog aparecen en PR e incidencias.' },
         }, {
-            locale: 'fr', messages: { ...POSTHOG_UI_TRANSLATIONS.fr, 'plugins.posthog.settings.group': 'PostHog', 'plugins.posthog.settings.sources': 'PR et tickets', 'plugins.posthog.settings.sources.subtitle': 'Choisissez les organisations et projets PostHog affichés dans PR et tickets.' },
+            locale: 'fr', messages: { ...POSTHOG_UI_TRANSLATIONS.fr, 'plugins.posthog.settings.group': 'PostHog', 'plugins.posthog.settings.sources': 'PR et tickets', 'plugins.posthog.settings.sources.subtitle': 'Choisis les organisations et projets PostHog affichés dans PR et tickets.' },
         }, {
             locale: 'it', messages: { ...POSTHOG_UI_TRANSLATIONS.it, 'plugins.posthog.settings.group': 'PostHog', 'plugins.posthog.settings.sources': 'PR e segnalazioni', 'plugins.posthog.settings.sources.subtitle': 'Scegli le organizzazioni e i progetti PostHog da mostrare in PR e segnalazioni.' },
         }, {

@@ -44,18 +44,34 @@ describe('PostHog configured-instance codec', () => {
         expect(decodePosthogConfiguration({ v: 1, token: '{"v":2}' })).toBeNull();
     });
 
-    it('rejects unknown fields at every declared exact configuration boundary', () => {
+    it('drops unknown retained fields at every configuration boundary and keeps encoded output canonical', () => {
         expect(decodePosthogConfiguration({
             v: 1,
             token: JSON.stringify({ ...CONFIGURATION, unexpected: true }),
-        })).toBeNull();
+        })).toEqual(CONFIGURATION);
         expect(decodePosthogConfiguration({
             v: 1,
             token: JSON.stringify({
                 ...CONFIGURATION,
                 environments: [{ ...CONFIGURATION.environments[0], unexpected: true }],
             }),
-        })).toBeNull();
+        })).toEqual(CONFIGURATION);
+        const read = decodePosthogConfiguration({ v: 1, token: JSON.stringify({
+            ...CONFIGURATION,
+            scanWindowPolicy: { ...CONFIGURATION.scanWindowPolicy, retired: true },
+            detailWindowPolicy: { ...CONFIGURATION.detailWindowPolicy, retired: true },
+        }) });
+        expect(read).toEqual(CONFIGURATION);
+        if (read === null) throw new Error('stored configuration was unreadable');
+        expect(encodePosthogConfiguration(read)).toEqual(encodePosthogConfiguration(CONFIGURATION));
+        const exact: PosthogConfigurationToken = { ...CONFIGURATION, detailWindowPolicy: {
+            kind: 'exact', from: '2026-08-01T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z',
+        } };
+        expect(decodePosthogConfiguration({ v: 1, token: JSON.stringify({ ...exact,
+            detailWindowPolicy: { ...exact.detailWindowPolicy, retired: true },
+        }) })).toEqual(exact);
+        const authoredExtra = { ...CONFIGURATION, scanWindowPolicy: { ...CONFIGURATION.scanWindowPolicy, retired: true } };
+        expect(encodePosthogConfiguration(authoredExtra)).toEqual({ ok: false, reason: 'invalidWindowPolicy' });
     });
 
     it('freezes a relative policy to one exact provider window', () => {

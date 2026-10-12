@@ -301,15 +301,15 @@ function SampledOccurrenceSummary({
     return (
         <Stack gap="small">
             <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.posthog.ui.showingSample"
                 fallback="Showing one sampled occurrence."
             />
-            {trace.exceptionLabel === null ? null : <Text variant="body" value={trace.exceptionLabel} />}
+            {trace.exceptionLabel === null ? null : <Text variant="meta" value={trace.exceptionLabel} />}
             {frame === null
                 ? null
-                : <Text variant="caption" tone="neutral" value={frame.location === null ? frame.label : `${frame.label} — ${frame.location}`} />}
+                : <Text variant="micro" tone="neutral" value={frame.location === null ? frame.label : `${frame.label} — ${frame.location}`} />}
             {trace.frames.length === 0 || onOpenStackTrace === undefined
                 ? null
                 : (
@@ -426,7 +426,7 @@ function OverviewPanel({
                         />
                     )}
                 {projected.disclosures.map((disclosure) => (
-                    <Text key={disclosure.id} variant="caption" tone="neutral">
+                    <Text key={disclosure.id} variant="micro" tone="neutral">
                         {`${disclosure.label}: ${disclosure.disclosure}`}
                     </Text>
                 ))}
@@ -435,7 +435,7 @@ function OverviewPanel({
                     : (
                         <Stack gap="small">
                             <Text
-                                variant="caption"
+                                variant="micro"
                                 tone="neutral"
                                 valueKey="plugins.posthog.ui.detailOnly"
                                 fallback="Read only in the detail plane:"
@@ -539,10 +539,19 @@ function SampledFailureNotice({
 function SampleFooter({
     controller,
 }: Readonly<{ controller: PosthogOccurrenceControllerV1 }>): React.ReactElement {
+    const text = usePluginTranslation();
+    const commands = React.useMemo<readonly TriageSourcePanelCommandV1[]>(() =>
+        controller.state.canLoadMore && !controller.state.pending ? [{ title: text('plugins.posthog.ui.loadMoreSamples', 'Load more sampled occurrences'),
+            operation: { kind: 'loadMoreSourceOccurrences' } }] : [], [controller.state.canLoadMore, controller.state.pending, text]);
+    const loadMore = useTriageSourcePanelIntentV1('loadMoreSourceOccurrences', async (operation, signal) => {
+        if (operation.kind !== 'loadMoreSourceOccurrences' || signal.aborted || !controller.state.canLoadMore || controller.state.pending) return { status: 'unavailable' };
+        controller.loadMore();
+        return { status: 'applied' };
+    }, commands);
     return (
         <Stack gap="small">
             <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey={controller.state.omittedRowCount === 0
                     ? 'plugins.posthog.ui.sampleDisclosure'
@@ -562,7 +571,7 @@ function SampleFooter({
                 ? null
                 : (
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="warning"
                         valueKey="plugins.posthog.ui.sampleStoppedShort"
                         fallback="PostHog offered more of this sample than this build could page, so it stops here."
@@ -575,7 +584,7 @@ function SampleFooter({
                         titleKey="plugins.posthog.ui.loadMoreSamples"
                         variant="secondary"
                         busy={controller.state.pending}
-                        onPress={controller.loadMore}
+                        onPress={() => { void loadMore({ kind: 'loadMoreSourceOccurrences' }); }}
                     />
                 )
                 : null}
@@ -739,15 +748,15 @@ function StackTracePanel({
                     {trace.exceptionLabel === null
                         ? (
                             <Text
-                                variant="caption"
+                                variant="micro"
                                 tone="neutral"
                                 valueKey="plugins.posthog.ui.selectSampleForStack"
                                 fallback="Select a sampled occurrence to read its stack."
                             />
                         )
-                        : <Text variant="caption" tone="neutral" value={trace.exceptionLabel} />}
+                        : <Text variant="micro" tone="neutral" value={trace.exceptionLabel} />}
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="neutral"
                         valueKey="plugins.posthog.ui.sampleStackCounts"
                         fallback="This stack belongs to one sampled occurrence, not to the latest one. {application} application frame(s), {other} other frame(s)."
@@ -864,7 +873,7 @@ function AffectedSessionsPanel({
                         ? null
                         : <SampledFailureNotice failure={controller.state.failure} />}
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="neutral"
                         valueKey="plugins.posthog.ui.sampledSessions.description"
                         fallback="These are the PostHog sessions the sampled occurrences named. A session here is not a claim that a recording exists."
@@ -878,7 +887,7 @@ function AffectedSessionsPanel({
                         exactly what this refuses to do.
                     */}
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="warning"
                         valueKey="plugins.posthog.ui.sampledSessions.replayUnavailable"
                         fallback="This build cannot open a PostHog session replay, and a sampled session is not a recording."
@@ -958,7 +967,7 @@ function ActivityFooter({
     return (
         <Stack gap="small">
             <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey={state.totalCount === null
                     ? 'plugins.posthog.ui.activityRecordsRead'
@@ -972,7 +981,7 @@ function ActivityFooter({
                 ? null
                 : (
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="neutral"
                         valueKey="plugins.posthog.ui.recordsUnreadable"
                         fallback="{count} record(s) on the pages read could not be understood."
@@ -988,7 +997,7 @@ function ActivityFooter({
                 ? null
                 : (
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="warning"
                         valueKey="plugins.posthog.ui.activityStoppedShort"
                         fallback="PostHog recorded more activity than this list could read, so it stops here."
