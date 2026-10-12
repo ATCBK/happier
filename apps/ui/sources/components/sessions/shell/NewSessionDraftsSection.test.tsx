@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createThemeFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { FocusReturnProvider, useFocusReturnFallbackRef } from '@/keyboard/focusReturn';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { NewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 type CataloguedNewSessionDraftDocument = Extract<
@@ -24,182 +26,16 @@ import {
     resolveNewSessionDraftAgentId,
     resolveNewSessionDraftMachineId,
 } from '@/components/sessions/drafts/newSessionDraftPresentation';
-import * as draftPresentation from '@/components/sessions/drafts/newSessionDraftPresentation';
-
-import {
-    NewSessionDraftsSection,
-    NewSessionDraftsSectionView,
-    buildNewSessionDraftContinueRoute,
-    buildNewSessionDraftRowPresentation,
-    deleteNewSessionDraftAfterConfirmation,
-    isNewSessionDraftDeletionBlocked,
-    resolveNewSessionDraftSectionTitle,
-    resolveNewSessionDraftWaitingSectionTitle,
-    resolveNewSessionDraftMachineUnavailable,
-} from './NewSessionDraftsSection';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const HOME_A_SCOPE = { serverId: 'home-a', accountId: 'account-a' } as const;
 const HOME_B_SCOPE = { serverId: 'home-b', accountId: 'account-b' } as const;
 
-const focusedScopeState = vi.hoisted(() => ({
-    scope: null as { serverId: string; accountId: string } | null,
-    listeners: new Set<() => void>(),
-}));
-const draftRepositoryState = vi.hoisted(() => ({
-    draftsByScopeKey: new Map<string, readonly unknown[]>(),
-    remoteDraftsByScopeKey: new Map<string, readonly unknown[]>(),
-    listenersByScopeKey: new Map<string, Set<() => void>>(),
-    scopedDeleteResultsByScopeKey: new Map<string, boolean>(),
-    hydrationGatesByScopeKey: new Map<string, Promise<void>>(),
-    deleteGatesByScopeKey: new Map<string, Promise<void>>(),
-    scopedHydrationKeys: [] as string[],
-    scopedDeleteKeys: [] as string[],
-    ambientDeleteKeys: [] as string[],
-    liveSubscriptionKeys: [] as string[],
-    subscribedKeys: [] as string[],
-}));
-const serverProfilesState = vi.hoisted(() => ({
-    profiles: [] as Array<{ id: string; serverIdentityId?: string | null; serverUrl: string; name: string }>,
-    bindings: new Map<string, { scope: { serverId: string; accountId: string }; isCurrent: () => boolean }>(),
-    unavailableProfileIds: new Set<string>(),
-}));
-
-// The draft repository is the persisted draft-store boundary consumed through
-// `useSyncExternalStore`. Everything below it — row presentation, availability,
-// deletion policy, focus return — stays real.
-vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/ops/sessionDrafts/sessionDraftRepository')>();
-    const keyOf = (scope: { serverId: string; accountId: string }) => `${scope.serverId}|${scope.accountId}`;
-    // The canonical repository caches one projection array per scope, so a scope
-    // with no drafts keeps returning the same reference. A fresh `[]` here would
-    // make `useSyncExternalStore` see a new snapshot on every render and spin —
-    // a defect in this harness, not in the owner it stands in for.
-    const NO_DRAFTS: readonly unknown[] = Object.freeze([]);
-    return {
-        ...actual,
-        subscribeSessionDraftList: (scope: { serverId: string; accountId: string }, listener: () => void) => {
-            const key = keyOf(scope);
-            draftRepositoryState.subscribedKeys.push(key);
-            draftRepositoryState.liveSubscriptionKeys.push(key);
-            const listeners = draftRepositoryState.listenersByScopeKey.get(key) ?? new Set();
-            listeners.add(listener);
-            draftRepositoryState.listenersByScopeKey.set(key, listeners);
-            return () => {
-                const index = draftRepositoryState.liveSubscriptionKeys.indexOf(key);
-                if (index >= 0) draftRepositoryState.liveSubscriptionKeys.splice(index, 1);
-                listeners.delete(listener);
-            };
-        },
-        listNewSessionDraftProjections: (scope: { serverId: string; accountId: string }) =>
-            draftRepositoryState.draftsByScopeKey.get(keyOf(scope)) ?? NO_DRAFTS,
-        deleteSessionDraft: async ({ scope, address }: {
-            scope: { serverId: string; accountId: string };
-            address: { kind: 'newSession'; draftId: string };
-        }) => {
-            draftRepositoryState.ambientDeleteKeys.push(`${keyOf(scope)}|${address.draftId}`);
-        },
-        ensureSessionDraftRepositoryHydratedWithScopedRuntime: async ({ scope, isCurrent }: {
-            scope: { serverId: string; accountId: string };
-            isCurrent: () => boolean;
-        }) => {
-            const key = keyOf(scope);
-            draftRepositoryState.scopedHydrationKeys.push(key);
-            await (draftRepositoryState.hydrationGatesByScopeKey.get(key) ?? Promise.resolve());
-            if (!isCurrent()) return;
-            draftRepositoryState.draftsByScopeKey.set(
-                key,
-                draftRepositoryState.remoteDraftsByScopeKey.get(key) ?? NO_DRAFTS,
-            );
-            draftRepositoryState.listenersByScopeKey.get(key)?.forEach((listener) => listener());
-        },
-        deleteSessionDraftWithScopedRuntime: async ({ scope, address, isCurrent }: {
-            scope: { serverId: string; accountId: string };
-            address: { kind: 'newSession'; draftId: string };
-            isCurrent: () => boolean;
-        }) => {
-            const key = keyOf(scope);
-            draftRepositoryState.scopedDeleteKeys.push(`${key}|${address.draftId}`);
-            await (draftRepositoryState.deleteGatesByScopeKey.get(key) ?? Promise.resolve());
-            if (!isCurrent() || draftRepositoryState.scopedDeleteResultsByScopeKey.get(key) !== true) return false;
-            const current = draftRepositoryState.draftsByScopeKey.get(key) ?? NO_DRAFTS;
-            draftRepositoryState.draftsByScopeKey.set(
-                key,
-                current.filter((candidate: any) => candidate.draftId !== address.draftId),
-            );
-            draftRepositoryState.listenersByScopeKey.get(key)?.forEach((listener) => listener());
-            return true;
-        },
-    };
-});
-vi.mock('@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime', () => ({
-    runWithSessionDraftRepositoryScopedRuntime: async ({ binding, operation }: {
-        binding: { scope: { serverId: string; accountId: string }; isCurrent: () => boolean };
-        operation: (input: unknown) => Promise<unknown>;
-    }) => {
-        if (!binding.isCurrent()) return null;
-        return await operation({
-            scope: binding.scope,
-            runtime: { transport: {}, cipher: {} },
-            isCurrent: binding.isCurrent,
-        });
-    },
-}));
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    const ReactModule = await import('react');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            // Production reads this value from the live zustand store. Preserve
-            // that reactive boundary here so a scope transition reaches a
-            // memoized consumer without relying on an unrelated parent render.
-            useActiveServerAccountScope: () => ReactModule.useSyncExternalStore(
-                (listener) => {
-                    focusedScopeState.listeners.add(listener);
-                    return () => focusedScopeState.listeners.delete(listener);
-                },
-                () => focusedScopeState.scope,
-                () => focusedScopeState.scope,
-            ),
-            useLaunchSelectionMachines: () => [],
-            useMachineListStatusByServerId: () => ({}),
-        },
-    });
-});
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-    return {
-        ...actual,
-        listServerProfiles: () => serverProfilesState.profiles,
-        getServerProfileById: (serverId: string) => (
-            serverProfilesState.unavailableProfileIds.has(serverId)
-                ? null
-                : serverProfilesState.profiles.find((profile) => profile.id === serverId) ?? null
-        ),
-    };
-});
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({ useServerProfilesGeneration: () => 1 }));
-vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
-    useServerCredentialAccountScopeBindings: () => serverProfilesState.bindings,
-}));
-const routerMockState = vi.hoisted(() => ({
-    spies: null as Awaited<ReturnType<typeof import('@/dev/testkit/mocks/router').createExpoRouterMock>>['spies'] | null,
-}));
-const modalMockState = vi.hoisted(() => ({ confirmResult: false }));
-vi.mock('expo-router', async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    const mock = createExpoRouterMock();
-    routerMockState.spies = mock.spies;
-    return mock.module;
-});
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({
-        spies: { confirm: async () => modalMockState.confirmResult },
-    }).module;
-});
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -229,9 +65,9 @@ vi.mock('@/text', async () => {
 });
 // Catalog consumers read the locale through this entry point as well. Keep
 // locale I/O at the same testkit boundary as `t`, rather than loading all locales.
-vi.mock('@/text/i18n', async () => {
+vi.mock('@/text/i18n', async (importOriginal) => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
+    return { ...(await importOriginal<typeof import('@/text/i18n')>()), ...createTextModuleMock() };
 });
 const focusState = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('@/components/ui/lists/Item', async () => {
@@ -267,6 +103,14 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/agents/catalog/catalog')>()),
     getAgentPickerIconScale: () => 1,
 }));
+
+await loadSyncSingletonForTests();
+const draftPresentation = await import('@/components/sessions/drafts/newSessionDraftPresentation');
+const {
+    NewSessionDraftsSectionView, buildNewSessionDraftContinueRoute, buildNewSessionDraftRowPresentation,
+    deleteNewSessionDraftAfterConfirmation, isNewSessionDraftDeletionBlocked,
+    resolveNewSessionDraftSectionTitle, resolveNewSessionDraftWaitingSectionTitle, resolveNewSessionDraftMachineUnavailable,
+} = await import('./NewSessionDraftsSection');
 
 function draft(
     overrides: Partial<NewSessionDraftProjection> = {},
@@ -340,42 +184,9 @@ function temporaryComputerDraft(input: Readonly<{
     };
 }
 
-/** A draft whose package is already out: an activation reference exists for it. */
-function waitingRunnerDraft(draftId: string, serverId: string): NewSessionDraftProjection {
-    return {
-        ...temporaryComputerDraft({
-            serverId,
-            activationRef: {
-                v: 1,
-                activationId: '00000000-0000-4000-8000-000000000099',
-                createdOnDeviceLabel: 'Alice’s Mac',
-            },
-        }),
-        draftId,
-        status: 'clean',
-    };
-}
-
 describe('NewSessionDraftsSection', () => {
     afterEach(() => {
         focusState.calls = [];
-        focusedScopeState.scope = null;
-        focusedScopeState.listeners.clear();
-        draftRepositoryState.draftsByScopeKey.clear();
-        draftRepositoryState.remoteDraftsByScopeKey.clear();
-        draftRepositoryState.listenersByScopeKey.clear();
-        draftRepositoryState.scopedDeleteResultsByScopeKey.clear();
-        draftRepositoryState.hydrationGatesByScopeKey.clear();
-        draftRepositoryState.deleteGatesByScopeKey.clear();
-        draftRepositoryState.scopedHydrationKeys = [];
-        draftRepositoryState.scopedDeleteKeys = [];
-        draftRepositoryState.ambientDeleteKeys = [];
-        draftRepositoryState.liveSubscriptionKeys = [];
-        draftRepositoryState.subscribedKeys = [];
-        serverProfilesState.profiles = [];
-        serverProfilesState.bindings = new Map();
-        serverProfilesState.unavailableProfileIds.clear();
-        modalMockState.confirmResult = false;
         standardCleanup();
     });
 
@@ -422,6 +233,35 @@ describe('NewSessionDraftsSection', () => {
         } finally {
             presentation.mockRestore();
         }
+    });
+
+    it('shows a few drafts with the full count, and every draft once asked', async () => {
+        const drafts = Array.from({ length: 7 }, (_, index) => draft({ draftId: `draft-${index}` }, `Draft ${index}`));
+        const screen = await renderScreen(
+            <NewSessionDraftsSectionView drafts={drafts} onContinue={vi.fn()} onDelete={vi.fn(async () => false)} />,
+        );
+        const shownRows = () => drafts.filter((entry) => screen.findByTestId(`session-draft-row:new-session:${entry.draftId}`)).length;
+
+        // The group keeps its true count while listing only the newest few.
+        expect(screen.findByTestId('session-drafts-header-count')).toBeTruthy();
+        expect(shownRows()).toBe(3);
+        const showAll = screen.findByTestId('session-drafts-show-all');
+        expect(showAll?.props.title).toBe('sessionDrafts.showAll');
+
+        await act(async () => showAll?.props.onPress());
+        expect(shownRows()).toBe(7);
+        expect(screen.findByTestId('session-drafts-show-all')).toBeNull();
+        await screen.unmount();
+    });
+
+    it('lists a short drafts group whole, with nothing to expand', async () => {
+        const drafts = [draft({ draftId: 'draft-a' }), draft({ draftId: 'draft-b' })];
+        const screen = await renderScreen(
+            <NewSessionDraftsSectionView drafts={drafts} onContinue={vi.fn()} onDelete={vi.fn(async () => false)} />,
+        );
+        expect(screen.findByTestId('session-draft-row:new-session:draft-b')).toBeTruthy();
+        expect(screen.findByTestId('session-drafts-show-all')).toBeNull();
+        await screen.unmount();
     });
 
     it('uses the latest committed deletion handler without rendering unchanged rows', async () => {
@@ -493,252 +333,11 @@ describe('NewSessionDraftsSection', () => {
         });
     });
 
-    it('subscribes only to the focused Home and replaces its rows when focus moves', async () => {
-        const draftA = { ...draft(), draftId: '00000000-0000-4000-8000-00000000000a' };
-        const draftB = { ...draft(), draftId: '00000000-0000-4000-8000-00000000000b' };
-        draftRepositoryState.draftsByScopeKey.set('home-a|account-a', Object.freeze([draftA]));
-        draftRepositoryState.draftsByScopeKey.set('home-b|account-b', Object.freeze([draftB]));
-        focusedScopeState.scope = HOME_A_SCOPE;
-
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-
-        expect(screen.findByTestId(`session-draft-row:new-session:${draftA.draftId}`)).not.toBeNull();
-        expect(screen.findByTestId(`session-draft-row:new-session:${draftB.draftId}`)).toBeNull();
-        expect(draftRepositoryState.subscribedKeys).toEqual(['home-a|account-a']);
-        expect(draftRepositoryState.liveSubscriptionKeys).toEqual(['home-a|account-a']);
-
-        await act(async () => {
-            focusedScopeState.scope = HOME_B_SCOPE;
-            focusedScopeState.listeners.forEach((listener) => listener());
-        });
-
-        expect(screen.findByTestId(`session-draft-row:new-session:${draftB.draftId}`)).not.toBeNull();
-        expect(screen.findByTestId(`session-draft-row:new-session:${draftA.draftId}`)).toBeNull();
-        expect(draftRepositoryState.liveSubscriptionKeys).toEqual(['home-b|account-b']);
-
-        await screen.unmount();
-        expect(draftRepositoryState.liveSubscriptionKeys).toEqual([]);
-    });
-
-    it('keeps another Home’s waiting Temporary-computer request discoverable and exactly scoped', async () => {
-        const ordinaryOnB = { ...draft(), draftId: '00000000-0000-4000-8000-00000000000b' };
-        const unlaunchedTemporaryComputerOnB = {
-            ...temporaryComputerDraft({ serverId: 'home-b' }),
-            draftId: '00000000-0000-4000-8000-0000000000db',
-        };
-        const waitingOnB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000cb', 'home-b');
-        draftRepositoryState.draftsByScopeKey.set('home-a|account-a', Object.freeze([draft()]));
-        // Nothing from B exists in the local repository before mount. The exact
-        // inactive-Home hydration is what makes the remote waiting row visible.
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([
-            ordinaryOnB,
-            unlaunchedTemporaryComputerOnB,
-            waitingOnB,
-        ]));
-        focusedScopeState.scope = HOME_A_SCOPE;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-
-        // The live package on home-b stays reachable from home-a...
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingOnB.draftId}`),
-        ).not.toBeNull());
-        // ...while home-b's ordinary drafts remain its own Home's business.
-        expect(screen.findByTestId(`session-draft-row:new-session:${ordinaryOnB.draftId}`)).toBeNull();
-        // Selecting Temporary computer is still ordinary authoring until the
-        // package activation reference exists. It must not leak cross-Home.
-        expect(screen.findByTestId(
-            `session-draft-row:new-session:${unlaunchedTemporaryComputerOnB.draftId}`,
-        )).toBeNull();
-        expect(screen.findByTestId('session-drafts-waiting-section:home-b:account-b')).not.toBeNull();
-        expect(draftRepositoryState.scopedHydrationKeys).toContain('home-b|account-b');
-        expect(draftRepositoryState.scopedHydrationKeys).not.toContain('home-a|account-a');
-        await screen.unmount();
-    });
-
     it('names the Home that owns a cross-Home waiting request', () => {
         expect(resolveNewSessionDraftWaitingSectionTitle({ serverId: 'home-b', homeName: 'Bob’s Home' }))
             .toBe('sessionDrafts.waitingSectionTitleForHome:Bob’s Home');
         expect(resolveNewSessionDraftWaitingSectionTitle({ serverId: 'home-b', homeName: '  ' }))
             .toBe('sessionDrafts.waitingSectionTitleForHome:home-b');
-    });
-
-    it('binds a cross-Home waiting row’s continue and delete to that row’s exact scope', async () => {
-        const waitingOnB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000cc', 'home-b');
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([waitingOnB]));
-        focusedScopeState.scope = HOME_A_SCOPE;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingOnB.draftId}`),
-        ).not.toBeNull());
-        const row = screen.findByTestId(`session-draft-row:new-session:${waitingOnB.draftId}`);
-        routerMockState.spies?.push.mockClear();
-        await act(async () => row?.props.onPress());
-        expect(routerMockState.spies?.push).toHaveBeenCalledWith(
-            buildNewSessionDraftContinueRoute(waitingOnB.draftId, HOME_B_SCOPE),
-        );
-        await screen.unmount();
-    });
-
-    it('removes only the acknowledged inactive-Home draft through that row scope', async () => {
-        const activeA = { ...draft(), draftId: '00000000-0000-4000-8000-0000000000aa' };
-        const waitingB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000bb', 'home-b');
-        draftRepositoryState.draftsByScopeKey.set('home-a|account-a', Object.freeze([activeA]));
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([waitingB]));
-        draftRepositoryState.scopedDeleteResultsByScopeKey.set('home-b|account-b', true);
-        focusedScopeState.scope = HOME_A_SCOPE;
-        modalMockState.confirmResult = true;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`),
-        ).not.toBeNull());
-
-        await act(async () => screen.findByTestId(
-            `session-draft-delete:new-session:${waitingB.draftId}`,
-        )?.props.onPress({ stopPropagation: vi.fn() }));
-
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`),
-        ).toBeNull());
-        expect(screen.findByTestId(`session-draft-row:new-session:${activeA.draftId}`)).not.toBeNull();
-        expect(draftRepositoryState.scopedDeleteKeys).toEqual([
-            `home-b|account-b|${waitingB.draftId}`,
-        ]);
-        await screen.unmount();
-    });
-
-    it('keeps the inactive-Home waiting row when its authoritative delete is rejected', async () => {
-        const waitingB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000bc', 'home-b');
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([waitingB]));
-        draftRepositoryState.scopedDeleteResultsByScopeKey.set('home-b|account-b', false);
-        focusedScopeState.scope = HOME_A_SCOPE;
-        modalMockState.confirmResult = true;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`),
-        ).not.toBeNull());
-
-        await act(async () => screen.findByTestId(
-            `session-draft-delete:new-session:${waitingB.draftId}`,
-        )?.props.onPress({ stopPropagation: vi.fn() }));
-
-        expect(screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`)).not.toBeNull();
-        expect(draftRepositoryState.scopedDeleteKeys).toEqual([
-            `home-b|account-b|${waitingB.draftId}`,
-        ]);
-        await screen.unmount();
-    });
-
-    it('never falls back to the active repository when an inactive Home endpoint is unavailable', async () => {
-        const waitingB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000bf', 'home-b');
-        draftRepositoryState.draftsByScopeKey.set('home-b|account-b', Object.freeze([waitingB]));
-        focusedScopeState.scope = HOME_A_SCOPE;
-        modalMockState.confirmResult = true;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.unavailableProfileIds.add('home-b');
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-
-        await act(async () => screen.findByTestId(
-            `session-draft-delete:new-session:${waitingB.draftId}`,
-        )?.props.onPress({ stopPropagation: vi.fn() }));
-
-        expect(screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`)).not.toBeNull();
-        expect(draftRepositoryState.scopedDeleteKeys).toEqual([]);
-        expect(draftRepositoryState.ambientDeleteKeys).toEqual([]);
-        await screen.unmount();
-    });
-
-    it('publishes and removes nothing after the inactive-Home section retires', async () => {
-        const waitingB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000bd', 'home-b');
-        let releaseHydration!: () => void;
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([waitingB]));
-        draftRepositoryState.hydrationGatesByScopeKey.set(
-            'home-b|account-b',
-            new Promise<void>((resolve) => { releaseHydration = resolve; }),
-        );
-        focusedScopeState.scope = HOME_A_SCOPE;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-        await vi.waitFor(() => expect(draftRepositoryState.scopedHydrationKeys).toContain('home-b|account-b'));
-
-        await screen.unmount();
-        releaseHydration();
-        await Promise.resolve();
-
-        expect(draftRepositoryState.draftsByScopeKey.has('home-b|account-b')).toBe(false);
-    });
-
-    it('does not remove a waiting row when the section retires before delete responds', async () => {
-        const waitingB = waitingRunnerDraft('00000000-0000-4000-8000-0000000000be', 'home-b');
-        let releaseDelete!: () => void;
-        draftRepositoryState.remoteDraftsByScopeKey.set('home-b|account-b', Object.freeze([waitingB]));
-        draftRepositoryState.scopedDeleteResultsByScopeKey.set('home-b|account-b', true);
-        draftRepositoryState.deleteGatesByScopeKey.set(
-            'home-b|account-b',
-            new Promise<void>((resolve) => { releaseDelete = resolve; }),
-        );
-        focusedScopeState.scope = HOME_A_SCOPE;
-        modalMockState.confirmResult = true;
-        serverProfilesState.profiles = [
-            { id: 'home-a', serverUrl: 'https://home-a.test', name: 'Home A' },
-            { id: 'home-b', serverUrl: 'https://home-b.test', name: 'Home B' },
-        ];
-        serverProfilesState.bindings = new Map([['home-b', { scope: HOME_B_SCOPE, isCurrent: () => true }]]);
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-        await vi.waitFor(() => expect(
-            screen.findByTestId(`session-draft-row:new-session:${waitingB.draftId}`),
-        ).not.toBeNull());
-
-        screen.findByTestId(`session-draft-delete:new-session:${waitingB.draftId}`)?.props.onPress({
-            stopPropagation: vi.fn(),
-        });
-        await vi.waitFor(() => expect(draftRepositoryState.scopedDeleteKeys).toHaveLength(1));
-        await screen.unmount();
-        releaseDelete();
-        await Promise.resolve();
-
-        expect(draftRepositoryState.draftsByScopeKey.get('home-b|account-b')).toEqual([waitingB]);
-    });
-
-    it('renders nothing until a focused Home Account scope exists', async () => {
-        draftRepositoryState.draftsByScopeKey.set('home-a|account-a', Object.freeze([draft()]));
-        focusedScopeState.scope = null;
-
-        const screen = await renderScreen(<NewSessionDraftsSection />);
-
-        expect(screen.findByTestId('session-drafts-section')).toBeNull();
-        expect(draftRepositoryState.subscribedKeys).toEqual([]);
-        await screen.unmount();
     });
 
     it('projects canonical Runner activation status without creating a draft-local lifecycle', async () => {
