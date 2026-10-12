@@ -33,6 +33,7 @@ const target = Object.freeze({
 const oauthMode = {
   id: 'oauth',
   kind: 'oauthAuthorizationCode',
+  callbackUrl: 'http://127.0.0.1:4000/auth/callback',
   scopes: ['openid', 'profile', 'email', 'offline_access'],
   pkce: 'required',
   outcomeReconciliation: 'none',
@@ -115,6 +116,7 @@ describe('resolveVoiceConnectedAccountTargetEligibility', () => {
       resolveAuthentication: () => authenticationWith({
         id: 'oauth',
         kind: 'oauthAuthorizationCode',
+        callbackUrl: 'http://127.0.0.1:4000/auth/callback',
         scopes: ['openid', 'profile', 'email', 'offline_access'],
         pkce: 'required',
         outcomeReconciliation: 'none',

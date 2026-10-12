@@ -76,6 +76,7 @@ function groupWith(activeConnectedAccountId: string) {
 const oauthMode: PluginConnectedAccountAuthenticationModeV2 = {
   id: 'oauth',
   kind: 'oauthAuthorizationCode',
+  callbackUrl: 'http://127.0.0.1:4000/auth/callback',
   pkce: 'required',
   outcomeReconciliation: 'none',
 };

@@ -53,7 +53,7 @@ it('authors a connected pick during unread inheritance and preserves controlled 
     }) });
     installConnectedAccountDescriptorProjection({ scopeKey: 'authoring-purpose', status: 'ready', descriptors: [{
         id: service.localId, serviceId: service.localId, pluginId: service.pluginId, provenance: 'first_party', sourceKind: 'bundled', title: 'Codex',
-        authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', scopes: ['openid'],
+        authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', scopes: ['openid'],
             pkce: 'required', outcomeReconciliation: 'none' }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
     }], conflicts: [], errorReason: null } satisfies ConnectedAccountDescriptorProjectionState);
     applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 5, record: { key: 'purposes', value } }, true);

@@ -61,6 +61,7 @@ const resolveAuthentication = () => ({
   modes: [{
     id: 'oauth',
     kind: 'oauthAuthorizationCode' as const,
+    callbackUrl: 'http://127.0.0.1:4000/auth/callback',
     pkce: 'required' as const,
     outcomeReconciliation: 'none' as const,
   }],
