@@ -147,14 +147,35 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         ]);
     });
 
-    it('admits personal MCP references in the private catalog while preserving shared resource checks', async () => {
+    it('admits current owned MCP resources while refusing dangling personal and missing shared references', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' }, select: { id: true } });
-        const content = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: { v: 1,
+        const danglingContent = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: { v: 1,
             servers: [{ id: 'personal', name: 'personal', transport: 'stdio', stdio: { command: 'server', args: [] },
                 env: { TOKEN: { t: 'savedSecret', secretId: 'personal-key' } }, createdAt: 1, updatedAt: 1 }], bindings: [],
         } });
         expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 'absent',
-            sourceSettingsVersion: 0, content, referencedSavedSecretIds: ['personal-key'] })))
+            sourceSettingsVersion: 0, content: danglingContent, referencedSavedSecretIds: ['personal-key'] })))
+            .toEqual({ status: 'invalid-reference' });
+        expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
+            .toMatchObject({ status: 'absent' });
+
+        const resource = await inTx(tx => createSavedSecretResourceInTx(tx, {
+            accountId: owner.id, resourceId: 'owned_mcp_secret', displayName: 'MCP token', kind: 'token',
+            encryptionMode: 'plain', storedContent: {
+                t: 'plain', v: { v: 1, name: 'MCP token', kind: 'token', value: 'owned-token' },
+            },
+        }));
+        expect(resource).toEqual({ ok: true, value: { resourceId: 'owned_mcp_secret', revision: 1 } });
+        if (!resource.ok || danglingContent.t !== 'plain') throw new Error('Expected a plain owned resource fixture');
+        const ownedRef = formatSharedSavedSecretRefV1(resource.value.resourceId);
+        const content = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: {
+            ...danglingContent.v, servers: danglingContent.v.servers.map(server => ({ ...server,
+                env: { TOKEN: { t: 'savedSecret' as const, secretId: ownedRef } },
+            })),
+        } });
+        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 'absent',
+            sourceSettingsVersion: 0, content, referencedSavedSecretIds: [ownedRef],
+            savedSecretRevisions: [{ resourceId: resource.value.resourceId, expectedRevision: resource.value.revision }] })))
             .toMatchObject({ status: 'updated', revision: 0 });
         expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
             .toMatchObject({ status: 'present', revision: 0, content });

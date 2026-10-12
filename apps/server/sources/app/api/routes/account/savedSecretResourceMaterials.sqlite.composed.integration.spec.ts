@@ -550,14 +550,12 @@ describe("Saved Secret material route (SQLite integration)", () => {
                 foregroundSatisfiedSecretRequirementNames: [],
             })).toEqual({ SHARED_API_KEY: "shared-provider-secret" });
 
-            const { resolveMcpValueRefPlaintext } = await importCliTestModule<{
-                resolveMcpValueRefPlaintext(input: unknown): Readonly<{ status: string; value?: string }>;
-            }>("../../../../../../cli/src/mcp/servers/resolveMcpValueRefPlaintext");
-            expect(resolveMcpValueRefPlaintext({
+            const { resolveValueRefPlaintext } = await importCliTestModule<{
+                resolveValueRefPlaintext(input: unknown): Readonly<{ status: string; value?: string }>;
+            }>("../../../../../../cli/src/settings/valueRefs/resolveValueRefPlaintext");
+            expect(resolveValueRefPlaintext({
                 valueRef: { t: "savedSecret", secretId: sharedRef },
-                savedSecretsById: new Map(),
                 savedSecretMaterializer: materializer,
-                settingsSecretsKey: null,
                 processEnv: {},
             })).toEqual({ status: "ready", value: "shared-provider-secret" });
 
@@ -739,7 +737,9 @@ describe("Saved Secret material route (SQLite integration)", () => {
 
             // The same request without that evidence still fails closed and
             // writes nothing.
-            const currentAccount = await db.account.findUniqueOrThrow({ where: { id: owner.id }, select: { settingsVersion: true } });
+            const currentAccount = await db.account.findUniqueOrThrow({
+                where: { id: owner.id }, select: { settingsVersion: true, settings: true },
+            });
             const currentGuard = await inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: owner.id }));
             if (currentGuard.status !== 'ready') throw new Error('Expected a current reference census');
             const unqualifiedBody = body("resource_promote_unqualified");
@@ -756,6 +756,11 @@ describe("Saved Secret material route (SQLite integration)", () => {
                 body: { error: "forbidden" },
             });
             expect(await db.savedSecretResource.count({ where: { id: "resource_promote_unqualified" } })).toBe(0);
+            await expect(db.account.findUniqueOrThrow({
+                where: { id: owner.id }, select: { settingsVersion: true, settings: true },
+            })).resolves.toEqual(currentAccount);
+            await expect(inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: owner.id })))
+                .resolves.toEqual(currentGuard);
         } finally {
             await app.close();
         }

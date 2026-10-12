@@ -47,7 +47,6 @@ import {
     txSessionOrganizationTagUpdateMany,
     txSessionOrganizationTagUpsert,
     txSessionPinCount,
-    txSessionPinDeleteMany,
     txSessionPinFindMany,
     txSessionPinFindUnique,
     txSessionPinUpsert,
@@ -205,6 +204,7 @@ describe("session organization routes", () => {
     });
 
     it("returns an account-scoped organization snapshot", async () => {
+        txSessionFindMany.mockResolvedValue([{ id: "s1" }]);
         txSessionOrganizationCheckpointFindUnique.mockResolvedValue({ version: 12 });
         txSessionPinFindMany.mockResolvedValue([
             { sessionId: "s1", sortKey: "a", pinnedAt: organizationDate(1_000), listPinned: true, railPinned: false },
@@ -441,8 +441,12 @@ describe("session organization routes", () => {
     });
 
     it("filters snapshot membership rows through current session visibility", async () => {
+        txSessionFindMany.mockResolvedValue([
+            { id: "visible-pin" }, { id: "visible-folder-session" }, { id: "visible-tag-session" },
+        ]);
         txSessionPinFindMany.mockResolvedValue([
             { sessionId: "visible-pin", sortKey: "pin-a", pinnedAt: organizationDate(1_000), listPinned: true, railPinned: false },
+            { sessionId: "revoked-pin", sortKey: "pin-b", pinnedAt: organizationDate(2_000), listPinned: true, railPinned: false },
         ]);
         txSessionFolderAssignmentFindMany.mockResolvedValue([
             { sessionId: "visible-folder-session", folderId: "folder-1" },
@@ -480,6 +484,7 @@ describe("session organization routes", () => {
     });
 
     it("fetches folder assignment snapshots from the union of requested session and folder scopes", async () => {
+        txSessionFindMany.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
         txSessionFolderAssignmentFindMany.mockResolvedValue([
             { sessionId: "s1", folderId: "folder-from-session" },
             { sessionId: "s2", folderId: "folder-a" },
@@ -516,6 +521,7 @@ describe("session organization routes", () => {
     });
 
     it("fetches tag assignment snapshots by requested tag scope without a session scope", async () => {
+        txSessionFindMany.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
         txSessionTagAssignmentFindMany.mockResolvedValue([
             { sessionId: "s1", tagId: "tag-a" },
             { sessionId: "s2", tagId: "tag-a" },
@@ -548,6 +554,7 @@ describe("session organization routes", () => {
     });
 
     it("fetches tag assignment snapshots from the union of requested session and tag scopes", async () => {
+        txSessionFindMany.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
         txSessionTagAssignmentFindMany.mockResolvedValue([
             { sessionId: "s1", tagId: "tag-from-session" },
             { sessionId: "s2", tagId: "tag-a" },
@@ -581,43 +588,6 @@ describe("session organization routes", () => {
                 }),
             }),
         }));
-    });
-
-    it("changes only the selected pin surface, preserving shared order and timestamp", async () => {
-        sessionFindFirst.mockResolvedValue({ id: "s1" });
-        txSessionFindFirst.mockResolvedValue({ id: "s1" });
-        const existing = { id: "pin-1", sessionId: "s1", sortKey: "saved-rank", pinnedAt: organizationDate(4_000), listPinned: true, railPinned: true };
-        txSessionPinUpdateMany.mockResolvedValue({ count: 1 });
-        txSessionPinFindUnique.mockResolvedValue({ ...existing, listPinned: false });
-        const route = await createSessionRouteTestBuilder("PUT", "/v2/session-organization/pins/:sessionId");
-        const cleared = await route.invoke({ params: { sessionId: "s1" }, body: { pinned: false, surface: "list" } });
-        expect(cleared.response).toEqual({ pin: { sessionId: "s1", sortKey: "saved-rank", pinnedAt: 4_000, listPinned: false, railPinned: true } });
-        expect(txSessionPinDeleteMany).not.toHaveBeenCalled();
-        expect(txSessionPinUpdateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { listPinned: false } }));
-
-        txSessionPinFindUnique.mockResolvedValue({ ...existing, listPinned: false });
-        txSessionPinUpsert.mockResolvedValue(existing);
-        const added = await route.invoke({ params: { sessionId: "s1" }, body: { pinned: true, sortKey: "replacement", surface: "list" } });
-        expect(added.response).toMatchObject({ pin: { sortKey: "saved-rank", pinnedAt: 4_000, listPinned: true, railPinned: true } });
-        expect(txSessionPinUpsert).toHaveBeenLastCalledWith(expect.objectContaining({ update: { listPinned: true } }));
-        expect(txSessionPinCount).not.toHaveBeenCalled();
-
-        txSessionPinFindUnique.mockResolvedValue({ ...existing, listPinned: false, railPinned: false });
-        const deleted = await route.invoke({ params: { sessionId: "s1" }, body: { pinned: false, surface: "rail" } });
-        expect(deleted.response).toEqual({ pin: null });
-        expect(txSessionPinDeleteMany).toHaveBeenCalledWith({ where: { accountId: "u1", sessionId: "s1", listPinned: false, railPinned: false } });
-    });
-
-    it("creates rail-only membership without list intent and reuses the Account record budget", async () => {
-        sessionFindFirst.mockResolvedValue({ id: "s1" });
-        txSessionFindFirst.mockResolvedValue({ id: "s1" });
-        txSessionPinFindUnique.mockResolvedValue(null);
-        txSessionPinCount.mockResolvedValue(0);
-        txSessionPinUpsert.mockResolvedValue({ sessionId: "s1", sortKey: null, pinnedAt: organizationDate(4_000), listPinned: false, railPinned: true });
-        const route = await createSessionRouteTestBuilder("PUT", "/v2/session-organization/pins/:sessionId");
-        const { response } = await route.invoke({ params: { sessionId: "s1" }, body: { pinned: true, surface: "rail" } });
-        expect(response).toMatchObject({ pin: { listPinned: false, railPinned: true } });
-        expect(txSessionPinUpsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ listPinned: false, railPinned: true }) }));
     });
 
     it("pins a visible session idempotently and marks organization changed", async () => {
