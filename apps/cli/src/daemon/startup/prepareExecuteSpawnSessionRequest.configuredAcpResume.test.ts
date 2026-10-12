@@ -4,6 +4,8 @@ import { createCustomAcpAdmissionRuntimeFixture } from './customAcpAdmission.tes
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
+import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 
 vi.mock('@/ui/logger', () => ({
     logger: {
@@ -78,7 +80,7 @@ async function prepareConfiguredAcpResume(params: Readonly<{
             acpCatalogSnapshot: params.acpCatalogSnapshot,
             credentials: { token: 'token', encryption: null },
         },
-        validateEnvVarRecordStrict: () => ({ ok: true, env: {} }),
+        validateEnvVarRecordStrict,
     });
 }
 
@@ -99,7 +101,12 @@ describe('prepareExecuteSpawnSessionRequest Account-configured ACP resume admiss
             runtimeDescriptorV1: { agent: { definitionId: CONFIGURED_BACKEND_ID } },
             effectiveBackendTargetV2: expect.objectContaining({
                 sourceKind: 'built_in',
+                configuredBackendId: CONFIGURED_BACKEND_ID,
             }),
+        });
+        if ('type' in result) throw new Error('Expected configured ACP resume admission');
+        expect(RuntimeDescriptorV1Schema.parse(result.runtimeDescriptorV1)).toEqual({
+            v: 1, agentId: result.catalogAgentId, agent: { definitionId: CONFIGURED_BACKEND_ID },
         });
     });
 

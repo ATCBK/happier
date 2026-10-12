@@ -18,6 +18,9 @@ export function resolveTrackedSessionCatalogAgentId(
   if (!tracked) return null;
 
   const backendTarget = tracked.spawnOptions?.backendTarget;
+  if (backendTarget?.sourceKind === 'built_in') {
+    return resolveDaemonCatalogAgentIdFromBackendTarget(backendTarget);
+  }
   const normalizedBackendTarget = normalizeDaemonBackendTargetV2Input(backendTarget);
   if (normalizedBackendTarget) {
     return resolveDaemonCatalogAgentIdFromBackendTarget(normalizedBackendTarget);

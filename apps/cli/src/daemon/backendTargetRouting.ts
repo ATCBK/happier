@@ -11,9 +11,9 @@ import {
   resolveConcreteCompatBackendTargetRefs,
 } from '@/session/backendTargets/resolveConcreteBackendTargetRefs';
 
-function resolveActiveCatalogAgentId(parsed: BackendTargetRefV2): CatalogAgentId | null {
-  return parsed.backendId !== 'customAcp' && isCatalogAgentId(parsed.backendId)
-    ? parsed.backendId
+function resolveActiveCatalogAgentId(target: BackendTargetRefV2): CatalogAgentId | null {
+  return target.backendId !== 'customAcp' && isCatalogAgentId(target.backendId)
+    ? target.backendId
     : null;
 }
 
@@ -62,34 +62,24 @@ export function normalizeDaemonBackendTargetV2Input(target: BackendTargetRefV2 |
 export function resolveDaemonCatalogAgentIdFromBackendTarget(
   target: BackendTargetRefV2 | undefined,
 ): CatalogAgentId | null {
-  const parsed = normalizeDaemonBackendTargetV2Input(target);
-  if (!parsed) {
+  // Admission already resolved the contribution and retained any definition.
+  // Ingress normalization would reinterpret that runtime reference as an
+  // authored configured-backend selection instead of its admitted catalog id.
+  if (target?.kind !== 'backend' || target.sourceKind !== 'built_in') {
     return null;
   }
-  if (parsed.sourceKind === 'configured') {
-    // Configured ACP backends are not a built-in catalog agent identity. The daemon must route them
-    // by backend-target identity (configuredBackendId) rather than a synthetic `customAcp` agent id.
-    return null;
-  }
-  if (parsed.sourceKind !== 'built_in') {
-    return null;
-  }
-  return resolveActiveCatalogAgentId(parsed);
+  return resolveActiveCatalogAgentId(target);
 }
 
 export function resolveDaemonCliSubcommandFromBackendTarget(
   target: BackendTargetRefV2 | undefined,
 ): CatalogAgentId | 'acp-catalog' | null {
-  const parsed = normalizeDaemonBackendTargetV2Input(target);
-  if (!parsed) {
+  if (target?.kind !== 'backend') {
     return null;
   }
-  if (parsed.sourceKind === 'configured') {
+  if (target.sourceKind === 'configured') {
     return 'acp-catalog';
   }
-  if (parsed.sourceKind !== 'built_in') {
-    return null;
-  }
-  const agentId = resolveActiveCatalogAgentId(parsed);
+  const agentId = resolveDaemonCatalogAgentIdFromBackendTarget(target);
   return agentId ? resolveAgentCliSubcommand(agentId) : null;
 }

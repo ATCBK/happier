@@ -91,7 +91,11 @@ export function buildHappySessionControlArgs(opts: Readonly<{
     args.push('--existing-session', existingSessionId);
   }
 
-  const backendTarget = normalizeDaemonBackendTargetV2Input(opts.backendTarget);
+  // A contributed runtime carries its definition in the admitted runtime
+  // descriptor. Only the retained acp-catalog command needs --backend.
+  const backendTarget = opts.backendTarget?.sourceKind === 'configured'
+    ? normalizeDaemonBackendTargetV2Input(opts.backendTarget)
+    : null;
   const configuredAcpBackendId = backendTarget?.sourceKind === 'configured'
     ? (backendTarget.configuredBackendId ?? backendTarget.backendId).trim()
     : '';

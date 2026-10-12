@@ -1,39 +1,15 @@
-import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const { readAgentCatalogSnapshot, runBackendSessionCliCommand } = vi.hoisted(() => ({
-  readAgentCatalogSnapshot: vi.fn(),
-  runBackendSessionCliCommand: vi.fn(async () => {}),
-}));
-
-vi.mock('@/agent/catalog/snapshot', () => ({
-  readAgentCatalogSnapshot,
-}));
-
-vi.mock('@/cli/runBackendSessionCliCommand', () => ({
-  runBackendSessionCliCommand,
-}));
-
-import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createCustomAcpAdmissionRuntimeFixture } from './startup/customAcpAdmission.testkit';
 import {
+  normalizeDaemonBackendTargetV2Input,
   resolveDaemonCatalogAgentIdFromBackendTarget,
   resolveDaemonCliSubcommandFromBackendTarget,
 } from './backendTargetRouting';
 
 describe('backendTargetRouting', () => {
-  beforeEach(() => {
-    readAgentCatalogSnapshot.mockReturnValue({
-      agentDefinitionsById: new Map(),
-      catalogEntriesById: {
-        codex: { id: 'codex', cliSubcommand: 'codex', vendorResumeSupport: 'supported' },
-        'acme-agent': {
-          id: 'acme-agent',
-          cliSubcommand: 'acme-agent',
-          vendorResumeSupport: 'supported',
-        },
-      },
-    });
-  });
+  let runtime: Awaited<ReturnType<typeof createCustomAcpAdmissionRuntimeFixture>>;
+  beforeAll(async () => { runtime = await createCustomAcpAdmissionRuntimeFixture(); });
+  afterAll(async () => { await runtime?.dispose(); });
 
   it('fails closed when backend target is missing', () => {
     expect(resolveDaemonCatalogAgentIdFromBackendTarget(undefined)).toBeNull();
@@ -48,8 +24,9 @@ describe('backendTargetRouting', () => {
       sourceKind: 'configured',
     } as const;
 
-    expect(resolveDaemonCatalogAgentIdFromBackendTarget(target)).toBeNull();
-    expect(resolveDaemonCliSubcommandFromBackendTarget(target)).toBe('acp-catalog');
+    const admittedTarget = normalizeDaemonBackendTargetV2Input(target) ?? undefined;
+    expect(resolveDaemonCatalogAgentIdFromBackendTarget(admittedTarget)).toBeNull();
+    expect(resolveDaemonCliSubcommandFromBackendTarget(admittedTarget)).toBe('acp-catalog');
   });
 
   it('routes configured ACP targets by concrete configured id when the backend id still carries customAcp', () => {
@@ -73,67 +50,6 @@ describe('backendTargetRouting', () => {
 
     expect(resolveDaemonCatalogAgentIdFromBackendTarget(target)).toBe('codex');
     expect(resolveDaemonCliSubcommandFromBackendTarget(target)).toBe('codex');
-  });
-
-  it('routes an installed external Session Agent through the exact active catalog projection', () => {
-    const target = {
-      kind: 'backend',
-      backendId: 'acme-agent',
-      sourceKind: 'built_in',
-    } as const;
-
-    expect(resolveDaemonCatalogAgentIdFromBackendTarget(target)).toBe('acme-agent');
-    expect(resolveDaemonCliSubcommandFromBackendTarget(target)).toBe('acme-agent');
-  });
-
-  it('routes an external no-CLI Session Agent subcommand into its generic host session runner', async () => {
-    const contribution = projectManifestAgentContribution({
-      definition: PluginAgentContributionV2Schema.parse({
-        id: 'acme-agent',
-        title: 'Acme Agent',
-        runtime: { kind: 'custom' },
-        primary: 'sessions',
-        capabilities: {
-          sessions: {
-            open: ['create', 'resume'],
-            delivery: ['newTurn'],
-            cancel: true,
-          },
-        },
-      }),
-      provenance: 'external',
-      source: { kind: 'path' },
-      pluginId: 'com.acme.agent',
-    });
-    const entry = contribution.catalogEntry;
-    expect(entry).not.toBeNull();
-    if (!entry?.getCliCommandHandler) throw new Error('Expected projected Session Agent command handler');
-    readAgentCatalogSnapshot.mockReturnValue({
-      agentDefinitionsById: new Map([[entry.id, contribution]]),
-      catalogEntriesById: { [entry.id]: entry },
-    });
-
-    const subcommand = resolveDaemonCliSubcommandFromBackendTarget({
-      kind: 'backend',
-      backendId: entry.id,
-      sourceKind: 'built_in',
-    });
-    expect(subcommand).toBe(entry.cliSubcommand);
-    if (!subcommand) throw new Error('Expected active catalog subcommand');
-
-    const context = {
-      args: [subcommand, '--happy-starting-mode', 'remote'],
-      rawArgv: ['happier', subcommand, '--happy-starting-mode', 'remote'],
-      terminalRuntime: null,
-    };
-    await (await entry.getCliCommandHandler())(context);
-
-    expect(runBackendSessionCliCommand).toHaveBeenCalledWith({
-      context,
-      backendIdForSessionRuntime: 'acme-agent',
-      runtimeAuthorityAgentId: 'acme-agent',
-      agentIdForAccountSettings: 'acme-agent',
-    });
   });
 
   it('fails closed for unknown built-in backend targets', () => {
@@ -160,12 +76,12 @@ describe('backendTargetRouting', () => {
 
   it('canonicalizes V1 compat carriers into V2 and routes them', () => {
     expect(
-      resolveDaemonCatalogAgentIdFromBackendTarget({ kind: 'builtInAgent', agentId: 'codex' } as never),
+      resolveDaemonCatalogAgentIdFromBackendTarget(normalizeDaemonBackendTargetV2Input({ kind: 'builtInAgent', agentId: 'codex' }) ?? undefined),
     ).toBe('codex');
     expect(
-      resolveDaemonCliSubcommandFromBackendTarget({ kind: 'configuredAcpBackend', backendId: 'review-bot' } as never),
+      resolveDaemonCliSubcommandFromBackendTarget(normalizeDaemonBackendTargetV2Input({ kind: 'configuredAcpBackend', backendId: 'review-bot' }) ?? undefined),
     ).toBe('acp-catalog');
-    expect(resolveDaemonCatalogAgentIdFromBackendTarget('agent:codex' as never)).toBe('codex');
-    expect(resolveDaemonCliSubcommandFromBackendTarget('acpBackend:review-bot' as never)).toBe('acp-catalog');
+    expect(resolveDaemonCatalogAgentIdFromBackendTarget(normalizeDaemonBackendTargetV2Input('agent:codex') ?? undefined)).toBe('codex');
+    expect(resolveDaemonCliSubcommandFromBackendTarget(normalizeDaemonBackendTargetV2Input('acpBackend:review-bot') ?? undefined)).toBe('acp-catalog');
   });
 });

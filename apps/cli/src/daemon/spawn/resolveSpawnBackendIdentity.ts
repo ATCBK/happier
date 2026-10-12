@@ -19,6 +19,7 @@ import {
 } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { resolveConcreteCompatBackendTargetRefs } from '@/session/backendTargets/resolveConcreteBackendTargetRefs';
 import { resolveCurrentExternalSessionAgentRoutingId } from '@/api/session/external/linking/qualifiedLinkIdentityRegistry';
+import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 
 export function mapExistingSessionAttachFailureToSpawnError(
   reason: ExistingSessionAttachContextFailureReason,
@@ -151,12 +152,8 @@ export async function resolveSpawnBackendIdentity(params: Readonly<{
       },
     };
   }
-  let effectiveBackendTargetV2 = resolvedAgentRoutingId
-    ? {
-        kind: 'backend' as const,
-        backendId: resolvedAgentRoutingId,
-        sourceKind: 'built_in' as const,
-      }
+  let effectiveBackendTargetV2 = resolvedAgentRoutingId && effectiveAgentTarget
+    ? projectResolvedAgentBackendTarget(effectiveAgentTarget, resolvedAgentRoutingId)
     : compatibilityBackendTarget;
   let sessionAttachPayload: SessionAttachFilePayload | null = null;
   let ownerMetadata: SessionOwnerMetadataV1 | null = null;
@@ -195,7 +192,7 @@ export async function resolveSpawnBackendIdentity(params: Readonly<{
           const routingId = await resolveCurrentExternalSessionAgentRoutingId(effectiveAgentTarget.identity);
           if (!routingId) return { ok: false, error: { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
             errorMessage: 'Selected Agent is not installed or unavailable' } };
-          effectiveBackendTargetV2 = { kind: 'backend', backendId: routingId, sourceKind: 'built_in' };
+          effectiveBackendTargetV2 = projectResolvedAgentBackendTarget(effectiveAgentTarget, routingId);
         }
       }
     }
