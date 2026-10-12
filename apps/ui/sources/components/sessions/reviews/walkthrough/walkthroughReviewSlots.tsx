@@ -2,13 +2,13 @@ import * as React from 'react';
 
 import type { WalkthroughReviewSlots } from '@/components/sessions/files/walkthrough/WalkthroughView';
 import { REVIEW_SEVERITY_RANK, reviewSeverityLabel } from '@/components/sessions/reviews/findings/reviewFindingPresentation';
+import { ReviewSeverityDot } from '@/components/sessions/reviews/findings/ReviewSeverity';
 import type { ReviewFinding } from '@happier-dev/protocol';
 import { t } from '@/text';
 
 import {
     ReviewFindingReferences,
     ReviewFindingsFirst,
-    ReviewSeverityDot,
     WalkthroughFindingCard,
     WalkthroughFindingsTail,
     WalkthroughReviewFact,

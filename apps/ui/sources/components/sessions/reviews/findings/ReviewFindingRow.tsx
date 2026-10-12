@@ -19,7 +19,7 @@ import {
 } from '@/components/sessions/reviews/findings/ReviewFindingThread';
 import type { ReviewFollowUpAvailability } from '@/components/sessions/reviews/findings/reviewFollowUpAvailability';
 import { formatReviewFindingLocation, reviewSeverityLabel } from '@/components/sessions/reviews/findings/reviewFindingPresentation';
-import { useReviewSeverityColors } from '@/components/sessions/reviews/findings/useReviewSeverityColors';
+import { REVIEW_SEVERITY_COLUMN_WIDTH_PX, ReviewSeverityLabel } from '@/components/sessions/reviews/findings/ReviewSeverity';
 import { StructuredFindText } from '@/components/sessions/transcript/structured/structuredFindText';
 
 export type ReviewFindingDecision = 'accept' | 'reject' | 'defer';
@@ -94,9 +94,6 @@ export const ReviewFindingRow = React.memo(function ReviewFindingRow(props: Read
     const { theme } = useUnistyles();
     const { finding, rowId, onAsk, onDecide, onToggleThread } = props;
     const location = formatReviewFindingLocation(finding);
-    // One severity colour wherever a finding is drawn (Walkthrough lab WT5): high red, medium amber, low blue, nit quiet.
-    const severityColor = useReviewSeverityColors(finding.severity).foreground;
-    const severityTextColor = severityColor;
     const updated = props.original !== null;
     const severityChanged = props.original !== null && props.original.severity !== finding.severity;
     const replyCount = props.threadEntries.length;
@@ -136,8 +133,7 @@ export const ReviewFindingRow = React.memo(function ReviewFindingRow(props: Read
     return (
         <View testID={`review-finding:${rowId}`} style={[styles.finding, props.divided ? styles.divided : null]}>
             <View style={styles.severity}>
-                <View style={[styles.severityDot, { backgroundColor: severityColor }]} />
-                <StructuredFindText blockId={`${props.findBlockPrefix}:severity`} text={reviewSeverityLabel(finding.severity)} style={[styles.severityText, { color: severityTextColor }]} />
+                <ReviewSeverityLabel severity={finding.severity} findBlockId={`${props.findBlockPrefix}:severity`} />
             </View>
             <View style={styles.body}>
                 <View style={props.density === 'card' ? styles.headRow : null}>
@@ -223,20 +219,8 @@ const styles = StyleSheet.create((theme) => ({
         borderTopColor: theme.colors.border.default,
     },
     severity: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        minWidth: 72,
+        width: REVIEW_SEVERITY_COLUMN_WIDTH_PX,
         paddingTop: 2,
-    },
-    severityDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-    },
-    severityText: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
     },
     body: {
         flex: 1,

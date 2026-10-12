@@ -1,0 +1,197 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import type { ReviewFinding } from '@happier-dev/protocol';
+
+import { StructuredFindText } from '@/components/sessions/transcript/structured/structuredFindText';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+
+import {
+  reviewSeverityCounts,
+  reviewSeverityLabel,
+} from './reviewFindingPresentation';
+import { useReviewSeverityColors } from './useReviewSeverityColors';
+
+/**
+ * How a finding's severity is drawn wherever a finding appears (Walkthrough lab WT5): its dot and its word,
+ * in its colour ("● High"). Severity colour appears only on findings; every review surface draws it here.
+ */
+export function ReviewSeverityLabel(
+  props: Readonly<{
+    severity: ReviewFinding['severity'];
+    label?: string;
+    findBlockId?: string;
+  }>,
+) {
+  const colors = useReviewSeverityColors(props.severity);
+  const label = props.label ?? reviewSeverityLabel(props.severity);
+  const textStyle = [styles.severityText, { color: colors.foreground }];
+  return (
+    <View style={styles.severity}>
+      <View style={[styles.dot, { backgroundColor: colors.foreground }]} />
+      {props.findBlockId ? (
+        <StructuredFindText
+          blockId={props.findBlockId}
+          text={label}
+          style={textStyle}
+        />
+      ) : (
+        <Text style={textStyle}>{label}</Text>
+      )}
+    </View>
+  );
+}
+
+/** The dot a contents row carries when its stop has a finding; the most severe one's colour. */
+export function ReviewSeverityDot(
+  props: Readonly<{ severity: ReviewFinding['severity'] }>,
+) {
+  const colors = useReviewSeverityColors(props.severity);
+  return (
+    <View
+      accessibilityLabel={reviewSeverityLabel(props.severity)}
+      style={[styles.railDot, { backgroundColor: colors.foreground }]}
+    />
+  );
+}
+
+/** "● 1 high  ● 2 medium  ● 1 low": a review's counts, most severe first (lab WT5-R8). */
+export function ReviewSeveritySummary(
+  props: Readonly<{
+    findings: readonly ReviewFinding[];
+    testID?: string;
+    findBlockPrefix?: string;
+  }>,
+) {
+  const counts = React.useMemo(
+    () => reviewSeverityCounts(props.findings),
+    [props.findings],
+  );
+  if (counts.length === 0) return null;
+  return (
+    <View testID={props.testID} style={styles.summary}>
+      {counts.map(({ severity, label }) => (
+        <ReviewSeverityLabel
+          key={severity}
+          severity={severity}
+          label={label}
+          findBlockId={
+            props.findBlockPrefix
+              ? `${props.findBlockPrefix}:${severity}`
+              : undefined
+          }
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * One finding as a single line (lab WT5-R5 findings first, WT5-R8 finished card): severity in its own
+ * column so every title starts on one edge, the title, then who found it. Pressable when the line leads
+ * to the finding.
+ */
+export function ReviewFindingLine(
+  props: Readonly<{
+    severity: ReviewFinding['severity'];
+    title: string;
+    reviewer: string;
+    testID?: string;
+    /** Block ids for in-transcript Find: `<prefix>:severity|title|reviewer`. */
+    findBlockPrefix?: string;
+    onPress?: () => void;
+  }>,
+) {
+  const find = props.findBlockPrefix;
+  const content = (
+    <>
+      <View style={styles.lineSeverity}>
+        <ReviewSeverityLabel
+          severity={props.severity}
+          findBlockId={find ? `${find}:severity` : undefined}
+        />
+      </View>
+      {find ? (
+        <StructuredFindText
+          blockId={`${find}:title`}
+          text={props.title}
+          numberOfLines={1}
+          style={styles.lineTitle}
+        />
+      ) : (
+        <Text style={styles.lineTitle} numberOfLines={1}>
+          {props.title}
+        </Text>
+      )}
+      {find ? (
+        <StructuredFindText
+          blockId={`${find}:reviewer`}
+          text={props.reviewer}
+          numberOfLines={1}
+          style={styles.lineReviewer}
+        />
+      ) : (
+        <Text style={styles.lineReviewer} numberOfLines={1}>
+          {props.reviewer}
+        </Text>
+      )}
+    </>
+  );
+  if (!props.onPress)
+    return (
+      <View testID={props.testID} style={styles.line}>
+        {content}
+      </View>
+    );
+  return (
+    <HappierPressable
+      testID={props.testID}
+      accessibilityRole="button"
+      accessibilityLabel={`${reviewSeverityLabel(props.severity)}: ${props.title}`}
+      onPress={props.onPress}
+      style={(state) => [
+        styles.line,
+        state.pressed ? styles.linePressed : null,
+      ]}
+    >
+      {content}
+    </HappierPressable>
+  );
+}
+
+/** The severity column of a finding line: wide enough for "● Medium", so titles share one left edge. */
+export const REVIEW_SEVERITY_COLUMN_WIDTH_PX = 72;
+
+const styles = StyleSheet.create((theme) => ({
+  severity: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  railDot: { width: 7, height: 7, borderRadius: 4 },
+  severityText: { ...Typography.default('semiBold'), fontSize: 13 },
+  summary: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4 },
+  line: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 30,
+    borderRadius: 6,
+  },
+  linePressed: { backgroundColor: theme.colors.surface.pressed },
+  lineSeverity: { width: REVIEW_SEVERITY_COLUMN_WIDTH_PX },
+  lineTitle: {
+    ...Typography.default(),
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    color: theme.colors.text.primary,
+  },
+  lineReviewer: {
+    ...Typography.default(),
+    flexShrink: 0,
+    maxWidth: '30%',
+    fontSize: 13,
+    color: theme.colors.text.tertiary,
+    textAlign: 'right',
+  },
+}));
