@@ -275,6 +275,8 @@ export type AgentConnectedAccountRuntimeAuthAdapterV1 = Readonly<{
 export type AgentConnectedAccountResumeFileCandidateV1 = Readonly<{
   fileName: string;
   nativeSessionId: string | null;
+  /** Declared state-entry name, not an absolute path or native filesystem capability. */
+  stateEntryPath?: string;
 }>;
 
 export type AgentConnectedAccountResumeFileLookupV1 = Readonly<{
@@ -303,10 +305,20 @@ export type AgentConnectedAccountResumeReachabilityResultV1 =
   | Readonly<{ ok: true }>
   | Readonly<{ ok: false; reason: string }>;
 
+/** Pure native fixed-file adoption; the host retains every filesystem operation. */
+export type AgentConnectedAccountSharedStateFileMergeV1 = (
+  input: Readonly<{
+    entryPath: string;
+    currentContents: string | null;
+    incomingContents: string;
+  }>,
+) => Readonly<{ appendText: string }> | null;
+
 export type AgentConnectedAccountContinuityV1 = Readonly<{
   /** Credential adoption authority: writing a home alone never proves process adoption. */
   generationApplicationScope?: 'per_session_runtime' | 'shared_group_auth_surface';
   nativeAuthCodec?: AgentConnectedAccountNativeAuthCodecV1;
+  mergeSharedStateFile?: AgentConnectedAccountSharedStateFileMergeV1;
   runtimeAuthAdapter?: AgentConnectedAccountRuntimeAuthAdapterV1;
   verifyResumeReachable?: (
     input: AgentConnectedAccountResumeReachabilityInputV1,
