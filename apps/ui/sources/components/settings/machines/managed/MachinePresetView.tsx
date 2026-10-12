@@ -79,7 +79,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
     const visiblePreset = teamDenied ? undefined : preset;
     const credentialTargets = React.useMemo(() => visiblePreset ? managedCredentialReceiptTargets(visiblePreset.recipe) : [], [visiblePreset?.recipe]);
     const credentialAccounts = useQualifiedConnectedAccountTargetPresentations({ binding: catalog.binding, targets: credentialTargets });
-    const configuration = useMachinePresetConfiguration({ binding: catalog.binding, client: catalog.client, homeId: catalog.homeId,
+    const configuration = useMachinePresetConfiguration({ binding: catalog.binding, resolution: catalog.resolution, client: catalog.client, homeId: catalog.homeId,
         preset: visiblePreset, provisioner, optionsInput, onApprovalPending });
     const canManage = visiblePreset?.owner.kind === 'account'
         ? visiblePreset.owner.accountId === detail.accountId

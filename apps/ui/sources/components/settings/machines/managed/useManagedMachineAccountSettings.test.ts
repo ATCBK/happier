@@ -22,8 +22,8 @@ describe('managed creation preferences on the addressed Account', () => {
         } } };
         harness.answer(target, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
         const hook = await renderHook(() => {
-            const { binding } = useServerCredentialAccountScopeBinding(target);
-            return { binding: binding?.scope, preferences: useManagedMachineAccountSettings(binding) };
+            const { binding, resolution } = useServerCredentialAccountScopeBinding(target);
+            return { binding: binding?.scope, preferences: useManagedMachineAccountSettings(binding, resolution) };
         });
         await waitForHomeGovernance(() => expect(hook.getCurrent().binding).toMatchObject({ accountId: 'owner' }));
         await waitForHomeGovernance(() => expect(hook.getCurrent().preferences.loading).toBe(false));
@@ -47,6 +47,31 @@ describe('managed creation preferences on the addressed Account', () => {
         harness.answer(target, '/v2/account/settings', { status: 403, body: { error: 'permission_denied' } });
         await act(async () => { await harness.switchAccount(target, 'replacement'); });
         await waitForHomeGovernance(() => expect(hook.getCurrent().preferences.settings).toBeNull());
+        await hook.unmount();
+    });
+
+    it('keeps the saved preferences while a profile refresh binds the same Account again', async () => {
+        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://compute.example', serverIdentityId: 'srv_compute', accountId: 'owner' });
+        const settings = { managedMachineCreationEnabled: true, machineRetentionDefaultsV1: undefined };
+        harness.answer(target, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        // Every render of the consumer, so a one-frame withdrawal cannot slip between polls.
+        const enabledByRender: boolean[] = [];
+        const hook = await renderHook(() => {
+            const { binding, resolution } = useServerCredentialAccountScopeBinding(target);
+            const preferences = useManagedMachineAccountSettings(binding, resolution);
+            enabledByRender.push(preferences.settings?.managedMachineCreationEnabled === true);
+            return { binding, preferences };
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().preferences.settings?.managedMachineCreationEnabled).toBe(true));
+        const firstBinding = hook.getCurrent().binding;
+        const firstEnabled = enabledByRender.indexOf(true);
+        // A profile publication retires the credential binding; the Account behind it is unchanged.
+        await act(async () => { await harness.addHome({ name: 'Other', serverUrl: 'https://other.example', serverIdentityId: 'srv_other', accountId: 'other' }); });
+        await waitForHomeGovernance(() => {
+            expect(hook.getCurrent().binding).not.toBe(firstBinding);
+            expect(hook.getCurrent().binding).not.toBeNull();
+        });
+        expect(enabledByRender.slice(firstEnabled).every(Boolean)).toBe(true);
         await hook.unmount();
     });
 });

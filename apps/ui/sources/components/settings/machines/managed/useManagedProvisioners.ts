@@ -12,9 +12,9 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
     const { binding, resolution } = useServerCredentialAccountScopeBinding(serverId);
     const homeId = getServerProfileById(serverId)?.serverIdentityId?.trim() || null;
     const [state, setState] = React.useState<Readonly<{
-        binding: ServerCredentialAccountScopeBinding | null; requestKey: string; provisioners: MachineProvisionersListResultV1['provisioners'];
+        binding: ServerCredentialAccountScopeBinding | null; accountId: string | null; requestKey: string; provisioners: MachineProvisionersListResultV1['provisioners'];
         error: string | null; loading: boolean;
-    }>>({ binding: null, requestKey: '', provisioners: [], error: null, loading: false });
+    }>>({ binding: null, accountId: null, requestKey: '', provisioners: [], error: null, loading: false });
     const controllers = React.useMemo(() => controller ? 'machineId' in controller ? [controller] : controller : [], [controller]);
     const requestKey = JSON.stringify([homeId, controllers]);
     // Presence projections may recreate equivalent controller objects. Only the semantic
@@ -29,11 +29,11 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
         const selectedControllers = controllersRef.current;
         if (!binding || !client || !homeId || selectedControllers.length === 0) return;
         const abort = new AbortController();
-        const retirement = binding.onRetire(() => {
-            abort.abort();
-            setState(current => current.binding === binding ? { binding: null, requestKey: '', provisioners: [], error: null, loading: false } : current);
-        });
-        setState(current => ({ binding, requestKey, provisioners: current.binding === binding && current.requestKey === requestKey ? current.provisioners : [], error: null, loading: true }));
+        // A profile refresh retires the binding and replaces it for the same Account: the read stops and the last
+        // answer stays until the replacement's read answers. Another Account never sees it.
+        const retirement = binding.onRetire(() => abort.abort());
+        setState(current => ({ binding, accountId: binding.accountId, requestKey,
+            provisioners: current.accountId === binding.accountId ? current.provisioners : [], error: null, loading: true }));
         // Each controller answers for its own installs, as soon as it answers: one that is slow, cannot answer or
         // fails does not hold back or hide the others'. Until one answers, the last-known list stays.
         type Settled = { kind: 'succeeded'; provisioners: MachineProvisionersListResultV1['provisioners'] } | { kind: 'failed'; code: string };
@@ -62,7 +62,11 @@ export function useManagedProvisioners(serverId: string, onApprovalPending?: (re
         });
         return () => { abort.abort(); retirement.dispose(); };
     }, [binding, client, homeId, requestKey, refreshRevision]);
-    const visible = binding?.isCurrent() && state.binding === binding && state.requestKey === requestKey ? state : {
+    const boundAccountId = binding?.isCurrent() ? binding.accountId : resolution.kind === 'bound' ? resolution.scope.accountId : null;
+    const sameAccount = boundAccountId !== null && state.accountId === boundAccountId;
+    // The last answer of this Account stays while a re-read runs: a new controller, or a refreshed credential binding.
+    const visible = binding?.isCurrent() && state.binding === binding && state.requestKey === requestKey ? state
+        : sameAccount && controllers.length > 0 ? { provisioners: state.provisioners, error: null, loading: true } : {
         provisioners: [], error: resolution.kind === 'resolving' || resolution.kind === 'bound' ? null : resolution.kind,
         loading: resolution.kind === 'resolving' || resolution.kind === 'bound' && controllers.length > 0,
     };

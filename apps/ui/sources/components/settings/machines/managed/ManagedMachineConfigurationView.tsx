@@ -106,7 +106,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const catalogController = requestedController && machines.some(machine => machine.id === requestedController.machineId
         && machine.installationId === requestedController.installationId) ? requestedController : undefined;
     const catalog = useManagedProvisioners(props.serverId, onApprovalPending, catalogController);
-    const accountSettings = useManagedMachineAccountSettings(catalog.binding ?? undefined);
+    const accountSettings = useManagedMachineAccountSettings(catalog.binding, catalog.resolution);
     const [teamId, setTeamId] = React.useState('');
     const [limit, setLimit] = React.useState<number | undefined>();
     const [error, setError] = React.useState<string | null>(null);

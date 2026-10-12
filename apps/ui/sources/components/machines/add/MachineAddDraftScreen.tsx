@@ -46,7 +46,7 @@ export const MachineAddDraftScreen = React.memo(function MachineAddDraftScreen()
     const homeName = resolveHomeDisplayName(getServerProfileById(serverId));
     // One read of the Account's opt-out serves the header's promise and the form's Create one.
     const accountScope = useServerCredentialAccountScopeBinding(serverId);
-    const canCreate = useManagedMachineAccountSettings(accountScope.binding ?? undefined).settings?.managedMachineCreationEnabled === true;
+    const canCreate = useManagedMachineAccountSettings(accountScope.binding, accountScope.resolution).settings?.managedMachineCreationEnabled === true;
     // Create one's "Managed from" scope: the form shows its chip beside the ways in while Create one is open,
     // and the catalog below reads the machine it names.
     const creating = useMachineAddFlowDraftSelector((draft) => draft.creating) && canCreate;

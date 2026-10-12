@@ -267,7 +267,7 @@ describe('provisioner picker demand', () => {
         // One honest state: the line says the read failed, and the card claims nothing and cannot start.
         await waitForHomeGovernance(() => expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull());
         const unreadable = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
-        expect(unreadable[0].status.label).toBe('');
+        expect(unreadable[0].status.label).toBe(t('managedMachines.providers.loading'));
         expect(unreadable[0].action.disabled).toBe(true);
         await screen.unmount();
         return;
@@ -317,6 +317,111 @@ describe('provisioner picker demand', () => {
       await screen.unmount();
     },
   );
+  /** One Home whose catalog answers with two provisioners; `hold` decides which later reads stay pending. */
+  async function arrangeCatalog(hold: Readonly<{ list?: (read: number, machineId: string) => boolean; check?: (read: number, localId: string) => boolean }>) {
+    const serverId = await harness.addHome({
+      name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true,
+    });
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({
+      machineListByServerId: { [serverId]: ['controller', 'other'].map(id =>
+        createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), kind: 'persistent' })) },
+      machineListStatusByServerId: { [serverId]: 'idle' },
+    });
+    const descriptor = (localId: string, title: string) => ({
+      contribution: { pluginId: 'custom.compute', localId }, occurrenceId: `occurrence-${localId}`, credentialPurposes: [],
+      descriptor: {
+        id: localId, title, icon: 'server', resourceKind: 'native-compute-vm', schemaVersion: 1,
+        kindTitle: { key: `${localId}.kind`, fallback: 'VM' }, description: { key: `${localId}.description`, fallback: `${title} guest.` },
+        launchSchema: { type: 'object', properties: {}, additionalProperties: false },
+        resourceSchema: { type: 'object', properties: {}, additionalProperties: false },
+        platforms: ['linux'], prerequisites: [], billing: { location: 'local', stoppedBilling: 'not-billed' },
+        retention: { supportedIntents: ['delete'] },
+        actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', destroy: 'destroy' },
+      },
+    });
+    const provisioners = [descriptor('alpha', 'Alpha'), descriptor('beta', 'Beta')];
+    const reads = { list: 0, check: new Map<string, number>() };
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reply = (actionId: string, requestId: string | undefined, execution: unknown) => ({ body: { v: 1, actionId, requestId, execution } });
+    harness.answer(serverId, '/v1/actions/machines.provisioners.list', {
+      select: async (value) => {
+        const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+        const controller = (request.input as { controller: { machineId: string; installationId: string } }).controller;
+        reads.list += 1;
+        if (hold.list?.(reads.list, controller.machineId)) await gate;
+        return reply('machines.provisioners.list', request.requestId, { ok: true, result: { controller, provisioners } });
+      },
+    });
+    harness.answer(serverId, '/v1/actions/machines.provisioners.check', {
+      select: async (value) => {
+        const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+        const localId = (request.input as { contribution: { localId: string } }).contribution.localId;
+        const read = (reads.check.get(localId) ?? 0) + 1;
+        reads.check.set(localId, read);
+        if (hold.check?.(read, localId)) await gate;
+        return reply('machines.provisioners.check', request.requestId, localId === 'alpha'
+          ? { ok: true, result: { available: false, code: 'license_required', status: { key: 'alpha.license', fallback: 'License required' } } }
+          : { ok: false, errorCode: 'controller_unavailable', error: 'controller_unavailable' });
+      },
+    });
+    return { serverId, reads, release };
+  }
+
+  it('keeps the answered checks on screen while the catalog is re-read', async () => {
+    const { serverId, reads, release } = await arrangeCatalog({ check: (read) => read > 1 });
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const screen = await renderPicker(<MachineProvisionerPicker serverId={serverId} onSelectProvisioner={vi.fn()} />);
+    // Nested layout nodes repeat the same card objects; one entry per card.
+    const cards = () => [...new Map(screen.tree.findAll(node => Array.isArray(node.props.cards))
+      .flatMap(node => node.props.cards as { title: string; status: { label: string } }[]).map(card => [card.title, card])).values()];
+    try {
+      await waitForHomeGovernance(() => {
+        expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull();
+        expect(cards().find(card => card.title === 'Alpha')?.status.label).toBe('License required');
+      });
+      await act(async () => screen.pressByTestId('managed-picker.unavailable-action'));
+      await waitForHomeGovernance(() => expect(reads.check.get('alpha')).toBe(2));
+      // The re-check is still pending: both cards keep what the last answer said.
+      expect(cards().map(card => card.title)).toEqual(['Alpha', 'Beta']);
+      expect(cards().find(card => card.title === 'Alpha')?.status.label).toBe('License required');
+    } finally {
+      release();
+    }
+    await screen.unmount();
+  });
+  it('keeps the last catalog across a refreshed credential binding while the replacement reads', async () => {
+    const { serverId, release } = await arrangeCatalog({ list: (read) => read > 1 });
+    const { useManagedProvisioners } = await import('./useManagedProvisioners');
+    const controller = { machineId: 'controller', installationId: 'controller-installation' };
+    const hook = await renderHook(() => useManagedProvisioners(serverId, undefined, controller));
+    try {
+      await waitForHomeGovernance(() => expect(hook.getCurrent().provisioners).toHaveLength(2));
+      const firstBinding = hook.getCurrent().binding;
+      // A profile publication retires the credential binding and binds the same Account again.
+      await harness.addHome({ name: 'Other', serverUrl: 'https://other.example', serverIdentityId: 'srv_other', accountId: 'other' });
+      await waitForHomeGovernance(() => expect(hook.getCurrent().binding).not.toBe(firstBinding));
+      expect(hook.getCurrent().loading).toBe(true);
+      expect(hook.getCurrent().provisioners).toHaveLength(2);
+    } finally {
+      release();
+    }
+  });
+  it('keeps the last catalog while another controller is being read', async () => {
+    const { serverId, release } = await arrangeCatalog({ list: (_read, machineId) => machineId === 'other' });
+    const { useManagedProvisioners } = await import('./useManagedProvisioners');
+    const first = { machineId: 'controller', installationId: 'controller-installation' };
+    const hook = await renderHook(({ controller }) => useManagedProvisioners(serverId, undefined, controller), { initialProps: { controller: first } });
+    try {
+      await waitForHomeGovernance(() => expect(hook.getCurrent().provisioners).toHaveLength(2));
+      await hook.rerender({ controller: { machineId: 'other', installationId: 'other-installation' } });
+      expect(hook.getCurrent().loading).toBe(true);
+      expect(hook.getCurrent().provisioners).toHaveLength(2);
+    } finally {
+      release();
+    }
+  });
   it('asks for an explicit Home, then reads the preselected controller catalog without allocation', async () => {
     const first = await harness.addHome({
       name: 'Build',

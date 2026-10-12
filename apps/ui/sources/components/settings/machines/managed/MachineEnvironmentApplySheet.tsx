@@ -10,6 +10,9 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { HappierPageSectionContext } from '@happier-dev/plugin-ui/presentation';
+import { useUnistyles } from 'react-native-unistyles';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -164,7 +167,7 @@ export function MachineEnvironmentApplySheet(
       {presets.length === 0 ? (
         // Nothing to apply: one flat state line on the sheet (no card against its edges) and no
         // consequence sentence for a run that cannot happen yet.
-        <ItemGroup surface="none">
+        <SheetStateLine>
           <SurfaceStateCard
             testID="machine-environment-apply.state"
             size="line"
@@ -191,7 +194,7 @@ export function MachineEnvironmentApplySheet(
                     }
             }
           />
-        </ItemGroup>
+        </SheetStateLine>
       ) : (
         <ItemGroup
           description={t('machinePresets.environment.applyDescription', {
@@ -233,16 +236,31 @@ export function MachineEnvironmentApplySheet(
         </ItemGroup>
       ) : null}
       {error ? (
-        <SurfaceStateCard
-          testID="machine-environment-apply.error"
-          kind="error"
-          size="line"
-          title={t('machinePresets.environment.applyFailed', {
-            machine: props.machineName,
-          })}
-          diagnosticCode={error}
-        />
+        <SheetStateLine>
+          <SurfaceStateCard
+            testID="machine-environment-apply.error"
+            kind="error"
+            size="line"
+            title={t('machinePresets.environment.applyFailed', {
+              machine: props.machineName,
+            })}
+            diagnosticCode={error}
+          />
+        </SheetStateLine>
       ) : null}
     </ItemList>
   );
+}
+
+/**
+ * A state line on the sheet stands on the page row edge, where the card chrome's title and the
+ * rows' text start, instead of the collection column's wider text inset.
+ */
+function SheetStateLine(props: Readonly<{ children: React.ReactNode }>) {
+  const { theme } = useUnistyles();
+  const section = React.useMemo(() => ({
+    rowDividerColor: theme.colors.border.default,
+    rowInsetPx: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+  }), [theme]);
+  return <HappierPageSectionContext.Provider value={section}>{props.children}</HappierPageSectionContext.Provider>;
 }

@@ -59,8 +59,8 @@ export function useManagedMachineConfigurator(input: Readonly<{
 
 /** Mounted only by an open creation-capable picker; Account opt-out precedes every preset read. */
 export function ManagedMachineSelectionOffers(props: OffersProps) {
-    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
-    const account = useManagedMachineAccountSettings(binding ?? undefined);
+    const { binding, resolution } = useServerCredentialAccountScopeBinding(props.serverId);
+    const account = useManagedMachineAccountSettings(binding, resolution);
     React.useEffect(() => {
         if (account.settings?.managedMachineCreationEnabled !== true) props.onOffers(props.serverId, [], {
             state: account.settings?.managedMachineCreationEnabled === false ? 'unavailable' : 'pending', rowCount: 0 });

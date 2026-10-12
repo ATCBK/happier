@@ -4,7 +4,7 @@ import type { MachinePresetActionInputV1 } from '@happier-dev/protocol/machines/
 import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
 import { getServerProfileById, areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useServerCredentialAccountScopeStates, useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useServerCredentialAccountScopeStates, useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { isArtifactOnlyHomeAccountChange, publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
@@ -112,6 +112,7 @@ function reconcilePresets(previous: readonly ManagedMachinePresetV1[] | null | u
 /** Current future-recipe facts use the same native selection and policy model as its editor. */
 export function useMachinePresetConfiguration(input: Readonly<{
     binding: ServerCredentialAccountScopeBinding | null;
+    resolution: ServerCredentialAccountScopeResolution;
     client: ReturnType<typeof createManagedProvisionerClient> | null;
     homeId: string | null;
     preset?: ManagedMachinePresetV1;
@@ -119,10 +120,10 @@ export function useMachinePresetConfiguration(input: Readonly<{
     optionsInput: ManagedProvisionerOptionsInput;
     onApprovalPending: (approval: ActionApprovalRegistration) => void;
 }>) {
-    const { binding, client, homeId, preset, provisioner, optionsInput, onApprovalPending } = input;
+    const { binding, resolution, client, homeId, preset, provisioner, optionsInput, onApprovalPending } = input;
     const optionsSchema = optionsInput.kind === 'ready' ? optionsInput.schema : null;
     const optionsInputError = optionsInput.kind === 'unavailable' ? optionsInput.error : null;
-    const settings = useManagedMachineAccountSettings(binding ?? undefined);
+    const settings = useManagedMachineAccountSettings(binding, resolution);
     const queryKey = stableJsonStringify([binding?.scope, binding?.revision, homeId, preset, provisioner?.occurrenceId]);
     const [state, setState] = React.useState<Readonly<{ queryKey: string; draft: ManagedConfiguratorDraft | null; error: string | null }>>(
         { queryKey: '', draft: null, error: null });

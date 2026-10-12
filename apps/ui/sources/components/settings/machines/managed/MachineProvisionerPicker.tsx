@@ -66,6 +66,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
     const handler = React.useRef<(registration: ActionApprovalRegistration) => void>(() => {});
     const onApprovalPending = React.useCallback((registration: ActionApprovalRegistration) => handler.current(registration), []);
     const [checks, setChecks] = React.useState<Readonly<Record<string, MachinePresetCollectionSettledResult<MachineProvisionerCheckResultV1>>>>({});
+    const checksAccount = React.useRef<string | null>(null);
     const scope = props.scope;
     const controller = scope.controller;
     const catalog = useManagedProvisioners(props.serverId, onApprovalPending, controller);
@@ -82,8 +83,10 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         const binding = catalog.binding;
         if (!binding || !catalog.homeId || !catalog.client || !controller) return;
         const abort = new AbortController();
-        const retirement = binding.onRetire(() => { abort.abort(); setChecks({}); });
-        setChecks({});
+        const retirement = binding.onRetire(() => abort.abort());
+        // The last answers stay while this read runs, even across a refreshed binding of the same Account;
+        // a settled read replaces them, and another Account never sees them.
+        if (checksAccount.current !== binding.accountId) { checksAccount.current = binding.accountId; setChecks({}); }
         void Promise.all(catalog.provisioners.map(async provisioner => ({
             id: buildQualifiedPluginContributionKey(provisioner.contribution),
             result: await catalog.client!.read('machines.provisioners.check', { homeId: catalog.homeId!, controller, contribution: provisioner.contribution }, { signal: abort.signal, onApprovalPending }),
@@ -114,13 +117,12 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         const repairAction = check?.prerequisites?.find(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction)?.repairAction;
         const missingExecutable = check?.prerequisites?.some(prerequisite => prerequisite.status !== 'available');
         const noAccount = check?.code === 'credential_unavailable' || outcome?.kind === 'failed' && outcome.code === 'credential_unavailable';
-        // A check that failed or never ran says nothing about this provisioner: the catalog's one line owns the cause.
+        // A check that failed or never ran says nothing about this provisioner: it stays neutral and the catalog's one line owns the cause.
         const unreadable = outcome?.kind === 'failed' && !noAccount;
         const statusLabel = check?.status ? localized(provisioner.contribution.pluginId, check.status)
             : noAccount ? t('managedMachines.add.status.noAccount')
             : check ? t(check.available ? 'managedMachines.add.status.ready'
                 : missingExecutable ? 'managedMachines.add.status.notInstalled' : 'managedMachines.add.status.needsSetup')
-                : unreadable ? ''
                 : t('managedMachines.providers.loading');
         const title = localized(provisioner.contribution.pluginId, provisioner.descriptor.title);
         const kind = provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined;
