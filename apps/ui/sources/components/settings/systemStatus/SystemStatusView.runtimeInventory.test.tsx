@@ -8,25 +8,20 @@ import {
     invokeTestInstanceHandler,
     pressTestInstanceAsync,
     renderScreen,
+    renderHook,
     standardCleanup,
 } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import {
     clearCachedMachineDoctorSnapshot,
     writeCachedMachineDoctorSnapshot,
 } from '@/components/machines/doctorSnapshot/machineDoctorSnapshotCache';
-import type { VoiceSessionSnapshot } from '@/voice/session/types';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+// The status projection now needs the actual Home credential authority, not only display rows.
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
 
 const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
-const voiceSessionSnapshot = vi.hoisted((): { current: VoiceSessionSnapshot } => ({
-    current: {
-        adapterId: null,
-        sessionId: null,
-        status: 'disconnected' as const,
-        mode: 'idle' as const,
-        canStop: false,
-    },
-}));
 const state = vi.hoisted(() => {
     const createMachine = (displayName: string) => ({
         id: 'machine-1',
@@ -51,14 +46,10 @@ const state = vi.hoisted(() => {
     });
 
     return {
-        isMachineOnline: true,
-        allMachines: [createMachine('Machine One')],
+        profileUsername: 'tester' as string | undefined,
         machineListByServerId: {
             srv_1: [createMachine('Machine One')],
         } as Record<string, Array<ReturnType<typeof createMachine>>>,
-        machineListStatusByServerId: {
-            srv_1: 'loaded',
-        } as Record<string, string>,
         activeServerSnapshot: {
             generation: 1,
             serverId: 'srv_1',
@@ -66,13 +57,9 @@ const state = vi.hoisted(() => {
         },
         createMachine,
         reset() {
-            this.isMachineOnline = true;
-            this.allMachines = [createMachine('Machine One')];
+            this.profileUsername = 'tester';
             this.machineListByServerId = {
                 srv_1: [createMachine('Machine One')],
-            };
-            this.machineListStatusByServerId = {
-                srv_1: 'loaded',
             };
             this.activeServerSnapshot = {
                 generation: 1,
@@ -85,8 +72,10 @@ const state = vi.hoisted(() => {
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    (await import('@/sync/domains/machines/reachability/machineReachability')).clearMachineRequestReachabilityForTest();
+    await home.reset();
 });
 
 vi.mock('react-native-mmkv', () => {
@@ -116,28 +105,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000000',
-                textSecondary: '#777777',
-                success: '#00aa55',
-                warningCritical: '#cc5500',
-                accent: {
-                    blue: '#0055ff',
-                    indigo: '#2255ff',
-                    orange: '#ff8800',
-                    purple: '#9955ff',
-                },
-                surface: '#ffffff',
-                groupped: {
-                    background: '#ffffff',
-                    sectionTitle: '#666666',
-                    chevron: '#666666',
-                },
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -192,55 +160,48 @@ vi.mock('./OtaUpdateStatusSection', () => ({
 
 vi.mock('@/constants/Typography', async (importOriginal) => await importOriginal());
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => state.activeServerSnapshot,
-}));
+// Only the RPC transport is replaced; doctor parsing, caching, and admission remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(machineCollectBugReportDiagnosticsMock));
 
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, { profiles: [] });
-});
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+const { SystemStatusView } = await import('./SystemStatusView');
+const beforeStorage = storage.getState();
+const beforeVoice = getVoiceSessionSnapshot();
 
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
+async function renderStatus() {
+    storage.setState(current => ({
+        isDataReady: true,
+        profileScope: { serverId: 'srv_1', accountId: 'acct_1' },
+        profile: { ...current.profile, id: 'acct_1', username: state.profileUsername ?? null },
+        machines: Object.fromEntries((state.machineListByServerId.srv_1 ?? []).map(machine => [machine.id, machine])),
+        machineListByServerId: state.machineListByServerId,
+        machineListStatusByServerId: Object.fromEntries(Object.keys(state.machineListByServerId).map(serverId => [serverId, 'idle' as const])),
+    }));
+    return renderScreen(React.createElement(SystemStatusView));
+}
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    return createStorageModuleStub({
-        useProfile: () => ({ id: 'acct_1', username: 'tester', connectedServices: [] }),
-        useIsDataReady: () => true,
-        useRealtimeStatus: () => 'connected',
-        useSocketStatus: () => ({ status: 'connected', lastError: null, lastErrorAt: null }),
-        useLastSyncAt: () => null,
-        // The active Home connection health reads these (another program's `useConnectionHealth` change).
-        useEndpointConnectivity: () => ({ status: 'online', reason: null, attempt: 1, nextRetryAt: null, lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null }),
-        useSyncError: () => null,
-        useMachineListForServer: () => [],
-        useMachineListStatusForServer: () => 'loaded',
-        useAllMachines: () => state.allMachines,
-        useMachineListByServerId: () => state.machineListByServerId,
-        useMachineListStatusByServerId: () => state.machineListStatusByServerId,
-    });
-});
-
-vi.mock('@/voice/session/voiceSession', () => ({
-    useVoiceSessionSnapshot: () => voiceSessionSnapshot.current,
-}));
-
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => state.isMachineOnline,
-}));
+afterEach(() => { storage.setState(beforeStorage, true); setVoiceSessionSnapshot(beforeVoice); });
 
 describe('SystemStatusView runtime inventory', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         state.reset();
-        voiceSessionSnapshot.current = {
+        installHomeGovernanceBoundaries(home);
+        await home.addHome({ name: 'Status Home', serverUrl: state.activeServerSnapshot.serverUrl,
+            serverIdentityId: 'srv_1', accountId: 'acct_1', currentAccount: true });
+        const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const scope = await renderHook(() => useServerCredentialAccountScopeBinding('srv_1'));
+        await waitForHomeGovernance(() => expect(scope.getCurrent().resolution)
+            .toMatchObject({ kind: 'bound', scope: { serverId: 'srv_1', accountId: 'acct_1' } }));
+        await scope.unmount();
+        setVoiceSessionSnapshot({
             adapterId: null,
             sessionId: null,
             status: 'disconnected',
             mode: 'idle',
             canStop: false,
-        };
+        });
         machineCollectBugReportDiagnosticsMock.mockReset();
         clearCachedMachineDoctorSnapshot({ serverId: 'srv_1', machineId: 'machine-1' });
         clearCachedMachineDoctorSnapshot({ serverId: 'srv_2', machineId: 'machine-1' });
@@ -367,8 +328,7 @@ describe('SystemStatusView runtime inventory', () => {
     });
 
     it('renders the current CLI, daemon, and runtime inventory summary', async () => {
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        const screen = await renderStatus();
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
@@ -380,16 +340,114 @@ describe('SystemStatusView runtime inventory', () => {
         expect(text).toContain('MULTIPLE_HAPPIER_INSTALLATIONS_ON_PATH');
     });
 
+    it('lists online machines and keeps the offline ones behind one quiet row, without speaking for machines nobody checked', async () => {
+        const online = state.createMachine('Studio');
+        const retired = { ...state.createMachine('Retired devbox'), id: 'machine-2', activeAt: 1 };
+        state.machineListByServerId = { srv_1: [online, retired] };
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        const text = screen.getTextContent();
+        expect(text).toContain('Studio');
+        expect(text).not.toContain('Retired devbox');
+        const offlineRow = screen.findAll((node) => node.props?.title === 'systemStatus.machine.offline' && node.props?.detail === '1');
+        expect(offlineRow.length).toBeGreaterThan(0);
+
+        // Nothing is said about an unchecked daemon until the person asks.
+        expect(screen.getTextContent()).not.toContain('systemStatus.machine.daemonAttributionUnknown');
+    });
+
+    it('shows the active Home once, even when its saved profile id differs from its identity', async () => {
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        expect(getServerProfileById('srv_1')?.id).not.toBe('srv_1');
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        const sections = screen.findAll((node) => typeof node.props?.title === 'string' && node.props.title.startsWith('systemStatus.sections.machines'));
+        expect(sections.some((node) => node.props.title === 'systemStatus.sections.machinesActiveServer')).toBe(true);
+        expect(sections.some((node) => node.props.title !== 'systemStatus.sections.machinesActiveServer' && !String(node.props.title).includes('machinesActiveServer'))).toBe(false);
+    });
+
+    it('names same-named machines apart with the canonical machine-name owner and hides an idle voice row', async () => {
+        const first = state.createMachine('Studio');
+        const second = { ...state.createMachine('Studio'), id: 'machine-2' };
+        state.machineListByServerId = { srv_1: [first, second] };
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        for (const header of screen.findAll((node) => node.props?.title === 'systemStatus.machines.calmOnline' && typeof node.props?.onPress === 'function')) {
+            await pressTestInstanceAsync(header, 'open calm machines');
+        }
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const titles = screen.findAll((node) => typeof node.props?.title === 'string').map((node) => String(node.props.title));
+        expect(titles.filter((title) => title.startsWith('Studio ·')).length).toBe(2);
+        expect(titles).not.toContain('systemStatus.ui.realtime');
+    });
+
+    it('folds calm online machines into one counted row and lists only the machines that need attention', async () => {
+        const calmA = { ...state.createMachine('Calm A'), id: 'machine-a' };
+        const calmB = { ...state.createMachine('Calm B'), id: 'machine-b' };
+        const drifted = { ...state.createMachine('Drifted'), id: 'machine-c' };
+        state.machineListByServerId = { srv_1: [calmA, calmB, drifted] };
+        const baseline = machineCollectBugReportDiagnosticsMock.getMockImplementation();
+        machineCollectBugReportDiagnosticsMock.mockImplementation(async (request: { machineId: string }) => {
+            const result = await baseline?.(request);
+            const machineId = request.machineId;
+            if (machineId !== 'machine-c' || !result?.doctorSnapshot) return result;
+            return { ...result, doctorSnapshot: { ...result.doctorSnapshot, accountId: 'acct_other' } };
+        });
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 4, turns: 4 });
+
+        const text = screen.getTextContent();
+        expect(text).toContain('Drifted');
+        expect(text).not.toContain('Calm A');
+        const fold = screen.findAll((node) => node.props?.title === 'systemStatus.machines.calmOnline');
+        expect(fold.some((node) => node.props?.detail === '2')).toBe(true);
+    });
+
+    it('hides the username row when the account has no name instead of showing a placeholder', async () => {
+        state.profileUsername = undefined;
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findAll((node) => node.props?.title === 'systemStatus.identity.username')).toHaveLength(0);
+        expect(screen.findAll((node) => node.props?.title === 'systemStatus.identity.accountId').length).toBeGreaterThan(0);
+    });
+
+    it('counts a machine the way the Overview does: a failed request overrides pushed presence, and a replaced machine is not listed', async () => {
+        const { recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const reachable = state.createMachine('Reachable');
+        const failing = { ...state.createMachine('Failing'), id: 'machine-f' };
+        const replaced = { ...state.createMachine('Replaced'), id: 'machine-r', replacedByMachineId: 'machine-new' };
+        const second = { ...state.createMachine('Second'), id: 'machine-s' };
+        state.machineListByServerId = { srv_1: [reachable, second, failing, replaced] };
+        recordMachineRequestFailed({ serverId: 'srv_1', accountId: 'acct_1', machineId: 'machine-f' });
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        for (const header of screen.findAll((node) => node.props?.title === 'systemStatus.machines.calmOnline' && typeof node.props?.onPress === 'function')) {
+            await pressTestInstanceAsync(header, 'open calm machines');
+        }
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const text = screen.getTextContent();
+        expect(text).toContain('Reachable');
+        expect(text).not.toContain('Replaced');
+        // The failing machine sits behind the Offline row, not among the online machines.
+        expect(text).not.toContain('Failing');
+        const offline = screen.findAll((node) => node.props?.title === 'systemStatus.machine.offline' && node.props?.detail === '1');
+        expect(offline.length).toBeGreaterThan(0);
+    });
+
     it('reports the canonical Voice session status rather than a copied sync-store projection', async () => {
-        voiceSessionSnapshot.current = {
+        setVoiceSessionSnapshot({
             adapterId: 'realtime_openai',
             sessionId: 'session-1',
             status: 'connecting',
             mode: 'idle',
             canStop: true,
-        };
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        });
+        const screen = await renderStatus();
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
@@ -397,8 +455,7 @@ describe('SystemStatusView runtime inventory', () => {
     });
 
     it('refreshes machine attribution using machine targets rather than target keys', async () => {
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        const screen = await renderStatus();
 
         await flushHookEffects({ cycles: 2, turns: 2 });
         machineCollectBugReportDiagnosticsMock.mockClear();
@@ -410,18 +467,15 @@ describe('SystemStatusView runtime inventory', () => {
         await pressTestInstanceAsync(refreshItem, 'refresh machine attribution');
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', {
+        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1',
             timeoutMs: 4000,
             serverId: 'srv_1',
-        });
+        }));
     });
 
     it('does not flag daemon attribution mismatch for loopback-equivalent Relay URLs', async () => {
-        state.activeServerSnapshot = {
-            generation: 2,
-            serverId: 'srv_1',
-            serverUrl: 'http://localhost:34567',
-        };
+        await home.addHome({ name: 'Local Home', serverUrl: 'http://localhost:34567',
+            serverIdentityId: 'srv_1', accountId: 'acct_1', currentAccount: true });
         machineCollectBugReportDiagnosticsMock.mockResolvedValueOnce({
             doctorSnapshot: {
                 capturedAt: '2026-04-07T10:11:12.000Z',
@@ -468,8 +522,7 @@ describe('SystemStatusView runtime inventory', () => {
             },
         });
 
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        const screen = await renderStatus();
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
@@ -477,8 +530,7 @@ describe('SystemStatusView runtime inventory', () => {
     });
 
     it('refreshes a machine inventory from the row long press using the machine target', async () => {
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        const screen = await renderStatus();
 
         await flushHookEffects({ cycles: 2, turns: 2 });
         machineCollectBugReportDiagnosticsMock.mockClear();
@@ -492,25 +544,18 @@ describe('SystemStatusView runtime inventory', () => {
         });
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', {
+        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1',
             timeoutMs: 4000,
             serverId: 'srv_1',
-        });
+        }));
     });
 
     it('keeps runtime inventory scoped per server when two servers expose the same machine id', async () => {
-        state.isMachineOnline = false;
-        state.allMachines = [
-            state.createMachine('Machine One A'),
-            state.createMachine('Machine One B'),
-        ];
+        await home.addHome({ name: 'Other Home', serverUrl: 'https://other-status.test',
+            serverIdentityId: 'srv_2', accountId: 'acct_1', currentAccount: true, active: false });
         state.machineListByServerId = {
-            srv_1: [state.createMachine('Machine One A')],
-            srv_2: [state.createMachine('Machine One B')],
-        };
-        state.machineListStatusByServerId = {
-            srv_1: 'loaded',
-            srv_2: 'loaded',
+            srv_1: [{ ...state.createMachine('Machine One A'), activeAt: 1 }],
+            srv_2: [{ ...state.createMachine('Machine One B'), activeAt: 1 }],
         };
 
         writeCachedMachineDoctorSnapshot({
@@ -626,9 +671,13 @@ describe('SystemStatusView runtime inventory', () => {
             },
         });
 
-        const { SystemStatusView } = await import('@/components/settings/systemStatus/SystemStatusView');
-        const screen = await renderScreen(React.createElement(SystemStatusView));
+        const screen = await renderStatus();
 
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        // Offline machines sit behind one row per Home; open both to read their inventory.
+        for (const header of screen.findAll((node) => node.props?.title === 'systemStatus.machine.offline' && typeof node.props?.onPress === 'function')) {
+            await pressTestInstanceAsync(header, 'open offline machines');
+        }
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         const text = screen.getTextContent();
