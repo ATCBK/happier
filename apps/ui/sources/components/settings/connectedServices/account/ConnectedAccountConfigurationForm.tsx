@@ -6,6 +6,7 @@ import type {
     PluginConfigurationSettingFieldV2,
     PluginJsonValueV2,
 } from '@happier-dev/protocol';
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -33,16 +34,14 @@ import { useConnectedAccountDraftNavigationGuard } from './useConnectedAccountDr
 
 const stylesheet = StyleSheet.create((theme) => ({
     description: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
-        marginBottom: 8,
+        ...Typography.variant('body'),
+        marginBottom: theme.space.s8,
     },
     actions: {
         alignItems: 'flex-end',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
 }));
 
@@ -124,7 +123,7 @@ type ConnectedAccountConfigurationFormProps = Readonly<{
     embedded?: boolean;
     localize?: (value: Parameters<typeof resolveProjectedLocalizedText>[0]) => string;
     fields: readonly PluginConfigurationSettingFieldV2[];
-    values: Readonly<Record<string, PluginJsonValueV2>>;
+    values: Readonly<Record<string, JsonValue>>;
     configuredSecretFieldIds: readonly string[];
     saving: boolean;
     navigation?: unknown;

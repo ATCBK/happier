@@ -3,6 +3,7 @@ import type {
     PluginJsonValueV2,
 } from '@happier-dev/protocol';
 import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type ConnectedAccountConfigurationControl =
     | 'text'
@@ -76,13 +77,13 @@ export function resolveConnectedAccountConfigurationControl(
     return 'text';
 }
 
-function stringifyJsonValue(value: PluginJsonValueV2): string {
+function stringifyJsonValue(value: JsonValue): string {
     return JSON.stringify(value, null, 2);
 }
 
 export function createConnectedAccountConfigurationDraft(params: Readonly<{
     fields: readonly PluginConfigurationSettingFieldV2[];
-    values: Readonly<Record<string, PluginJsonValueV2>>;
+    values: Readonly<Record<string, JsonValue>>;
 }>): ConnectedAccountConfigurationDraft {
     const draft: Record<string, unknown> = {};
     for (const field of params.fields) {
