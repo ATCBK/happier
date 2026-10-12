@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 import type { SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
@@ -95,7 +96,7 @@ function mockSessionsDomainBoundaries() {
 }
 
 function createHarness(createSessionsDomain: any) {
-    let state: any = {
+    const state: any = {
         sessions: {},
         sessionListRenderables: {},
         sessionsData: null,
@@ -115,18 +116,15 @@ function createHarness(createSessionsDomain: any) {
         settings: { groupInactiveSessionsByProject: false },
     };
 
-    const get = () => state;
-    const set = (updater: any) => {
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
+    const store = createStore(() => state);
+    const get = store.getState;
+    const set = store.setState;
 
     const domain = createSessionsDomain({ get, set } as any);
     return {
         get,
-        setState: (patch: Record<string, unknown>) => {
-            state = { ...state, ...patch };
-        },
+        setState: store.setState,
+        subscribe: store.subscribe,
         domain,
     };
 }
@@ -530,13 +528,18 @@ describe('sessions domain: renderable patches', () => {
         it('retains cached rows for an empty partial replacement but evicts them for a complete empty list', async () => {
             mockSessionsDomainBoundaries();
             const { createSessionsDomain } = await import('./sessions');
-            const { get, domain } = createHarness(createSessionsDomain);
+            const { get, domain, subscribe } = createHarness(createSessionsDomain);
             domain.replaceSessionListRenderables([makeRenderable({ id: 'retained' })]);
+            const previousState = get();
             const previousRenderables = get().sessionListRenderables;
             const previousList = get().sessionListViewData;
+            let notifications = 0;
+            const unsubscribe = subscribe(() => { notifications += 1; });
 
             domain.replaceSessionListRenderables([], { coversWholeList: false });
 
+            expect(notifications).toBe(0);
+            expect(get()).toBe(previousState);
             expect(get().sessionListRenderables).toBe(previousRenderables);
             expect(get().sessionListViewData).toBe(previousList);
 
@@ -544,6 +547,7 @@ describe('sessions domain: renderable patches', () => {
 
             expect(get().sessionListRenderables).toEqual({});
             expect(get().sessionListViewData?.filter((item: SessionListViewItem) => item.type === 'session')).toEqual([]);
+            unsubscribe();
         });
     });
 
