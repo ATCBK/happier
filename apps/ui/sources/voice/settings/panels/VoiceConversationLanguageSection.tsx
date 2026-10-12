@@ -13,8 +13,6 @@ import { LANGUAGES, getLanguageDisplayNameForCode } from '@/constants/Languages'
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { t } from '@/text';
 import { projectConversationLanguage, projectConversationLanguagePreference } from '@/voice/settings/language/conversationLanguage';
-import { getLocalSttProviderSpec } from '@/voice/settings/panels/localStt/providers/registry';
-import { getLocalTtsProviderSpec } from '@/voice/settings/panels/localTts/providers/registry';
 import { VOICE_CONVERSATIONS_SETTINGS, resolveVoiceConversationLanguageSetting } from '@/voice/settings/voiceSettingsDeclarations';
 import { updateVoiceConversationLanguagePreference } from '@/voice/settings/voiceSettingBinding';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
@@ -62,8 +60,6 @@ export function VoiceConversationLanguageSection(props: Readonly<{
   );
 
   const local = language.mode === 'local' ? language : null;
-  const sttTitle = local ? getLocalSttProviderSpec(local.sttProvider)?.title ?? local.sttProvider : '';
-  const ttsTitle = local ? getLocalTtsProviderSpec(local.ttsProvider)?.title ?? local.ttsProvider : '';
   const recognition = local?.recognition ?? null;
   const coupled = preference.kind === 'single_language' ? preference : null;
   const automatic = language.mode === 'service' && language.language?.kind === 'automatic_recognition';
@@ -84,7 +80,7 @@ export function VoiceConversationLanguageSection(props: Readonly<{
         <Item
           testID="settings.voice.language.iSpeak"
           title={t('settingsVoice.pages.conversations.iSpeakTitle')}
-          subtitle={t('settingsVoice.pages.conversations.iSpeakEngineDescription', { engine: sttTitle })}
+          subtitle={t('settingsVoice.pages.conversations.iSpeakEngineDescription')}
           subtitleLines={0}
           detail={recognition.kind === 'explicit' ? languageName(recognition.language) : t('settingsVoice.pages.conversations.languageEngineDefault')}
           accessibilityRole="button"
@@ -148,7 +144,7 @@ export function VoiceConversationLanguageSection(props: Readonly<{
         <Item
           testID="settings.voice.language.voice"
           title={t('settingsVoice.pages.conversations.voiceTitle')}
-          subtitle={t('settingsVoice.pages.conversations.voiceDescription', { engine: ttsTitle })}
+          subtitle={t('settingsVoice.pages.conversations.voiceDescription')}
           subtitleLines={0}
           detail={local.outputVoice.kind === 'engine_voice'
             ? local.outputVoice.voiceId ?? t('settingsVoice.pages.conversations.voiceDefault')

@@ -6,7 +6,6 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import {
   voiceSettingsParse,
-  writeVoiceProviderSettingsConfig,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 import { t, tLoose } from '@/text';
@@ -21,7 +20,7 @@ import {
 } from '@/voice/credentials/accountVoiceCredential';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { resolveVoiceProviderId } from '@/voice/settings/resolveVoiceProviderId';
-import { applyVoiceWelcomeSelection, resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
+import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 
 import {
   readRealtimeSavedSecretCredentialPurpose,
@@ -31,6 +30,7 @@ import {
 import { RealtimeProviderFields } from './realtime/RealtimeProviderFields';
 import { useRealtimeVoiceCatalog } from './realtime/realtimeVoiceCatalogMenu';
 import { useBundledConversationProviderSettings } from './realtime/useBundledConversationProviderSettings';
+import { readDeclaredVoiceSettingsCatalog } from './realtime/voiceCatalog';
 import {
   VoiceCredentialSourceField,
   type VoiceCredentialSourceFieldStatus,
@@ -59,7 +59,6 @@ function UnavailableSettings(props: Readonly<{ status: string }>) {
 
 export function BundledConversationSettingsSection(props: Readonly<{
   voice: VoiceSettings;
-  setVoice: (next: VoiceSettings) => void;
   popoverBoundaryRef?: React.RefObject<any> | null;
   /**
    * Rows the host owns that belong at the top of the service's account group (the service's Pay with
@@ -79,7 +78,7 @@ export function BundledConversationSettingsSection(props: Readonly<{
   ) : null;
   const latestVoiceRef = React.useRef(voice);
   latestVoiceRef.current = voice;
-  const { providerId, bundledUi, descriptor, owner, resolved, config } = useBundledConversationProviderSettings(voice);
+  const { providerId, bundledUi, descriptor, owner, resolved, config, sessionChoice } = useBundledConversationProviderSettings(voice);
   const settingRef = useVoiceContributedSettingRefs(providerId ?? '');
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
   const billingMode = config && typeof config.billingMode === 'string' ? config.billingMode : null;
@@ -143,14 +142,12 @@ export function BundledConversationSettingsSection(props: Readonly<{
         ? credentialAvailability?.usable === true
         : false
     : credentialAvailability?.usable === true;
+  const declaredRows = React.useMemo(() => sessionChoice?.declaration
+    ? readDeclaredVoiceSettingsCatalog(sessionChoice.declaration) : null, [sessionChoice?.declaration]);
   const { catalog, requestCatalog, resetCatalog } = useRealtimeVoiceCatalog({
-    client: bundledUi?.client ?? null, credentialUsable, targetKey: credentialTargetKey,
+    client: bundledUi?.client ?? null, credentialUsable, targetKey: sessionChoice?.targetKey ?? credentialTargetKey,
+    declaredRows,
   });
-
-  const persistConfig = React.useCallback((next: Readonly<Record<string, unknown>>) => {
-    if (!providerId) return;
-    props.setVoice(writeVoiceProviderSettingsConfig(latestVoiceRef.current, providerId, next));
-  }, [props.setVoice, providerId]);
 
   const onCredentialStatusChanged = React.useCallback((status: VoiceCredentialItemStatus) => {
     setCredentialState({ targetKey: credentialTargetKey, status });
@@ -240,9 +237,12 @@ export function BundledConversationSettingsSection(props: Readonly<{
   }];
   const credentialsAssigned = groups.some((group) => group.includeCredentials === true);
   const accountGroupIndex = credentialsAssigned ? groups.findIndex((group) => group.includeCredentials === true) : 0;
+  // One rule with the fields beneath (RealtimeProviderFields): a plain string is a host translation key
+  // or the author's literal text (an unknown key resolves to itself); a localized object belongs to the
+  // contributing plugin's catalog. Installed and generated descriptors of one service read the same.
   const presentationText = (value: unknown): string | undefined => {
     if (value === undefined) return undefined;
-    if (typeof value === 'string' && providerEntry?.source.kind !== 'external') return tLoose(value);
+    if (typeof value === 'string') return tLoose(value);
     if (providerEntry) return localizePluginText(providerEntry.pluginId, value);
     const localized = record(value);
     return typeof localized?.key === 'string' ? tLoose(localized.key)
@@ -274,10 +274,6 @@ export function BundledConversationSettingsSection(props: Readonly<{
         popoverBoundaryRef={props.popoverBoundaryRef}
         welcomeSelection={resolveVoiceWelcomeSelection(voice.welcome)}
         assistantLanguage={voice.assistantLanguage}
-        onWelcomeSelection={(selection) => props.setVoice(applyVoiceWelcomeSelection(
-          voice,
-          selection === 'off' ? 'off' : selection === 'on_first_turn' ? 'on_first_turn' : 'immediate',
-        ))}
         renderAfterField={(field) => <VoiceProviderSettingsActions
           providerId={providerId}
           owner={owner}

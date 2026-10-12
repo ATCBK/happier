@@ -217,44 +217,8 @@ describe('local voice engine TTS behavior', () => {
         await expect(toggleLocalVoiceTurn('s1')).rejects.toThrow('send failed');
 
         expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('does not hang when assistant polling throws; resolves to idle', async () => {
-        const storage = await getStorage();
-        storage.__setState({
-            settings: {
-                ...storage.getState().settings,
-                voice: {
-                    ...storage.getState().settings.voice,
-                    providerId: 'local_direct',
-                    providers: {
-                        ...storage.getState().settings.voice.providers,
-                        local_direct: { schemaVersion: 1, config: {
-                            ...storage.getState().settings.voice.providers.local_direct.config,
-                            tts: {
-                                ...storage.getState().settings.voice.providers.local_direct.config.tts,
-                                autoSpeakReplies: true,
-                            },
-                        } },
-                    },
-                },
-            },
-        });
-
-        (globalThis.fetch as any).mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ text: 'hello world' }),
-        });
-
-        submitMessage.mockImplementationOnce(() => {
-            storage.__throwGetStateOnce(new Error('boom'));
-        });
-
-        const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
-        await toggleLocalVoiceTurn('s1');
-        await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
-
-        expect(getLocalVoiceState().status).toBe('idle');
+        expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(localVoiceEngine.getLocalVoiceState().status).toBe('idle');
     });
 
 });

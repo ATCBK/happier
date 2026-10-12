@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics, isHappierPageRowNarrow } from '@happier-dev/plugin-ui/presentation';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -25,6 +25,13 @@ function localizedText(value: string | Readonly<{ key: string; fallback: string 
 
 export function VoiceProviderProcessingDisclosureSection(props: Readonly<{ voice: VoiceSettings }>) {
   const [expandedIds, setExpandedIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  // The shared narrow-row rule: on a phone each fact's label sits above its value instead of
+  // squeezing into a quarter column ("Audio goes / to").
+  const [narrow, setNarrow] = React.useState(false);
+  const onFactsLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const next = isHappierPageRowNarrow(event.nativeEvent.layout.width);
+    setNarrow((current) => (current === next ? current : next));
+  }, []);
   React.useSyncExternalStore(
     registry.subscribe ?? (() => () => {}),
     registry.getRevision ?? (() => 0),
@@ -56,13 +63,13 @@ export function VoiceProviderProcessingDisclosureSection(props: Readonly<{ voice
           <SectionContentRow>
             <View style={styles.service}>
               <Text accessibilityRole="header" style={styles.serviceTitle}>{tLoose(entry.titleKey)}</Text>
-              {rows.length > 0 ? <View testID={`${id}.facts`} role="list" accessibilityLabel={tLoose(entry.titleKey)} style={styles.facts}>
+              {rows.length > 0 ? <View testID={`${id}.facts`} role="list" accessibilityLabel={tLoose(entry.titleKey)} style={styles.facts} onLayout={onFactsLayout}>
                 {rows.map((row) => {
                   const value = localizedText(row.value);
                   return <View key={row.key} testID={`${id}.${row.key}`} role="listitem" accessible
-                    accessibilityLabel={`${row.title}: ${value}`} style={styles.fact}>
-                    <Text style={styles.factLabel}>{row.title}</Text>
-                    <Text style={styles.factValue}>{value}</Text>
+                    accessibilityLabel={`${row.title}: ${value}`} style={[styles.fact, narrow && styles.factStacked]}>
+                    <Text style={[styles.factLabel, narrow && styles.factStackedText]}>{row.title}</Text>
+                    <Text style={[styles.factValue, narrow && styles.factStackedText]}>{value}</Text>
                   </View>;
                 })}
               </View> : null}
@@ -90,4 +97,6 @@ const styles = StyleSheet.create((theme) => ({
   fact: { flexDirection: 'row', alignItems: 'flex-start', columnGap: PAGE_LIST_METRICS.rowLeadingGapPx },
   factLabel: { ...Typography.default('medium'), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary, flex: 1 },
   factValue: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary, flex: 3 },
+  factStacked: { flexDirection: 'column', rowGap: 0 },
+  factStackedText: { flex: 0 },
 }));

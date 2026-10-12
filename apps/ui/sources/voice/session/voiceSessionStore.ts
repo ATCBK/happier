@@ -7,7 +7,7 @@ import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindi
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areSessionAddressesEqual } from '@/sync/domains/session/sessionAddress';
 import type { VoiceContinuationProvenance } from '@/voice/transcript/voiceTranscriptNoteMeta';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { VoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
 
 type VoiceSessionConversationContext = Readonly<{
@@ -38,6 +38,9 @@ let activeAttemptConversationContext: VoiceSessionConversationContext | null = n
 let requestedEndReason: VoiceSessionEndReason | null = null;
 /** The live attempt that connected to a conversation last voiced on another device (continuation arrival). */
 let arrivedAttemptId: string | null = null;
+let firstSuccessAttempt: Readonly<{ attemptId: string; lifetime: ServerAccountScopeLifetime }> | null = null;
+const NO_INPUT_IDS: readonly string[] = Object.freeze([]);
+let firstSuccessInputs: Readonly<{ attemptId: string; lifetime: ServerAccountScopeLifetime; ids: readonly string[] }> | null = null;
 
 export type VoiceSessionEndReason = Readonly<
   | { kind: 'disconnected' }
@@ -99,6 +102,8 @@ function reconcileAttemptId(snapshot: VoiceSessionSnapshot, binding?: VoiceSessi
     activeAttemptConversationContext = null;
     requestedEndReason = null;
     arrivedAttemptId = null;
+    firstSuccessAttempt = null;
+    firstSuccessInputs = null;
     setEndedAttempt(null);
   } else if (!active) {
     arrivedAttemptId = null;
@@ -255,6 +260,55 @@ export function getVoiceSessionArrivedAttemptId(): string | null {
   return arrivedAttemptId;
 }
 
+/** The runtime publishes only the genuine completed-attempt fact, never transcript rows to controls. */
+export function recordVoiceSessionFirstSuccess(attemptId: string, lifetime: ServerAccountScopeLifetime): void {
+  if (attemptId !== presentedAttemptId || !lifetime.isCurrent()
+    || (attemptId !== activeAttemptId && attemptId !== endedAttempt?.attemptId)
+    || firstSuccessAttempt?.attemptId === attemptId) return;
+  firstSuccessAttempt = { attemptId, lifetime };
+  firstSuccessInputs = null;
+  for (const listener of endedAttemptListeners) listener();
+}
+
+export function clearVoiceSessionFirstSuccess(): void {
+  if (!firstSuccessAttempt && !firstSuccessInputs) return;
+  firstSuccessAttempt = null;
+  firstSuccessInputs = null;
+  for (const listener of endedAttemptListeners) listener();
+}
+
+export function clearVoiceSessionFirstSuccessInputs(): void {
+  if (!firstSuccessInputs) return;
+  firstSuccessInputs = null;
+  for (const listener of endedAttemptListeners) listener();
+}
+
+/** The durable input producer reports acceptance for its captured attempt, including settlement just after End. */
+export function recordVoiceSessionFirstSuccessInput(input: Readonly<{
+  attemptId: string; lifetime: ServerAccountScopeLifetime; conversationSessionId: string; localId: string;
+}>): void {
+  const conversation = activeAttemptBinding?.conversationSessionAddress ?? endedAttempt?.conversationSessionAddress;
+  if (input.attemptId !== presentedAttemptId || !input.lifetime.isCurrent()
+    || firstSuccessAttempt?.attemptId === input.attemptId
+    || (input.attemptId !== activeAttemptId && input.attemptId !== endedAttempt?.attemptId)
+    || conversation?.sessionId !== input.conversationSessionId || conversation.serverId !== input.lifetime.scope.serverId) return;
+  const previous = firstSuccessInputs?.attemptId === input.attemptId && firstSuccessInputs.lifetime === input.lifetime
+    ? firstSuccessInputs.ids : NO_INPUT_IDS;
+  if (previous.includes(input.localId)) return;
+  firstSuccessInputs = { attemptId: input.attemptId, lifetime: input.lifetime, ids: [...previous, input.localId] };
+  for (const listener of endedAttemptListeners) listener();
+}
+
+export function getVoiceSessionFirstSuccessInputIds(): readonly string[] {
+  return firstSuccessInputs?.attemptId === presentedAttemptId && firstSuccessInputs.lifetime.isCurrent()
+    ? firstSuccessInputs.ids : NO_INPUT_IDS;
+}
+
+export function getVoiceSessionFirstSuccessAttemptId(): string | null {
+  return firstSuccessAttempt?.attemptId === presentedAttemptId && firstSuccessAttempt.lifetime.isCurrent()
+    ? firstSuccessAttempt.attemptId : null;
+}
+
 export function getVoiceSessionAttemptId(): string | null {
   return activeAttemptId;
 }
@@ -279,6 +333,7 @@ export function getVoiceSessionEndedAttempt(): VoiceSessionEndedAttempt | null {
 
 /** The person put the ended conversation away; the next start clears it on its own. */
 export function dismissVoiceSessionEndedAttempt(): void {
+  clearVoiceSessionFirstSuccess();
   setEndedAttempt(null);
   if (!activeAttemptId && !canDismissVoiceSessionFailedAttempt(lastAttemptSnapshot)) presentedAttemptId = null;
 }
@@ -306,6 +361,8 @@ export function resetVoiceSessionStoreForTests(): void {
   activeAttemptConversationContext = null;
   requestedEndReason = null;
   arrivedAttemptId = null;
+  firstSuccessAttempt = null;
+  firstSuccessInputs = null;
   endedAttempt = null;
   useVoiceSessionStore.setState({
     ...DEFAULT_SNAPSHOT,

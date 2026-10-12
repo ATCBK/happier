@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createExpoRouterMock, renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
 
 /**
@@ -20,6 +20,9 @@ import { t } from '@/text';
 const openExternalUrlSpy = vi.hoisted(() => vi.fn(
   async (_url: string, _options?: Record<string, unknown>) => true,
 ));
+
+const routerMock = createExpoRouterMock();
+vi.mock('expo-router', () => routerMock.module);
 
 vi.mock('@/utils/url/openExternalUrl', () => ({
   openExternalUrl: (url: string, options?: Record<string, unknown>) => openExternalUrlSpy(url, options),

@@ -358,7 +358,20 @@ function createRuntimeAdapter(
         notify();
       }),
       stop: vi.fn(async () => {
+        const stoppedSnapshot = state.current;
         await state.hooks?.stop?.();
+        // The real conversation controller publishes disconnected after a
+        // successful Stop. Retaining a live snapshot invents another attempt
+        // for the next Account lifetime to retire.
+        if (state.current === stoppedSnapshot) {
+          state.current = {
+            ...stoppedSnapshot,
+            status: 'disconnected',
+            mode: 'idle',
+            canStop: false,
+          };
+          notify();
+        }
       }),
       toggle: createAsyncNoopSpy(),
       interrupt: createAsyncNoopSpy(),
@@ -1620,10 +1633,16 @@ describe('VoiceSessionRuntime', () => {
     }));
 
     const { VoiceSessionRuntime } = await import('./VoiceSessionRuntime');
+    const { getVoiceSessionLifecycleController } = await import('./voiceSessionLifecycleControllerStore');
     const { storage } = await import('@/sync/domains/state/storage');
     const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
     registerStorageStateReader(() => storage.getState());
     const screen = await renderScreen(React.createElement(VoiceSessionRuntime));
+    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
+      sessionId: 'direct-agent-session',
+      status: 'connected',
+      canStop: true,
+    });
 
     // Route-only rerenders preserve an established direct Agent attachment.
     await act(async () => {
@@ -1662,12 +1681,22 @@ describe('VoiceSessionRuntime', () => {
     expect(active.controller.stop).toHaveBeenCalledWith({
       sessionId: 'direct-agent-session',
     });
+    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
+      status: 'disconnected',
+      canStop: false,
+    });
+    expect(active.controller.start).not.toHaveBeenCalled();
 
     await act(async () => {
       screen.tree.update(React.createElement(VoiceSessionRuntime));
       await Promise.resolve();
     });
     expect(active.controller.stop).toHaveBeenCalledOnce();
+    expect(getVoiceSessionLifecycleController()?.getSnapshot()).toMatchObject({
+      status: 'disconnected',
+      canStop: false,
+    });
+    expect(active.controller.start).not.toHaveBeenCalled();
   });
 
   it('fences an established and a pending ordinary provider attempt when the server-account scope changes', async () => {
@@ -2266,13 +2295,14 @@ describe('VoiceSessionRuntime', () => {
       return null;
     });
 
+    const stopped = createDeferred<void>();
     const active = createRuntimeAdapter('local_direct', {
       adapterId: 'local_direct',
       sessionId: 's1',
       status: 'connected',
       mode: 'listening',
       canStop: true,
-    });
+    }, { stop: () => stopped.promise });
     const selected = createRuntimeAdapter('local_conversation', {
       adapterId: 'local_conversation',
       sessionId: null,
@@ -2312,6 +2342,14 @@ describe('VoiceSessionRuntime', () => {
       });
     });
 
+    // Providers can publish disconnected while their media cleanup is still
+    // pending. The next provider must wait for that same Stop to settle.
+    expect(selected.controller.start).not.toHaveBeenCalled();
+    await act(async () => {
+      stopped.resolve();
+      await stopped.promise;
+    });
+
     expect(selected.controller.start).toHaveBeenCalledWith({
       sessionId: 's1',
       requestedTargetSessionAddress: null,
@@ -2332,13 +2370,14 @@ describe('VoiceSessionRuntime', () => {
       return null;
     });
 
+    const stopped = createDeferred<void>();
     const active = createRuntimeAdapter('local_direct', {
       adapterId: 'local_direct',
       sessionId: 's1',
       status: 'connected',
       mode: 'listening',
       canStop: true,
-    });
+    }, { stop: () => stopped.promise });
     const idlePeer = createRuntimeAdapter('local_conversation', {
       adapterId: 'local_conversation',
       sessionId: null,
@@ -2376,6 +2415,8 @@ describe('VoiceSessionRuntime', () => {
         mode: 'idle',
         canStop: false,
       });
+      stopped.resolve();
+      await stopped.promise;
     });
 
     expect(getVoiceSessionSnapshot()).toEqual({

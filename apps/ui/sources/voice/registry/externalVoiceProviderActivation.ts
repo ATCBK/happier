@@ -969,7 +969,7 @@ export function createExternalVoiceProviderRuntimeContribution(input: Readonly<{
             const voice = voiceSettingsParse(readVoiceSettingsInput(bindingInput.settings));
             const envelope = voice.providers[providerId];
             if (envelope?.schemaVersion !== providerSettings.schemaVersion) return null;
-            const parsedConfig = providerSettings.parseConfig(envelope.config);
+            const parsedConfig = providerSettings.parseStoredConfig(envelope.config);
             if (!parsedConfig || typeof parsedConfig !== 'object' || Array.isArray(parsedConfig)) return null;
             const parsedConfigRecord = parsedConfig as Readonly<Record<string, unknown>>;
             const connectedServices = ConnectedServiceBindingsV2IngressSchema.safeParse(
@@ -1436,7 +1436,6 @@ export function createExternalVoiceProviderActivationScope(input: Readonly<{
           const selectionOptions = Object.freeze([Object.freeze({
             id: 'default', modeId: 'default', order: 10_000,
             titleKey: declarationTitle(declaration),
-            subtitleKey: input.pluginId,
             configPatch: providerSettings.defaultConfig,
           })]);
           const declarationBase = projectVoiceProviderDeclarationRegistryBase({

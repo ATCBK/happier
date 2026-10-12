@@ -121,7 +121,7 @@ export function projectVoiceProviderCredentialReadiness(
   try {
     if (credentials.requirement.kind === 'when_setting_equals') {
       const owner = entry.providerSettings;
-      const config = owner?.parseConfig(envelope?.config ?? owner.defaultConfig);
+      const config = owner?.parseStoredConfig(envelope?.config ?? owner.defaultConfig);
       if (!config || (config as Readonly<Record<string, unknown>>)[credentials.requirement.settingId]
         !== credentials.requirement.value) return null;
     }

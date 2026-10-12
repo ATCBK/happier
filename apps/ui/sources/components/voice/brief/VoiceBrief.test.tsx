@@ -25,8 +25,12 @@ import { VoiceTopBarPresence } from '@/components/voice/presence/VoiceTopBarPres
 import { useVoiceAttemptControl, VOICE_ATTEMPT_IDLE_TARGET_GLOBAL } from '@/components/voice/attempt/useVoiceAttemptControl';
 import { setVoiceGlanceOpen } from '@/components/voice/presence/voiceCompanionSectionReveal';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -75,6 +79,7 @@ let screen: RenderScreenResult | null = null;
 let lifecycle: VoiceSessionLifecycleController | null = null;
 let unsubscribe: (() => void) | null = null;
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let restorePopoverGlobals: (() => void) | null = null;
 const initialState = storage.getState();
 beforeEach(() => {
     resetVoiceSessionStoreForTests();
@@ -88,6 +93,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
     await screen?.unmount(); screen = null;
+    restorePopoverGlobals?.(); restorePopoverGlobals = null;
     unsubscribe?.(); unsubscribe = null;
     await lifecycle?.dispose(); lifecycle = null;
     setVoiceSessionLifecycleController(null);
@@ -135,6 +141,8 @@ describe('mounted Voice Brief request', () => {
         await lifecycle?.toggle(null);
         speech.connect();
         expect(setVoiceGlanceOpen(true)).toBe(false);
+        // Browser event APIs are the boundary; the mounted Glance/Popover stay real.
+        restorePopoverGlobals = withPopoverWebGlobals();
         screen = await renderScreen(<AuthProvider initialCredentials={{ token: 'token-1', secret: 'secret-1' }}><Presentation /></AuthProvider>);
         await act(async () => { expect(setVoiceGlanceOpen(true)).toBe(true); });
         expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(true);
@@ -222,6 +230,7 @@ describe('mounted Voice Brief request', () => {
         await import('@/sync/syncEngine');
         account = await restoreServerAccountForTest({
             serverUrl: 'https://brief-account.example.test',
+            credentialScope: 'restored-home',
             request: async (url) => new URL(String(url)).pathname === '/v1/features'
                 ? new Response(JSON.stringify(buildServerFeaturesResponse({ voiceEnabled: true })), {
                     status: 200, headers: { 'content-type': 'application/json' },
@@ -232,7 +241,10 @@ describe('mounted Voice Brief request', () => {
         screen = await renderScreen(renderHome());
         const scope = getActiveServerAccountScope();
         expect(scope).not.toBeNull();
-        await act(async () => { executeVoiceBriefOperation('request'); });
+        let outcome;
+        await act(async () => { outcome = executeVoiceBriefOperation('request'); });
+        expect(outcome).toEqual({ ok: true, result: { status: 'waiting', attemptId: null } });
+        expect(screen.findByTestId('voice-brief')).toBeTruthy();
         expect(speech.starts).toHaveLength(1);
         // Sync's reset owner calls this exact retirement hook. Renew without a
         // render so the old pending Inbox cannot rely on equal Account ids.

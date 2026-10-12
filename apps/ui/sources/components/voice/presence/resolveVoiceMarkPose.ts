@@ -14,17 +14,19 @@ export type VoiceMarkPose = 'mic' | PlanetDotPose;
 export type VoiceMarkEvent = Readonly<{ kind: 'gather' | 'leave'; id: string }>;
 
 /**
- * The attempt's own continuation facts as a mark event: dots leave when this device ended its
+ * The attempt's own completion/continuation facts as one mark event: dots leave when this device ended its
  * microphone because the conversation continued on another device, and gather when this attempt
  * connected to a conversation last voiced on another device.
  */
 export function resolveVoiceMarkEvent(input: Readonly<{
     ended: VoiceSessionEndedAttempt | null | undefined;
     arrivedAttemptId: string | null;
+    firstSuccess?: VoiceMarkEvent | null;
 }>): VoiceMarkEvent | null {
     if (input.ended?.reason.kind === 'continued_elsewhere') {
         return { kind: 'leave', id: `${input.ended.attemptId ?? input.ended.endedAt}:leave` };
     }
+    if (input.firstSuccess) return input.firstSuccess;
     return input.arrivedAttemptId ? { kind: 'gather', id: `${input.arrivedAttemptId}:arrive` } : null;
 }
 

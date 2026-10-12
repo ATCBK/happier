@@ -262,8 +262,8 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     await act(async () => {
       publishVoiceDiagnosticsRuntimeStatus({ machineId: 'm1', phase: 'transitioning' });
     });
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle)
-      .toBe('settingsVoice.diagnostics.unavailable');
+    expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.location' })).toHaveLength(0);
 
     await act(async () => {
       publishVoiceDiagnosticsRuntimeStatus({ machineId: 'm1', phase: 'active' });
@@ -311,8 +311,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     expect(testState.configureCompletions.filter(([machineId]) => machineId === 'm1').at(-1))
       .toEqual(['m1', false]);
     expect(testState.policyByMachine.get('m1')).toBe(false);
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle)
-      .not.toBe('/private/m1');
+    expect(tree.root.findAllByProps({ subtitle: '/private/m1' })).toHaveLength(0);
     await act(async () => { tree.unmount(); });
   });
 
@@ -336,7 +335,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
       direction: 'stt_input',
       format: 'webm',
       durationMs: null,
-      byteLength: 42,
+      byteLength: 1236,
     }];
     testState.deleteError = new Error('daemon unavailable');
     let tree!: renderer.ReactTestRenderer;
@@ -346,6 +345,9 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
         setVoice: vi.fn(),
       }));
     });
+
+    expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-artifact-abcdef12-dead-beef' }).props.subtitle)
+      .toBe('WEBM · 1.24 KB');
 
     await act(async () => {
       tree.root.findByProps({ title: 'settingsVoice.diagnostics.deleteAll' }).props.onPress();
@@ -384,8 +386,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
       diagnostics: expect.objectContaining({ enabled: true, consentVersion: 1 }),
     }));
     expect(configure).not.toHaveBeenCalled();
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.location' }).props.subtitle)
-      .toBe('settingsVoice.diagnostics.unavailable');
+    expect(tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' })).toBeTruthy();
   });
 
   it('commits desired diagnostics settings without writing current-machine policy from the settings surface', async () => {
@@ -454,7 +455,28 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.cleanupRequired' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.retryCapture' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.retryCleanup' })).toHaveLength(0);
-    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.deleteAll' }).props.disabled).toBe(true);
+    // Nothing is retained, so there is nothing to delete: the action is hidden, not a dead red row.
+    expect(tree.root.findAllByProps({ title: 'settingsVoice.diagnostics.deleteAll' })).toHaveLength(0);
+  });
+
+  it('says once that the Voice computer cannot be reached instead of an unavailable value on every row', async () => {
+    testState.statusError = new Error('machine unavailable');
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(React.createElement(VoiceDiagnosticsSettingsSection, {
+        voice: { diagnostics } as any,
+        setVoice: vi.fn(),
+      }));
+    });
+
+    const line = tree.root.findByProps({ testID: 'settings-voice-diagnostics-unavailable' });
+    expect(line.props.title).toBe('settingsVoice.pages.privacy.diagnosticsUnreachable');
+    expect(tree.root.findAll((node) => node.props?.subtitle === 'settingsVoice.diagnostics.unavailable')).toHaveLength(0);
+    for (const title of ['location', 'backupPolicy', 'exportTitle', 'deleteAll']) {
+      expect(tree.root.findAllByProps({ title: `settingsVoice.diagnostics.${title}` })).toHaveLength(0);
+    }
+    // The setting the user can still change stays.
+    expect(tree.root.findByProps({ title: 'settingsVoice.diagnostics.enabled' })).toBeTruthy();
   });
 
   it('shows independent capture and cleanup obligations with only truthful actions', async () => {

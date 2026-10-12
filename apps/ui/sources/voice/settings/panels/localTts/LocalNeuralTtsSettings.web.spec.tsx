@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { ReactTestRenderer } from 'react-test-renderer';
+import { act, ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -56,6 +56,25 @@ describe('LocalNeuralTtsSettings (web)', () => {
             }],
         },
     } as any;
+
+    it.each([null, 1, Number.NaN])('shows effective default speed for %s and preserves the pack and voice when changed', async (storedSpeed) => {
+        const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');
+        const cfgKokoro = { model: 'kokoro' as const, assetId: 'acme.voice/tts-pack', voiceId: 'bright',
+            speed: storedSpeed, execution: 'daemon' as const };
+        const setKokoro = vi.fn();
+        const { tree } = await renderScreen(<LocalNeuralTtsSettings
+            cfgKokoro={cfgKokoro}
+            setKokoro={setKokoro}
+            networkTimeoutMs={15_000}
+        />);
+        const speed = tree.root.findAllByType('DropdownMenu').find((node) =>
+            node.props.itemTrigger?.title === 'settingsVoice.local.kokoro.speed.title');
+        expect(speed).toBeDefined();
+        expect(speed!.props.selectedId).toBe('1');
+        expect(setKokoro).not.toHaveBeenCalled();
+        await act(async () => { speed!.props.onSelect('1.2'); });
+        expect(setKokoro).toHaveBeenCalledWith({ ...cfgKokoro, speed: 1.2 });
+    });
 
     it('preserves stored web device authority while hiding device selection and stale browser Kokoro management', async () => {
         const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.web');

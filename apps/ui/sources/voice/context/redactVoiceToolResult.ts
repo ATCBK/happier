@@ -258,3 +258,20 @@ export function redactVoiceToolResultForProvider(
     toolName === CURRENT_UI_CONTEXT_READ_TOOL_NAME,
   );
 }
+
+/** Preserve the MCP-compatible transport envelope while applying the target's policy. */
+export function redactVoiceActionExecutionResultForProvider(
+  toolName: string,
+  value: unknown,
+  prefs: VoiceToolResultRedactionPrefs,
+): unknown {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>> : null;
+  if (isVoiceToolResultBlockedByPrivacy(toolName, prefs)) {
+    return { ok: false, errorCode: 'privacy_disabled', error: 'privacy_disabled' };
+  }
+  if (record?.ok === true) {
+    return { ok: true, result: redactVoiceToolResultForProvider(toolName, record.result, prefs) };
+  }
+  return redactVoiceToolResultForProvider(toolName, value, prefs);
+}

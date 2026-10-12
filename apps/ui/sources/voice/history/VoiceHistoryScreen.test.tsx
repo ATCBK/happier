@@ -223,9 +223,9 @@ describe('VoiceHistoryScreen', () => {
     expect(newerRow?.props.accessibilityLabel).toContain('Grok Realtime');
     expect(newerRow?.props.accessibilityLabel).toContain('A newer response');
     expect(screen.findByTestId('voice-history-search')?.props.accessibilityLabel)
-      .toBe('Search Voice History');
-    expect(initialText).toContain('Read-only: decrypt the previous page of Voice History on this device.');
-    expect(initialText).toContain('Loading older messages does not change or lock Voice History on any device.');
+      .toBe('Search voice history');
+    expect(initialText).toContain('Read-only: decrypt the previous page of voice history on this device.');
+    expect(initialText).toContain('Loading older messages does not change or lock voice history on any device.');
 
     await act(async () => {
       screen.changeTextByTestId('voice-history-search', 'newer');
@@ -554,9 +554,9 @@ describe('VoiceHistoryScreen', () => {
     );
     expect(screen.findByTestId('voice-history-empty')).not.toBeNull();
     expect(screen.findByTestId('voice-history-action-message')?.props.children)
-      .toBe('Voice History was cleared.');
+      .toBe('Voice history was cleared.');
     expect(screen.findByTestId('voice-history-operation-status')?.props.children?.props.children)
-      .toBe('Voice History was cleared.');
+      .toBe('Voice history was cleared.');
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds()).toEqual([]);
     expect(readMountedSessionTranscriptConsumerSessionIdsForRetention()).toEqual([]);
     expect(screen.findByTestId('voice-history-export')).toBeNull();
@@ -619,10 +619,10 @@ describe('VoiceHistoryScreen', () => {
     await screen.pressByTestIdAsync('voice-history-clear');
 
     expect(screen.findByTestId('voice-history-action-message')?.props.children)
-      .toBe('Voice History was cleared.');
+      .toBe('Voice history was cleared.');
     expect(screen.findByTestId('voice-history-operation-status')?.props.children?.props.children)
-      .toBe('Voice History was cleared.');
-    expect(screen.getTextContent()).not.toContain('Voice History could not be cleared.');
+      .toBe('Voice history was cleared.');
+    expect(screen.getTextContent()).not.toContain('Voice history could not be cleared.');
     expect(deleteSession).toHaveBeenCalledTimes(1);
   });
 
@@ -654,7 +654,7 @@ describe('VoiceHistoryScreen', () => {
       ?.props.children?.props.children;
 
     expect(screen.findByTestId('voice-history-loading')).not.toBeNull();
-    expect(readStatus()).toBe('Loading Voice History…');
+    expect(readStatus()).toBe('Loading voice history…');
 
     discovery.resolve('voice-history-session');
     await flushAsyncState();
@@ -669,7 +669,7 @@ describe('VoiceHistoryScreen', () => {
     // is a real announcer and not a permanently empty placeholder.
     await screen.pressByTestIdAsync('voice-history-load-older');
 
-    expect(readStatus()).toBe('Older Voice History could not be loaded.');
+    expect(readStatus()).toBe('Older voice history could not be loaded.');
     await screen.unmount();
 
     const errorScreen = await renderScreen(
@@ -687,7 +687,7 @@ describe('VoiceHistoryScreen', () => {
     expect(errorScreen.findByTestId('voice-history-error')).not.toBeNull();
     expect(errorScreen.findByTestId('voice-history-operation-status')?.props.children?.props.children)
       .toBe(
-        'Voice History is unavailable. Happier could not load the encrypted'
+        'Voice history is unavailable. Happier could not load the encrypted'
         + ' history for this account. Check your connection and try again.',
       );
     await errorScreen.unmount();
@@ -707,7 +707,7 @@ describe('VoiceHistoryScreen', () => {
     expect(supersededScreen.findByTestId('voice-history-superseded')).not.toBeNull();
     expect(supersededScreen.findByTestId('voice-history-operation-status')?.props.children?.props.children)
       .toBe(
-        'The active account changed. This Voice History request was stopped'
+        'The active account changed. This voice history request was stopped'
         + ' before it could use a different account. Reload to continue safely.',
       );
   });
@@ -747,9 +747,9 @@ describe('VoiceHistoryScreen', () => {
     await screen.pressByTestIdAsync('voice-history-load-older');
 
     expect(screen.findByTestId('voice-history-action-message')?.props.children)
-      .toBe('Older Voice History could not be loaded.');
+      .toBe('Older voice history could not be loaded.');
     expect(screen.findByTestId('voice-history-operation-status')?.props.children?.props.children)
-      .toBe('Older Voice History could not be loaded.');
+      .toBe('Older voice history could not be loaded.');
     expect(screen.findByTestId('voice-history-row-older')).toBeNull();
 
     // Rows and the older cursor survived the failure, so the retry works.

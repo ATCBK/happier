@@ -136,7 +136,7 @@ export function VoiceServiceGallery(props: Readonly<{
       options={options}
       value={selectedId}
       density="compact"
-      {...(setup ? { subtitleLines: 0, minimumColumns: 2, maximumColumns: 2, minimumTileWidth: SETUP_TILE_MIN_WIDTH_PX } : { subtitleLines: 3, minimumColumns: 3 })}
+      {...(setup ? { subtitleLines: 0, minimumColumns: 2, maximumColumns: 2, minimumTileWidth: SETUP_TILE_MIN_WIDTH_PX } : { subtitleLines: 0, minimumColumns: 3 })}
       accessibilityLabel={t('settingsVoice.pages.conversations.serviceTitle')}
       testIdPrefix="settings.voice.service"
       onChange={(next) => {
@@ -149,15 +149,17 @@ export function VoiceServiceGallery(props: Readonly<{
         if (!status) return null;
         return (
           <View style={styles.footer} accessible accessibilityLabel={status.detail ?? status.text}>
-            {/* The dot carries the tone; the words stay quiet so a gallery of choices never reads as broken. */}
-            {/* The dot sits on the first line, so a readiness that wraps (setup's narrow tiles) still reads as one fact. */}
-            <View style={styles.footerDot}>
-              <StatusDot
-                color={status.tone === 'ready' ? theme.colors.state.success.foreground
-                  : selected ? theme.colors.state.warning.foreground : theme.colors.text.tertiary}
-                size={6}
-              />
-            </View>
+            {/* Ready stays quiet (words only); a dot marks only what still needs something. The words stay
+                quiet so a gallery of choices never reads as broken. The dot sits on the first line, so a
+                readiness that wraps (setup's narrow tiles) still reads as one fact. */}
+            {status.tone === 'needs_you' ? (
+              <View style={styles.footerDot}>
+                <StatusDot
+                  color={selected ? theme.colors.state.warning.foreground : theme.colors.text.tertiary}
+                  size={6}
+                />
+              </View>
+            ) : null}
             <Text numberOfLines={setup ? undefined : 1} style={styles.footerText}>{status.text}</Text>
           </View>
         );

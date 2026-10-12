@@ -125,6 +125,16 @@ describe('VoiceMark one-shot events', () => {
         expect(screen.findByTestId('mark-rest')?.props.style).toMatchObject({ opacity: 1 });
         expect(motion.events).toEqual([1]);
     });
+
+    it('still lands on the rest glyph when a newer fact supersedes a leave in flight', async () => {
+        screen = await renderScreen(<VoiceMarkArt pose="ready" size={24} testID="mark" />);
+        await screen.update(<VoiceMarkArt pose="mic" size={24} event={leave} testID="mark" />);
+        // The leave is held mid-flight; its hand-back to the rest glyph has not happened yet.
+        expect(screen.findByTestId('mark-rest')?.props.style).toMatchObject({ opacity: 0 });
+        // The ended attempt is put away before the leave lands, and the next fact takes its place.
+        await screen.update(<VoiceMarkArt pose="mic" size={24} event={gather} testID="mark" />);
+        expect(screen.findByTestId('mark-rest')?.props.style).toMatchObject({ opacity: 1, transform: [{ scale: 1 }] });
+    });
 });
 
 describe('resolveVoiceMarkEvent', () => {
@@ -140,5 +150,12 @@ describe('resolveVoiceMarkEvent', () => {
         expect(resolveVoiceMarkEvent({ ended: ended({ kind: 'stopped' }), arrivedAttemptId: null })).toBeNull();
         expect(resolveVoiceMarkEvent({ ended: null, arrivedAttemptId: 'voice-attempt:5' })).toEqual({ kind: 'gather', id: 'voice-attempt:5:arrive' });
         expect(resolveVoiceMarkEvent({ ended: null, arrivedAttemptId: null })).toBeNull();
+    });
+
+    it('projects the same genuine first-success event to the composer and keeps continuation leave authoritative', () => {
+        const firstSuccess = { kind: 'gather', id: 'voice-attempt:4:first-success' } as const;
+        expect(resolveVoiceMarkEvent({ ended: null, arrivedAttemptId: 'voice-attempt:4', firstSuccess })).toBe(firstSuccess);
+        expect(resolveVoiceMarkEvent({ ended: ended({ kind: 'continued_elsewhere', continuation: { v: 1, deviceId: 'phone', conversation } }), arrivedAttemptId: null, firstSuccess }))
+            .toEqual({ kind: 'leave', id: 'voice-attempt:4:leave' });
     });
 });

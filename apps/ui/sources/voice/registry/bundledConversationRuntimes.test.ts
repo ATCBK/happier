@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { createRecipientContractDigestV1 } from '@happier-dev/protocol';
 
@@ -7,6 +7,9 @@ import { storage } from '@/sync/domains/state/storage';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import '@/sync/syncEngine';
 import { sync } from '@/sync/sync';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import {
   createBundledConversationRuntimeHostLease,
@@ -138,7 +141,7 @@ function installCredentialSettings(
         kind: 'apiKey' as const,
         encryptedValue: Object.freeze({
           _isSecretValue: true as const,
-          value: 'bundled-encrypted-secret',
+          value: 'bundled-account-secret',
         }),
         createdAt: 1,
         updatedAt: 1,
@@ -160,7 +163,17 @@ function installCredentialSettings(
 }
 
 describe('createBundledConversationRuntimes', () => {
+  let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+  beforeEach(async () => {
+    const purposes = createConnectedPurposeCatalogHttpBoundary();
+    account = await createPlainArtifactHomeFixture('https://bundled-credentials.example.test', {
+      handleRequest: async (path, init) => await purposes.handle(new URL(path, 'https://bundled-credentials.example.test'), init)
+        ?? answerVoiceRealtimePreparationHttpRequest(new URL(path, 'https://bundled-credentials.example.test'), storage.getState().settings),
+    });
+    await purposes.hydrate({ serverId: account.home.id, accountId: 'artifact-account' });
+  });
   afterEach(() => {
+    account?.dispose();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -183,8 +196,7 @@ describe('createBundledConversationRuntimes', () => {
     async (_approvalState, approvedRecipientContractDigest) => {
       const entry = createCredentialSettingsEntry();
       const settings = installCredentialSettings(approvedRecipientContractDigest);
-      const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue')
-        .mockReturnValue('bundled-account-secret');
+      const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue');
       const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
         expect(new Headers(init?.headers).get('authorization'))
           .toBe('Bearer bundled-account-secret');
@@ -229,8 +241,7 @@ describe('createBundledConversationRuntimes', () => {
     const settings = installCredentialSettings(
       createRecipientContractDigestV1(recipientContract),
     );
-    const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue')
-      .mockReturnValue('bundled-account-secret');
+    const decryptSecretValue = vi.spyOn(sync, 'decryptSecretValue');
     const fetch = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('authorization'))
         .toBe('Bearer bundled-account-secret');

@@ -12,11 +12,11 @@ import {
     createProviderSettingsHarness,
     type ProviderRpcRequest,
 } from '@/dev/testkit/harness/providerSettingsHarness';
-import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
 import { resetDynamicModelProbeCacheForTests, writeDynamicModelProbeCacheSuccess } from '@/sync/domains/models/dynamicModelProbeCache';
 
 const account = createProviderSettingsAccountHarness();
+const { refreshProviderCatalog } = await import('@/sync/engine/settings/providerCatalogEngine');
 const daemon = createProviderSettingsHarness();
 // Hoist the genuine Machine transport boundary before the shared Sync graph
 // imports Actions; the canonical daemon fixture still owns all response shapes.

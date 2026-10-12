@@ -24,6 +24,22 @@ function hasAncestor(
 }
 
 describe('DaemonModelPackRow', () => {
+    it('says an unknown status once rather than as both the description and the value', async () => {
+        const row: ModelCatalogRow = {
+            packId: 'pack-unknown', kind: 'stt_sherpa', displayName: 'Unknown Pack', model: 'zipformer',
+            state: 'unknown', progress: null, lastError: null, loadedArtifactBytes: null,
+            isDefault: false, canInstall: false, canRemove: false, licenseReview: null, sourcePluginId: null,
+        };
+        const screen = await renderScreen(
+            <DaemonModelPackRow row={row} actionInFlight={false}
+                onSetDefault={() => undefined} onInstall={() => undefined} onRemove={() => undefined} />,
+        );
+        // The value column already reads the state; the description must not repeat it.
+        const item = screen.tree.root.findAll((node) => node.props.testID === 'voice-model-row-pack-unknown' && 'title' in node.props)[0];
+        expect(item.props.detail).toBe(t('settingsVoice.local.models.state.unknown'));
+        expect(item.props.subtitle).toBeUndefined();
+    });
+
     it('keeps an accessible cancel action visible for the active install', async () => {
         const row: ModelCatalogRow = {
             packId: 'pack-active', kind: 'tts_sherpa', displayName: 'Active Pack', model: 'kokoro',

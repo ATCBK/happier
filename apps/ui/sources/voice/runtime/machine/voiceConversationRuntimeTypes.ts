@@ -3,6 +3,8 @@ import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/
 
 export type VoiceMachineErrorKind =
     | 'mic_permission_denied'
+    | 'mic_unavailable'
+    | 'speech_recognition_unavailable'
     | 'mic_permission_revoked'
     | 'mic_ended'
     | 'mic_plateau'
@@ -32,6 +34,7 @@ export type VoiceMachineRecoveryAction =
     | 'open_settings_then_reconnect'
     | 'review_credentials'
     | 'select_execution_machine'
+    | 'select_speech_engine'
     | 'connect_agent'
     | 'install_agent_runtime'
     | 'update_agent_runtime'

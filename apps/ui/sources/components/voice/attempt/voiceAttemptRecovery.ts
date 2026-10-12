@@ -1,6 +1,8 @@
 import { Linking, Platform } from 'react-native';
 
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
+import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import type { VoiceConnectRecoveryTarget } from '@/components/voice/surface/resolveVoiceConnectRecoveryTarget';
 import type { VoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
 import { voiceSessionManager } from '@/voice/session/voiceSession';
@@ -96,14 +98,14 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
      */
     setupIncomplete: boolean;
     context: VoiceAttemptRecoveryContext;
-    navigate: (href: unknown) => void;
+    navigate: (href: unknown) => void | Promise<void>;
 }>): Promise<boolean> {
     const { context, navigate, recoveryAction, setupIncomplete } = params;
     if (params.isCurrent?.() === false) return false;
     if ('expectedAttempt' in params && !voiceSessionManager.matchesAttempt(params.expectedAttempt ?? null)) return false;
         if (recoveryAction === 'connect_agent') {
             if (context.connectRecoveryTarget.kind === 'unavailable') return false;
-            navigate(
+            await navigate(
                 context.connectRecoveryTarget.kind === 'exact'
                     ? context.connectRecoveryTarget.route
                     : context.connectRecoveryTarget.kind === 'provider_settings'
@@ -115,7 +117,7 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
         if (recoveryAction === 'install_agent_runtime' || recoveryAction === 'update_agent_runtime') {
             const runtimeRecoveryTarget = context.runtimeRecoveryTarget;
             if (!runtimeRecoveryTarget) return false;
-            navigate({
+            await navigate({
                 pathname: '/(app)/settings/agents/[agentId]',
                 params: {
                     agentId: runtimeRecoveryTarget.agentId,
@@ -128,20 +130,24 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
             return true;
         }
         if (recoveryAction === 'review_credentials') {
-            navigate(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
+            await navigate(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
             return true;
         }
         if (recoveryAction === 'select_execution_machine') {
-            navigate(VOICE_SETTINGS_EXECUTION_MACHINE_FOCUS_TARGET);
+            await navigate(VOICE_SETTINGS_EXECUTION_MACHINE_FOCUS_TARGET);
+            return true;
+        }
+        if (recoveryAction === 'select_speech_engine') {
+            await navigate(buildSettingHref(SETTINGS_ROUTES.voiceConversations, VOICE_CONVERSATIONS_SETTINGS.settings.sttProvider));
             return true;
         }
         if (recoveryAction === 'open_settings' || recoveryAction === 'open_settings_then_reconnect') {
             if (Platform.OS === 'web') {
-                navigate(SETTINGS_ROUTES.voice);
+                await navigate(SETTINGS_ROUTES.voice);
                 return true;
             }
-            await Linking.openSettings().catch(() => {
-                if (params.isCurrent?.() !== false) navigate(SETTINGS_ROUTES.voice);
+            await Linking.openSettings().catch(async () => {
+                if (params.isCurrent?.() !== false) await navigate(SETTINGS_ROUTES.voice);
             });
             return params.isCurrent?.() !== false;
         }
@@ -160,7 +166,7 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
             return true;
         }
         if (setupIncomplete) {
-            navigate(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
+            await navigate(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
             return true;
         }
         return false;

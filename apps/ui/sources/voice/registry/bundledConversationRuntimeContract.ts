@@ -336,6 +336,7 @@ export type BundledRealtimeProviderRuntimeHost = Readonly<{
     adapterId: string;
     /** Provider-declared effect-call custody, fail-closed for undeclared adapters. */
     effectCalls: VoiceConversationToolEffectCalls;
+    exposure?: 'voice_assistant' | 'current_ui_only';
     resolveSessionId(explicitSessionId?: string | null): string | null;
     submitResults(
       responseId: string,

@@ -27,7 +27,7 @@ const directPlaybackConsumerPaths = [
     'sources/voice/runtime/daemonInference/DaemonTtsController.ts',
     'sources/voice/runtime/machine/voiceBargeInController.ts',
     'sources/voice/runtime/realtime/createRealtimeBargeInCoordinator.ts',
-    'sources/voice/settings/panels/localTts/LocalNeuralTtsSettings.native.tsx',
+    'sources/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts.ts',
 ] as const;
 
 const retiredCompatibilityWrappers = [

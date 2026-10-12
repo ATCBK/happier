@@ -1,10 +1,11 @@
 import * as React from 'react';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { act } from 'react-test-renderer';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit';
-import type { Settings } from '@/sync/domains/settings/settings';
+import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { voiceSettingsDefaults, type VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
@@ -12,6 +13,9 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { t } from '@/text';
 import { createVoiceProviderRegistry, type VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 
 // This third-party SDK export is unavailable on some workers and is never used by these settings rows.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -19,9 +23,22 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 }));
 
 
-const storageBoundary = vi.hoisted(() => ({
-  settings: null as Settings | null,
-}));
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+const storageBoundary = {
+  get settings() { return storage.getState().settings; },
+  set settings(value: Settings | null) { account.replaceSettings(value ?? settingsDefaults); },
+};
+installDisconnectedServerSocketBoundary();
+
+beforeEach(async () => {
+  account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+  onTestFinished(account.dispose);
+  const machine = createMachineFixture({ metadata: {
+    displayName: 'Primary Mac', host: 'primary-mac', platform: 'darwin',
+    happyCliVersion: '1', happyHomeDir: '/h', homeDir: '/u',
+  } });
+  storage.getState().applyMachines([machine], true, { sourceServerId: account.scope.serverId });
+});
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -37,46 +54,7 @@ vi.mock('react-native-unistyles', async () => {
   return createUnistylesMock();
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-  useAllMachines: () => [
-    {
-      id: 'machine-1',
-      active: true,
-      createdAt: 1,
-      updatedAt: 1,
-      activeAt: 1,
-      seq: 1,
-      metadata: {
-        displayName: 'Primary Mac',
-        host: 'primary-mac',
-        platform: 'darwin',
-        happyCliVersion: '1',
-        happyHomeDir: '/h',
-        homeDir: '/u',
-      },
-      metadataVersion: 1,
-      daemonState: null,
-      daemonStateVersion: 1,
-    },
-  ],
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-  return {
-    // Unselected fixtures only need the resolver to fail closed; the focused
-    // source-selection cases install their canonical parsed Settings value.
-    useSettingsSelector: <T,>(selector: (settings: Settings) => T) => selector(storageBoundary.settings ?? settingsDefaults),
-  };
-});
 
 function localVoice(providerId: 'local_direct' | 'local_conversation'): VoiceSettings {
   return {
@@ -102,7 +80,7 @@ it('keeps the Advanced Voice computer available for model management when conver
   } };
   const setVoice = vi.fn();
   const view = await renderSettingsView(<VoiceExecutionMachineSection voice={voice} setVoice={setVoice} intent="advanced" />);
-  const picker = view.tree.root.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+  const picker = view.tree.root.findAll((node) => node.type === DropdownMenu)[0];
   expect(picker).toBeDefined();
   await act(async () => { picker!.props.onSelect('machine-1'); });
   expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
@@ -194,7 +172,6 @@ function agentRealtimeRegistry(): VoiceProviderRegistry {
 
 describe('VoiceExecutionMachineSection', () => {
   beforeEach(() => {
-    storage.setState({ settingsScope: { serverId: 'voice-picker-home', accountId: 'voice-picker-account' } });
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
     vi.clearAllMocks();
   });
@@ -208,7 +185,7 @@ describe('VoiceExecutionMachineSection', () => {
       );
 
       const dropdown = screen.findAll(
-        (node) => String(node.type) === 'DropdownMenu'
+        (node) => node.type === DropdownMenu
           && node.props?.itemTrigger?.title === t('settingsVoice.pages.conversations.runsOn'),
       )[0];
 
@@ -249,7 +226,7 @@ describe('VoiceExecutionMachineSection', () => {
       />,
     );
 
-      expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(1);
+      expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(1);
     },
   );
 
@@ -274,7 +251,7 @@ describe('VoiceExecutionMachineSection', () => {
       />,
     );
 
-    expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(0);
+    expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(0);
   });
 
   it.each([
@@ -318,7 +295,7 @@ describe('VoiceExecutionMachineSection', () => {
         />,
       );
 
-      expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(1);
+      expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(1);
     },
   );
 
@@ -340,7 +317,7 @@ describe('VoiceExecutionMachineSection', () => {
         registry={agentRealtimeRegistry()}
       />,
     );
-    const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+    const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
 
     expect(dropdown).toBeTruthy();
     dropdown?.props.onSelect('machine-1');
@@ -358,7 +335,7 @@ describe('VoiceExecutionMachineSection', () => {
     const screen = await renderSettingsView(
       <VoiceExecutionMachineSection voice={voice} setVoice={setVoice} />,
     );
-    const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+    const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
 
     dropdown?.props.onSelect('auto');
     expect(useVoiceTargetStore.getState().autoTargetMachineByScope[accountSettingsScopeKeySuffix(scope)]).toBeNull();
@@ -380,9 +357,29 @@ describe('VoiceExecutionMachineSection', () => {
     const screen = await renderSettingsView(
       <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} />,
     );
-    const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+    const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
 
     expect(dropdown?.props.itemTrigger.detailFormatter()).toBe('missing-machine');
+  });
+
+  it('names the machine Automatic uses before any conversation has remembered one', async () => {
+    const VoiceExecutionMachineSection = await loadSection();
+    const voice = {
+      ...localVoice('local_conversation'),
+      executionMachine: { mode: 'auto' as const, machineId: null },
+    };
+    account.replaceVoice(voice);
+    // Automatic picks among online machines; the shared fixture's activity is long past.
+    storage.getState().applyMachines([createMachineFixture({ activeAt: Date.now(), metadata: {
+      displayName: 'Primary Mac', host: 'primary-mac', platform: 'darwin',
+      happyCliVersion: '1', happyHomeDir: '/h', homeDir: '/u',
+    } })], true, { sourceServerId: account.scope.serverId });
+    const screen = await renderSettingsView(
+      <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} intent="advanced" />,
+    );
+    const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
+
+    expect(dropdown?.props.itemTrigger.detailFormatter()).toBe(`${t('settingsVoice.local.executionMachine.autoTitle')} · Primary Mac`);
   });
 
   it('shows the sticky resolved machine in the Automatic selection', async () => {
@@ -395,7 +392,7 @@ describe('VoiceExecutionMachineSection', () => {
     const screen = await renderSettingsView(
       <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} />,
     );
-    const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+    const dropdown = screen.findAll((node) => node.type === DropdownMenu)[0];
 
     expect(dropdown?.props.itemTrigger.detailFormatter()).toContain('Primary Mac');
   });
@@ -413,7 +410,7 @@ describe('VoiceExecutionMachineSection', () => {
       />,
     );
 
-    expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(expectedCount);
+    expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(expectedCount);
   });
 
   it.each(['happier.voice.openai/realtime-openai', 'happier.voice.xai/realtime-grok'] as const)(
@@ -427,7 +424,7 @@ describe('VoiceExecutionMachineSection', () => {
         />,
       );
 
-      expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(0);
+      expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(0);
     },
   );
 
@@ -465,6 +462,7 @@ describe('VoiceExecutionMachineSection', () => {
       : initial;
     const selected = applyAccountVoiceCredentialSourceSelection({
       settings: withSavedSecret,
+      connectedPurposes: account.purposes.value,
       mutation: {
         contribution,
         credentialSlotId: provider.declaration.credentials!.slot.id,
@@ -484,6 +482,7 @@ describe('VoiceExecutionMachineSection', () => {
       },
       currentDeclaration: provider.declaration,
     });
+    await account.replaceConnectedPurposes(selected.connectedPurposes);
     storageBoundary.settings = selected.settings;
     try {
       const VoiceExecutionMachineSection = await loadSection();
@@ -491,7 +490,7 @@ describe('VoiceExecutionMachineSection', () => {
       const screen = await renderSettingsView(
         <VoiceExecutionMachineSection voice={selected.settings.voice} setVoice={setVoice} />,
       );
-      const dropdowns = screen.findAll((node) => String(node.type) === 'DropdownMenu');
+      const dropdowns = screen.findAll((node) => node.type === DropdownMenu);
       expect(dropdowns).toHaveLength(expectedCount);
       if (sourceKind === 'connectedAccount') {
         const dropdown = dropdowns[0];
@@ -530,8 +529,8 @@ describe('VoiceExecutionMachineSection', () => {
       />,
     );
 
-    expect((await renderMode('byo')).findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(0);
-    expect((await renderMode('happier')).findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(0);
+    expect((await renderMode('byo')).findAll((node) => node.type === DropdownMenu)).toHaveLength(0);
+    expect((await renderMode('happier')).findAll((node) => node.type === DropdownMenu)).toHaveLength(0);
   });
 
   it.each([
@@ -549,6 +548,6 @@ describe('VoiceExecutionMachineSection', () => {
       <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} registry={modeRegistry()} />,
     );
 
-    expect(screen.findAll((node) => String(node.type) === 'DropdownMenu')).toHaveLength(0);
+    expect(screen.findAll((node) => node.type === DropdownMenu)).toHaveLength(0);
   });
 });

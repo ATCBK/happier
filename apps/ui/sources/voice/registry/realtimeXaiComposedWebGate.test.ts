@@ -1,22 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import {
   buildQualifiedPluginContributionKey,
   createPluginContributionIdentity,
   createRecipientContractDigestV1,
 } from '@happier-dev/protocol';
 
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { encodeBase64 } from '@/encryption/base64';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { Encryption } from '@/sync/encryption/encryption';
 import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import '@/sync/syncEngine';
@@ -25,7 +28,7 @@ import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch'
 import { voiceSessionBindingManager } from '@/voice/binding/voiceConversationBindingRuntime';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
-import { saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { applyAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import {
   buildVoiceTranscriptHistorySessionMetadata,
@@ -60,6 +63,14 @@ import {
 const XAI_HISTORY_SESSION_ID = 'voice-history-xai-composed';
 const XAI_SOURCE_CREDENTIAL = 'xai_source_composed';
 let historyLookupSessionIds: readonly string[] = [];
+let xaiSessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
+let persistedXaiSettings: ReturnType<typeof storage.getState>['settings'];
+let xaiAccountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+
+function readProviderConversationOwnerMetadata(sessionId: string) {
+  const session = storage.getState().sessions[sessionId];
+  return session ? readSessionOwnerMetadataView(session) : null;
+}
 
 function installProviderConversationMetadata(
   sessionId: string,
@@ -74,7 +85,7 @@ function installProviderConversationMetadata(
         ...current.sessions,
         [sessionId]: {
           ...session,
-          metadata: writeVoiceProviderConversationMetadata(session.metadata, {
+          [session.metadataLayoutVersion === 1 ? 'ownerMetadataView' : 'metadata']: writeVoiceProviderConversationMetadata(readSessionOwnerMetadataView(session), {
             providerId: 'happier.voice.xai/realtime-grok',
             state: { conversationId },
             updatedAt: Date.now(),
@@ -83,21 +94,13 @@ function installProviderConversationMetadata(
       },
     } as never;
   });
+  xaiSessionHttp.replaceSession(sessionId);
 }
 
 function mockHistoryCarrierDiscovery(
   sessionIds: readonly string[] = [XAI_HISTORY_SESSION_ID],
 ): void {
   historyLookupSessionIds = sessionIds;
-  vi.spyOn(sync, 'ensureSessionVisibleForMessageRoute').mockImplementation(
-    async (sessionId) => ({ kind: 'available', sessionId }) as never,
-  );
-}
-
-function buildToken(accountId: string): string {
-  const encode = (value: unknown) =>
-    encodeBase64(new TextEncoder().encode(JSON.stringify(value)), 'base64url');
-  return `${encode({ alg: 'none' })}.${encode({ sub: accountId })}.signature`;
 }
 
 class FakeWebSocket {
@@ -158,7 +161,8 @@ function xaiEntry() {
   return entry;
 }
 
-function installXaiSettings(resumptionEnabled: boolean): void {
+let xaiPurposes: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary>;
+async function installXaiSettings(resumptionEnabled: boolean): Promise<void> {
   const entry = xaiEntry();
   const recipientContract = createBundledVoiceRecipientContract({
     pluginId: entry.pluginId,
@@ -177,7 +181,7 @@ function installXaiSettings(resumptionEnabled: boolean): void {
       },
     },
   });
-  const credentialSettings = saveAndUseAccountVoiceCredential({
+  const credentialInput = {
     settings: settingsParse({
       ...settingsDefaults,
       voiceSettingsV1: voice,
@@ -196,7 +200,14 @@ function installXaiSettings(resumptionEnabled: boolean): void {
     expectedSecretUpdatedAt: null,
     approvedRecipientContractDigest:
       createRecipientContractDigestV1(recipientContract),
-  }).settings;
+  };
+  const selected = applyAccountVoiceCredentialSourceSelection({
+    settings: saveAndUseAccountVoiceCredential(credentialInput).settings, connectedPurposes: { v: 1, bindings: [] }, currentDeclaration: entry.declaration,
+    mutation: { contribution: credentialInput.contribution, credentialSlotId: credentialInput.credentialSlotId,
+      expectedSettingsVersion: 1, selection: { kind: 'savedSecret' } },
+  });
+  const credentialSettings = selected.settings;
+  persistedXaiSettings = credentialSettings;
   storage.setState((current) => ({
     ...current,
     settings: {
@@ -221,11 +232,17 @@ function installXaiSettings(resumptionEnabled: boolean): void {
     },
     sessionMessages: {},
   }) as never);
+  xaiSessionHttp.replaceSession(XAI_HISTORY_SESSION_ID);
+  xaiPurposes = createConnectedPurposeCatalogHttpBoundary({ initialValue: selected.connectedPurposes });
+  const scope = storage.getState().settingsScope;
+  if (!scope) throw new Error('Expected the XAI fixture Account scope');
+  await xaiPurposes.hydrate(scope);
 }
 
 function installXaiFetchBoundary(): ReturnType<typeof vi.fn> {
   const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/v1/tts/voices')) return Response.json({ voices: [{ voice_id: 'ara', name: 'Ara' }] });
     if (!url.endsWith('/v1/realtime/client_secrets')) {
       throw new Error(`unexpected xAI fetch: ${url}`);
     }
@@ -380,6 +397,9 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   const originalSyncCredentials = Reflect.get(sync, 'credentials');
 
   beforeEach(async () => {
+    xaiPurposes = createConnectedPurposeCatalogHttpBoundary();
+    xaiSessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    persistedXaiSettings = settingsParse(settingsDefaults);
     await resetServerReachabilitySupervisors();
     const server = await upsertServerProfile({
       serverUrl: 'https://xai-composed.example.test',
@@ -391,18 +411,15 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       'getCredentialsForServerUrl',
     ).mockResolvedValue(null);
     await switchConnectionToActiveServer();
+    credentialsForServer.mockRestore();
     storage.getState().activateProfileScope({
       serverId: server.id,
       accountId: 'xai-composed-account',
     });
-    const secretBytes = new Uint8Array(32).fill(9);
-    const credentials: AuthCredentials = {
-      token: buildToken('xai-composed-account'),
-      secret: encodeBase64(secretBytes, 'base64url'),
-    };
-    Reflect.set(sync, 'credentials', credentials);
-    sync.encryption = await Encryption.create(secretBytes);
-    credentialsForServer.mockResolvedValue(credentials);
+    await storage.getState().activateSettingsScope({
+      serverId: server.id,
+      accountId: 'xai-composed-account',
+    });
     resetVoiceAdapterRegistryForTests();
     resetVoiceSessionStoreForTests();
     voiceConversationRuntimeMachine.reset();
@@ -420,11 +437,20 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     installXaiFetchBoundary();
     let nextTranscriptSeq = 0;
-    vi.spyOn(apiSocket, 'request').mockRejectedValue(
-      new Error('dynamic active request must not own transcript persistence'),
-    );
-    setRuntimeFetch(async (input, init) => {
+    const activeRequest = apiSocket.request.bind(apiSocket);
+    vi.spyOn(apiSocket, 'request').mockImplementation((path, init, options) =>
+      String(path).endsWith('/messages') && init?.method === 'POST'
+        ? Promise.reject(new Error('dynamic active request must not own transcript persistence'))
+        : activeRequest(path, init, options));
+    const accountRequest = async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
+      if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') return Response.json({ messages: [], hasMore: false });
+      const purposeResponse = await xaiPurposes.handle(input, init);
+      if (purposeResponse) return purposeResponse;
+      const preparation = answerVoiceRealtimePreparationHttpRequest(input, persistedXaiSettings);
+      if (preparation) return preparation;
+      const sessionResponse = xaiSessionHttp.handle(input, init);
+      if (sessionResponse) return sessionResponse;
       if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
         return new Response('{}', {
           status: 200,
@@ -446,24 +472,15 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       }
       if (url.endsWith('/v2/sessions/lookup-by-tags')) {
         return Response.json({
-          sessions: historyLookupSessionIds.map((id) => ({
-            id,
-            seq: 0,
-            createdAt: 1,
-            updatedAt: 1,
-            active: false,
-            activeAt: 1,
-            metadata: '{}',
-            metadataVersion: 1,
-            agentState: null,
-            agentStateVersion: 0,
-            dataEncryptionKey: null,
+          sessions: await Promise.all(historyLookupSessionIds.map(async id => {
+            const response = xaiSessionHttp.handle(`${getActiveServerSnapshot().serverUrl}/v2/sessions/${encodeURIComponent(id)}`);
+            if (!response?.ok) throw new Error(`Missing history carrier HTTP fixture: ${id}`);
+            const body = await response.json();
+            return body.session;
           })),
         });
       }
-      expect(url).toBe(
-        `https://xai-composed.example.test/v2/sessions/${XAI_HISTORY_SESSION_ID}/messages`,
-      );
+      if (url !== `https://xai-composed.example.test/v2/sessions/${XAI_HISTORY_SESSION_ID}/messages`) return Response.json({ error: 'not_found' }, { status: 404 });
       expect(init?.method).toBe('POST');
       const body = JSON.parse(String(init?.body)) as Readonly<{
         localId: string;
@@ -481,31 +498,14 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    });
-    vi.spyOn(sync, 'patchSessionMetadataWithRetry').mockImplementation(
-      async (sessionId, updater) => {
-        const session = storage.getState().sessions[sessionId];
-        if (!session) throw new Error(`missing session ${sessionId}`);
-        if (!session.metadata) throw new Error(`missing session metadata ${sessionId}`);
-        if (updater === 'ownerMigration') {
-          throw new Error('unexpected owner migration in voice metadata fixture');
-        }
-        const metadata = updater(session.metadata);
-        storage.setState((current) => ({
-          ...current,
-          sessions: {
-            ...current.sessions,
-            [sessionId]: {
-              ...session,
-              metadata,
-            },
-          },
-        }) as never);
-      },
-    );
+    };
+    setRuntimeFetch(accountRequest);
+    xaiAccountConnection = await restoreServerAccountForTest({ serverUrl: server.serverUrl, accountId: 'xai-composed-account', credentialScope: 'restored-home', request: accountRequest });
+    await xaiPurposes.hydrate({ serverId: server.id, accountId: 'xai-composed-account' });
   });
 
   afterEach(async () => {
+    await xaiAccountConnection?.dispose(); xaiAccountConnection = null;
     await resetServerReachabilitySupervisors();
     resetRuntimeFetch();
     sync.encryption = originalSyncEncryption;
@@ -517,14 +517,14 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('runs approved SavedSecret through public activation, host PCM/WebSocket, and the canonical history carrier', async () => {
-    installXaiSettings(false);
+    await installXaiSettings(false);
     const patchSessionMetadata = vi.spyOn(sync, 'patchSessionMetadataWithRetry');
     const composed = createSourceComposedXaiRuntime();
 
     try {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
 
-      expect(composed.requestAccountOperation).toHaveBeenCalledTimes(1);
+      expect(composed.requestAccountOperation.mock.calls.filter(([request]) => request.operationId === 'client-auth')).toHaveLength(1);
       expect(composed.ensureMicActive).toHaveBeenCalledTimes(1);
       expect(composed.createWebSocketPcmMedia).toHaveBeenCalledTimes(1);
       expect(composed.pcmStart).toHaveBeenCalledTimes(1);
@@ -610,19 +610,21 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('persists and resumes the provider conversation on the durable history carrier', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     const patchSessionMetadata = vi.spyOn(sync, 'patchSessionMetadataWithRetry');
     const composed = createSourceComposedXaiRuntime();
 
     try {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
 
-      expect(composed.requestAccountOperation).toHaveBeenCalledTimes(1);
+      expect(composed.requestAccountOperation.mock.calls.filter(([request]) => request.operationId === 'client-auth')).toHaveLength(1);
       expect(FakeWebSocket.instances).toHaveLength(1);
       FakeWebSocket.instances[0]!.emitConversationId('conv-durable');
       await vi.waitFor(() => expect(patchSessionMetadata).toHaveBeenCalledTimes(1));
+      await patchSessionMetadata.mock.results[0]?.value;
+      expect(storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata).not.toHaveProperty('voiceProviderConversationsV1');
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({
         conversationId: 'conv-durable',
@@ -644,7 +646,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       });
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
 
-      expect(composed.requestAccountOperation).toHaveBeenCalledTimes(2);
+      expect(composed.requestAccountOperation.mock.calls.filter(([request]) => request.operationId === 'client-auth')).toHaveLength(2);
       expect(FakeWebSocket.instances).toHaveLength(2);
       expect(new URL(FakeWebSocket.instances[1]!.url).searchParams.get(
         'conversation_id',
@@ -670,7 +672,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         state: { conversationId: 'stale-after-stop' },
       })).rejects.toThrow('voice_provider_conversation_persistence_unavailable');
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({
         conversationId: 'conv-durable',
@@ -682,7 +684,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('forgets only Happier-owned xAI resumption metadata without a provider request', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     mockHistoryCarrierDiscovery();
     const patchSessionMetadata = vi.spyOn(sync, 'patchSessionMetadataWithRetry');
     const composed = createSourceComposedXaiRuntime();
@@ -692,7 +694,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       const socket = FakeWebSocket.instances[0]!;
       socket.emitConversationId('conv-forget-local-only');
       await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({
         conversationId: 'conv-forget-local-only',
@@ -706,7 +708,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       )).resolves.toEqual({ status: 'completed' });
 
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
       expect(patchSessionMetadata).toHaveBeenCalledTimes(2);
@@ -716,7 +718,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       socket.emitConversationId('conv-late-after-forget');
       await Promise.resolve();
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
     } finally {
@@ -726,7 +728,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('forgets only the fixed history carrier after a retained direct-session attempt', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     installProviderConversationMetadata(XAI_HISTORY_SESSION_ID, 'conv-history-before-direct');
     const directTargetSessionId = 'direct-target-before-forget';
     storage.setState((current) => ({
@@ -757,7 +759,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       const historySocket = FakeWebSocket.instances[0]!;
       historySocket.emitConversationId('conv-history-current');
       await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-history-current' }));
       await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
@@ -791,7 +793,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         .toBe('conv-direct-before');
       directSocket.emitConversationId('conv-direct-current');
       await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[directTargetSessionId]?.metadata,
+        readProviderConversationOwnerMetadata(directTargetSessionId),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-direct-current' }));
       await composed.runtime.adapter.stop({ sessionId: directTargetSessionId });
@@ -802,18 +804,18 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       )).resolves.toEqual({ status: 'completed' });
 
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[directTargetSessionId]?.metadata,
+        readProviderConversationOwnerMetadata(directTargetSessionId),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-direct-current' });
 
       historySocket.emitConversationId('conv-history-late-after-forget');
       await Promise.resolve();
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
     } finally {
@@ -823,7 +825,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('forgets persisted history-carrier metadata before any Voice attempt after a fresh composition', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     installProviderConversationMetadata(XAI_HISTORY_SESSION_ID, 'conv-from-prior-process');
     const directTargetSessionId = 'direct-target-with-independent-state';
     storage.setState((current) => ({
@@ -858,11 +860,11 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       )).resolves.toEqual({ status: 'completed' });
 
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[directTargetSessionId]?.metadata,
+        readProviderConversationOwnerMetadata(directTargetSessionId),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-direct-target' });
       expect(patchSessionMetadata).toHaveBeenCalledTimes(1);
@@ -876,7 +878,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('forgets persisted metadata after End Voice and keeps the fenced late provider write inert', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     mockHistoryCarrierDiscovery();
     const composed = createSourceComposedXaiRuntime();
 
@@ -885,7 +887,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       const socket = FakeWebSocket.instances[0]!;
       socket.emitConversationId('conv-before-end');
       await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-before-end' }));
 
@@ -898,7 +900,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       socket.emitConversationId('conv-late-after-end-and-forget');
       await Promise.resolve();
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toBeNull();
     } finally {
@@ -908,7 +910,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('treats an already-absent persisted ID as successful without a metadata mutation', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     mockHistoryCarrierDiscovery();
     const providerFetch = installXaiFetchBoundary();
     const patchSessionMetadata = vi.spyOn(sync, 'patchSessionMetadataWithRetry');
@@ -930,11 +932,10 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
   });
 
   it('does not report completed when the durable metadata clear fails', async () => {
-    installXaiSettings(true);
+    await installXaiSettings(true);
     installProviderConversationMetadata(XAI_HISTORY_SESSION_ID, 'conv-mutation-fails');
     mockHistoryCarrierDiscovery();
-    vi.spyOn(sync, 'patchSessionMetadataWithRetry')
-      .mockRejectedValueOnce(new Error('metadata mutation failed'));
+    xaiSessionHttp.rejectNextPatch(XAI_HISTORY_SESSION_ID);
     const composed = createSourceComposedXaiRuntime();
     voiceSessionBindingStore.getState().unbind(XAI_HISTORY_SESSION_ID);
 
@@ -947,7 +948,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         code: 'voice_runtime_action_failed',
       });
       expect(readVoiceProviderConversationMetadata(
-        storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata,
+        readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-mutation-fails' });
       expect(FakeWebSocket.instances).toHaveLength(0);

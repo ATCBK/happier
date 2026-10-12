@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import type { VoiceLocalSttSettings } from '@/sync/domains/settings/voiceLocalSttSettings';
 import { t } from '@/text';
+import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
 import { LocalNeuralSttSettings } from './LocalNeuralSttSettings';
 
 import type { LocalSttProviderSpec } from '../_types';
@@ -25,4 +26,5 @@ export const localNeuralSttProviderSpec: LocalSttProviderSpec = {
   iconName: 'sparkle',
   detail: t('settingsVoice.local.localNeuralStt.provider.detail'),
   Settings: LocalNeuralProviderSettings,
+  resolvePreferredExecution: (requestedExecution) => resolveLocalNeuralExecutionPolicy({ requestedExecution }).preferredExecution,
 };

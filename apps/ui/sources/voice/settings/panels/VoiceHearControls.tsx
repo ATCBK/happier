@@ -26,11 +26,6 @@ export function VoiceHearControls(props: Readonly<{
 }>) {
   const { handsFree } = props;
   const handsFreeOn = props.handsFreeSupported && handsFree.enabled;
-  const timingReason = !props.handsFreeSupported
-    ? t('settingsVoice.pages.conversations.handsFreeUnsupported')
-    : handsFree.enabled
-      ? undefined
-      : t('settingsVoice.pages.conversations.handsFreeTimingUnavailable');
   const commitEndpointing = (key: 'silenceMs' | 'minSpeechMs') => (draft: string) => {
     const next = Math.max(0, Math.min(MAX_VOICE_TIMER_DELAY_MS, Math.round(Number(draft) * 1000)));
     if (!Number.isFinite(next)) return String(handsFree.endpointing[key] / 1000);
@@ -41,7 +36,9 @@ export function VoiceHearControls(props: Readonly<{
     <>
       <SettingRow
         setting={VOICE_CONVERSATIONS_SETTINGS.settings.handsFree}
-        subtitle={props.handsFreeSupported ? undefined : t('settingsVoice.pages.conversations.handsFreeUnsupported')}
+        subtitle={props.handsFreeSupported
+          ? t('settingsVoice.pages.conversations.handsFreeDescription')
+          : t('settingsVoice.pages.conversations.handsFreeUnsupported')}
         subtitleLines={0}
         disabled={!props.handsFreeSupported}
         rightElement={(
@@ -54,32 +51,32 @@ export function VoiceHearControls(props: Readonly<{
           />
         )}
       />
-      <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs}>
-        <FieldValueItem
-          title={t(VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs.titleKey)}
-          subtitle={timingReason}
-          subtitleLines={0}
-          fieldTestID={`${props.testIDPrefix}.handsFree.silenceMs.field`}
-          kind="decimal"
-          unit="s"
-          disabled={!handsFreeOn}
-          value={String(handsFree.endpointing.silenceMs / 1000)}
-          onCommit={commitEndpointing('silenceMs')}
-        />
-      </SettingAnchor>
-      <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs}>
-        <FieldValueItem
-          title={t(VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs.titleKey)}
-          subtitle={timingReason}
-          subtitleLines={0}
-          fieldTestID={`${props.testIDPrefix}.handsFree.minSpeechMs.field`}
-          kind="decimal"
-          unit="s"
-          disabled={!handsFreeOn}
-          value={String(handsFree.endpointing.minSpeechMs / 1000)}
-          onCommit={commitEndpointing('minSpeechMs')}
-        />
-      </SettingAnchor>
+      {/* Hands-free timing belongs to Hands-free: it is drawn only while Hands-free is on. A search for
+          it while Hands-free is off lands on the page's prerequisite row (VoiceSettingsSearchPrerequisite). */}
+      {handsFreeOn ? (
+        <>
+        <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs}>
+          <FieldValueItem
+            title={t(VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs.titleKey)}
+            fieldTestID={`${props.testIDPrefix}.handsFree.silenceMs.field`}
+            kind="decimal"
+            unit="s"
+            value={String(handsFree.endpointing.silenceMs / 1000)}
+            onCommit={commitEndpointing('silenceMs')}
+          />
+        </SettingAnchor>
+        <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs}>
+          <FieldValueItem
+            title={t(VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs.titleKey)}
+            fieldTestID={`${props.testIDPrefix}.handsFree.minSpeechMs.field`}
+            kind="decimal"
+            unit="s"
+            value={String(handsFree.endpointing.minSpeechMs / 1000)}
+            onCommit={commitEndpointing('minSpeechMs')}
+          />
+        </SettingAnchor>
+        </>
+      ) : null}
       <SettingRow
         setting={VOICE_CONVERSATIONS_SETTINGS.settings.bargeInEnabled}
         rightElement={(

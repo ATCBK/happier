@@ -9,6 +9,7 @@ import { createWorkflowRunSummaryFixture, createAutomationRunFixture } from '@/d
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
 import { buildInboxSessionContextLine } from '@/components/inbox/workGroups/inboxSessionContextLine';
+import { t } from '@/text';
 
 const EMPTY_WORKFLOW_ATTENTION_SOURCE: WorkflowAttentionSource = { serverId: null, available: false, phase: 'idle', runIds: [], refreshFailed: false,
     knownAt: null, hasMore: false, loadingMore: false, loadMoreFailed: false, retry: async () => {}, loadMore: async () => {} };
@@ -36,12 +37,31 @@ function source(): VoiceBriefSource {
 }
 
 describe('Voice brief from the mounted Inbox', () => {
+    it.each([
+        { total: 2, working: 0, needsYou: 0, stalled: 2 },
+        { total: 2, working: 0, needsYou: 2, stalled: 0 },
+        { total: 6, working: 2, needsYou: 1, stalled: 3 },
+    ])('keeps report buckets truthful in the spoken session context: %j', (reports) => {
+        const inbox = source();
+        const candidates = [...inbox.sessionPresentation.sessionsNeedingAttention.map(entry => entry.candidate),
+            ...inbox.sessionPresentation.readySessions].map(candidate => ({ ...candidate, session: { ...candidate.session, reports } }));
+        const brief = buildVoiceBrief({ inbox: { ...inbox, sessionPresentation: buildInboxSessionPresentation({
+            overview: buildActivityOverviewFromCandidates(candidates),
+        }) }, settings: { voice: { privacy: { shareSessionSummary: true } } } });
+        expect(brief.items).toHaveLength(3);
+        for (const item of brief.items) {
+            expect(item.subtitle).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
+            if (reports.working > 0) expect(item.subtitle).toContain(t('sessionWork.strip.stillWorking', { count: reports.working }));
+        }
+        expect(brief.context).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
+    });
     it('keeps originless workflow and automation work at their exact existing Run routes', () => {
         const inbox = source();
         const row = workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'run/a', state: 'interrupted' }));
         const route = { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: 'automation', runId: 'run/b' } };
         const brief = buildVoiceBrief({ inbox: { ...inbox,
-            workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
+            workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,
+                openApprovals: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
             automationAttentionItems: [{ key: 'automation:run/b', run: createAutomationRunFixture({ id: 'run/b', state: 'dispatch_failed' }), route }] }, settings: {} });
         expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa' });
         expect(brief.items.find((item) => item.destination.kind === 'automation')).toMatchObject({ destination: { kind: 'automation', route }, route });
@@ -87,7 +107,7 @@ describe('Voice brief from the mounted Inbox', () => {
 
     it('retains paging/failure facts and never announces caught up from unknown or partial sources', () => {
         const inbox = source();
-        const brief = buildVoiceBrief({ inbox: { ...inbox, sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [] },
+        const brief = buildVoiceBrief({ inbox: { ...inbox, sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
             isLoading: true, showCaughtUp: true, source: { isDataReady: false, personalSessionListCoverageComplete: false },
             workflowAttention: { ...EMPTY_WORKFLOW_ATTENTION_SOURCE, available: true, phase: 'loaded', refreshFailed: true, knownAt: 700, hasMore: true } }, settings: {} });
         expect(brief.caughtUp).toBe(false);

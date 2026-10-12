@@ -1,9 +1,130 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { DownloadOptions, DownloadProgressData, DownloadResumable } from 'expo-file-system/legacy';
 
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
-import { createMemFs } from '@/voice/modelPacks/installerTestFs';
+import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+
+const nativeDownload = vi.hoisted(() => vi.fn<(
+  url: string, uri: string, options?: DownloadOptions, progress?: (value: DownloadProgressData) => void,
+) => Pick<DownloadResumable, 'downloadAsync' | 'pauseAsync' | 'cancelAsync'>>());
+vi.mock('expo-file-system/legacy', () => ({ createDownloadResumable: nativeDownload,
+  FileSystemSessionType: { BACKGROUND: 0, FOREGROUND: 1 } }));
+vi.mock('react-native', async () => {
+  const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeNativeMock({ platformOS: 'android' });
+});
 
 describe('modelPacks installer (native)', () => {
+  it('keeps artifact transfer native with foreground lifetime and numeric progress', async () => {
+    const { createHash } = await import('node:crypto');
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const manifest = { packId: 'native-download', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
+    const progress: number[] = [];
+    nativeDownload.mockImplementation((_url, uri, options, onProgress) => {
+      expect(options?.sessionType).toBe(1);
+      return {
+        async downloadAsync() {
+          files.set(uri, bytes);
+          onProgress?.({ totalBytesWritten: bytes.length, totalBytesExpectedToWrite: bytes.length });
+          return { uri, status: 200, headers: {}, mimeType: null };
+        },
+        async pauseAsync() { return { url: manifest.files[0]!.url, fileUri: uri, options: options ?? {} }; },
+        async cancelAsync() {},
+      };
+    });
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      if (!String(input).includes('manifest.json')) throw new Error('artifact_fetch_crossed_js_boundary');
+      return Response.json(manifest);
+    });
+    try {
+      await ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+        manifestUrl: 'https://example.com/manifest.json', timeoutMs: null,
+        signal: new AbortController().signal, onProgress: (value) => progress.push(value.loaded) },
+        { fs, invalidatePackRuntime: async () => {} });
+      expect(files.get('file:///docs/happier/voice/modelPacks/native-download/model.onnx')).toEqual(bytes);
+      expect(files.has('file:///docs/happier/voice/modelPacks/.native-download.download')).toBe(false);
+      expect(progress.every((loaded, index) => loaded <= bytes.length && loaded >= (progress[index - 1] ?? 0))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals(); nativeDownload.mockReset();
+    }
+  });
+
+  it('awaits native transfer termination after cancellation before deleting its temporary file', async () => {
+    const { createHash } = await import('node:crypto');
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'cancel-native', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: 1,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
+    let finish!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    const terminal = new Promise<void>((resolve) => { finish = resolve; });
+    let targetUri = '';
+    nativeDownload.mockImplementation((url, uri, options) => {
+      targetUri = uri;
+      return {
+        async downloadAsync() { files.set(uri, bytes); started(); await terminal; return undefined; },
+        async pauseAsync() { return { url, fileUri: uri, options: options ?? {} }; },
+        async cancelAsync() {},
+      };
+    });
+    const controller = new AbortController();
+    const install = ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: 1,
+      signal: controller.signal }, { fs, fetch: async (input) => {
+        if (!String(input).includes('manifest.json')) throw new Error('artifact_fetch_crossed_js_boundary');
+        return Response.json(manifest);
+      }, invalidatePackRuntime: async () => {} });
+    let settled = false;
+    const outcome = install.then(() => { settled = true; return null; }, (error: unknown) => { settled = true; return error; });
+    // Also allow the pre-fix implementation to settle, so RED does not hang on absent native wiring.
+    await Promise.race([running, outcome]);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const settledBeforeTerminal = settled;
+    const retainedBeforeTerminal = files.has(targetUri);
+    finish();
+    try {
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('aborted');
+      expect(settledBeforeTerminal).toBe(false);
+      expect(retainedBeforeTerminal).toBe(true);
+      expect(files.has(targetUri)).toBe(false);
+    } finally { nativeDownload.mockReset(); }
+  });
+
+  it.each(['setup', 'http'] as const)('preserves native %s failure when task cleanup also fails', async (failure) => {
+    const { createHash } = await import('node:crypto');
+    const { fs } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'setup-failure', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: 1,
+        sha256: createHash('sha256').update(bytes).digest('hex') }] };
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    nativeDownload.mockImplementation(() => ({
+      async downloadAsync() {
+        if (failure === 'setup') throw new Error('native_setup_failed');
+        return { uri: 'file:///unused', status: 503, headers: {}, mimeType: null };
+      },
+      async pauseAsync() { throw new Error('native_task_unregistered'); },
+      async cancelAsync() {},
+    }));
+    try {
+      await expect(ensureModelPackInstalled({ packId: manifest.packId, mode: 'download_if_missing',
+        manifestUrl: 'https://example.com/manifest.json', timeoutMs: null,
+        signal: new AbortController().signal }, { fs, fetch: async (input) => {
+          if (!String(input).includes('manifest.json')) throw new Error('artifact_fetch_crossed_js_boundary');
+          return Response.json(manifest);
+        }, invalidatePackRuntime: async () => {} })).rejects.toThrow(failure === 'setup' ? 'native_setup_failed' : 'model_pack_download_failed:503');
+      expect(warning).toHaveBeenCalledWith('model_pack_native_download_cleanup_failed', expect.any(Error));
+    } finally { warning.mockRestore(); nativeDownload.mockReset(); }
+  });
+
   it('allows an explicitly unbounded model-pack download to finish after a slow manifest read', async () => {
     vi.useFakeTimers();
     try {
@@ -20,10 +141,11 @@ describe('modelPacks installer (native)', () => {
       const install = ensureModelPackInstalled({ packId: 'slow-download', mode: 'download_if_missing',
         manifestUrl: 'https://example.com/manifest.json',
         timeoutMs: null,
-        signal: new AbortController().signal }, { fs, fetch: fetchImpl, invalidatePackRuntime: async () => {} });
+        signal: new AbortController().signal }, { download: createMemNativeDownload(fs, fetchImpl), fs, fetch: fetchImpl, invalidatePackRuntime: async () => {} });
       const outcome = install.then(() => 'installed', (error: unknown) => error instanceof Error ? error.message : String(error));
       await vi.advanceTimersByTimeAsync(300_000);
       finishManifest?.(Response.json(manifest));
+      await vi.runAllTimersAsync();
       expect(await outcome).toBe('installed');
       expect(await getModelPackInstallSummary({ packId: 'slow-download' }, { fs })).toMatchObject({ installed: true });
     } finally {
@@ -74,7 +196,7 @@ describe('modelPacks installer (native)', () => {
           timeoutMs: 5000,
           signal: new AbortController().signal,
         },
-        {
+        { download: createMemNativeDownload({ Directory, File, Paths: { document: 'file:///docs/' } } as any, (async () => ({ ok: false })) as any),
           fs: { Directory, File, Paths: { document: 'file:///docs/' } } as any,
           fetch: (async () => ({ ok: false })) as any,
         },
@@ -139,7 +261,7 @@ describe('modelPacks installer (native)', () => {
         signal: new AbortController().signal,
         onProgress: (p) => progressCalls.push({ loaded: p.loaded, total: p.total }),
       },
-      {
+      { download: createMemNativeDownload(fs as any, fetchImpl as any),
         fs: fs as any,
         fetch: fetchImpl as any,
       },
@@ -217,7 +339,7 @@ describe('modelPacks installer (native)', () => {
         timeoutMs: 5000,
         signal: new AbortController().signal,
       },
-      {
+      { download: createMemNativeDownload(fs as any, fetchImpl as any),
         fs: fs as any,
         fetch: fetchImpl as any,
       },
@@ -284,7 +406,7 @@ describe('modelPacks installer (native)', () => {
           timeoutMs: 5000,
           signal: new AbortController().signal,
         },
-        {
+        { download: createMemNativeDownload({ Directory, File, Paths: { document: 'file:///docs/' } } as any, fetchImpl as any),
           fs: { Directory, File, Paths: { document: 'file:///docs/' } } as any,
           fetch: fetchImpl as any,
         },
@@ -359,7 +481,7 @@ describe('modelPacks installer (native)', () => {
         timeoutMs: 5000,
         signal: new AbortController().signal,
       },
-      {
+      { download: createMemNativeDownload(fs as any, fetchImpl as any),
         fs: fs as any,
         fetch: fetchImpl as any,
       },

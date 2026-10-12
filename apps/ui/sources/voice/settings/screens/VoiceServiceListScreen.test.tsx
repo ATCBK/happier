@@ -9,6 +9,8 @@ import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useVoiceConversationsReadinessModel } from '@/voice/settings/panels/VoiceProviderSection';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -18,8 +20,8 @@ vi.mock('expo-router', async () => {
 describe('VoiceServiceListScreen', () => {
   it('does not recompute service readiness for unrelated Account settings but observes its credential roots', async () => {
     getPersistenceStorage().clearAll();
-    await storage.getState().activateSettingsScope({ serverId: 'voice-readiness', accountId: 'voice-account' });
-    storage.getState().applySettings(settingsDefaults, 1);
+    const account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+    await refreshSavedSecretCatalog(account.scope);
     let renders = 0;
     const hook = await renderHook(() => {
       renders++;
@@ -33,10 +35,12 @@ describe('VoiceServiceListScreen', () => {
     expect(renders - baseline).toBe(0);
     expect(hook.getCurrent()).toBe(model);
     await act(async () => {
-      storage.getState().applySettingsLocal({ connectedServicesProfileLabelByKey: { 'openai:test': 'Updated account label' } });
+      await account.addOwnerResource();
+      await refreshSavedSecretCatalog(account.scope);
     });
     expect(renders).toBeGreaterThan(baseline);
     await hook.unmount();
+    await account.dispose();
   });
   it('keeps contributed service identities visible in the phone picker', async () => {
     const { VoiceServiceListScreen } = await import('./VoiceServiceListScreen');

@@ -24,7 +24,7 @@ export function revealVoiceCompanionSection(): boolean {
 
 // Mounted presentation owners lend their existing controls; no request survives an unmount.
 let glance: ((open: boolean) => void) | null = null;
-let setup: ((open: boolean) => void) | null = null;
+let setup: ((open: boolean) => boolean | void) | null = null;
 let position: ((point: Readonly<{ x: number; y: number }>) => boolean) | null = null;
 
 export function registerVoiceGlancePresentation(control: NonNullable<typeof glance>): () => void {
@@ -36,14 +36,16 @@ export function setVoiceGlanceOpen(open: boolean): boolean {
     glance(open);
     return true;
 }
+export function hasVoiceTranscriptPresentation(): boolean {
+    return glance !== null || mounted.length > 0;
+}
 export function registerVoiceSetupPresentation(control: NonNullable<typeof setup>): () => void {
     setup = control;
     return () => { if (setup === control) setup = null; };
 }
 export function setVoiceSetupOpen(open: boolean): boolean {
     if (!setup) return false;
-    setup(open);
-    return true;
+    return setup(open) !== false;
 }
 export function registerVoicePresencePosition(control: NonNullable<typeof position>): () => void {
     position = control;

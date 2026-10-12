@@ -5,6 +5,7 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
   isCapturedVoiceExecutionMachineCurrent,
@@ -18,14 +19,30 @@ function machine(id: string, active: boolean, extra: Record<string, unknown> = {
 
 describe('resolveVoiceExecutionMachineIdFromState', () => {
   const settingsScope = { serverId: 'execution-home', accountId: 'execution-account' };
-  beforeEach(() => useVoiceTargetStore.setState({ autoTargetMachineByScope: {} }));
+  const fixtureScope = { serverId: getAppliedActiveServerSnapshot().serverId, accountId: settingsScope.accountId };
+  beforeEach(() => {
+    useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
+    clearMachineRequestReachabilityForTest();
+    storage.setState({ profileScope: fixtureScope });
+  });
+  it('keeps a selected failed machine unreachable in its exact Account despite a fresh heartbeat', () => {
+    const scope = { serverId: getAppliedActiveServerSnapshot().serverId, accountId: 'voice-account' };
+    const state = { profileScope: scope, machines: { selected: machine('selected', true, { activeAt: Date.now() }) },
+      settings: { voice: { executionMachine: { mode: 'fixed', machineId: 'selected' } } } };
+    recordMachineRequestFailed({ ...scope, machineId: 'selected' });
+    expect(resolveVoiceExecutionMachineSelectionFromState(state)).toEqual({ kind: 'selected_unreachable', machineId: 'selected' });
+    expect(resolveVoiceExecutionMachineSelectionFromState({ ...state, profileScope: { ...scope, accountId: 'other-account' } }))
+      .toEqual({ kind: 'resolved', machineId: 'selected' });
+  });
   it('selects the Machine belonging to the applied Home while another Home is staged', () => {
     const original = getAppliedActiveServerSnapshot();
     const originalAvailable = isAppliedActiveServerRuntimeAvailable();
     const stagedServerId = getActiveServerSnapshot().serverId;
     const appliedServerId = `${stagedServerId}-execution-owner`;
     const state = {
+      profileScope: fixtureScope,
       ...storage.getState(),
+      profileScope: { serverId: appliedServerId, accountId: fixtureScope.accountId },
       machines: {},
       machineListByServerId: {
         [stagedServerId]: [machine('wrong-staged-machine', true)],
@@ -118,6 +135,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
   it('resolves fixed and sticky-auto targets without requiring a voice-home directory', () => {
     useVoiceTargetStore.getState().rememberAutoTargetMachine(settingsScope, 'sticky');
     const state = {
+      profileScope: fixtureScope,
       settingsScope,
       machines: { fixed: machine('fixed', true), sticky: machine('sticky', true) },
       settings: {
@@ -136,6 +154,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
     useVoiceTargetStore.getState().rememberAutoTargetMachine(settingsScope, 'sticky');
     let dictationReads = 0;
     const state = {
+      profileScope: fixtureScope,
       settingsScope,
       machines: { sticky: machine('sticky', true) },
       settings: {
@@ -157,6 +176,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('follows a replacement only when the canonical daemon is active', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: {
         old: machine('old', false, { replacedByMachineId: 'replacement' }),
         replacement: machine('replacement', true),
@@ -179,6 +199,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('uses the canonical online grace rule for a recently disconnected fixed machine', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: {
         fixed: machine('fixed', false, { activeAt: Date.now() - 1_000 }),
       },
@@ -198,6 +219,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
   it('fails closed instead of roaming when a sticky target disconnects', () => {
     useVoiceTargetStore.getState().rememberAutoTargetMachine(settingsScope, 'sticky');
     const state = {
+      profileScope: fixtureScope,
       settingsScope,
       machines: {
         sticky: machine('sticky', false),
@@ -215,6 +237,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('uses the canonical preferred-machine ordering only before a sticky auto target exists', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: {
         older: machine('older', true, { createdAt: 1 }),
         newer: machine('newer', true, { createdAt: 2 }),
@@ -234,6 +257,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('honors a scoped override without rewriting the persisted default', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: { global: machine('global', true), scoped: machine('scoped', true) },
       settings: {
         voice: {
@@ -248,6 +272,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('resolves the migrated legacy nested fixed target before choosing an automatic machine', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: {
         wrong: machine('wrong', true),
         configured: machine('configured', true),
@@ -271,6 +296,7 @@ describe('resolveVoiceExecutionMachineIdFromState', () => {
 
   it('fails closed for malformed canonical machine settings instead of choosing another daemon', () => {
     const state = {
+      profileScope: fixtureScope,
       machines: { wrong: machine('wrong', true) },
       settings: {
         voice: {

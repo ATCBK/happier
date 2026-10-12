@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { resolveVoiceSpeechDiagnosticsHealthPresentation } from '@happier-dev/protocol/voice/diagnostics';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
 import { VOICE_PRIVACY_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -51,7 +53,7 @@ function DiagnosticsExportRows(props: Readonly<{
         title={artifact.direction === 'stt_input'
           ? tLoose('settingsVoice.diagnostics.exportSttArtifact')
           : tLoose('settingsVoice.diagnostics.exportTtsArtifact')}
-        subtitle={`${artifact.format.toUpperCase()} · ${Math.max(1, Math.ceil(artifact.byteLength / 1024))} KB`}
+        subtitle={`${artifact.format.toUpperCase()} · ${formatHappierDataBytes(artifact.byteLength, { kind: 'storage' })}`}
         accessibilityLabel={tLoose('settingsVoice.diagnostics.exportArtifactAccessibility')}
         onPress={() => props.onExport(artifact)}
       />
@@ -239,18 +241,6 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
         </>
       ) : null}
           <SettingRow
-            setting={VOICE_PRIVACY_SETTINGS.settings.diagnosticsLocation}
-            testID={status?.settings.enabled && status.settings.consentVersion === 1
-              ? 'settings-voice-diagnostics-status-active'
-              : status
-                ? 'settings-voice-diagnostics-status-inactive'
-                : 'settings-voice-diagnostics-status-unavailable'}
-            mode="info"
-            subtitle={status?.root ?? tLoose('settingsVoice.diagnostics.unavailable')}
-            subtitleTestID="settings-voice-diagnostics-root"
-            subtitleLines={2}
-          />
-          <SettingRow
             setting={VOICE_PRIVACY_SETTINGS.settings.diagnosticsRetention}
             mode="info"
             subtitle={t('settingsVoice.diagnostics.retentionDetail', {
@@ -260,19 +250,41 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
             })}
             subtitleLines={0}
           />
+          {/* What is on the Voice computer is known only once it answers; until then one line says so. */}
+          {status ? (
+            <>
+          <SettingRow
+            setting={VOICE_PRIVACY_SETTINGS.settings.diagnosticsLocation}
+            testID={status.settings.enabled && status.settings.consentVersion === 1
+              ? 'settings-voice-diagnostics-status-active'
+              : 'settings-voice-diagnostics-status-inactive'}
+            mode="info"
+            subtitle={status.root}
+            subtitleTestID="settings-voice-diagnostics-root"
+            subtitleLines={2}
+          />
           <SettingRow
             setting={VOICE_PRIVACY_SETTINGS.settings.diagnosticsBackupPolicy}
             mode="info"
-            subtitle={status?.backupPolicy.status === 'best_effort'
+            subtitle={status.backupPolicy.status === 'best_effort'
               ? tLoose('settingsVoice.diagnostics.backupPolicyBestEffort')
               : tLoose('settingsVoice.diagnostics.unavailable')}
           />
           <DiagnosticsExportRows
             status={status}
-            showEmpty={!status || (healthPresentation?.severity === 'healthy' && status.artifacts.length === 0)}
+            showEmpty={healthPresentation?.severity === 'healthy' && status.artifacts.length === 0}
             busy={busy}
             onExport={(artifact) => { fireAndForget(exportArtifact(artifact), { tag: 'VoiceDiagnosticsSettingsSection.exportArtifact' }); }}
           />
+            </>
+          ) : (
+            <SurfaceStateCard
+              testID="settings-voice-diagnostics-unavailable"
+              size="line"
+              kind="unavailable"
+              title={t('settingsVoice.pages.privacy.diagnosticsUnreachable')}
+            />
+          )}
           {captureFailure ? (
             <Item
               mode="info"
@@ -298,11 +310,11 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
               }}
             />
           ) : null}
-          <SettingRow
+          {canDelete ? <SettingRow
             setting={VOICE_PRIVACY_SETTINGS.settings.diagnosticsDelete}
             testID="settings-voice-diagnostics-delete-all"
             destructive
-            disabled={busy || !canDelete}
+            disabled={busy}
             subtitle={tLoose('settingsVoice.diagnostics.deleteAllSubtitle')}
             onPress={() => {
               fireAndForget((async () => {
@@ -327,7 +339,7 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
                 }
               })(), { tag: 'VoiceDiagnosticsSettingsSection.deleteAll' });
             }}
-          />
+          /> : null}
           <VoiceDiagnosticsIndicator
             wrapAction={(action, operation) => <SettingAnchor setting={operation === 'retry_shutdown'
               ? VOICE_PRIVACY_SETTINGS.settings.diagnosticsRetryShutdown

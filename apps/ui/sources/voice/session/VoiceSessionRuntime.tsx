@@ -52,6 +52,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { resolveLocalDeviceLabel } from '@/utils/platform/resolveLocalDeviceLabel';
 import { readVoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
+import { VoiceSetupFirstSuccessRuntime } from '@/voice/settings/setup/VoiceSetupFirstSuccessRuntime';
 
 const voiceProviderRegistry = createDefaultVoiceProviderRegistry();
 
@@ -342,5 +343,5 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
     selectedCredentialAuthority,
   ]);
 
-  return null;
+  return <VoiceSetupFirstSuccessRuntime />;
 }

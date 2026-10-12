@@ -21,6 +21,9 @@ import { Modal } from '@/modal';
 
 const STT_PACK = listModelPackCatalogEntries('stt_sherpa')[0]!.packId;
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 type LegacyTestClient = Pick<DaemonVoiceInferenceClient, 'getModelsStatus' | 'installModel' | 'removeModel'>;

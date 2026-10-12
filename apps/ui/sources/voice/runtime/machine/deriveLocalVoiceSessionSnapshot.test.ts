@@ -183,6 +183,18 @@ describe('deriveLocalVoiceSessionSnapshot', () => {
         });
     });
 
+    it('keeps a blocked or missing microphone on screen as a failed attempt with its recovery', () => {
+        for (const kind of ['mic_permission_denied', 'mic_unavailable'] as const) {
+            const snapshot = deriveLocalVoiceSessionSnapshot('local_conversation', 'local', createRuntimeSnapshot({
+                controlSessionId: 'session-mic',
+                state: 'mic_error',
+                error: createVoiceMachineError({ kind, reason: kind }),
+            }));
+            // Not a graceful `disconnected` end: the presence would draw that as plain rest.
+            expect(snapshot).toMatchObject({ status: 'error', canStop: false, errorCode: kind });
+        }
+    });
+
     it('projects a recoverable error state as a graceful disconnected end carrying the error code', () => {
         const snapshot = deriveLocalVoiceSessionSnapshot(
             'happier.voice.elevenlabs/realtime-elevenlabs',

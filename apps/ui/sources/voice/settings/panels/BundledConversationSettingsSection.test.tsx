@@ -10,6 +10,8 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 import { voiceSettingsParse, type VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 import { storage } from '@/sync/domains/state/storage';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
 import { upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -21,6 +23,9 @@ import { BundledConversationSettingsSection } from './BundledConversationSetting
 import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -37,13 +42,18 @@ vi.mock('@expo/vector-icons', async () => {
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) =>
-    key === 'settingsVoice.realtimeProviders.operationFailedStage' ? `${key}(stage=${String(params?.stage)})` : key });
+    key === 'settingsVoice.realtimeProviders.operationFailedStage' ? `${key}(stage=${String(params?.stage)})`
+      : key === 'settingsVoice.realtimeProviders.setup.title' ? 'Realtime voice setup' : key });
 });
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock({ confirmResult: true }).module;
 });
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vi.fn() } }));
+vi.mock('@/components/ui/popover', async (importOriginal) => {
+  const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+  return createInlinePopoverModuleMock(importOriginal);
+});
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
   const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
@@ -80,11 +90,12 @@ describe('BundledConversationSettingsSection', () => {
     await account?.dispose();
     storage.setState(initialStorage, true);
   });
-  function saveCredential() {
+  async function saveCredential() {
     account.replaceSettings(upsertAccountVoiceCredential({ settings: account.settings, contribution,
       credentialSlotId: 'api_key', value: 'test-only-api-key', generateId: () => 'voice-test-secret', now: 1,
       expectedSecretId: null, expectedSecretUpdatedAt: null,
     }).settings);
+    await refreshSavedSecretCatalog(account.scope);
   }
   async function render(voice = account.settings.voice) {
     return await renderScreen(<BundledConversationSettingsSection voice={voice} />);
@@ -115,6 +126,19 @@ describe('BundledConversationSettingsSection', () => {
     disposals.push(() => removeExternalVoiceProviderRegistration(token));
     return await render(voiceSettingsParse({ providerId: openAiProviderId }));
   }
+  it('titles an installed first-party service section in words, the same way its fields are resolved', async () => {
+    const base = createDefaultVoiceProviderRegistry().get(openAiProviderId);
+    if (base?.kind !== 'voice.conversation-provider.v1') throw new Error('OpenAI conversation entry missing');
+    // An installed activation carries its own descriptor (external source) with the host's presentation keys.
+    const descriptor = { ...base, source: { kind: 'external' as const, pluginId: base.pluginId, localId: base.declaration?.id ?? 'realtime-openai' } };
+    const token = Object.freeze({});
+    commitExternalVoiceProviderRegistration({ token, pluginId: base.pluginId, localId: descriptor.source.localId, providerId: openAiProviderId, descriptor, adapter: null });
+    disposals.push(() => removeExternalVoiceProviderRegistration(token));
+    const screen = await render(voiceSettingsParse({ providerId: openAiProviderId }));
+    const titles = screen.tree.findAllByType(GroupComponent).map((group) => group.props.title);
+    expect(titles).toContain('Realtime voice setup');
+    expect(titles).not.toContain('settingsVoice.realtimeProviders.setup.title');
+  });
   it('renders only the canonical source selector for a Connected Account-only conversation', async () => {
     const screen = await registerOpenAiSources(true);
     expect(screen.tree.findAllByType(VoiceCredentialSourceField)).toHaveLength(1);
@@ -146,7 +170,7 @@ describe('BundledConversationSettingsSection', () => {
     expect(provider.request.mock.calls.some(([input]) => input.operationId === 'voices')).toBe(false);
   });
   it('projects a retained credential awaiting recipient approval as review-required in provider summaries', async () => {
-    saveCredential();
+    await saveCredential();
     const base = createDefaultVoiceProviderRegistry().get(providerId);
     const slot = base?.accountCredentialSlot;
     if (!base || !slot?.recipientContract) throw new Error('Recipient contract missing');
@@ -158,11 +182,11 @@ describe('BundledConversationSettingsSection', () => {
     const screen = await render();
     const dropdown = screen.tree.findAllByType(DropdownMenu).find((node) => node.props.testID === 'voice-realtime-field-tts-voiceId');
     expect(dropdown?.props.itemTrigger.detailFormatter?.(null)).toBe('settingsVoice.externalCredentials.reviewRequired');
-    expect(account.settings.secrets).toHaveLength(1);
+    expect(account.resources).toHaveLength(1);
     expect(provider.request.mock.calls.some(([input]) => input.operationId === 'voices')).toBe(false);
   });
   it('keeps credential deletion in the canonical credential item instead of rendering a competing disconnect action', async () => {
-    saveCredential();
+    await saveCredential();
     const screen = await render();
     expect(screen.tree.findAllByProps({ title: 'settingsVoice.realtimeProviders.disconnect.title' })).toHaveLength(0);
     expect(screen.tree.findAllByType(CredentialComponent)).toHaveLength(1);
@@ -185,9 +209,12 @@ describe('BundledConversationSettingsSection', () => {
     expect(account.settings.secrets).toHaveLength(0);
     expect(account.writes).toHaveLength(0);
     await act(async () => enterNew());
-    await vi.waitFor(() => expect(account.settings.secrets).toHaveLength(1));
-    expect(account.writes).toHaveLength(1);
-    expect(account.persistedSettings.secrets).toHaveLength(1);
+    await vi.waitFor(() => expect(account.resources).toHaveLength(1));
+    expect(account.promotions).toHaveLength(1);
+    expect(account.persistedSettings.secrets).toHaveLength(0);
+    const resource = account.resources[0]!;
+    expect('resourceId' in resource && openSavedSecretResourceStoredContentV1({ mode: 'plain',
+      resourceId: resource.resourceId, storedContent: resource.storedContent })?.value).toBe('test-only-entered-key');
     expect(account.settings.voice.providers[providerId]?.config).not.toHaveProperty('apiKey');
     expect(account.persistedSettings.voice.providers[providerId]?.config).not.toHaveProperty('apiKey');
   });
@@ -209,7 +236,7 @@ describe('BundledConversationSettingsSection', () => {
     }
   });
   it('reports a bounded provisioning failure stage without persisting an unverified agent id', async () => {
-    saveCredential();
+    await saveCredential();
     const originalRequest = provider.request.getMockImplementation()!;
     provider.request.mockImplementation(async (input) => input.operationId === 'create-tool'
       ? provider.response({ providerPrivateValue: 'must-not-reach-alert' }, 400) : originalRequest(input));
@@ -222,7 +249,7 @@ describe('BundledConversationSettingsSection', () => {
     expect(JSON.stringify(vi.mocked(Modal.alertAsync).mock.calls)).not.toContain('must-not-reach-alert');
   });
   it('keeps client-executed autoprovision independent of daemon selection changes', async () => {
-    saveCredential();
+    await saveCredential();
     const existing = createDeferred<Awaited<ReturnType<typeof provider.request>>>();
     const originalRequest = provider.request.getMockImplementation()!;
     provider.request.mockImplementation(async (input) => input.operationId === 'agents' ? existing.promise : originalRequest(input));
@@ -237,7 +264,7 @@ describe('BundledConversationSettingsSection', () => {
     expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: 'agent_created' });
   });
   it('aborts a deferred autoprovision when its provider target retires without publishing stale work', async () => {
-    saveCredential();
+    await saveCredential();
     const existing = createDeferred<Awaited<ReturnType<typeof provider.request>>>();
     let signal: AbortSignal | undefined;
     const originalRequest = provider.request.getMockImplementation()!;
@@ -270,14 +297,19 @@ describe('BundledConversationSettingsSection', () => {
     expect(config()).toMatchObject({ agentId: 'agent-new' });
   });
   it('merges a completed settings action into the latest canonical same-provider config', async () => {
-    saveCredential();
+    await saveCredential();
     const created = createDeferred<Awaited<ReturnType<typeof provider.request>>>();
     const originalRequest = provider.request.getMockImplementation()!;
-    provider.request.mockImplementation(async (input) => input.operationId === 'create-agent' ? created.promise : originalRequest(input));
+    provider.request.mockImplementation(async (input) => {
+      if (input.operationId !== 'create-agent') return originalRequest(input);
+      await originalRequest(input);
+      return created.promise;
+    });
     const screen = await render();
     await screen.pressByTestIdAsync('voice-settings-action-create-agent');
     await vi.waitFor(() => expect(provider.request.mock.calls.some(([input]) => input.operationId === 'create-agent')).toBe(true));
-    const next = voiceWith({ tts: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts, voiceId: 'voice-new' } });
+    const next = voiceSettingsParse({ ...account.settings.voice,
+      providers: voiceWith({ tts: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts, voiceId: 'voice-new' } }).providers });
     account.replaceVoice(next);
     await act(async () => created.resolve(provider.response({ agent_id: 'agent-new' })));
     await vi.waitFor(() => expect(config()).toMatchObject({ agentId: 'agent-new', tts: { voiceId: 'voice-new' } }));

@@ -19,7 +19,7 @@ import {
 } from './resolveVoiceProviderAvailability';
 import { projectLocalConversationReadinessFacts } from './projectLocalConversationReadinessFacts';
 import { buildVoiceConversationsPipeline } from './pipeline/voicePipelineSteps';
-import { projectVoiceConfiguredAgentTarget } from '@/voice/agent/resolveVoiceConfiguredAgentTarget';
+import { projectVoiceConfiguredAgentTarget } from '@/voice/agent/projectVoiceConfiguredAgentTarget';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 
 const registry = createDefaultVoiceProviderRegistry();

@@ -10,7 +10,8 @@ import {
 } from '@happier-dev/voice-modelpacks';
 
 import { createExpoModelPackInstallerHost, reconcileExpoModelPackPromotion } from '@/voice/modelPacks/installer/host.native';
-import { createMemFs } from '@/voice/modelPacks/installerTestFs';
+import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+import type { ExpoFsFile } from '@/voice/modelPacks/installer/types';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
@@ -56,6 +57,132 @@ function streamResponse(bytes: Uint8Array, status: number): any {
 }
 
 describe('Expo native host — real Range resume (FIND-010)', () => {
+  it('retains its existing prefix and retries only the interrupted native tail', async () => {
+    const { fs, files } = createMemFs();
+    const full = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const prefix = full.slice(0, 3);
+    const manifest = makeManifest(full);
+    const scratchFile = 'file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin';
+    files.set(scratchFile, prefix);
+    seedResumePlan(files, manifest);
+    const controller = new AbortController();
+    const host = createExpoModelPackInstallerHost({ fs, download: async (request) => {
+      expect(request.rangeStart).toBe(prefix.length);
+      files.set(request.fileUri, full.slice(prefix.length, prefix.length + 1));
+      request.onProgress?.(1);
+      controller.abort();
+      throw new Error('aborted');
+    } });
+    await expect(installModelPackWithHost({ host, packId: 'resume', manifest, signal: controller.signal })).rejects.toThrow('aborted');
+    expect(files.get(scratchFile)).toEqual(prefix);
+    expect(files.has('file:///docs/happier/voice/modelPacks/.resume.download')).toBe(false);
+    const retryHost = createExpoModelPackInstallerHost({ fs, download: createMemNativeDownload(fs, async (_url, init) => {
+      expect((init?.headers as Record<string, string>).Range).toBe('bytes=3-');
+      return new Response(full.slice(prefix.length), { status: 206 });
+    }) });
+    await installModelPackWithHost({ host: retryHost, packId: 'resume', manifest, signal: new AbortController().signal });
+    expect(files.get(`${PACK_DIR}/model.bin`)).toEqual(full);
+  });
+
+  it.each(['open failure', 'write failure'] as const)('closes native transfer handles and removes its tail on %s without replacing live bytes', async (outcome) => {
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const prior = new Uint8Array([9, 9]);
+    files.set(`${PACK_DIR}/model.bin`, prior);
+    const BaseFile: new (...args: unknown[]) => ExpoFsFile = fs.File;
+    let activeHandles = 0;
+    class DiskFile extends BaseFile {
+      open() {
+        if (outcome === 'open failure' && this.uri.endsWith('/.resume.download')) throw new Error('disk_open_failed');
+        const handle = super.open();
+        activeHandles += 1;
+        return { readBytes: handle.readBytes, close: () => { activeHandles -= 1; handle.close(); } };
+      }
+      write(content: string | Uint8Array, options?: { append?: boolean }) {
+        if (outcome === 'write failure' && typeof content !== 'string' && this.uri.endsWith('/.resume.scratch/model.bin')) {
+          throw new Error('disk_write_failed');
+        }
+        super.write(content, options);
+      }
+    }
+    fs.File = DiskFile;
+    const host = createExpoModelPackInstallerHost({ fs,
+      download: createMemNativeDownload(fs, async () => new Response(bytes)) });
+    await expect(installModelPackWithHost({ host, packId: 'resume', manifest: makeManifest(bytes),
+      signal: new AbortController().signal })).rejects.toThrow(outcome === 'open failure' ? 'disk_open_failed' : 'disk_write_failed');
+    expect(activeHandles).toBe(0);
+    expect(files.has('file:///docs/happier/voice/modelPacks/.resume.download')).toBe(false);
+    expect(files.get(`${PACK_DIR}/model.bin`)).toEqual(prior);
+  });
+
+  it.each(['success', 'cancel', 'read failure'] as const)('closes bounded native partial reads on %s and retains cancelled bytes for resume', async (outcome) => {
+    const { fs, files } = createMemFs();
+    const chunkBytes = 1024 * 1024;
+    const prefix = new Uint8Array(chunkBytes + 1).fill(7);
+    const full = new Uint8Array(prefix.length + (outcome === 'success' ? 0 : 1)).fill(7);
+    const manifest = makeManifest(full);
+    const scratchFile = 'file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin';
+    files.set(scratchFile, prefix);
+    seedResumePlan(files, manifest);
+    const BaseFile: new (...args: unknown[]) => ExpoFsFile = fs.File;
+    let activeHandles = 0;
+    const readLengths: number[] = [];
+    let failRead = outcome === 'read failure';
+    class TracingFile extends BaseFile {
+      open() {
+        const handle = super.open();
+        activeHandles += 1;
+        let closed = false;
+        return {
+          readBytes: (length: number) => {
+            readLengths.push(length);
+            if (failRead) throw new Error('native_read_failed');
+            return handle.readBytes(length);
+          },
+          close: () => {
+            if (!closed) activeHandles -= 1;
+            closed = true;
+            handle.close();
+          },
+        };
+      }
+    }
+    fs.File = TracingFile;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      if (failRead) throw new Error('native_read_failed');
+      return new Response(full);
+    });
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, fetchImpl), fs });
+    const install = installModelPackWithHost({ host, packId: 'resume', manifest, signal: controller.signal,
+      onProgress: () => { if (outcome === 'cancel') controller.abort(); } });
+    if (outcome === 'success') {
+      await install;
+      expect(Buffer.from(files.get(`${PACK_DIR}/model.bin`)!).equals(Buffer.from(full))).toBe(true);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } else if (outcome === 'cancel') {
+      await expect(install).rejects.toThrow('aborted');
+      expect(Buffer.from(files.get(scratchFile)!).equals(Buffer.from(prefix))).toBe(true);
+      expect(readLengths).toHaveLength(1);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } else {
+      await expect(install).rejects.toThrow('native_read_failed');
+    }
+    expect(readLengths.length).toBeGreaterThan(0);
+    expect(readLengths.every((length) => length <= chunkBytes)).toBe(true);
+    expect(activeHandles).toBe(0);
+    if (outcome === 'cancel') {
+      failRead = false;
+      fetchImpl.mockImplementation(async (_input, init) => {
+        expect((init?.headers as Record<string, string>).Range).toBe(`bytes=${prefix.length}-`);
+        return new Response(full.slice(prefix.length), { status: 206 });
+      });
+      await installModelPackWithHost({ host, packId: 'resume', manifest, signal: new AbortController().signal });
+      expect(Buffer.from(files.get(`${PACK_DIR}/model.bin`)!).equals(Buffer.from(full))).toBe(true);
+      expect(activeHandles).toBe(0);
+    }
+  });
+
   it('does not promote an unlisted file even when scratch has the current immutable plan', async () => {
     const { fs, files } = createMemFs();
     const current = new Uint8Array([1, 2, 3]);
@@ -63,12 +190,11 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     files.set('file:///docs/happier/voice/modelPacks/.resume.scratch/removed.bin', new Uint8Array([9, 9]));
     files.set('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin', current);
     seedResumePlan(files, manifest);
-    const host = createExpoModelPackInstallerHost({
-      fs,
-      fetchImpl: (async () => {
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => {
         throw new Error('current verified partial must not redownload');
-      }) as any,
-      timeoutMs: 5000,
+      }) as any),
+      fs,
+
     });
 
     await installModelPackWithHost({
@@ -98,7 +224,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
       return streamResponse(full.slice(start), 206);
     });
 
-    const host = createExpoModelPackInstallerHost({ fs, fetchImpl: fetchImpl as any, timeoutMs: 5000 });
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, fetchImpl as any), fs });
     await installModelPackWithHost({ host, packId: 'resume', manifest, signal: new AbortController().signal });
 
     expect(observedRange).toBe('bytes=4-');
@@ -107,14 +233,16 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
 
   it('appends chunks incrementally rather than rewriting the whole staged file (LB-L1)', async () => {
     const { fs, files } = createMemFs();
-    const full = new Uint8Array(Array.from({ length: 6 }, (_, i) => i + 1));
+    const chunkBytes = 1024 * 1024;
+    const full = new Uint8Array(chunkBytes * 2 + 3).fill(7);
 
     // Spy on File.write to assert append-mode writes (no full-buffer rewrites).
     const writeCalls: Array<{ append: boolean; length: number }> = [];
     const OriginalFile = fs.File;
-    class TracingFile extends (OriginalFile as any) {
+    const BaseFile: new (...args: unknown[]) => ExpoFsFile = OriginalFile;
+    class TracingFile extends BaseFile {
       write(data: string | Uint8Array, options?: { append?: boolean }) {
-        if (typeof data !== 'string') {
+        if (typeof data !== 'string' && this.uri.endsWith('/.resume.scratch/model.bin')) {
           writeCalls.push({ append: Boolean(options?.append), length: data.byteLength });
         }
         return super.write(data, options);
@@ -124,7 +252,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
 
     // Deliver the body in three separate chunks so multiple appends happen.
     const fetchImpl = vi.fn(async () => {
-      const chunks = [full.slice(0, 2), full.slice(2, 4), full.slice(4, 6)];
+      const chunks = [full.slice(0, chunkBytes), full.slice(chunkBytes, chunkBytes * 2), full.slice(chunkBytes * 2)];
       let i = 0;
       return {
         ok: true,
@@ -134,17 +262,17 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
       } as any;
     });
 
-    const host = createExpoModelPackInstallerHost({ fs, fetchImpl: fetchImpl as any, timeoutMs: 5000 });
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, fetchImpl as any), fs });
     await installModelPackWithHost({ host, packId: 'resume', manifest: makeManifest(full), signal: new AbortController().signal });
 
     // Every binary write of a downloaded chunk must be an append, and each append
-    // is chunk-sized (2 bytes) — never a growing full-file rewrite.
+    // is bounded by the native read budget — never a growing full-file rewrite.
     const chunkAppends = writeCalls.filter((c) => c.append);
     expect(chunkAppends.length).toBeGreaterThanOrEqual(3);
     for (const call of chunkAppends) {
-      expect(call.length).toBeLessThanOrEqual(2);
+      expect(call.length).toBeLessThanOrEqual(chunkBytes);
     }
-    expect(Array.from(files.get(`${PACK_DIR}/model.bin`)!)).toEqual(Array.from(full));
+    expect(Buffer.from(files.get(`${PACK_DIR}/model.bin`)!).equals(Buffer.from(full))).toBe(true);
   });
 
   it('streams existing partial bytes without reading the whole partial through File.bytes', async () => {
@@ -175,7 +303,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
       return streamResponse(full.slice(start), 206);
     });
 
-    const host = createExpoModelPackInstallerHost({ fs, fetchImpl: fetchImpl as any, timeoutMs: 5000 });
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, fetchImpl as any), fs });
     await installModelPackWithHost({ host, packId: 'resume', manifest, signal: new AbortController().signal });
 
     expect(observedRange).toBe('bytes=4-');
@@ -195,9 +323,7 @@ describe('Expo native host per-pack install ownership', () => {
     let firstProgress!: () => void;
     const firstWroteScratch = new Promise<void>((resolve) => { firstProgress = resolve; });
     let firstRead = 0;
-    const firstHost = createExpoModelPackInstallerHost({
-      fs,
-      fetchImpl: (async () => ({
+    const firstHost = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => ({
         ...streamResponse(firstBytes, 200),
         body: {
           getReader: () => ({
@@ -212,13 +338,13 @@ describe('Expo native host per-pack install ownership', () => {
             },
           }),
         },
-      })) as typeof fetch,
-      timeoutMs: 5000,
-    });
-    const secondHost = createExpoModelPackInstallerHost({
+      })) as typeof fetch),
       fs,
-      fetchImpl: (async () => streamResponse(secondBytes, 200)) as typeof fetch,
-      timeoutMs: 5000,
+
+    });
+    const secondHost = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => streamResponse(secondBytes, 200)) as typeof fetch),
+      fs,
+
     });
 
     const firstInstall = installModelPackWithHost({
@@ -261,9 +387,7 @@ describe('Expo native host per-pack install ownership', () => {
     const install = (packId: keyof typeof bytesByPack) => {
       const bytes = bytesByPack[packId];
       let delivered = false;
-      const host = createExpoModelPackInstallerHost({
-        fs,
-        fetchImpl: (async () => ({
+      const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => ({
           ...streamResponse(bytes, 200),
           body: {
             getReader: () => ({
@@ -277,8 +401,9 @@ describe('Expo native host per-pack install ownership', () => {
               },
             }),
           },
-        })) as typeof fetch,
-        timeoutMs: 5000,
+        })) as typeof fetch),
+        fs,
+
       });
       const manifest = { ...makeManifest(bytes), packId } as ModelPackManifest;
       return installModelPackWithHost({
@@ -524,10 +649,9 @@ describe('Expo native host promote rollback intent safety', () => {
     }
     (fs as any).Directory = FailingDirectory;
 
-    const host = createExpoModelPackInstallerHost({
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => streamResponse(full, 200)) as any),
       fs,
-      fetchImpl: (async () => streamResponse(full, 200)) as any,
-      timeoutMs: 5000,
+
     });
 
     await expect(
@@ -553,10 +677,9 @@ describe('Expo native host promote rollback intent safety', () => {
     files.set(`file:///docs/happier/voice/modelPacks/${packId}/pack.json`, new TextEncoder().encode('{}'));
     const manifest = makeManifest(newBytes) as ModelPackManifest;
     manifest.packId = packId;
-    const host = createExpoModelPackInstallerHost({
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => streamResponse(newBytes, 200)) as typeof fetch),
       fs,
-      fetchImpl: (async () => streamResponse(newBytes, 200)) as typeof fetch,
-      timeoutMs: 5000,
+
     });
     const staging = await host.beginStaging(packId, deriveModelPackStagingPlan(manifest));
     await staging.appendDownloadedChunk('model.bin', newBytes);
@@ -586,10 +709,9 @@ describe('Expo native host promote rollback intent safety', () => {
     const manifest = makeManifest(newBytes) as ModelPackManifest;
     manifest.packId = packId;
     const controller = new AbortController();
-    const host = createExpoModelPackInstallerHost({
+    const host = createExpoModelPackInstallerHost({ download: createMemNativeDownload(fs, (async () => streamResponse(newBytes, 200)) as typeof fetch),
       fs,
-      fetchImpl: (async () => streamResponse(newBytes, 200)) as typeof fetch,
-      timeoutMs: 5000,
+
     });
 
     await expect(installModelPackWithHost({

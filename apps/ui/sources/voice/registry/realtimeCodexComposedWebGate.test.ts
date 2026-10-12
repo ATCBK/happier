@@ -9,16 +9,21 @@ import {
   FeaturesResponseSchema,
 } from '@happier-dev/protocol';
 import type { BundledVoiceRuntimeContribution } from '@/voice/session/types';
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { encodeBase64 } from '@/encryption/base64';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 
-installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const rpcBoundary = vi.hoisted(() => ({
   sessionRpc: vi.fn(),
@@ -26,9 +31,7 @@ const rpcBoundary = vi.hoisted(() => ({
 const machineRpcBoundary = vi.hoisted(() => ({
   machineRpc: vi.fn(),
 }));
-const globalMachineBoundary = vi.hoisted(() => ({
-  projectionDescribe: vi.fn(),
-}));
+let daemonProjection: ReturnType<typeof PluginProjectionV2Schema.parse> | null = null;
 
 // Genuine daemon RPC boundary. Internal binding/service/controller logic remains real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
@@ -39,22 +42,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
   machineRpcWithServerScope: machineRpcBoundary.machineRpc,
 }));
 
-vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>();
-  return {
-    ...actual,
-    machineContributionRegistryProjectionDescribe: (
-      ...args: Parameters<typeof actual.machineContributionRegistryProjectionDescribe>
-    ) => globalMachineBoundary.projectionDescribe(...args),
-  };
-});
-
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
-import { Encryption } from '@/sync/encryption/encryption';
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import '@/sync/syncEngine';
 import { sync } from '@/sync/sync';
@@ -102,12 +94,6 @@ function readEntryProviderId(entry: Readonly<{
     pluginId: entry.pluginId,
     localId: entry.declaration.id,
   }));
-}
-
-function buildToken(accountId: string): string {
-  const encode = (value: unknown) =>
-    encodeBase64(new TextEncoder().encode(JSON.stringify(value)), 'base64url');
-  return `${encode({ alg: 'none' })}.${encode({ sub: accountId })}.signature`;
 }
 
 function codexEntry() {
@@ -202,22 +188,36 @@ describe('realtime_codex normal web composed gate', () => {
   let restoreExecutorModuleLoader: (() => void) | null;
   let transcriptRequest: ReturnType<typeof vi.fn>;
   let globalCreationAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null;
+  let sessionHttp: ReturnType<typeof createSessionMetadataHttpBoundary>;
 
   const restoreGlobalCreationAccount = async () => {
+    await globalCreationAccount?.dispose();
     globalCreationAccount = await restoreServerAccountForTest({
       serverUrl: getActiveServerSnapshot().serverUrl,
       accountId: 'codex-composed-account',
-      request: async (input) => {
+      credentialScope: 'restored-home',
+      request: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/health') return Response.json({});
+        const sessionResponse = sessionHttp.handle(input, init);
+        if (sessionResponse) return sessionResponse;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }));
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: storage.getState().settings }, version: 1 });
+        if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
+        if (path === '/v1/machines') return Response.json(Object.keys(storage.getState().machines).map(id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' })));
+        const access = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
+        if (access) {
+          const machineId = decodeURIComponent(access[1]!);
+          const row = createPlainMachineRowFixture({ id: machineId, accountId: 'codex-composed-account' });
+          return Response.json({ machineId, custodian: row.access!.custodian, access: row.access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] });
+        }
         return Response.json({}, { status: 404 });
       },
     });
     activeServerId = globalCreationAccount.home.id;
+    await refreshAcpCatalog({ serverId: activeServerId, accountId: 'codex-composed-account' });
   };
 
   const transcriptPostCount = (): number => transcriptRequest.mock.calls.filter(
@@ -227,31 +227,15 @@ describe('realtime_codex normal web composed gate', () => {
   ).length;
 
   const installTranscriptPersistenceBoundary = async (): Promise<void> => {
-    const secretBytes = new Uint8Array(32).fill(10);
-    const credentials: AuthCredentials = {
-      token: buildToken('codex-composed-account'),
-      secret: encodeBase64(secretBytes, 'base64url'),
-    };
-    Reflect.set(sync, 'credentials', credentials);
-    sync.encryption = await Encryption.create(secretBytes);
-    const tokenStorageSpy = vi.spyOn(
-      TokenStorage,
-      'getCredentialsForServerUrl',
-    ).mockResolvedValue(credentials);
-    const activeRequestSpy = vi.spyOn(apiSocket, 'request').mockRejectedValue(
-      new Error('dynamic active request must not own transcript persistence'),
-    );
+    const activeRequest = apiSocket.request.bind(apiSocket);
+    const activeRequestSpy = vi.spyOn(apiSocket, 'request').mockImplementation((path, init, options) =>
+      String(path).endsWith('/messages') && init?.method === 'POST' ? Promise.reject(new Error('dynamic active request must not own transcript persistence')) : activeRequest(path, init, options));
     setRuntimeFetch(transcriptRequest);
     storage.getState().activateProfileScope({
       serverId: activeServerId,
       accountId: 'codex-composed-account',
     });
     persistenceCleanup = () => {
-      storage.setState((current) => ({ ...current, profileScope: null }));
-      resetRuntimeFetch();
-      sync.encryption = originalSyncEncryption;
-      Reflect.set(sync, 'credentials', originalSyncCredentials);
-      tokenStorageSpy.mockRestore();
       activeRequestSpy.mockRestore();
       persistenceCleanup = null;
     };
@@ -268,21 +252,26 @@ describe('realtime_codex normal web composed gate', () => {
     await switchConnectionToActiveServer();
     credentialsForServer.mockRestore();
     storage.setState((current) => ({ ...current, profileScope: null }));
+    installDirectSessionState();
     nextTranscriptSeq = 0;
     persistenceCleanup = null;
     globalCreationAccount = null;
+    sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
     restoreExecutorModuleLoader = null;
     transcriptRequest = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
+      if (/^\/v[123]\/sessions\/[^/]+\/messages$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') return Response.json({ messages: [], hasMore: false });
+      const sessionResponse = sessionHttp.handle(input, init);
+      if (sessionResponse) return sessionResponse;
+      const preparation = answerVoiceRealtimePreparationHttpRequest(input, storage.getState().settings);
+      if (preparation) return preparation;
       if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
         return new Response('{}', {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
       }
-      expect(new URL(url).pathname).toBe(
-        '/v2/sessions/codex-direct-session/messages',
-      );
+      if (new URL(url).pathname !== '/v2/sessions/codex-direct-session/messages') return Response.json({ error: 'not_found' }, { status: 404 });
       expect(init?.method).toBe('POST');
       const body = JSON.parse(String(init?.body)) as Readonly<{ localId: string }>;
       nextTranscriptSeq += 1;
@@ -301,13 +290,9 @@ describe('realtime_codex normal web composed gate', () => {
     });
     rpcBoundary.sessionRpc.mockReset();
     machineRpcBoundary.machineRpc.mockReset();
-    globalMachineBoundary.projectionDescribe.mockReset();
-    globalMachineBoundary.projectionDescribe.mockResolvedValue({
-      supported: false,
-      reason: 'not-supported',
-    });
+    daemonProjection = null;
     clearDaemonMergedProjectionCacheForTests();
-    vi.spyOn(sync, 'patchSessionMetadataWithRetry').mockResolvedValue(undefined as never);
+    vi.spyOn(sync, 'patchSessionMetadataWithRetry');
     resetVoiceAdapterRegistryForTests();
     resetVoiceSessionStoreForTests();
     voiceConversationRuntimeMachine.reset();
@@ -320,6 +305,7 @@ describe('realtime_codex normal web composed gate', () => {
       getByControlSessionId: voiceSessionBindingStore.getState().getByControlSessionId,
       list: voiceSessionBindingStore.getState().list,
     }, true);
+    await restoreGlobalCreationAccount();
     installDirectSessionState();
   });
 
@@ -887,14 +873,14 @@ describe('realtime_codex normal web composed gate', () => {
         },
       },
     };
-    const globalMachine = {
+    const globalMachine = createMachineFixture({
       id: 'machine-global-preflight',
-      active: true,
+      activeAt: Date.now(),
       metadata: {
         homeDir: '/Users/global-preflight',
         happyHomeDir: '/Users/global-preflight/.happier',
       },
-    };
+    });
     const voice = voiceSettingsParse({
       providerId: 'happier.agent.codex/realtime-codex',
       executionMachine: {
@@ -929,9 +915,7 @@ describe('realtime_codex normal web composed gate', () => {
         [activeServerId]: [globalMachine],
       },
     }) as never);
-    globalMachineBoundary.projectionDescribe.mockResolvedValue({
-      supported: true,
-      projection: PluginProjectionV2Schema.parse({
+    daemonProjection = PluginProjectionV2Schema.parse({
         v: 2,
         generation: 1,
         agentsById: {
@@ -943,9 +927,9 @@ describe('realtime_codex normal web composed gate', () => {
           },
         },
         familiesById: {},
-      }),
-    });
+      });
     machineRpcBoundary.machineRpc.mockImplementation(async (input) => {
+      if (input.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection: daemonProjection };
       return {
         type: 'error' as const,
         code: 'spawn_failed' as const,
@@ -990,7 +974,7 @@ describe('realtime_codex normal web composed gate', () => {
       });
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
       expect(browser.peer.createDataChannel).not.toHaveBeenCalled();
-      expect(machineRpcBoundary.machineRpc).toHaveBeenCalledTimes(1);
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(1);
       expect(createAgentSessionRealtimeService).not.toHaveBeenCalled();
       expect(rpcBoundary.sessionRpc).not.toHaveBeenCalled();
     } finally {
@@ -1202,6 +1186,7 @@ describe('realtime_codex normal web composed gate', () => {
 
   it('composes Global through the real hidden-session owner before exact hidden-session inspection', async () => {
     await restoreGlobalCreationAccount();
+    installDirectSessionState();
     restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
     const connectedServices = {
       v: 1 as const,
@@ -1213,14 +1198,14 @@ describe('realtime_codex normal web composed gate', () => {
         },
       },
     };
-    const globalMachine = {
+    const globalMachine = createMachineFixture({
       id: 'machine-global',
-      active: true,
+      activeAt: Date.now(),
       metadata: {
         homeDir: '/Users/global',
         happyHomeDir: '/Users/global/.happier',
       },
-    };
+    });
     const voice = voiceSettingsParse({
       providerId: 'happier.agent.codex/realtime-codex',
       executionMachine: {
@@ -1269,7 +1254,7 @@ describe('realtime_codex normal web composed gate', () => {
             machineId: globalMachine.id,
             path: '/Users/global/.happier/codex-global-voice',
             host: 'global.test.local',
-            backendTarget: { kind: 'backend', backendId: 'codex' },
+            flavor: 'codex',
             connectedServices,
             systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
             voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
@@ -1280,11 +1265,7 @@ describe('realtime_codex normal web composed gate', () => {
       },
     }) as never);
 
-    globalMachineBoundary.projectionDescribe.mockImplementation(async (machineId: string) => {
-      expect([globalMachine.id, 'machine-direct']).toContain(machineId);
-      return {
-        supported: true as const,
-        projection: PluginProjectionV2Schema.parse({
+    daemonProjection = PluginProjectionV2Schema.parse({
           v: 2,
           generation: 1,
           agentsById: {
@@ -1301,14 +1282,13 @@ describe('realtime_codex normal web composed gate', () => {
             },
           },
           familiesById: {},
-        }),
-      };
-    });
+        });
 
     const events: string[] = [];
     const spawnedSessionIds = ['hidden-global-failed', 'hidden-global-ready'];
     machineRpcBoundary.machineRpc.mockImplementation(async (input) => {
-      const sessionId = spawnedSessionIds[machineRpcBoundary.machineRpc.mock.calls.length - 1];
+      if (input.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection: daemonProjection };
+      const sessionId = spawnedSessionIds[events.filter(event => event.startsWith('spawn:')).length];
       if (!sessionId) throw new Error('unexpected trusted Global spawn');
       events.push(`spawn:${sessionId}`);
       storage.setState((current) => ({
@@ -1324,13 +1304,14 @@ describe('realtime_codex normal web composed gate', () => {
               machineId: input.machineId,
               path: input.payload.directory.path,
               host: 'global.test.local',
-              backendTarget: { kind: 'backend', backendId: 'codex' },
+              flavor: 'codex',
               connectedServices,
             },
             permissionMode: input.payload.permissionMode,
           }),
         },
       }) as never);
+      sessionHttp.replaceSession(sessionId);
       return {
         type: 'success' as const,
         disposition: 'created' as const,
@@ -1340,39 +1321,16 @@ describe('realtime_codex normal web composed gate', () => {
         initialInput: { status: 'notRequested' as const },
       };
     });
-    let rejectFailedCandidateMetadata = true;
-    vi.spyOn(sync, 'refreshSessions').mockResolvedValue(undefined as never);
-    vi.spyOn(sync, 'patchSessionMetadataWithRetry').mockImplementation(async (sessionId, patch) => {
-      events.push(`metadata:${sessionId}`);
-      if (patch === 'ownerMigration') {
-        throw new Error('unexpected owner migration in voice metadata fixture');
-      }
-      if (sessionId === 'hidden-global-failed' && rejectFailedCandidateMetadata) {
-        rejectFailedCandidateMetadata = false;
-        throw new Error('metadata write must retire the candidate');
-      }
-      const session = storage.getState().sessions[sessionId];
-      if (!session?.metadata) throw new Error(`missing test session metadata: ${sessionId}`);
-      const metadata = await patch(session.metadata);
-      storage.setState((current) => ({
-        ...current,
-        sessions: {
-          ...current.sessions,
-          [sessionId]: { ...session, metadata },
-        },
-      }) as never);
-    });
+    sessionHttp.rejectNextPatch('hidden-global-failed');
 
     let resolveWatch!: (value: unknown) => void;
     const assertFinalizedHiddenSession = (sessionId: string): void => {
       expect(sessionId).toBe('hidden-global-ready');
-      expect(storage.getState().sessions[sessionId]).toMatchObject({
-        active: true,
-        metadata: {
+      expect(storage.getState().sessions[sessionId]?.active).toBe(true);
+      expect(readSessionOwnerMetadataView(storage.getState().sessions[sessionId]!)).toMatchObject({
           systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
           voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
           voiceAgentStartupInstructionsV1: expect.objectContaining({ v: 1 }),
-        },
       });
     };
     rpcBoundary.sessionRpc.mockImplementation(async (input: Readonly<{
@@ -1427,10 +1385,8 @@ describe('realtime_codex normal web composed gate', () => {
         requestedTargetSessionAddress: { serverId: activeServerId, sessionId: 'visible-global-target' },
         settings: storage.getState().settings,
       })).rejects.toMatchObject({ code: 'VOICE_CONVERSATION_METADATA_COMMIT_FAILED' });
-      expect(storage.getState().sessions['hidden-global-failed']).toMatchObject({
-        metadata: {
-          systemSessionV1: { v: 1, key: 'voice_conversation_retired', hidden: true },
-        },
+      expect(readSessionOwnerMetadataView(storage.getState().sessions['hidden-global-failed']!)).toMatchObject({
+        systemSessionV1: { v: 1, key: 'voice_conversation_retired', hidden: true },
       });
       registerVoiceAdapters([runtime.adapter]);
       const starting = runtime.adapter.start({
@@ -1450,11 +1406,11 @@ describe('realtime_codex normal web composed gate', () => {
         transcriptMode: 'native_session',
         targetSessionAddress: null,
       });
-      expect(machineRpcBoundary.machineRpc).toHaveBeenCalledTimes(2);
-      expect(globalMachineBoundary.projectionDescribe).toHaveBeenCalledWith(
-        globalMachine.id,
-        expect.objectContaining({ serverId: activeServerId }),
-      );
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(2);
+      expect(machineRpcBoundary.machineRpc).toHaveBeenCalledWith(expect.objectContaining({
+        method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+        machineId: globalMachine.id, serverId: activeServerId,
+      }));
       expect(events.indexOf('spawn:hidden-global-ready')).toBeLessThan(
         events.indexOf('inspect:hidden-global-ready'),
       );
@@ -1479,7 +1435,7 @@ describe('realtime_codex normal web composed gate', () => {
         transcriptMode: 'native_session',
         targetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
       });
-      expect(machineRpcBoundary.machineRpc).toHaveBeenCalledTimes(2);
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(2);
     } finally {
       await runtime.dispose();
       hostLease.revoke();

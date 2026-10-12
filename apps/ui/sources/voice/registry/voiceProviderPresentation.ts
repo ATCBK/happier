@@ -19,7 +19,8 @@ export type VoiceProviderSelectionPresentation = Readonly<{
   modeId: string;
   order: number;
   titleKey: string;
-  subtitleKey: string;
+  /** What the option is for, in a sentence. Absent when the contribution declares none (never an identifier). */
+  subtitleKey?: string;
   badgeKey?: string;
   configPatch?: Readonly<Record<string, unknown>>;
 }>;

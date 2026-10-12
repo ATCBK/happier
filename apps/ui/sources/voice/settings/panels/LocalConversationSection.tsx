@@ -5,7 +5,8 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { DEFAULT_AGENT_ID, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
-import { getResolvedAgentCatalogEntries, resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
+import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
 import { getModelDropdownMenuItems, REFRESH_MODELS_DROPDOWN_ITEM_ID } from '@/components/settings/pickers/modelDropdownItems';
@@ -42,7 +43,7 @@ import { useSettingsSelector } from '@/sync/domains/state/storage';
 import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
 import { resolveVoiceProviderIdFromSettings } from '@/voice/settings/resolveVoiceProviderId';
-import { applyVoiceWelcomeSelection, resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
+import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 import { VoiceGreetingItem } from '@/voice/settings/panels/VoiceGreetingItem';
 import { applyVoiceAgentSelection } from '@/voice/settings/voiceAgentSelection';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
@@ -180,24 +181,17 @@ export function LocalConversationSection(props: {
   const currentDaemonProjectionInputs = daemonMergedProjection.phase === 'ready'
     ? daemonMergedProjection.inputs
     : null;
-  const enabledBuiltInAgentIds = React.useMemo(
-    () => new Set<string>(enabledAgentIds),
-    [enabledAgentIds],
-  );
-  const resolvedAgentEntries = React.useMemo(() => getResolvedAgentCatalogEntries({
+  const resolvedAgentEntries = React.useMemo(() => getResolvedBackendCatalogEntries({
     enabledAgentIds,
     acpCatalogSnapshot: acpCatalog?.catalog,
     backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
     mergedProviderProjectionById: currentDaemonProjectionInputs?.mergedProviderProjectionById ?? null,
     mergedBackendProjectionById: currentDaemonProjectionInputs?.mergedBackendProjectionById ?? null,
-  }).filter((entry) => (
-    entry.isBuiltIn
-      ? enabledBuiltInAgentIds.has(entry.agentId)
-      : entry.enabled !== false
-  )), [
+    discoveredBackendIds: currentDaemonProjectionInputs?.discoveredBackendIds,
+  }).map(entry => entry.agentCatalogEntry), [
+    currentDaemonProjectionInputs?.discoveredBackendIds,
     currentDaemonProjectionInputs?.mergedBackendProjectionById,
     currentDaemonProjectionInputs?.mergedProviderProjectionById,
-    enabledBuiltInAgentIds,
     enabledAgentIds,
     acpCatalog?.catalog,
     settings.backendEnabledByTargetKey,
@@ -347,7 +341,10 @@ export function LocalConversationSection(props: {
           }}
           options={[
             { id: 'direct_session', label: t('settingsVoice.pages.conversations.talkToSession'), description: t('settingsVoice.pages.conversations.talkToSessionDescription') },
-            { id: 'agent', label: t('settingsVoice.pages.conversations.talkToAgent'), description: t('settingsVoice.pages.conversations.talkToAgentDescription'), unavailableReason: voiceAgentUnavailableReason },
+            // When the row below says why and offers the fix, the choice is simply unavailable here: the
+            // reason is said once, beside its action.
+            { id: 'agent', label: t('settingsVoice.pages.conversations.talkToAgent'), description: t('settingsVoice.pages.conversations.talkToAgentDescription'),
+              ...(voiceAgentAvailability === 'policy_disabled' ? { disabled: !voiceAgentEnabled } : { unavailableReason: voiceAgentUnavailableReason }) },
           ]}
         />
         {voiceAgentAvailability === 'policy_disabled' ? <Item
@@ -604,7 +601,6 @@ export function LocalConversationSection(props: {
             <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.greeting}>
             <VoiceGreetingItem
               value={resolveVoiceWelcomeSelection(voice.welcome)}
-              onChange={(next) => props.setVoice(applyVoiceWelcomeSelection(voice, next))}
             />
             </SettingAnchor>
         <SettingAnchor settings={ADVANCED_AGENT_SETTINGS}>

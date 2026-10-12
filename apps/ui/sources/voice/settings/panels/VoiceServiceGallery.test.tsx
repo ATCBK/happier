@@ -42,4 +42,24 @@ describe('VoiceServiceGallery', () => {
     await act(async () => { current!.props.onPress(); });
     expect(onOpenServiceList).toHaveBeenCalledTimes(1);
   });
+  it('shows every word of a service name and description, with its badge, instead of cutting them to an ellipsis', async () => {
+    const title = 'Codex Realtime Voice Through A Running Session';
+    const subtitle = 'Talk to a Codex session that is already running on one of your computers and have it answer aloud.';
+    const screen = await renderScreen(
+      <VoiceServiceGallery
+        tiles={[{ id: 'codex', title, subtitle, badge: 'Experimental', status: { tone: 'ready', text: 'Ready' }, selected: false, disabled: false, testID: 'settings.voice.provider.codex' }]}
+        offSelected={false}
+        onSelect={vi.fn()}
+        onSelectOff={vi.fn()}
+      />,
+    );
+    const textOf = (value: string) => screen.root.findAll((node) => node.props.children === value && 'numberOfLines' in node.props);
+    for (const value of [title, subtitle]) {
+      const nodes = textOf(value);
+      expect(nodes.length).toBeGreaterThan(0);
+      // numberOfLines 0 is "no limit"; any other number is an ellipsis.
+      expect(nodes.every((node) => !node.props.numberOfLines)).toBe(true);
+    }
+    expect(textOf('Experimental').length).toBeGreaterThan(0);
+  });
 });

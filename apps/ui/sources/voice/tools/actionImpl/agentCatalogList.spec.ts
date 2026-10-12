@@ -13,6 +13,18 @@ import type { machineCapabilitiesInvoke as machineCapabilitiesInvokeFn } from '@
 import { installVoiceToolActionImplCommonModuleMocks } from './voiceToolActionImplTestHelpers';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { applyProviderCatalogSnapshot, resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+
+let catalogHomeId = '';
+let accountHomes: Awaited<ReturnType<typeof serveAccountHomes>>;
+let featureResponse: (() => Promise<Response>) | null = null;
 
 type MachineContributionRegistryProjectionDescribeFn = typeof import('@/sync/ops/machineContributionRegistryProjection').machineContributionRegistryProjectionDescribe;
 
@@ -35,8 +47,7 @@ const state: any = {
         name: 'team-review',
         title: 'Team review',
         description: 'Custom team review backend',
-        command: 'kiro-cli',
-        args: ['acp'],
+        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
         env: {},
         transportProfile: 'kiro',
         capabilities: {
@@ -71,7 +82,7 @@ function primeProvidersFeatureSnapshot(mode: ProvidersFeatureSnapshotMode): void
       }),
     };
   }
-  primeServerFeaturesSnapshot({ serverId: 'server-a', snapshot });
+  primeServerFeaturesSnapshot({ serverId: catalogHomeId, snapshot });
 }
 
 function createProviderModelsProjection(freeformPolicy: Readonly<{
@@ -92,48 +103,53 @@ function createProviderModelsProjection(freeformPolicy: Readonly<{
         ref: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'pc_work', modelId: 'provider-model' },
         descriptor: { id: 'provider-model', name: 'Provider model' },
         sources: { manual: false, static: true, probe: false }, confidence: 'verified_static',
-        compatibility: { result: { status: 'verified' }, compatibilityFingerprint: 'compatibility:v1:voice', confirmed: true },
+        compatibility: { result: { status: 'experimental', selectedProtocol: 'openai-responses', reasons: ['compatibility_evidence_missing'], confirmationScope: { kind: 'model', modelId: 'provider-model' } }, compatibilityFingerprint: 'compatibility:v1:voice', confirmed: true },
         endpointHealth: 'available', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible',
       }],
     }],
   };
 }
 
-installVoiceToolActionImplCommonModuleMocks({
-  storage: async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-      storage: {
-        getState: () => ({ ...state }),
-      } as typeof import('@/sync/domains/state/storage').storage,
-    });
-  },
+installVoiceToolActionImplCommonModuleMocks();
+vi.doUnmock('@/sync/domains/state/storage');
+
+// Replace only Socket.IO's network acknowledgement. Scoped routing, Account
+// mode/Machine-key admission, capability parsing and Provider Actions stay real.
+vi.mock('socket.io-client', async (importOriginal) => (
+  await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+  socket.connected = true;
+  vi.mocked(socket.connect).mockImplementation(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  vi.spyOn(socket.io, '_packet').mockImplementation(() => {});
+  vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
+    if (event !== 'rpc-call') throw new Error(`Unexpected catalog socket acknowledgement: ${event}`);
+    if (!serverUrl || new URL(serverUrl).origin !== 'https://voice-test.invalid') throw new Error('Unexpected catalog RPC Home');
+    // Socket.IO's untyped SDK payload was authored by the real shared RPC codec.
+    const request = payload as SocketRpcRequestPayload;
+    const separator = request.method.indexOf(':');
+    const machineId = request.method.slice(0, separator);
+    const method = request.method.slice(separator + 1);
+    let result: unknown;
+    if (method === RPC_METHODS.CAPABILITIES_INVOKE) {
+      const response = await machineCapabilitiesInvoke(machineId,
+        request.params as Parameters<typeof machineCapabilitiesInvokeFn>[1], { serverId: catalogHomeId });
+      result = response.supported ? response.response : { error: response.reason === 'not-supported' ? 'RPC_METHOD_NOT_FOUND' : 'test_transport_failure' };
+    } else if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+      const response = await machineContributionRegistryProjectionDescribeMock(machineId, { serverId: catalogHomeId });
+      result = response.supported ? { protocolVersion: 1, projection: response.projection } : { error: 'RPC_METHOD_NOT_FOUND' };
+    } else if (method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) {
+      result = await describeProviderModelsMock(request.params);
+    } else {
+      throw new Error(`Unexpected catalog RPC: ${method}`);
+    }
+    return { ok: true, result };
+  });
 });
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://voice-test.invalid', runtimeOrigin: 'https://voice-test.invalid', generation: 1 }),
-  getActiveServerHomeCarrier: () => null,
-}));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-  machineContributionRegistryProjectionDescribe: (...args: Parameters<MachineContributionRegistryProjectionDescribeFn>) =>
-    machineContributionRegistryProjectionDescribeMock(...args),
-    machinePluginSecretStatus: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretDelete: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsGet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    resetMachineProjectionReadsForTests: () => {},
-}));
-
-vi.mock('@/sync/ops/capabilities', () => ({
-  machineCapabilitiesInvoke: (...args: Parameters<typeof machineCapabilitiesInvokeFn>) => machineCapabilitiesInvoke(...args),
-}));
-vi.mock('@/providers/rpc/client', () => ({
-  describeProviderModels: (...args: any[]) => describeProviderModelsMock(...args),
-}));
 
 // These owners reach the storage graph; initialize after the fixture installer
 // has registered its options rather than selecting its default storage branch.
@@ -147,18 +163,35 @@ const {
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 
 describe('agent catalog voice tools', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    featureResponse = null;
+    accountHomes = await serveAccountHomes({ homes: [{ key: 'catalog', serverUrl: 'https://voice-test.invalid', accountId: 'account-a', currentAccount: true, settings: state.settings }],
+      route: request => {
+        if (request.path.startsWith('/v1/features') && featureResponse) return featureResponse();
+        const machine = /^\/v1\/machines\/([^/]+)$/.exec(request.path);
+        if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]), accountId: 'account-a' }) });
+        return undefined;
+      } });
+    catalogHomeId = accountHomes.homes.catalog.id;
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const { storage } = await import('@/sync/domains/state/storage');
+    state.settings = storage.getState().settings;
     resetAcpCatalogSnapshotsForTests();
-    state.settingsScope = { serverId: 'server-a', accountId: 'account-a' };
+    state.settingsScope = { serverId: catalogHomeId, accountId: 'account-a' };
+    resetProviderCatalogSnapshotsForTests();
+    applyProviderCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }, true);
     applyAcpCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 1, record: { v: 1, definitions: [AcpBackendDefinitionV1Schema.parse({
-      id: 'team-review', name: 'team-review', title: 'Team review', description: 'Custom team review backend', command: 'kiro-cli',
-      args: ['acp'], createdAt: 1, updatedAt: 1,
+      id: 'team-review', name: 'team-review', title: 'Team review', description: 'Custom team review backend', launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
+       createdAt: 1, updatedAt: 1,
     })] } }, true);
     clearDaemonMergedProjectionCacheForTests();
     primeProvidersFeatureSnapshot('enabled');
     machineCapabilitiesInvoke.mockReset();
     describeProviderModelsMock.mockReset();
-    describeProviderModelsMock.mockResolvedValue({ status: 'success', agentTargetKey: 'agent:happier.agent.claude/claude', groups: [] });
+    describeProviderModelsMock.mockImplementation(async (request: Readonly<{ agentTargetKey: string }>) => ({
+      status: 'success', agentTargetKey: request.agentTargetKey, groups: [],
+    }));
     machineContributionRegistryProjectionDescribeMock.mockReset();
     machineContributionRegistryProjectionDescribeMock.mockResolvedValue({ supported: false, reason: 'not-supported' });
     state.settings.backendEnabledByTargetKey = {
@@ -172,8 +205,7 @@ describe('agent catalog voice tools', () => {
         name: 'team-review',
         title: 'Team review',
         description: 'Custom team review backend',
-        command: 'kiro-cli',
-        args: ['acp'],
+        launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
         env: {},
         transportProfile: 'kiro',
         capabilities: {
@@ -190,7 +222,10 @@ describe('agent catalog voice tools', () => {
     resetDynamicModelProbeCacheForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    await serverScopedRpcSocketPool.stopAll();
+    accountHomes?.dispose();
     vi.unstubAllGlobals();
   });
 
@@ -277,7 +312,7 @@ describe('agent catalog voice tools', () => {
       rejectFeatureFetch = reject;
     });
     const fetchSpy = vi.fn(async () => await featureFetch);
-    vi.stubGlobal('fetch', fetchSpy);
+    featureResponse = fetchSpy;
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
 
     const resultPromise = listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
@@ -422,7 +457,7 @@ describe('agent catalog voice tools', () => {
           timeoutMs: 15_000,
         },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(models).toMatchObject({
       agentId: 'claude',
@@ -496,7 +531,7 @@ describe('agent catalog voice tools', () => {
           timeoutMs: 15_000,
         },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(models).toMatchObject({
       agentId: 'acme-review',
@@ -537,7 +572,7 @@ describe('agent catalog voice tools', () => {
         method: 'probeModels',
         params: { timeoutMs: 15_000 },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(models).toMatchObject({
       agentId: 'acme-review',
@@ -572,7 +607,7 @@ describe('agent catalog voice tools', () => {
     const res: any = await listAgentBackendsForVoiceTool({ includeDisabled: false });
     const targetKeys = (res?.items ?? []).map((i: any) => i.targetKey);
     expect(targetKeys).not.toContain('agent:happier.agent.gemini/gemini');
-    expect(targetKeys).not.toContain('backend:team-review:configured:team-review');
+    expect(targetKeys).not.toContain('agent:happier.agent.custom-acp/custom-acp:definition:team-review');
   });
 
   it('includes disabled backends when includeDisabled=true', async () => {
@@ -585,7 +620,7 @@ describe('agent catalog voice tools', () => {
       agentId: 'gemini',
       identity: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
     });
-    const configured = (res?.items ?? []).find((i: any) => i.targetKey === 'backend:team-review:configured:team-review');
+    const configured = (res?.items ?? []).find((i: any) => i.targetKey === 'agent:happier.agent.custom-acp/custom-acp:definition:team-review');
     expect(configured).toBeTruthy();
     expect(configured.enabled).toBe(false);
     expect(configured.agentId).toBeUndefined();
@@ -608,7 +643,7 @@ describe('agent catalog voice tools', () => {
       identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
     }));
     expect(parsed.data.items).toContainEqual(expect.objectContaining({
-      targetKey: 'backend:team-review:configured:team-review',
+      targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:team-review',
       backendId: 'team-review',
     }));
     expect(parsed.data.items.find((item) => item.backendId === 'team-review')).not.toHaveProperty('identity');
@@ -753,7 +788,7 @@ describe('agent catalog voice tools', () => {
       machineId: 'm1',
       targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }),
       providerConnectionId: null,
-      serverId: 'server-a',
+      serverId: catalogHomeId,
       cwd: null,
     });
     expect(cacheKey).toBeTruthy();
@@ -809,7 +844,7 @@ describe('agent catalog voice tools', () => {
       machineId: 'm1',
       targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }),
       providerConnectionId: null,
-      serverId: 'server-a',
+      serverId: catalogHomeId,
       cwd: null,
     });
     expect(cacheKey).toBeTruthy();
@@ -910,6 +945,9 @@ describe('agent catalog voice tools', () => {
       ...params,
     });
 
+    expect(describeProviderModelsMock).toHaveBeenCalledWith(expect.objectContaining({
+      agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:team-review',
+    }));
     expect(machineCapabilitiesInvoke).toHaveBeenCalledWith(
       'm1',
       {
@@ -920,7 +958,7 @@ describe('agent catalog voice tools', () => {
           backendTarget: { kind: 'configuredAcpBackend', backendId: 'team-review' },
         },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(res).toMatchObject({
       machineId: 'm1',
@@ -966,7 +1004,7 @@ describe('agent catalog voice tools', () => {
           backendTarget: { kind: 'configuredAcpBackend', backendId: 'team-review' },
         },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(res).toMatchObject({
       machineId: 'm1',
@@ -1013,7 +1051,7 @@ describe('agent catalog voice tools', () => {
           backendTarget: { kind: 'configuredAcpBackend', backendId: 'team-review' },
         },
       },
-      { serverId: 'server-a' },
+      { serverId: catalogHomeId },
     );
     expect(res).toMatchObject({
       machineId: 'm1',
@@ -1049,12 +1087,12 @@ describe('agent catalog voice tools', () => {
     const { listAgentModelsForVoiceTool } = await import('./agentCatalogList');
     const result = await listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' });
     expect(result).toMatchObject({ source: 'preflight', items: expect.arrayContaining([expect.objectContaining({ modelId: 'provider-model', label: 'Provider model' })]) });
-    const key = buildDynamicModelProbeCacheKey({ machineId: 'm1', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }), providerConnectionId: null, serverId: 'server-a', cwd: null })!;
+    const key = buildDynamicModelProbeCacheKey({ machineId: 'm1', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }), providerConnectionId: null, serverId: catalogHomeId, cwd: null })!;
     expect(readDynamicModelProbeCache(key)).toMatchObject({ kind: 'success', cacheable: false });
   });
 
   it('uses a newer daemon last-good observation on failure without renewing its age', async () => {
-    const key = buildDynamicModelProbeCacheKey({ machineId: 'm1', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }), providerConnectionId: null, serverId: 'server-a', cwd: null })!;
+    const key = buildDynamicModelProbeCacheKey({ machineId: 'm1', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }), providerConnectionId: null, serverId: catalogHomeId, cwd: null })!;
     const previousAt = Date.now() - DYNAMIC_MODEL_PROBE_SUCCESS_TTL_MS - 1000;
     const observedAt = previousAt + 500;
     writeDynamicModelProbeCacheSuccess(key, { availableModels: [{ id: 'old', name: 'Old' }], supportsFreeform: true }, previousAt);

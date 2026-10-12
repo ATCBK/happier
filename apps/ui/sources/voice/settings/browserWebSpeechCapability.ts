@@ -56,7 +56,7 @@ function exposesProcessLocallyOnPrototype(constructor: SpeechRecognitionConstruc
     }
 }
 
-function readPassiveBrowserWebSpeechCapability(input: Readonly<{
+export function readPassiveBrowserWebSpeechCapability(input: Readonly<{
     platformOs?: string;
     globalObject?: BrowserWebSpeechGlobal;
 }> = {}): VoiceBrowserSpeechCapability {

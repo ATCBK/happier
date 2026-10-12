@@ -2,6 +2,8 @@ import type { VoiceMachineErrorKind } from './voiceConversationRuntimeTypes';
 
 export const VOICE_MACHINE_ERROR_TRANSLATION_KEYS = {
     mic_permission_denied: 'settingsVoice.local.machineErrors.mic_permission_denied',
+    mic_unavailable: 'settingsVoice.local.machineErrors.mic_unavailable',
+    speech_recognition_unavailable: 'settingsVoice.local.machineErrors.speech_recognition_unavailable',
     mic_ended: 'settingsVoice.local.machineErrors.mic_ended',
     mic_plateau: 'settingsVoice.local.machineErrors.mic_plateau',
     transport_disconnect: 'settingsVoice.local.machineErrors.transport_disconnect',

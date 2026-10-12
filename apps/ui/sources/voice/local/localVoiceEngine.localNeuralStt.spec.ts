@@ -75,7 +75,7 @@ describe('local voice engine local neural STT (streaming)', () => {
     });
   });
 
-  it('surfaces mic permission denial as a recoverable idle error instead of entering recording', async () => {
+  it('keeps mic permission denial visible as a failed attempt instead of entering recording', async () => {
     const { requestMicrophonePermission } = await import('@/utils/platform/microphonePermissions');
     vi.mocked(requestMicrophonePermission).mockResolvedValueOnce({ granted: false, canAskAgain: false });
 
@@ -110,7 +110,8 @@ describe('local voice engine local neural STT (streaming)', () => {
 
     expect(audioStreamStart).not.toHaveBeenCalled();
     expect(getLocalVoiceState()).toMatchObject({
-      status: 'idle',
+      // Not a graceful idle end: the presence keeps "Microphone blocked" with Allow on screen.
+      status: 'error',
       sessionId: 's1',
       error: 'mic_permission_denied',
     });

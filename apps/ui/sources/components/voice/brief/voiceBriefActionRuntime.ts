@@ -1,9 +1,9 @@
 import { getVoiceSessionPresentedAttemptId } from '@/voice/session/voiceSessionStore';
 
-export type VoiceBriefOperation = 'request' | 'retry' | 'stop';
+export type VoiceBriefOperation = 'request' | 'retry' | 'stop' | 'close';
 export type VoiceBriefOperationInput = Readonly<{ expectedAttemptId?: string }>;
 export type VoiceBriefOperationOutcome =
-    | Readonly<{ ok: true; result: Readonly<{ status: 'waiting' | 'sent' | 'refused' | 'stopped'; attemptId: string | null }> }>
+    | Readonly<{ ok: true; result: Readonly<{ status: 'waiting' | 'sent' | 'refused' | 'stopped' | 'closed'; attemptId: string | null }> }>
     | Readonly<{ ok: false; errorCode: 'voice_brief_unavailable' | 'stale_voice_attempt' | 'voice_brief_not_retryable' | 'voice_brief_stop_unavailable' }>;
 
 type MountedBriefOperation = (operation: VoiceBriefOperation) => VoiceBriefOperationOutcome;
@@ -22,7 +22,7 @@ export function registerVoiceBriefHomeRequest(request: () => VoiceBriefOperation
     return () => { if (mountedHomeRequest === request) mountedHomeRequest = null; };
 }
 
-export function voiceBriefOperationResult(status: 'waiting' | 'sent' | 'refused' | 'stopped'): VoiceBriefOperationOutcome {
+export function voiceBriefOperationResult(status: 'waiting' | 'sent' | 'refused' | 'stopped' | 'closed'): VoiceBriefOperationOutcome {
     return { ok: true, result: { status, attemptId: getVoiceSessionPresentedAttemptId() } };
 }
 

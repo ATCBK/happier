@@ -29,7 +29,7 @@ function staticVoice(): VoiceAttemptControlProjection {
             sessionId: null, canStop: true, muted: false, capturing: true, startAdmitted: true, hasRecovery: false }),
         statusWord: t('voiceAssistant.listening'), statusLabel: t('voiceAssistant.listening'),
         elapsedStartedAt: null, canHoldToTalk: false, beginHoldToTalk: () => null,
-        primaryActionLabel: null, primaryActionHint: null, recoveryLabel: null, recoveryShortLabel: null,
+        primaryActionLabel: null, primaryActionHint: null, recoveryLabel: null, recoveryIcon: null,
         micStateLabel: '', captionLabel: '', onPrimaryAction: NO_ACTION, onToggle: NO_ACTION,
         onToggleMute: NO_ACTION, onRecover: NO_ACTION, openConversationSessionId: null,
         openConversationSessionAddress: null, canOpenConversation: false, onOpenConversation: NO_ACTION,

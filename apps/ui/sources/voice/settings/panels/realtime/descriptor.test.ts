@@ -6,6 +6,8 @@ import {
   updateRealtimeProviderConfig,
 } from './descriptor';
 import { VOICE_PROVIDER_CONVERSATION_RETENTION_MS } from '@/voice/persistence/voiceProviderConversationRetention';
+import { createExternalVoiceProviderSettingsDescriptor } from '@happier-dev/protocol/voice/settings/externalProviderSettings';
+import { VoiceProviderSettingsSchema } from '@happier-dev/protocol/plugins/contributions/voice';
 
 const owner = Object.freeze({
   schemaVersion: 1,
@@ -17,6 +19,9 @@ const owner = Object.freeze({
     return typeof nested?.value === 'number' && nested.value >= 0 && nested.value <= 10
       ? candidate
       : null;
+  },
+  parseStoredConfig(value: unknown) {
+    return this.parseConfig(value);
   },
 });
 
@@ -68,6 +73,24 @@ describe('realtime settings descriptor boundary', () => {
 });
 
 describe('realtime provider config projection', () => {
+  it('opens stored provider preferences with retired fields while keeping edits strict', () => {
+    const descriptor = createExternalVoiceProviderSettingsDescriptor(VoiceProviderSettingsSchema.parse({
+      schemaVersion: 1, fields: [{ id: 'voice', title: 'Voice', schema: { type: 'string', maxLength: 32 }, default: 'default', presentation: { control: 'text' } }],
+    }));
+    const projectionOwner = { ...descriptor,
+      parseConfig: (value: unknown) => {
+        const parsed = descriptor.parseConfig(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      },
+      parseStoredConfig: (value: unknown) => {
+        const parsed = descriptor.parseStoredConfig(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      },
+    };
+    expect(resolveRealtimeProviderConfig(projectionOwner, { schemaVersion: 1, config: { voice: 'kept', retired: true } }))
+      .toMatchObject({ status: 'ready', source: 'persisted', config: { voice: 'kept' } });
+    expect(updateRealtimeProviderConfig(projectionOwner, { voice: 'kept' }, 'retired', true)).toBeNull();
+  });
   it('preserves newer and invalid envelopes inert instead of replacing them with defaults', () => {
     expect(resolveRealtimeProviderConfig(owner, { schemaVersion: 2, config: { nested: { value: 2 } } })).toEqual({ status: 'unsupported_version' });
     expect(resolveRealtimeProviderConfig(owner, { schemaVersion: 1, config: { nested: { value: 99 } } })).toEqual({ status: 'invalid' });

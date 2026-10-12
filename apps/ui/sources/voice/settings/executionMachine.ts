@@ -4,7 +4,8 @@ import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { readVoiceAutoTargetMachineId } from '@/voice/persistence/voiceAutoTargetMachineSettings';
 import { readVoiceExecutionMachineSettings } from '@/sync/domains/settings/voiceSettings';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -27,7 +28,8 @@ function resolveReplacementAwareSelection(state: any, requestedMachineId: unknow
   if (!target) return { kind: 'selected_unreachable', machineId: originMachineId };
 
   const machine = resolveMachineForActiveServerFromState(state, target.machineId, { serverId });
-  return machine && isMachineOnline(machine)
+  const scope = selectActiveServerAccountScopeForServer(state.profileScope, serverId);
+  return machine && isMachineReachable(scope, machine)
     ? { kind: 'resolved', machineId: target.machineId }
     : { kind: 'selected_unreachable', machineId: target.machineId };
 }
@@ -58,7 +60,8 @@ export function resolveVoiceExecutionMachineSelectionFromState(
 
   const visibleMachines = resolveVisibleMachinesForActiveServerFromState(state, { serverId });
   const preferredMachineIds = listPreferredMachineIds({
-    machines: visibleMachines,
+    scope: selectActiveServerAccountScopeForServer(state.profileScope, serverId),
+    machines: visibleMachines.filter(machine => isMachineReachable(selectActiveServerAccountScopeForServer(state.profileScope, serverId), machine)),
     recentMachinePaths: Array.isArray(state?.authoringMemory?.recentMachinePaths)
       ? state.authoringMemory.recentMachinePaths
       : [],

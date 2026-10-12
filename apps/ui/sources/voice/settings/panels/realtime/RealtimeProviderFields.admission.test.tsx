@@ -8,14 +8,15 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
-import { storage } from '@/sync/domains/state/storage';
+import { storage, useSetting } from '@/sync/domains/state/storage';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { Slider } from '@/components/ui/forms/Slider';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Modal } from '@/modal';
 import { VoiceGreetingItem } from '../VoiceGreetingItem';
-import { applyVoiceWelcomeSelection, resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
+import { resolveVoiceWelcomeSelection } from '@/voice/settings/welcome';
 import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutable';
 import { useBundledConversationProviderSettings } from './useBundledConversationProviderSettings';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
@@ -49,7 +50,7 @@ if (!xai?.providerSettings) throw new Error('xAI declared Voice settings missing
 
 /** The existing settings consumer and writer remain real below the Home HTTP boundary. */
 function VoiceFields({ paths = ['voice'] }: { paths?: readonly string[] }) {
-    const [voice, setVoice] = useVoiceSettingsMutable();
+    const [voice] = useVoiceSettingsMutable();
     const settings = useBundledConversationProviderSettings(voice);
     if (!settings.owner || !settings.config || !settings.descriptor) throw new Error('Voice settings unavailable');
     if (!voice.providerId) throw new Error('Voice provider missing');
@@ -57,9 +58,13 @@ function VoiceFields({ paths = ['voice'] }: { paths?: readonly string[] }) {
         descriptor={{ ...settings.descriptor, fields: settings.descriptor.fields.filter(field => paths.includes(field.path)) }}
         credentialStatus="ready" catalog={{ phase: 'ready', rows: [{ id: 'alloy', name: 'Alloy' }, { id: 'sage', name: 'Sage' }] }}
         welcomeSelection={resolveVoiceWelcomeSelection(voice.welcome)} assistantLanguage={voice.assistantLanguage}
-        onWelcomeSelection={selection => setVoice(applyVoiceWelcomeSelection(voice,
-            selection === 'immediate' ? 'immediate' : selection === 'on_first_turn' ? 'on_first_turn' : 'off'))}
         onRequestCatalog={() => {}} />;
+}
+
+/** Local voice presents the same shared Account Greeting control without a provider descriptor. */
+function LocalGreeting() {
+    const voice = useSetting('voice');
+    return <VoiceGreetingItem value={resolveVoiceWelcomeSelection(voice.welcome)} />;
 }
 
 describe('declared Voice field Action admission', () => {
@@ -138,22 +143,29 @@ describe('declared Voice field Action admission', () => {
                 .toMatchObject({ tts: { voiceSettings: { speed: null } } }));
         } finally { standardCleanup(); await account.dispose(); }
     });
-    it.each([false, true])('retains shared Greeting Action admission (disabled=%s)', async disabled => {
-        const id = elevenlabs.providerId;
+    it.each([
+        { local: false, disabled: false }, { local: false, disabled: true },
+        { local: true, disabled: false }, { local: true, disabled: true },
+    ])('retains shared Greeting Action admission (local=$local, disabled=$disabled)', async ({ local, disabled }) => {
+        const id = local ? 'local_conversation' : elevenlabs.providerId;
         const settings = elevenlabs.providerSettings!;
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: id,
-            providers: { [id]: { schemaVersion: settings.schemaVersion, config: settings.defaultConfig } } },
+            ...(local ? {} : { providers: { [id]: { schemaVersion: settings.schemaVersion, config: settings.defaultConfig } } }) },
             ...(disabled ? { actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } : {}),
         }));
         try {
-            const screen = await renderScreen(<VoiceFields paths={['welcome']} />);
-            const greeting = screen.findAllByType(VoiceGreetingItem)[0];
+            const screen = await renderScreen(local ? <LocalGreeting /> : <VoiceFields paths={['welcome']} />);
+            const greeting = screen.findAllByType(SegmentedChoiceItem).find(node => node.props.testIDPrefix === 'settings.voice.greeting');
             if (!greeting) throw new Error('Greeting missing');
+            act(() => account.replaceVoice({ ...account.settings.voice, assistantLanguage: 'fr' }));
             await act(async () => greeting.props.onChange('on_first_turn'));
             if (disabled) {
                 expect(resolveVoiceWelcomeSelection(account.settings.voice.welcome)).toBe('off');
                 expect(account.writes).toEqual([]);
-            } else await vi.waitFor(() => expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn'));
+            } else {
+                await vi.waitFor(() => expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn'));
+                expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
+            }
         } finally { standardCleanup(); await account.dispose(); }
     });
     it('encodes declared keyterm arrays and structured custom voices through their existing bindings', async () => {

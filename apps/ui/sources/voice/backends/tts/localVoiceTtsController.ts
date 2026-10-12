@@ -41,4 +41,12 @@ export function createLocalVoiceTtsController(options?: Readonly<{
   };
 }
 
-export const localVoiceTtsController = createLocalVoiceTtsController();
+let sharedController: LocalVoiceTtsController | null = null;
+
+// Provider declarations are read on first use, after the storage/runtime import graph has loaded.
+export const localVoiceTtsController: LocalVoiceTtsController = {
+  speak: (ctx) => {
+    sharedController ??= createLocalVoiceTtsController();
+    return sharedController.speak(ctx);
+  },
+};

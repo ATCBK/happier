@@ -21,6 +21,8 @@ import {
 } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { resolvePreferredMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import {
   resolveDirectoryFavoriteComparisonKey,
@@ -62,6 +64,8 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
   const { onClose, onResolve, setChrome } = props;
 
   const machines = useAllMachines();
+  const scope = useActiveServerAccountScope();
+  useMachineReachabilityRevision();
   const sessions = useAllSessionListRenderables();
   const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
   const normalizedRecentMachinePaths = React.useMemo(
@@ -86,7 +90,7 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
 
   const [step, setStep] = React.useState<Step>('machine');
   const [selectedMachineId, setSelectedMachineId] = React.useState<string | null>(() =>
-    resolvePreferredMachineId({ machines, recentMachinePaths: normalizedRecentMachinePaths }),
+    resolvePreferredMachineId({ machines, recentMachinePaths: normalizedRecentMachinePaths, scope }),
   );
 
   const selectedMachine = React.useMemo(() => {
@@ -131,17 +135,17 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
   const canCreate = Boolean(
     selectedMachineId
     && selectedMachine
-    && canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId })
+    && canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId, scope })
     && (selectedPath.trim() || selectedMachine?.metadata?.homeDir),
   );
 
   const handleCreate = React.useCallback(() => {
     if (!selectedMachineId) return;
-    if (!canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId })) return;
+    if (!canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId, scope })) return;
     const directory = selectedPath.trim() || selectedMachine?.metadata?.homeDir || '/home';
     onResolve({ machineId: selectedMachineId, directory });
     onClose();
-  }, [onClose, onResolve, selectedMachine, selectedMachineId, selectedPath]);
+  }, [onClose, onResolve, selectedMachine, selectedMachineId, selectedPath, scope]);
 
   const footer = React.useMemo(() => (
     <View style={styles.footer}>
@@ -189,6 +193,7 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
         <>
           <ItemList presentation="grouped" style={{ paddingTop: 0 }}>
             <MachineSelector
+              serverId={scope?.serverId}
               machines={machines}
               selectedMachine={selectedMachine}
               recentMachines={recentMachines}

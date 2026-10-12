@@ -265,8 +265,27 @@ function buildStep(
         }
         case 'microphone': {
             if (step.state === 'done') return { key: step.id, testID, state: 'done', title: t('voiceMoments.setupMicrophoneDone') };
-            const denied = step.state === 'blocked';
             const current = stepMarker(step.state) === 'current';
+            // No microphone connected: nothing was denied, so say so and check again on press.
+            if (step.state === 'blocked' && model.facts.microphonePermission === 'unavailable') {
+                return {
+                    key: step.id,
+                    testID,
+                    state: stepMarker(step.state),
+                    title: t('voiceMoments.setupMicrophoneMissingTitle'),
+                    detail: current ? t('voiceMoments.setupMicrophoneMissingDetail') : undefined,
+                    body: current ? (
+                        <RoundButton
+                            testID={`${testID}.checkAgain`}
+                            size="small"
+                            leading={<MicGlyph />}
+                            title={t('voiceMoments.setupMicrophoneCheckAgain')}
+                            onPress={actions.onAllowMicrophone}
+                        />
+                    ) : undefined,
+                };
+            }
+            const denied = step.state === 'blocked';
             return {
                 key: step.id,
                 testID,

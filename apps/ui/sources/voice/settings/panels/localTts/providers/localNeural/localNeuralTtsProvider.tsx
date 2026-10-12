@@ -4,6 +4,7 @@ import { LocalNeuralTtsSettings } from '@/voice/settings/panels/localTts/LocalNe
 import { resolveKokoroOperationTimeoutMs } from '@/voice/kokoro/config/kokoroConfig';
 import { previewLocalNeuralTts } from './previewLocalNeuralTts';
 import { t } from '@/text';
+import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
 
 import type { LocalTtsProviderSpec } from '../_types';
 
@@ -31,6 +32,7 @@ export const localNeuralTtsProviderSpec: LocalTtsProviderSpec = {
   iconName: 'sparkle',
   detail: t('settingsVoice.local.localNeuralTts.provider.detail'),
   Settings: LocalNeuralProviderSettings,
+  resolvePreferredExecution: (requestedExecution) => resolveLocalNeuralExecutionPolicy({ requestedExecution }).preferredExecution,
   test: async ({ cfgTts, networkTimeoutMs, sample, signal, isCurrent, registerPlaybackStopper }) => previewLocalNeuralTts({
     config: cfgTts.localNeural, sample, timeoutMs: resolveKokoroOperationTimeoutMs(networkTimeoutMs),
     signal, isCurrent, registerPlaybackStopper: registerPlaybackStopper ?? ((_stopper) => () => {}),

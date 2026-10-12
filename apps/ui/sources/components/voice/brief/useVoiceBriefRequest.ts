@@ -43,7 +43,7 @@ export function useVoiceBriefHomeRequest(input: Readonly<{ available: boolean; o
 }
 
 /** One request owner for the visible Brief and agent Actions; lifecycle and output remain incumbent. */
-export function useVoiceBriefRequest() {
+export function useVoiceBriefRequest(onClose?: () => void) {
     const inbox = useInboxModel();
     const settings = storage((state) => state.settings);
     const brief = React.useMemo(() => buildVoiceBrief({ inbox, settings }), [inbox, settings]);
@@ -55,8 +55,8 @@ export function useVoiceBriefRequest() {
     const pending = React.useRef<PendingBrief | null>(null);
     const started = React.useRef(false);
     const initialized = React.useRef(false);
-    const current = React.useRef({ inbox, voice, surface, delivery, retryRequired, attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() });
-    current.current = { inbox, voice, surface, delivery, retryRequired, attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() };
+    const current = React.useRef({ inbox, voice, surface, delivery, retryRequired, onClose, attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() });
+    current.current = { inbox, voice, surface, delivery, retryRequired, onClose, attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() };
 
     const deliverWhenConnected = React.useCallback((): Delivery | null => {
         const request = pending.current;
@@ -93,6 +93,12 @@ export function useVoiceBriefRequest() {
             return { ok: false, errorCode: 'voice_brief_unavailable' };
         }
         if (owner.attemptId !== getVoiceSessionAttemptId()) return { ok: false, errorCode: 'stale_voice_attempt' };
+        if (operation === 'close') {
+            if (!owner.onClose) return { ok: false, errorCode: 'voice_brief_unavailable' };
+            pending.current = null;
+            owner.onClose();
+            return voiceBriefOperationResult('closed');
+        }
         if (operation === 'stop') {
             const stop = owner.surface?.canBargeIn ? owner.surface.onBargeIn
                 : owner.surface?.canCancelTurn ? owner.surface.onCancelTurn : null;
@@ -147,5 +153,6 @@ export function useVoiceBriefRequest() {
         canStopReply: surface?.canCancelTurn === true || surface?.canBargeIn === true,
         retry: () => execute('retry'),
         stopReply: () => execute('stop'),
+        closeBrief: () => execute('close'),
     };
 }

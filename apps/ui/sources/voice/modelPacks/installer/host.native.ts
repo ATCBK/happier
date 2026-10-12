@@ -2,7 +2,7 @@
  * Expo-FS host adapter for the shared model-pack installer core.
  *
  * Implements {@link ModelPackInstallerHost} on top of Expo `File`/`Directory`
- * and `fetch`, so the UI native installer runs the one shared
+ * and native file transfers, so the UI native installer runs the one shared
  * `installModelPackWithHost` algorithm (resume-aware download → verify → atomic
  * swap → restore-on-failure) instead of a parallel implementation.
  *
@@ -18,9 +18,10 @@
  *           present through swap and commit so a crash can be rolled back
  *           (X-M1, via {@link reconcileExpoModelPackPromotion}).
  *
- * Streaming: chunks are appended with `file.write(chunk, { append: true })`
- * (LB-L1), so a large pack is written incrementally instead of read+concat+
- * rewriting the whole staged file on every chunk.
+ * Artifact transfer stays native in a temporary sibling file; only numeric
+ * progress crosses into JS. Bounded disk chunks are verified by the shared core
+ * and appended to scratch. Interrupted new tails are retried; existing scratch
+ * prefixes survive cancellation and still resume through HTTP Range.
  *
  * Digest: the adapter uses the shared incremental SHA-256 implementation, so
  * native installs do not retain downloaded chunks until finalize.
@@ -53,11 +54,13 @@ import {
   getPackSiblingFile,
 } from './paths';
 import type { ExpoFsDirectory, ExpoFsFile, InstallerFs, InvalidatePackRuntime } from './types';
+import { downloadNativeModelPackFile, type NativeModelPackDownload } from './nativeDownload';
 
 const SCRATCH_SUFFIX = '.scratch';
 const BACKUP_SUFFIX = '.backup';
 const INTENT_SUFFIX = '.promote-intent';
 const RESUME_PLAN_FILE = '.resume-plan.json';
+const DOWNLOAD_SUFFIX = '.download';
 type ExpoModelPackOperationLease = Readonly<{
   key: string;
   token: symbol;
@@ -139,25 +142,30 @@ function stagedFile(fs: InstallerFs, scratchDir: ExpoFsDirectory, filePath: stri
   return new fs.File(dir, filename);
 }
 
-async function streamFile(file: ExpoFsFile, onChunk: (chunk: Uint8Array) => void | Promise<void>): Promise<number> {
-  const readable = (file as ExpoFsFile & { readableStream?: () => ReadableStream<Uint8Array> }).readableStream;
-  if (typeof readable !== 'function') {
-    throw new Error('model_pack_partial_stream_unavailable');
-  }
-  const reader = readable.call(file).getReader();
-  let total = 0;
+// Large models must never be materialized in the JS heap. This reader owns both native
+// partial rehashes and completed native-transfer bodies, with one bounded handle lifecycle.
+async function* readFileChunks(file: ExpoFsFile): AsyncGenerator<Uint8Array, void, undefined> {
+  const handle = file.open();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return total;
-      if (!value || value.byteLength === 0) continue;
-      const chunk = new Uint8Array(value);
-      total += chunk.byteLength;
-      await onChunk(chunk);
+      const chunk = handle.readBytes(1024 * 1024);
+      if (chunk.byteLength === 0) return;
+      yield chunk;
+      // Native reads are synchronous: give cancellation and rendering a task between chunks.
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   } finally {
-    reader.releaseLock?.();
+    handle.close();
   }
+}
+
+async function streamFile(file: ExpoFsFile, onChunk: (chunk: Uint8Array) => void | Promise<void>): Promise<number> {
+  let total = 0;
+  for await (const chunk of readFileChunks(file)) {
+    total += chunk.byteLength;
+    await onChunk(chunk);
+  }
+  return total;
 }
 
 function pruneScratchTreeToPlan(
@@ -190,72 +198,54 @@ function pruneScratchTreeToPlan(
   visit(scratchDir, []);
 }
 
-/**
- * Open a download stream. When `rangeStart` is set, request the remaining bytes
- * with an HTTP Range header; `isPartial` reflects whether the server honored it
- * (HTTP 206).
- */
+/** Native transfer followed by bounded disk reads through the shared installer core. */
 function createDownloadOpener(
-  fetchImpl: typeof fetch,
-  timeoutMs: number | null,
+  fs: InstallerFs,
+  download: NativeModelPackDownload,
 ): (request: ModelPackDownloadRequest) => Promise<ModelPackDownloadStream> {
   return async (request) => {
-    const headers: Record<string, string> = {};
-    if (request.rangeStart && request.rangeStart > 0) {
-      headers.Range = `bytes=${request.rangeStart}-`;
-    }
-    const requestPromise = fetchImpl(request.url, { signal: request.signal, headers });
-    const response = timeoutMs === null ? await requestPromise : await Promise.race([
-      requestPromise,
-      new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
-        (timer as unknown as { unref?: () => void })?.unref?.();
-      }),
-    ]);
-    if (!response.ok) {
-      throw new Error(`model_pack_download_failed:${response.status}`);
-    }
-
-    const isPartial = response.status === 206;
-    const contentLengthHeader = response.headers.get('content-length');
-    const contentLength = contentLengthHeader ? Number(contentLengthHeader) : null;
-
-    const body = (response as unknown as { body?: { getReader?: () => any } }).body;
-    const reader = body?.getReader?.();
-    if (reader) {
+    if (!request.packId) throw new Error('model_pack_download_packid_missing');
+    // The existing pack lease and serial file loop give this sibling one producer.
+    const temporaryFile = getPackSiblingFile(fs, request.packId, DOWNLOAD_SUFFIX);
+    let chunks: ReturnType<typeof readFileChunks> | undefined;
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      try { await chunks?.return(); } finally { deleteRequired(temporaryFile); }
+    };
+    try {
+      deleteRequired(temporaryFile);
+      const result = await download({
+        url: request.url, fileUri: temporaryFile.uri, rangeStart: request.rangeStart,
+        signal: request.signal, onProgress: request.onProgress,
+      });
+      const lengthHeader = Object.entries(result.headers).find(([name]) => name.toLowerCase() === 'content-length')?.[1];
+      const contentLength = lengthHeader ? Number(lengthHeader) : null;
+      const reader = readFileChunks(temporaryFile);
+      chunks = reader;
       return {
         contentLength: Number.isFinite(contentLength) ? contentLength : null,
-        isPartial,
+        isPartial: result.status === 206,
         read: async () => {
-          const { done, value } = await reader.read();
-          if (done) return null;
-          return value ? new Uint8Array(value) : new Uint8Array();
+          const result = await reader.next();
+          if (result.done) { await close(); return null; }
+          return result.value;
         },
-        cancel: () => {
-          void reader.cancel?.().catch?.(() => undefined);
-        },
+        cancel: close,
       };
+    } catch (error) {
+      try { await close(); } catch (cleanupError) {
+        console.warn('model_pack_download_cleanup_failed', cleanupError);
+      }
+      throw error;
     }
-
-    // No streaming body: deliver the full buffer once.
-    const buf = new Uint8Array(await response.arrayBuffer());
-    let delivered = false;
-    return {
-      contentLength: buf.byteLength,
-      isPartial,
-      read: async () => {
-        if (delivered) return null;
-        delivered = true;
-        return buf;
-      },
-    };
   };
 }
 
 export function createExpoModelPackInstallerHost(opts: {
   fs: InstallerFs;
-  fetchImpl: typeof fetch;
-  timeoutMs: number | null;
+  download?: NativeModelPackDownload;
   /**
    * Awaited immediately before and again after this pack's live directory bytes
    * change. Native engines cache by that stable directory path: the first
@@ -264,10 +254,10 @@ export function createExpoModelPackInstallerHost(opts: {
    */
   invalidatePackRuntime?: InvalidatePackRuntime;
 }): ModelPackInstallerHost {
-  const { fs, fetchImpl } = opts;
+  const { fs } = opts;
 
   return {
-    openDownload: createDownloadOpener(fetchImpl, opts.timeoutMs),
+    openDownload: createDownloadOpener(fs, opts.download ?? downloadNativeModelPackFile),
     createHasher: createSha256Hasher,
     beginStaging: async (packId, plan: ModelPackStagingPlan): Promise<ModelPackStagingHandle> => {
       const lease = acquireOperationLease(fs, packId);
@@ -489,7 +479,7 @@ export function createExpoModelPackInstallerHost(opts: {
           if (promoted) {
             tryDelete(freshScratchDir());
           }
-          lease.release();
+          try { deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX)); } finally { lease.release(); }
         },
       };
     },
@@ -524,6 +514,7 @@ async function reconcileExpoModelPackPromotionOwned(opts: {
 }, lease?: ExpoModelPackOperationLease): Promise<boolean> {
   const { fs, packId } = opts;
   assertOperationAvailable(fs, packId, lease);
+  deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
   const intentFile = getPackSiblingFile(fs, packId, INTENT_SUFFIX);
   const liveDir = getPackRootDir(fs, packId);
   const backupDir = getPackSiblingDir(fs, packId, BACKUP_SUFFIX);

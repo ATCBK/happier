@@ -1,6 +1,6 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   ConnectedServiceBindingsV1Schema,
   ConnectedServiceBindingsV2Schema,
@@ -8,13 +8,22 @@ import {
   readBuiltInLegacyConnectedAccountServiceKeyIngress,
 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { Item } from '@/components/ui/lists/Item';
+import { NewSessionConnectedServicesSelectionContent } from '@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 
-const featureState = vi.hoisted(() => ({
-  accountGroups: false,
-}));
-const profileState = vi.hoisted(() => ({
-  connectedServicesV2: [] as Array<{
+function renderScreen(element: React.ReactElement) {
+  return renderTestScreen(<InjectedAuthProvider credentials={null}>{element}</InjectedAuthProvider>);
+}
+
+const profileState = {
+  get connectedServicesV2() { return storage.getState().profile.connectedServicesV2; },
+  set connectedServicesV2(value: Array<{
     serviceId: string;
     profiles: Array<{
       profileId: string;
@@ -22,32 +31,20 @@ const profileState = vi.hoisted(() => ({
       kind: 'oauth' | 'token';
       providerEmail: string;
     }>;
-  }>,
-}));
+  }>) { storage.setState((state) => ({ profile: { ...state.profile, connectedServicesV2: value } })); },
+};
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 const modalShow = vi.hoisted(() => vi.fn());
 
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock().module;
 });
-vi.mock('@/components/ui/lists/Item', () => ({
-  // Test-renderer host preserves the Item contract without pulling in native styling.
-  Item: (props: any) => React.createElement('Item', props),
-}));
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-  useFeatureEnabled: () => featureState.accountGroups,
-}));
-vi.mock('@/sync/store/hooks', () => ({
-  useProfile: () => profileState,
-  useSettingsSelector: <T,>(selector: (settings: Record<string, unknown>) => T) => selector({
-    connectedServicesProfileLabelByKey: {},
-    connectedServicesDefaultProfileByServiceId: {},
-  }),
-}));
-vi.mock('@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent', () => ({
-  NewSessionConnectedServicesSelectionContent: (props: Record<string, unknown>) =>
-    React.createElement('ConnectedServicesPicker', props),
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock({ spies: { show: modalShow } }).module;
@@ -58,8 +55,9 @@ vi.mock('@/text', async () => {
 });
 
 describe('VoiceGlobalConnectedServicesBindingField', () => {
-  beforeEach(() => {
-    featureState.accountGroups = false;
+  beforeEach(async () => {
+    const account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+    onTestFinished(account.dispose);
     profileState.connectedServicesV2 = [];
     modalShow.mockClear();
   });
@@ -77,7 +75,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       onChange={vi.fn()}
     />);
 
-    const item = screen.tree.findByType('Item' as any);
+    const item = screen.tree.findByType(Item);
     expect(item.props).toMatchObject({
       testID: 'voice-realtime-connected-services-codex',
       title: 'Codex account',
@@ -98,7 +96,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       modalConfig.component,
       { ...modalConfig.props, onClose: vi.fn() },
     ));
-    expect(pickerScreen.tree.findByType('ConnectedServicesPicker' as any).props).toMatchObject({
+    expect(pickerScreen.tree.findByType(NewSessionConnectedServicesSelectionContent).props).toMatchObject({
       bindingsByServiceId: {},
       allowDefaultProfileFallback: false,
       includeNativeAuthOption: false,
@@ -144,7 +142,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       onChange={onChange}
     />);
 
-    const item = screen.tree.findByType('Item' as any);
+    const item = screen.tree.findByType(Item);
     expect(item.props.onPress).toEqual(expect.any(Function));
     act(() => item.props.onPress());
 
@@ -165,7 +163,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
         { ...modalConfig.props, onClose: vi.fn() },
       ),
     ));
-    const picker = pickerScreen.tree.findByType('ConnectedServicesPicker' as any);
+    const picker = pickerScreen.tree.findByType(NewSessionConnectedServicesSelectionContent);
 
     expect(picker.props.supportedServiceIds).toEqual([serviceId]);
     expect(picker.props.profileOptionsByServiceId[serviceId]).toEqual([
@@ -273,7 +271,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
       onChange={vi.fn()}
     />);
 
-    expect(screen.tree.findByType('Item' as any).props).toMatchObject({
+    expect(screen.tree.findByType(Item).props).toMatchObject({
       title: 'Installed Agent account',
       detail: 'common.none',
       showChevron: true,

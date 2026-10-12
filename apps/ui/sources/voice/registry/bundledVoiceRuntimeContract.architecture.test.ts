@@ -68,7 +68,7 @@ describe('bundled voice runtime contract ownership', () => {
       'inputSchema: Parameters<typeof zodSchemaToJsonSchemaObject>[0]',
     );
     expect(runtimeHost).toContain(
-      'StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(inputSchema))',
+      "StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(inputSchema, { reused: 'ref' }))",
     );
     expect(runtimeHost).not.toContain("import { defineSchema } from '@happier-dev/plugin-sdk';");
     expect(runtimeHost).not.toContain('defineSchema(inputSchema)');
@@ -173,7 +173,7 @@ describe('bundled voice runtime contract ownership', () => {
     const generator = bundledPluginGeneratorSource();
 
     for (const providerLeaf of [openAiVoice, elevenLabsVoice, xaiVoice, codexVoice]) {
-      expect(providerLeaf).toMatch(/export\s*\{\s*activate/);
+      expect(providerLeaf).toMatch(/export\s*(?:\{\s*activate|function\s+activate)/);
       expect(providerLeaf).not.toContain('BUNDLED_VOICE_PROVIDER_ACTIVATION_ENTRIES');
       expect(providerLeaf).not.toContain('BUNDLED_VOICE_CONVERSATION_RUNTIME_ENTRIES');
     }
@@ -215,13 +215,13 @@ describe('bundled voice runtime contract ownership', () => {
     ].map((platform) => {
       const path = `apps/ui/sources/voice/registry/generatedBundledVoiceRuntimeEntries.${platform}.ts`;
       // The canonical generator removes byte-identical platform overrides;
-      // those platforms consume the common projection with package export conditions.
+      // those platforms consume the same portable activation projection.
       return existsSync(resolve(repoRoot, path)) ? source(path) : webRuntimeEntries;
     });
     const registration = source(
       'apps/ui/sources/voice/adapters/registerBuiltinVoiceAdapters.ts',
     );
-    const nativeMetadataLeaves = [
+    const portableMetadataLeaves = [
       ['codex', source('packages/plugins/codex/package.json')],
       ['elevenlabs', source('packages/plugins/elevenlabs/package.json')],
       ['openai', source('packages/plugins/openai/package.json')],
@@ -245,24 +245,23 @@ describe('bundled voice runtime contract ownership', () => {
     expect(registration).toContain(
       "from '@/voice/registry/generatedBundledVoiceRuntimeEntries'",
     );
-    for (const [packageId, packageJson] of nativeMetadataLeaves) {
+    for (const [packageId, packageJson] of portableMetadataLeaves) {
       const manifest: unknown = JSON.parse(packageJson);
       expect(manifest).toMatchObject({
         exports: {
           './ui/voice': {
-            'react-native': {
-              'happier-source': './src/ui/voice/index.native.ts',
-              default: './dist/ui/voice/index.native.js',
-            },
+            'happier-source': './src/ui/voice/index.ts',
+            default: './dist/ui/voice/index.js',
           },
         },
       });
-      const nativeLeaf = source(
-        `packages/plugins/${packageId}/src/ui/voice/index.native.ts`,
+      expect(manifest).not.toHaveProperty(['exports', './ui/voice', 'react-native']);
+      const portableLeaf = source(
+        `packages/plugins/${packageId}/src/ui/voice/index.ts`,
       );
-      expect(nativeLeaf).toContain('VOICE_PROVIDER_PRESENTATIONS');
-      expect(nativeLeaf).toContain('activate');
-      expect(nativeLeaf).not.toContain('createRuntimeContribution');
+      expect(portableLeaf).toContain('VOICE_PROVIDER_PRESENTATIONS');
+      expect(portableLeaf).toContain('activate');
+      expect(portableLeaf).not.toContain('createRuntimeContribution');
     }
   });
 

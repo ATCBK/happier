@@ -1,4 +1,4 @@
-import { isPermissionDeniedMicrophoneError } from '@/utils/platform/microphonePermissions';
+import { isMicrophoneUnavailableError, isPermissionDeniedMicrophoneError } from '@/utils/platform/microphonePermissions';
 import type { MicSessionFailure } from '@/voice/runtime/mic/MicSession';
 
 import type {
@@ -26,6 +26,9 @@ type VoiceMachineErrorPolicy = Readonly<{
 
 const POLICY_BY_KIND: Readonly<Record<VoiceMachineErrorKind, VoiceMachineErrorPolicy>> = {
     mic_permission_denied: { phase: 'preflight', retryPolicy: 'user_action', recoveryAction: 'open_settings', presentation: 'permission_required' },
+    // No microphone to open: nothing was denied, so it fails with its own sentence and a retry.
+    mic_unavailable: { phase: 'preflight', retryPolicy: 'user_action', recoveryAction: 'retry', presentation: 'error' },
+    speech_recognition_unavailable: { phase: 'preflight', retryPolicy: 'user_action', recoveryAction: 'select_speech_engine', presentation: 'error' },
     mic_permission_revoked: { phase: 'active_session', retryPolicy: 'user_action', recoveryAction: 'open_settings_then_reconnect', presentation: 'error' },
     mic_ended: { phase: 'active_session', retryPolicy: 'immediate_once', recoveryAction: 'reconnect', presentation: 'notice' },
     mic_plateau: { phase: 'active_session', retryPolicy: 'immediate_once', recoveryAction: 'reconnect', presentation: 'notice' },
@@ -75,7 +78,9 @@ export function createVoiceMachineError(params: Readonly<{
         kind: params.kind,
         reason: params.reason,
         ...policy,
-        recoverable: policy.presentation === 'notice' || policy.presentation === 'permission_required',
+        // Only a notice ends gracefully. A blocked microphone stays on screen ("Microphone blocked"
+        // with Allow, lab ST): projected as a graceful disconnect it was drawn as plain rest.
+        recoverable: policy.presentation === 'notice',
     };
 }
 
@@ -116,6 +121,9 @@ export function classifyMicSessionFailure(failure: MicSessionFailure): VoiceMach
 
 /** Classify a realtime transport/provider error (permission denial vs generic provider fault). */
 export function classifyRealtimeProviderFailure(error: unknown): VoiceMachineError {
+    if (isMicrophoneUnavailableError(error)) {
+        return createVoiceMachineError({ kind: 'mic_unavailable', reason: 'mic_unavailable' });
+    }
     if (isPermissionDeniedMicrophoneError(error)) {
         return createVoiceMachineError({
             kind: 'mic_permission_denied',
@@ -142,6 +150,9 @@ export function classifyVoiceMachineError(
             kind: 'turn_aborted',
             reason: readErrorReason(error, 'turn_aborted'),
         });
+    }
+    if (isMicrophoneUnavailableError(error)) {
+        return createVoiceMachineError({ kind: 'mic_unavailable', reason: 'mic_unavailable' });
     }
     if (isPermissionDeniedMicrophoneError(error)) {
         return createVoiceMachineError({

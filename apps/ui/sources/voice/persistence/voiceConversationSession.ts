@@ -37,6 +37,7 @@ import {
 import { executeSessionSpawnNewAction } from '@/sync/ops/actions/sessionSpawnNewAction';
 import { resolveSpawnAttemptDirectoryIdentity } from '@/sync/domains/session/spawn/spawnAttemptKey';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { resolveMachineForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { publishDisplayTitleMetadataMutation } from '@/sync/state/displayTitlePublish';
 import { sync } from '@/sync/sync';
@@ -563,7 +564,7 @@ async function spawnVoiceConversationSession(params: Readonly<{
     if (!action.ok) {
         throw toVoiceConversationSpawnError({
             errorCode: action.errorCode,
-            errorMessage: action.error,
+            errorMessage: action.errorCode,
         });
     }
     if (action.result.type !== 'success') {
@@ -590,10 +591,10 @@ function resolveTargetMachineForSpawn(state: any, machineId: string): any {
         ?? null;
 }
 
-function assertTargetMachineStructurallyReadyForSpawn(machineId: string): void {
+function assertTargetMachineStructurallyReadyForSpawn(machineId: string, accountLifetime = captureActiveServerAccountScopeLifetime()): void {
     const state = storage.getState();
     const machine = resolveTargetMachineForSpawn(state, machineId);
-    if (canAttemptMachineSpawn({ selectedMachineId: machineId, machine })) return;
+    if (canAttemptMachineSpawn({ selectedMachineId: machineId, machine, scope: accountLifetime?.isCurrent() ? accountLifetime.scope : null })) return;
     throw Object.assign(
         new Error('Target machine daemon is offline. Start or reconnect the daemon before starting local voice.'),
         { code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' },
@@ -852,9 +853,11 @@ async function findExactVoiceHomeConversationSession(params: Readonly<{
         }
         let backendTargetMatches = false;
         try {
-            backendTargetMatches = buildBackendTargetKeyV2(
-                readBackendTargetRefV2(metadata?.backendTarget as Parameters<typeof readBackendTargetRefV2>[0]),
-            ) === buildBackendTargetKeyV2(params.requirements.backendTarget);
+            const candidateTarget = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({
+                session: candidate.session,
+            }));
+            backendTargetMatches = candidateTarget !== null
+                && buildBackendTargetKeyV2(candidateTarget) === buildBackendTargetKeyV2(params.requirements.backendTarget);
         } catch {
             backendTargetMatches = false;
         }
@@ -936,7 +939,7 @@ async function ensureVoiceConversationSessionForVoiceHomeUnguarded(
     // Bind persistence to the Account that selected this exact target before
     // any retirement, requirement resolution, recovery, or spawn await.
     const state: any = storage.getState();
-    assertTargetMachineStructurallyReadyForSpawn(target.machineId);
+    assertTargetMachineStructurallyReadyForSpawn(target.machineId, accountLifetime);
     await retireLegacyVoiceConversationSessions(target).catch(() => {});
     assertVoiceConversationAccountCurrent(accountLifetime);
     const resolvedRequirements = requirements

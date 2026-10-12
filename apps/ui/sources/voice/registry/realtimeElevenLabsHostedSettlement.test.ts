@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture } from '@/dev/testkit';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
   installDisconnectedServerSocketBoundary,
@@ -20,6 +21,9 @@ import {
 import { getCurrentBundledConversationRuntimeHost } from './bundledConversationRuntimeHost';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn() }));
@@ -70,9 +74,12 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
     });
     account = await restoreServerAccountForTest({
       serverUrl: 'https://hosted-settlement.example.test', accountId: 'hosted-account',
+      credentialScope: 'restored-home',
       request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/health') return new Response('{}');
+        const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
+        if (preparation) return preparation;
         if (!path.startsWith('/v1/voice/')) return new Response('{}', { status: 404 });
         expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${account.credentials.token}`);
         const body: unknown = JSON.parse(String(init?.body));

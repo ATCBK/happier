@@ -8,7 +8,7 @@ import {
     resolveCurrentVoiceRuntimePlatform,
     resolveVoiceStartAdmission,
 } from '@/components/voice/surface/resolveVoiceStartAdmission';
-import { resolveVoiceSurfaceRecovery } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
+import { resolveVoiceSurfaceRecovery, type VoiceRecoveryIcon } from '@/components/voice/surface/resolveVoiceSurfaceRecovery';
 import { resolveVoiceSurfaceState, type VoiceSurfaceState } from '@/components/voice/surface/resolveVoiceSurfaceState';
 import { resolveVoiceSurfaceStatusPresentation } from '@/components/voice/surface/resolveVoiceSurfaceStatusPresentation';
 import { useStoreSnapshot } from '@/components/voice/surface/useStoreSnapshot';
@@ -29,6 +29,7 @@ import {
     dismissVoiceSessionEndedAttempt,
     getVoiceSessionAttemptStartedAt,
     getVoiceSessionPresentedAttemptId,
+    getVoiceSessionFirstSuccessAttemptId,
     getVoiceSessionArrivedAttemptId,
     getVoiceSessionEndedAttempt,
     subscribeToVoiceSessionEndedAttempt,
@@ -112,14 +113,20 @@ export type VoiceAttemptControlProjection = VoiceAttemptControl & Readonly<{
     onDismissEnded?: () => void;
     /** The attempt's one-shot continuation event for the mark (leave / arrive). Omitted by static previews. */
     markEvent?: VoiceMarkEvent | null;
+    /** The same genuine completion fact drives setup art and the composer mark. */
+    firstSuccessEvent?: VoiceMarkEvent | null;
     /** Acknowledges a terminal failure through the lifecycle owner and releases its media. */
     onDismissFailedAttempt?: () => void;
     /** Truthful transport semantics and copy, selected once for every placement. */
     primaryActionLabel: string | null;
     primaryActionHint: string | null;
+    /**
+     * The recovery's one label (lab ST: Allow · Retry · Set up), drawn and announced the same way in
+     * every placement — the pill, the island, the glance and the sheet never name one action twice.
+     */
     recoveryLabel: string | null;
-    /** The recovery's short visible verb for compact transports; `recoveryLabel` stays its accessible name. */
-    recoveryShortLabel: string | null;
+    /** The recovery's glyph, chosen with its label: microphone to allow, gear to set up, arrow to retry. */
+    recoveryIcon: VoiceRecoveryIcon | null;
     /** Placement-neutral, privacy-safe microphone status copy. */
     micStateLabel: string;
     /** The sheet caption selected from recovery and microphone status facts. */
@@ -387,10 +394,6 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
         getVoiceSessionArrivedAttemptId,
         getVoiceSessionArrivedAttemptId,
     );
-    const markEvent = React.useMemo(
-        () => resolveVoiceMarkEvent({ ended: presentedEnded, arrivedAttemptId }),
-        [arrivedAttemptId, presentedEnded],
-    );
     const currentAccountScope = useActiveServerAccountScope();
     const subscribeBindingSources = React.useCallback((notify: () => void) => {
         const unsubscribeSessions = storage.subscribe(notify);
@@ -461,6 +464,18 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
     const openConversationSessionAddress = openConversationTarget?.address ?? null;
     const openConversationSessionId = openConversationSessionAddress?.sessionId ?? null;
     const canOpenConversation = openConversationTarget !== null;
+
+    const firstSuccessAttemptId = React.useSyncExternalStore(
+        subscribeToVoiceSessionEndedAttempt,
+        getVoiceSessionFirstSuccessAttemptId,
+        getVoiceSessionFirstSuccessAttemptId,
+    );
+    const firstSuccessEvent = React.useMemo<VoiceMarkEvent | null>(() => firstSuccessAttemptId
+        ? { kind: 'gather', id: `${firstSuccessAttemptId}:first-success` } : null, [firstSuccessAttemptId]);
+    const markEvent = React.useMemo(
+        () => resolveVoiceMarkEvent({ ended: presentedEnded, arrivedAttemptId, firstSuccess: firstSuccessEvent }),
+        [arrivedAttemptId, presentedEnded, firstSuccessEvent],
+    );
 
     const onOpenConversation = React.useCallback(() => {
         if (!openConversationTarget) return;
@@ -591,9 +606,19 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
         if (voiceSessionManager.matchesAttempt(expectedAttempt)) dismissVoiceSessionEndedAttempt();
     }, [expectedAttempt]);
 
-    const recoveryLabel = control.recoveryAvailable
-        ? t(recovery?.labelKey ?? 'modals.openSettings')
-        : null;
+    /*
+     * One label per recovery action for every placement (R12b), owned by the recovery resolver. A
+     * blocked microphone is always "Allow"; setup still owed with no runtime recovery is "Set up".
+     */
+    const recoveryPresentation = !control.recoveryAvailable
+        ? null
+        : surfaceState === 'permission_required'
+            ? { label: t('voicePresence.recovery.allow'), icon: 'microphone' as const }
+            : recovery
+                ? { label: t(recovery.labelKey), icon: recovery.icon }
+                : { label: t('voicePresence.recovery.setUp'), icon: 'gear' as const };
+    const recoveryLabel = recoveryPresentation?.label ?? null;
+    const recoveryIcon = recoveryPresentation?.icon ?? null;
     const micStateLabel = surfaceState === 'permission_required' ? statusLabel : t(
         control.muted
             ? 'voiceSurface.a11y.microphoneMuted'
@@ -615,18 +640,6 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
         : surfaceState === 'error'
             ? failureReason ?? t('voicePresence.captions.failed')
             : recoveryLabel ?? micStateLabel;
-    /*
-     * The transport's visible verb (lab ST: Allow · Retry · Set up). The full `recoveryLabel` stays
-     * the accessible name and the glance's button title.
-     */
-    const recoveryShortLabel = !recoveryLabel
-        ? null
-        : surfaceState === 'permission_required' || recoveryAction === 'open_settings_then_reconnect'
-            ? t('voicePresence.recovery.allow')
-            : recovery === null || recovery.kind === 'open_settings' || recovery.kind === 'review_credentials'
-                || recovery.kind === 'select_execution_machine'
-                ? t('voicePresence.recovery.setUp')
-                : recoveryLabel;
     const primaryActionLabel = control.primaryAction === 'recover'
         ? recoveryLabel
         : control.primaryAction === 'end'
@@ -667,6 +680,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             beginHoldToTalk,
             ended: presentedEnded,
             markEvent,
+            firstSuccessEvent,
             onDismissEnded,
             onDismissFailedAttempt,
             onToggle,
@@ -677,7 +691,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             primaryActionLabel,
             primaryActionHint,
             recoveryLabel,
-            recoveryShortLabel,
+            recoveryIcon,
             micStateLabel,
             captionLabel,
             onPrimaryAction,
@@ -702,6 +716,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             beginHoldToTalk,
             presentedEnded,
             markEvent,
+            firstSuccessEvent,
             onDismissEnded,
             onDismissFailedAttempt,
             onCommitInput,
@@ -717,7 +732,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
             primaryActionHint,
             primaryActionLabel,
             recoveryLabel,
-            recoveryShortLabel,
+            recoveryIcon,
             micStateLabel,
             captionLabel,
         ],

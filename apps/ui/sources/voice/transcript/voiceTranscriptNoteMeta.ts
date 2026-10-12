@@ -1,5 +1,6 @@
 import type { MessageMeta } from "@happier-dev/session-core/messages";
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export const VOICE_TRANSCRIPT_NOTE_META_KIND = 'voice_note.v1';
 
@@ -26,7 +27,7 @@ export function buildVoiceTranscriptNoteMeta(input?: Readonly<{ continuation: Vo
 export function readVoiceContinuationProvenance(meta: unknown): VoiceContinuationProvenance | null {
     if (!hasVoiceTranscriptNoteMeta(meta)) return null;
     const happier = (meta as Readonly<{ happier: Readonly<{ payload?: unknown }> }>).happier;
-    const result = VoiceTranscriptNotePayloadSchema.safeParse(happier.payload);
+    const result = createStoredReadSchema(VoiceTranscriptNotePayloadSchema).safeParse(happier.payload);
     return result.success ? result.data.continuation ?? null : null;
 }
 

@@ -149,6 +149,9 @@ const accountFixture = {
     });
   },
 };
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let accountScope = { serverId: 'server-1', accountId: 'account-1' };

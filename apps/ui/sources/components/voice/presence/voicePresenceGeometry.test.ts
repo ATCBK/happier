@@ -139,4 +139,48 @@ describe('voice presence geometry', () => {
             petOffset: 0,
         })).toBe(291 + 12);
     });
+
+    /**
+     * R1 (qa-4-design-5): on desktop the workspace frame lifts the 208 px composer band 41 px off
+     * the 900 px window edge, so its top is 249 px up. A float placed from the height alone rested
+     * on the context/usage meters at y 665.
+     */
+    it('rests a float above a composer the workspace frame lifts off the window edge', () => {
+        const desktop = resolveVoiceOrbRestingBottomInset({
+            safeAreaBottom: 0,
+            bottomChromeHeight: 0,
+            composerChromeHeight: 208,
+            composerTopFromBottom: 900 - 651,
+            keyboardHeight: 0,
+            petOffset: 0,
+        });
+        expect(desktop).toBe(249 + 12);
+        const island = resolveVoicePresenceGeometry({
+            hostWidth: 1440, hostHeight: 900, containerWidth: 330, containerHeight: 56,
+            restingBottomInset: desktop, bottomMargin: 0,
+        });
+        expect(island.restingPoint.y + 56).toBeLessThanOrEqual(651);
+    });
+
+    it('keeps the phone stack when the measured top is the same band or stale under the keyboard', () => {
+        // Phone (F18): the band sits flush on the bar, so its measured top is the stack itself.
+        const flushTop = 34 + BOTTOM_CHROME_HEIGHT + COMPOSER_CHROME_HEIGHT;
+        expect(resolveVoiceOrbRestingBottomInset({
+            safeAreaBottom: 34,
+            bottomChromeHeight: BOTTOM_CHROME_HEIGHT,
+            composerChromeHeight: COMPOSER_CHROME_HEIGHT,
+            composerTopFromBottom: flushTop,
+            keyboardHeight: 0,
+            petOffset: 0,
+        })).toBe(flushTop + 12);
+        // The keyboard lifts the band past its last measurement: the stack still clears it.
+        expect(resolveVoiceOrbRestingBottomInset({
+            safeAreaBottom: 34,
+            bottomChromeHeight: 0,
+            composerChromeHeight: COMPOSER_CHROME_HEIGHT,
+            composerTopFromBottom: flushTop,
+            keyboardHeight: 291,
+            petOffset: 0,
+        })).toBe(34 + 291 + COMPOSER_CHROME_HEIGHT + 12);
+    });
 });

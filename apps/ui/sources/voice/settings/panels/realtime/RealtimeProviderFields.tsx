@@ -114,7 +114,7 @@ function detail(value: unknown): string {
 export function RealtimeProviderFields(props: Readonly<{
   providerId: string;
   descriptor: RealtimeSettingsDescriptor;
-  owner: RealtimeProviderSettingsOwner;
+  owner: Pick<RealtimeProviderSettingsOwner, 'schemaVersion' | 'defaultConfig' | 'parseConfig'>;
   config: SettingsValue;
   credentialStatus: AccountVoiceCredentialUseStatus;
   catalog: RealtimeCatalogState;
@@ -122,7 +122,6 @@ export function RealtimeProviderFields(props: Readonly<{
   popoverBoundaryRef?: React.RefObject<any> | null;
   welcomeSelection?: string;
   assistantLanguage?: string | null;
-  onWelcomeSelection?: (selection: string) => void;
   renderAfterField?: (field: RealtimeSettingsFieldDescriptor) => React.ReactNode;
 }>) {
   const { theme } = useUnistyles();
@@ -301,7 +300,6 @@ export function RealtimeProviderFields(props: Readonly<{
           key={key}
           value={selection}
           explanation={greetingUnavailable ? t('voicePresence.greetingLiteralUnavailable') : undefined}
-          onChange={(next) => props.onWelcomeSelection?.(next)}
         />;
       }
 

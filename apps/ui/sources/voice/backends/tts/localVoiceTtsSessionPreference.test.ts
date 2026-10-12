@@ -41,7 +41,7 @@ describe('local model Session voice consumption', () => {
     boundary.synthesize.mockResolvedValue({ bytes: new Uint8Array([1]), output: { codec: 'wav', mimeType: 'audio/wav' } });
   });
 
-  async function speak(value: string, current: () => boolean = () => true) {
+  async function speak(value: string, current: () => boolean = () => true, speed: number | null = 1.2) {
     const voice = voiceSettingsParse({ providerId: 'local_conversation' });
     const cfg = readLocalConversationVoiceSettings(voice);
     const applied = vi.fn();
@@ -54,7 +54,7 @@ describe('local model Session voice consumption', () => {
     const request: LocalVoiceTtsRequest = {
       text: 'hello', settings: { voice }, networkTimeoutMs: 15000,
       tts: { ...cfg.tts, provider: 'local_neural', localNeural: { ...cfg.tts.localNeural,
-        assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart', speed: 1.2 } },
+        assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart', speed } },
       registerPlaybackStopper: () => () => {}, onSpeaking: speaking, onTtsFailed: failed,
       preparation,
     };
@@ -73,6 +73,24 @@ describe('local model Session voice consumption', () => {
       packId: 'kokoro-82m-v1.0-onnx-q8-wasm' }));
     expect(result.applied).toHaveBeenCalledWith(expect.objectContaining({ value: 'am_adam', displayName: 'Adam' }));
     expect(result.request.tts.localNeural.voiceId).toBe('af_heart');
+  });
+
+  it.each([
+    { speed: null, expected: 1 },
+    { speed: 1.2, expected: 1.2 },
+    { speed: Number.NaN, expected: 1 },
+    { speed: Number.POSITIVE_INFINITY, expected: 1 },
+  ])('previews the same effective speed as runtime for $speed without rewriting stored options', async ({ speed, expected }) => {
+    const { request, failed } = await speak('am_adam', () => true, speed);
+    expect(failed).not.toHaveBeenCalled();
+    expect(boundary.synthesize).toHaveBeenLastCalledWith(expect.objectContaining({ speed: expected }));
+
+    boundary.playback.mockImplementation(async () => {});
+    await previewLocalNeuralTts({ config: { ...request.tts.localNeural, voiceId: 'am_adam' },
+      sample: 'preview', timeoutMs: request.networkTimeoutMs,
+      registerPlaybackStopper: () => () => {} });
+    expect(boundary.synthesize).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'preview', speed: expected }));
+    expect(request.tts.localNeural.speed).toBe(speed);
   });
 
   it('refuses a removed voice rather than playing the account default', async () => {

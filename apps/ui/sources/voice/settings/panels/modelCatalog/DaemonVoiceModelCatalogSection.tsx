@@ -2,8 +2,8 @@ import * as React from 'react';
 
 import type { ModelPackKind } from '@happier-dev/protocol';
 
-import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { DaemonVoiceInferenceClient } from '@/voice/runtime/daemonInference/DaemonVoiceInferenceClient';
@@ -21,33 +21,38 @@ type ModelCatalogClient = Pick<
 
 export type DaemonVoiceModelCatalogController = ReturnType<typeof useDaemonVoiceModelCatalogState>;
 
+type CatalogStateLine = Readonly<{
+    kind: 'loading' | 'unavailable' | 'error';
+    title: string;
+    retryable: boolean;
+}>;
+
 /**
- * Service-level status copy for the catalog. Reuses the canonical daemon
- * inference state strings so the model manager and the single-pack section read
- * the same error language. `loading` wins over a stale error so a refresh does
- * not flash the previous failure.
+ * What the section says while no model's state is known: one line naming the cause, in the person's
+ * words, with a retry only when trying again can help. `loading` is the initial check (the hook keeps
+ * last-known rows during a refresh), so a refresh never flashes this line over listed models.
  */
-function resolveCatalogStatusDetail(
+function resolveCatalogStateLine(
     loading: boolean,
     errorCode: DaemonVoiceModelCatalogErrorCode,
-): string {
-    if (loading) {
-        return t('settingsVoice.local.daemonInference.states.loading');
+): CatalogStateLine | null {
+    if (errorCode === null) {
+        return loading
+            ? { kind: 'loading', title: t('settingsVoice.pages.advanced.speechModelsChecking'), retryable: false }
+            : null;
     }
     switch (errorCode) {
-        case 'machine_unreachable':
-            return t('settingsVoice.local.daemonInference.states.machineUnreachable');
         case 'feature_disabled':
-            return t('settingsVoice.local.daemonInference.states.unavailable');
+            return { kind: 'unavailable', title: t('settingsVoice.pages.advanced.speechModelsOff'), retryable: false };
+        case 'machine_unreachable':
+            return { kind: 'error', title: t('settingsVoice.pages.advanced.speechModelsUnreachable'), retryable: true };
         case 'runtime_unavailable':
         case 'unsupported_runtime_family':
-            return t('settingsVoice.local.daemonInference.states.runtimeUnavailable');
+            return { kind: 'unavailable', title: t('settingsVoice.pages.advanced.speechModelsUnsupported'), retryable: false };
         case 'request_timeout':
-            return t('settingsVoice.local.daemonInference.states.requestTimeout');
-        case 'internal_error':
-            return t('settingsVoice.local.daemonInference.states.unavailable');
+            return { kind: 'error', title: t('settingsVoice.pages.advanced.speechModelsTimeout'), retryable: true };
         default:
-            return t('settingsVoice.local.daemonInference.states.ready');
+            return { kind: 'error', title: t('settingsVoice.pages.advanced.speechModelsFailed'), retryable: true };
     }
 }
 
@@ -130,25 +135,30 @@ export function DaemonVoiceModelCatalogSection(props: Readonly<{
 
     const handleRemove = React.useCallback((packId: string) => remove(packId), [remove]);
 
-    const showStatusRow = state.loading || statusUnavailable;
+    // While the catalog's state is unknown, no model can be installed or removed, so none is listed:
+    // the section says once why, instead of an unknown state on every model.
+    const stateLine = resolveCatalogStateLine(state.loading, state.errorCode);
+    if (stateLine) {
+        return (
+            <ItemGroup
+                title={t('settingsVoice.pages.advanced.speechModelsTitle')}
+                description={t('settingsVoice.local.models.footer')}
+            >
+                <SurfaceStateCard
+                    testID="voice-model-catalog-status"
+                    size="line"
+                    kind={stateLine.kind}
+                    title={stateLine.title}
+                    action={stateLine.retryable
+                        ? { label: t('common.retry'), onPress: handleRetryStatus, testID: 'voice-model-catalog-retry' }
+                        : undefined}
+                />
+            </ItemGroup>
+        );
+    }
 
     return (
         <>
-            {showStatusRow ? (
-                <ItemGroup>
-                    <Item
-                        testID="voice-model-catalog-status"
-                        title={t('settingsVoice.local.models.statusTitle')}
-                        detail={resolveCatalogStatusDetail(state.loading, state.errorCode)}
-                        loading={state.loading}
-                        destructive={statusUnavailable}
-                        onPress={statusUnavailable ? handleRetryStatus : undefined}
-                        showChevron={false}
-                        selected={false}
-                    />
-                </ItemGroup>
-            ) : null}
-
             <ModelCatalogGroup
                 title={t('settingsVoice.local.models.sttGroupTitle')}
                 description={t('settingsVoice.local.models.footer')}

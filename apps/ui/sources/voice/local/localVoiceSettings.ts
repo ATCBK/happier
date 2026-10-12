@@ -59,6 +59,23 @@ export function parseLocalVoiceTtsSettings(value: unknown): VoiceLocalTtsSetting
   return VoiceLocalTtsSchema.parse(value ?? {});
 }
 
+/** Effective playback options; nullable stored values remain unchanged. */
+export function resolveLocalNeuralTtsOptions(localNeural: VoiceLocalTtsSettings['localNeural']): Readonly<{
+  assetSetId: string | null;
+  execution: VoiceLocalTtsSettings['localNeural']['execution'];
+  model: string;
+  speed: number;
+  voiceId: string | null;
+}> {
+  return {
+    assetSetId: typeof localNeural?.assetId === 'string' ? normalizeNonEmptyString(localNeural.assetId) : null,
+    execution: localNeural?.execution ?? 'auto',
+    model: typeof localNeural?.model === 'string' ? normalizeNonEmptyString(localNeural.model) ?? 'kokoro' : 'kokoro',
+    speed: typeof localNeural?.speed === 'number' && Number.isFinite(localNeural.speed) ? localNeural.speed : 1,
+    voiceId: typeof localNeural?.voiceId === 'string' ? normalizeNonEmptyString(localNeural.voiceId) : null,
+  };
+}
+
 export function resolveLocalSttProvider(settings: any): VoiceLocalSttSettings['provider'] {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
   return parseLocalVoiceSttSettings(config?.stt).provider;

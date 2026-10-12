@@ -28,7 +28,7 @@ export function projectVoiceSpeechEndpointReadiness(input: Readonly<{
   if (!input.providerEnvelope || input.providerEnvelope.schemaVersion !== owner.schemaVersion) {
     return 'unknown';
   }
-  const config = owner.parseConfig(input.providerEnvelope.config);
+  const config = owner.parseStoredConfig(input.providerEnvelope.config);
   if (!isRecord(config)) return 'unknown';
   if (!Object.hasOwn(config, 'baseUrl')) return 'ready';
   if (typeof config.baseUrl !== 'string' || config.baseUrl.trim().length === 0) return 'missing';

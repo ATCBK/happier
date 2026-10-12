@@ -1,19 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => true,
-}));
-
-vi.mock('@/voice/agent/getVoiceAgentSessionTeleportAvailability', () => ({
-    getVoiceAgentSessionTeleportAvailability: () => ({ ok: false }),
-}));
-
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useProjectedConnectedServicesRegistry: () => ({ entries: [] }),
-}));
+import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -25,30 +14,30 @@ const initialStorageState = getStorage().getState();
 const TARGET_SESSION_ID = 'target-session';
 
 function seedSession(thinking: boolean): void {
-    getStorage().setState((state: any) => ({
+    getStorage().setState((state) => ({
         ...state,
         isDataReady: true,
         settings: {
             ...state.settings,
-            voice: {
+            voice: voiceSettingsParse({
                 providerId: 'local_conversation',
                 ui: {
                     activityFeedEnabled: false,
                     scopeDefault: 'session',
                     surfaceLocation: 'session',
                 },
-            },
+            }),
         },
         sessions: {
             ...state.sessions,
-            [TARGET_SESSION_ID]: {
+            [TARGET_SESSION_ID]: createSessionFixture({
                 id: TARGET_SESSION_ID,
                 thinking,
                 thinkingAt: thinking ? 10 : 0,
                 presence: 'online',
                 active: true,
-                metadata: { summaryText: 'Dashboard auth' },
-            },
+                metadata: { path: '/workspace', host: 'test', summaryText: 'Dashboard auth' },
+            }),
         },
     }));
 }
@@ -58,7 +47,7 @@ async function renderModel() {
     return renderHook(() => useVoiceSurfaceModel({
         variant: 'session',
         sessionId: TARGET_SESSION_ID,
-    } as any));
+    }));
 }
 
 describe('useVoiceSurfaceModel delegated work', () => {
@@ -71,7 +60,7 @@ describe('useVoiceSurfaceModel delegated work', () => {
             status: 'connected',
             mode: 'listening',
             canStop: true,
-        } as any);
+        });
     });
 
     afterEach(() => {

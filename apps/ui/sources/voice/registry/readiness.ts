@@ -10,6 +10,7 @@ import type { VoiceProviderLocalAvailability } from '@/voice/settings/voiceProvi
 import {
   type VoiceProviderRegistry,
   type VoiceProviderRegistryEntry,
+  type VoiceProviderCredentialReadinessProjection,
 } from './providerRegistry';
 
 export type VoiceReadinessFact = 'ready' | 'missing' | 'installing' | 'incompatible' | 'unknown';
@@ -42,6 +43,35 @@ export type VoiceRoleReadiness = Readonly<{
   reasonKey: string;
   recoveryAction: 'none' | 'select_provider' | 'open_provider_settings' | 'select_execution_machine' | 'configure_credential' | 'review_credential_access' | 'configure_endpoint' | 'install_model' | 'switch_provider';
 }>;
+
+export function projectHostedModeAvailabilityReadiness(input: Readonly<{
+  providerId: string;
+  role: VoiceRoleReadiness['role'];
+  modeId: string | null;
+  hostedEnabled: boolean;
+}>): VoiceRoleReadiness | null {
+  if (input.modeId !== 'happier' || input.hostedEnabled) return null;
+  return Object.freeze({ role: input.role, providerId: input.providerId, status: 'unavailable',
+    code: 'server_feature_disabled', reasonKey: 'voice.readiness.server_feature_disabled', recoveryAction: 'switch_provider' });
+}
+
+export function resolveVoiceProviderCredentialFact(input: Readonly<{
+  sourceKind: 'built_in' | 'bundled' | 'external';
+  projectedCredential: Pick<VoiceProviderCredentialReadinessProjection, 'status'> | null;
+  hasAccountCredentialSlot: boolean;
+  hasAccountCredentialReference: boolean;
+  accountCredentialApprovalRequired?: boolean;
+}>): VoiceCredentialReadinessFact {
+  // Only an absent projection admits the external Account fallback. An explicit
+  // unknown must remain unknown even when a last-known reference exists.
+  const usesExternalAccountCredentialFallback = input.sourceKind === 'external'
+    && input.hasAccountCredentialSlot && !input.projectedCredential;
+  if (input.sourceKind === 'external' && input.accountCredentialApprovalRequired
+    && (input.projectedCredential?.status === 'missing' || usesExternalAccountCredentialFallback)) return 'approval_required';
+  if (input.projectedCredential) return input.projectedCredential.status;
+  if (input.sourceKind !== 'external') return 'unknown';
+  return input.hasAccountCredentialSlot ? input.hasAccountCredentialReference ? 'ready' : 'missing' : 'unknown';
+}
 
 export function isVoiceRoleSelectableForConfiguration(input: Readonly<{
   readiness: VoiceRoleReadiness;

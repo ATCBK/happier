@@ -175,6 +175,8 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
     // explicit End/provider-selection authority. Home cannot be rebuilt from
     // a session id, including when two Homes contain that same id.
     let recoveryBinding: VoiceRecoveryBinding | null = null;
+    // Requested Start while the preceding explicit Stop still owns physical cleanup.
+    let pendingStart: VoiceRecoveryBinding | null = null;
     let publishedSnapshot = getVoiceSessionSnapshot();
     let pendingAdapterSwitch: PendingAdapterSwitch | null = null;
     let suppressedTerminalFailureAdapterId: string | null = null;
@@ -198,7 +200,10 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
     let disposePromise: Promise<void> | null = null;
     const listeners = new Set<() => void>();
     const adapterUnsubs = new Map<VoiceAdapterController, () => void>();
-    const adapterStopPromises = new Map<string, Promise<void>>();
+    const adapterStopPromises = new Map<string, {
+        completion: Promise<void>;
+        retireAttempt: boolean;
+    }>();
 
     const releaseRealtimeCaptureAdmission = (match?: Readonly<{
         adapterId?: string;
@@ -375,14 +380,31 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
     const stopAdapter = async (
         adapter: VoiceAdapterController,
         sessionId: string,
+        retireAttempt = false,
     ): Promise<void> => {
         const stopKey = adapterStopKey(adapter.id, sessionId);
         const existingStop = adapterStopPromises.get(stopKey);
         if (existingStop) {
-            await existingStop;
+            if (retireAttempt && !existingStop.retireAttempt) {
+                existingStop.retireAttempt = true;
+                publishSnapshot();
+            }
+            await existingStop.completion;
             return;
         }
-        const stop = (async () => {
+        let resolveStop!: () => void;
+        let rejectStop!: (error: unknown) => void;
+        const completion = new Promise<void>((resolve, reject) => {
+            resolveStop = resolve;
+            rejectStop = reject;
+        });
+        const stop = { completion, retireAttempt };
+        // Explicit End/Dismiss retires the controls before native teardown can
+        // emit `ending` (also used by turn interruption). Keep physical cleanup
+        // and admission at this same coalesced Stop, not at the UI projection.
+        adapterStopPromises.set(stopKey, stop);
+        if (retireAttempt) publishSnapshot();
+        void (async () => {
             try {
                 await adapter.stop({ sessionId });
             } finally {
@@ -393,13 +415,13 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
                 });
                 releaseAttemptConnectivityLease({ adapter, sessionId });
             }
-        })();
-        adapterStopPromises.set(stopKey, stop);
+        })().then(resolveStop, rejectStop);
         try {
-            await stop;
+            await completion;
         } finally {
             if (adapterStopPromises.get(stopKey) === stop) {
                 adapterStopPromises.delete(stopKey);
+                if (stop.retireAttempt) publishSnapshot();
             }
         }
     };
@@ -427,7 +449,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         adapter: VoiceAdapterController;
         snapshot: VoiceSessionSnapshot;
     }> | null => {
-        if (disposed) {
+        if (disposed || pendingStart) {
             return null;
         }
         const snapshot = publishedSnapshot;
@@ -499,8 +521,22 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         if (disposed) {
             return publishedSnapshot;
         }
+        if (pendingStart) {
+            return {
+                adapterId: pendingStart.providerId,
+                sessionId: pendingStart.sessionId,
+                status: 'connecting',
+                mode: 'idle',
+                canStop: true,
+            };
+        }
         const adapters = listAttemptAdapters();
-        const snapshots = adapters.map((adapter) => adapter.getSnapshot());
+        const snapshots = adapters.map((adapter) => {
+            const snapshot = adapter.getSnapshot();
+            return adapterStopPromises.get(adapterStopKey(adapter.id, snapshot.sessionId ?? ''))?.retireAttempt
+                ? createDisconnectedSnapshot()
+                : snapshot;
+        });
         const pending = pendingAdapterSwitch;
         if (pending) {
             const sourceSnapshot = snapshots.find((snapshot) => snapshot.adapterId === pending.sourceAdapterId) ?? null;
@@ -732,7 +768,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             // snapshot. Initial/retiring snapshot emissions during that
             // interval must not tear the lease out from under the pending
             // provider watch. Start failure/settlement owns that release.
-            if (!startingAdapter) {
+            if (!startingAdapter && adapterStopPromises.size === 0) {
                 releaseAttemptConnectivityLease();
             }
         }
@@ -831,32 +867,8 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         return null;
     };
 
-    const toggle = async (requestedTargetSessionAddress: SessionAddress | null): Promise<void> => {
-        if (disposed) return;
+    const startConfiguredAdapter = async (requestedTargetSessionAddress: SessionAddress | null): Promise<void> => {
         const sessionId = requestedTargetSessionAddress?.sessionId ?? '';
-        const cancelledRestartStart = cancelPendingCurrentUiContextToolSetRestart();
-        const owned = resolveOwnedAdapter();
-        if (owned) {
-            recoveryBinding = null;
-            recordVoiceSessionEndReason(owned.adapter.id, owned.snapshot.sessionId ?? sessionId, { kind: 'stopped' });
-            await stopAdapter(
-                owned.adapter,
-                owned.snapshot.sessionId ?? sessionId,
-            );
-            return;
-        }
-        if (cancelledRestartStart) {
-            recoveryBinding = null;
-            await stopAdapter(cancelledRestartStart.adapter, cancelledRestartStart.sessionId);
-            return;
-        }
-        const pendingStartAttempt = startingAdapter;
-        if (pendingStartAttempt) {
-            recoveryBinding = null;
-            await stopAdapter(pendingStartAttempt.adapter, pendingStartAttempt.sessionId);
-            return;
-        }
-
         const adapter = resolveConfiguredAdapter();
         if (!adapter) {
             /*
@@ -934,6 +946,60 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             throw error;
         }
     };
+
+    const cancelPendingStart = (): boolean => {
+        if (!pendingStart) return false;
+        pendingStart = null;
+        publishSnapshot();
+        return true;
+    };
+
+    const toggle = async (requestedTargetSessionAddress: SessionAddress | null): Promise<void> => {
+        if (disposed || cancelPendingStart()) return;
+        const retiringStops = [...adapterStopPromises.values()].filter((stop) => stop.retireAttempt);
+        if (retiringStops.length > 0) {
+            if (configuredProviderId === null || configuredProviderId === 'off') return;
+            const request: VoiceRecoveryBinding = {
+                providerId: configuredProviderId,
+                sessionId: requestedTargetSessionAddress?.sessionId.trim() || VOICE_AGENT_GLOBAL_SESSION_ID,
+                requestedTargetSessionAddress,
+            };
+            pendingStart = request;
+            publishSnapshot();
+            try {
+                // Acknowledgement owns no capture: the same retiring Stop must settle first.
+                await Promise.all(retiringStops.map((stop) => stop.completion));
+                if (disposed || pendingStart !== request) return;
+                pendingStart = null;
+                await startConfiguredAdapter(request.requestedTargetSessionAddress);
+            } finally {
+                if (pendingStart === request) pendingStart = null;
+                publishSnapshot();
+            }
+            return;
+        }
+        const sessionId = requestedTargetSessionAddress?.sessionId ?? '';
+        const cancelledRestartStart = cancelPendingCurrentUiContextToolSetRestart();
+        const owned = resolveOwnedAdapter();
+        if (owned) {
+            recoveryBinding = null;
+            recordVoiceSessionEndReason(owned.adapter.id, owned.snapshot.sessionId ?? sessionId, { kind: 'stopped' });
+            await stopAdapter(owned.adapter, owned.snapshot.sessionId ?? sessionId, true);
+            return;
+        }
+        if (cancelledRestartStart) {
+            recoveryBinding = null;
+            await stopAdapter(cancelledRestartStart.adapter, cancelledRestartStart.sessionId, true);
+            return;
+        }
+        const pendingStartAttempt = startingAdapter;
+        if (pendingStartAttempt) {
+            recoveryBinding = null;
+            await stopAdapter(pendingStartAttempt.adapter, pendingStartAttempt.sessionId, true);
+            return;
+        }
+        await startConfiguredAdapter(requestedTargetSessionAddress);
+    };
     refreshAdapterSubscriptions();
     const unsubscribeRegistry = getRegistry().subscribe?.(() => {
         refreshAdapterSubscriptions();
@@ -965,6 +1031,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         },
         dispose: () => {
             if (disposePromise) return disposePromise;
+            cancelPendingStart();
             const owned = resolveOwnedAdapter();
             const disposalTargets = new Map<string, Readonly<{
                 adapter: VoiceAdapterController;
@@ -1006,15 +1073,17 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             adapterUnsubs.clear();
             listeners.clear();
             const disposal = (async () => {
+                const pendingStops = [...adapterStopPromises.values()].map((stop) => stop.completion);
                 if (disposalTargets.size === 0) {
+                    await Promise.allSettled(pendingStops);
                     releaseRealtimeCaptureAdmission();
                     releaseAttemptConnectivityLease();
                     return;
                 }
                 await Promise.allSettled(
-                    [...disposalTargets.values()].map(
+                    [...pendingStops, ...[...disposalTargets.values()].map(
                         async (target) => await stopAdapter(target.adapter, target.sessionId),
-                    ),
+                    )],
                 );
                 releaseRealtimeCaptureAdmission();
                 releaseAttemptConnectivityLease();
@@ -1023,9 +1092,12 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             return disposal;
         },
         getSnapshot: () => publishedSnapshot,
-        getAttemptTargetSessionAddress: () => startingAdapter?.requestedTargetSessionAddress
-            ?? attemptConnectivityLease?.requestedTargetSessionAddress
-            ?? recoveryBinding?.requestedTargetSessionAddress ?? null,
+        getAttemptTargetSessionAddress: () => {
+            if (pendingStart) return pendingStart.requestedTargetSessionAddress;
+            return startingAdapter?.requestedTargetSessionAddress
+                ?? attemptConnectivityLease?.requestedTargetSessionAddress
+                ?? recoveryBinding?.requestedTargetSessionAddress ?? null;
+        },
         getConfiguredProviderId: () => configuredProviderId,
         interrupt: async (sessionId) => {
             if (disposed) return;
@@ -1065,6 +1137,9 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         },
         rearmAfterCredentialAuthorityChange: (options) => {
             if (disposed) return;
+            const cancelledPendingStart = pendingStart !== null && (options?.exactSessionAccountScopeChanged === true
+                || (options?.globalBindingAuthorityChanged === true && pendingStart.sessionId === VOICE_AGENT_GLOBAL_SESSION_ID));
+            if (cancelledPendingStart) pendingStart = null;
             if (options?.exactSessionAccountScopeChanged === true) {
                 // A queued provider/tool-set transition belongs to the Account
                 // authority that admitted it. Retire that intent before an
@@ -1080,6 +1155,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             ) {
                 recoveryBinding = null;
             }
+            if (cancelledPendingStart) publishSnapshot();
             const owned = resolveOwnedAdapter();
             const stopTargets = new Map<string, Readonly<{
                 adapter: VoiceAdapterController;
@@ -1143,6 +1219,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         setConfiguredProviderId: (providerId) => {
             if (disposed) return;
             if (providerId !== configuredProviderId) {
+                pendingStart = null;
                 suppressedTerminalFailureAdapterId = null;
                 recoveryBinding = null;
             }
@@ -1279,7 +1356,7 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
             const adapter = resolveAttemptAdapter(failed.adapterId);
             const failedBinding = recoveryBinding;
             // Reuse terminal rearming and Stop cleanup; acknowledgement does not fabricate a clean End.
-            if (adapter) await stopAdapter(adapter, sessionId ?? '');
+            if (adapter) await stopAdapter(adapter, sessionId ?? '', true);
             // A later Start or authority change owns its own recovery; old cleanup cannot acknowledge it.
             if (disposed || recoveryBinding !== failedBinding) return;
             recoveryBinding = null;
@@ -1351,23 +1428,24 @@ export function createVoiceSessionLifecycleController(deps?: Readonly<{
         stop: async (sessionId, reason = { kind: 'stopped' }) => {
             if (disposed) return;
             recoveryBinding = null;
+            if (cancelPendingStart()) return;
             const cancelledRestartStart = cancelPendingCurrentUiContextToolSetRestart();
             const owned = resolveOwnedAdapter();
             if (!owned) {
                 if (cancelledRestartStart) {
-                    await stopAdapter(cancelledRestartStart.adapter, cancelledRestartStart.sessionId);
+                    await stopAdapter(cancelledRestartStart.adapter, cancelledRestartStart.sessionId, true);
                     return;
                 }
                 const startAttempt = startingAdapter;
                 if (startAttempt) {
-                    await stopAdapter(startAttempt.adapter, startAttempt.sessionId);
+                    await stopAdapter(startAttempt.adapter, startAttempt.sessionId, true);
                 }
                 return;
             }
             const ownedSessionId = owned.snapshot.sessionId ?? sessionId;
             recordVoiceSessionEndReason(owned.adapter.id, ownedSessionId, reason);
             try {
-                await stopAdapter(owned.adapter, ownedSessionId);
+                await stopAdapter(owned.adapter, ownedSessionId, true);
             } catch (error) {
                 recordVoiceSessionEndReason(owned.adapter.id, ownedSessionId, null);
                 throw error;

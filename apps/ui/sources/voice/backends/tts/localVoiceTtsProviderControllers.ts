@@ -2,6 +2,7 @@ import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTt
 import type { Settings } from '@/sync/domains/settings/settings';
 import { readLocalNeuralVoiceCatalog } from '@/voice/kokoro/assets/readLocalNeuralVoiceCatalog';
 import { resolveSessionVoicePreference } from '@/voice/settings/resolveSessionVoicePreference';
+import { resolveLocalNeuralTtsOptions } from '@/voice/local/localVoiceSettings';
 import { resolveKokoroDaemonTtsPackId } from '@/voice/kokoro/assets/resolveKokoroDaemonTtsPackId';
 import { resolveKokoroOperationTimeoutMs } from '@/voice/kokoro/config/kokoroConfig';
 import { speakDeviceText } from '@/voice/local/speakDeviceText';
@@ -82,23 +83,6 @@ export type LocalVoiceTtsController = Readonly<{
     speak: (ctx: LocalVoiceTtsRequest) => Promise<void>;
 }>;
 
-function normalizeLocalNeuralTtsSettings(tts: VoiceLocalTtsSettings): Readonly<{
-    assetSetId: string | null;
-    execution: VoiceLocalTtsSettings['localNeural']['execution'];
-    model: string;
-    speed: number;
-    voiceId: string | null;
-}> {
-    const localNeural = tts.localNeural;
-    return {
-        assetSetId: typeof localNeural?.assetId === 'string' && localNeural.assetId.trim() ? localNeural.assetId.trim() : null,
-        execution: localNeural?.execution ?? 'auto',
-        model: typeof localNeural?.model === 'string' && localNeural.model.trim() ? localNeural.model.trim() : 'kokoro',
-        speed: typeof localNeural?.speed === 'number' && Number.isFinite(localNeural.speed) ? localNeural.speed : 1,
-        voiceId: typeof localNeural?.voiceId === 'string' && localNeural.voiceId.trim() ? localNeural.voiceId.trim() : null,
-    };
-}
-
 async function speakWithDeviceSpeech(ctx: LocalVoiceTtsRequest): Promise<void> {
     // Bridge the playback stopper to an AbortController. `speakDeviceText` is the
     // single owner of the device speech stop call: it checks the signal before
@@ -169,7 +153,7 @@ async function speakWithLocalNeuralDaemonRuntime(
 }
 
 async function speakWithLocalNeuralTts(ctx: LocalVoiceTtsRequest): Promise<void> {
-    const localNeural = normalizeLocalNeuralTtsSettings(ctx.tts);
+    const localNeural = resolveLocalNeuralTtsOptions(ctx.tts.localNeural);
     const preparation = ctx.preparation;
     const originMachineId = resolveVoiceExecutionMachineId();
     const current = () => (!preparation || preparation.isCurrent())

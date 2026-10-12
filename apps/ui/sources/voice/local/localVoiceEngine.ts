@@ -53,6 +53,7 @@ import { resolveVoiceSttCapturePlan } from '@/voice/runtime/input/resolveVoiceSt
 import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
 import type { TurnEndpointSignal } from '@/voice/runtime/input/TurnEndpointController';
 import { createExpoAudioRecordingMicSession } from '@/voice/runtime/mic/NativeMicSession';
+import { isMicrophoneUnavailableError } from '@/utils/platform/microphonePermissions';
 import {
   voiceRuntimeLevelStore,
   type VoiceRuntimeLevelWriter,
@@ -759,6 +760,10 @@ async function startLocalVoiceCapture(args: Readonly<{
     });
     return;
   }
+  if (isMicrophoneUnavailableError(startError)) {
+    transitionVoiceRuntimeToIdle({ controlSessionId: args.sessionId, reason: 'mic_unavailable', kind: 'mic_unavailable' });
+    return;
+  }
 
   transitionVoiceRuntimeToIdle({
     controlSessionId: args.sessionId,
@@ -1387,7 +1392,8 @@ export async function toggleLocalVoiceTurn(
     return;
   }
 
-  if (current.status === 'idle') {
+  // Stop retains a terminal error for diagnostics; a fresh Start must still acquire a new capture.
+  if (current.status === 'idle' || current.status === 'error') {
     const settings = storage.getState().settings as any;
     const { config } = resolveLocalVoiceAdapterSettings(settings);
     if (!await ensureLocalConversationBindingForSession(settings, sessionId, requestedTargetSessionAddress)) {

@@ -1,11 +1,13 @@
 import { Platform } from 'react-native';
+import { HAPPIER_PRIVACY_POLICY_URL } from '@/constants/legalUrls';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import { VoiceRuntimePlatformSchema } from '@happier-dev/protocol/voice/realtime/capabilities';
 import { getDefaultModelPackId, listModelPackCatalogEntries, resolveCanonicalModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import type { SettingOperationContext, SettingOperationResult } from '@/components/settings/catalog/settingDeclarations';
 import { Modal } from '@/modal';
 import type { Settings } from '@/sync/domains/settings/settings';
-import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceDiagnosticsSettings, readVoiceProviderSettingsConfig, voiceSettingsParse, writeVoiceDiagnosticsSettings } from '@/sync/domains/settings/voiceSettings';
+import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceDiagnosticsSettings, voiceSettingsParse, writeVoiceDiagnosticsSettings } from '@/sync/domains/settings/voiceSettings';
+import { storage } from '@/sync/domains/state/storage';
+import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
 import { t, tLoose } from '@/text';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { resolveLocalVoiceAdapterSettings, parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings } from '@/voice/local/localVoiceSettings';
@@ -20,10 +22,8 @@ import { resolveVoiceExecutionMachineId } from './executionMachine';
 import { updateVoiceLocalConversationSetting } from './voiceSettingBinding';
 import { buildModelCatalogRows } from './panels/modelCatalog/buildModelCatalogRows';
 import { invokeDaemonModelPackOperation } from './panels/modelCatalog/invokeDaemonModelPackOperation';
-import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
-import { projectVoiceProviderSettings } from '@/voice/registry/providerRegistry';
-import { inspectVoiceDictationSettingsReadiness, inspectVoiceProviderReadiness, projectVoiceRawSpeechReadinessTargets } from './voiceProviderReadinessInspection';
-import { projectVoiceProviderAgentRealtimePassiveSetup, readVoiceProviderConnectedServicesBinding } from './passiveSetup';
+import { projectVoiceProcessingDisclosures } from './projectVoiceProcessingDisclosures';
+import { inspectVoiceSettingsSemanticReadiness } from './voiceProviderReadinessInspection';
 import type { VoiceSettingsOperation } from './voiceSettingsOperation';
 
 const unavailable = (reason: string): SettingOperationResult => ({ status: 'unavailable', reason });
@@ -47,16 +47,39 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
     const current = () => !context.signal?.aborted && context.isCurrent();
     if (!current()) return { status: 'cancelled' };
     try {
+        if (operation === 'privacy_policy_open') {
+            const { openExternalUrl } = await import('@/utils/url/openExternalUrl');
+            if (!current()) return { status: 'cancelled' };
+            const opened = await openExternalUrl(HAPPIER_PRIVACY_POLICY_URL);
+            if (!current()) return { status: 'cancelled' };
+            return opened ? completed() : unavailable('external_url_open_failed');
+        }
         const settings = await context.readSettings();
         throwIfAborted(context.signal);
         if (!current()) return { status: 'cancelled' };
         const voice = voiceSettingsParse(settings.voice);
         const machineId = resolveVoiceExecutionMachineId();
-        const material = (latest: Settings) => JSON.stringify(latest.voice);
+        const material = (latest: Settings) => {
+            if (operation !== 'readiness_inspect') return JSON.stringify(latest.voice);
+            const machine = resolveVoiceExecutionMachinePresentationFromState(storage.getState());
+            return JSON.stringify({ voice: latest.voice, backendEnabledByTargetKey: latest.backendEnabledByTargetKey,
+                featureToggles: latest.featureToggles, experiments: latest.experiments, secrets: latest.secrets,
+                executionMachine: { machineId: machine.machineId, selectedMachineId: machine.selectedMachineId, selectionKind: machine.selectionKind } });
+        };
         const capturedMaterial = material(settings);
         const selectionCurrent = () => current() && resolveVoiceExecutionMachineId() === machineId;
-        const operationCurrent = async () => selectionCurrent() && material(await context.readSettings()) === capturedMaterial;
+        const operationCurrent = async () => {
+            if (!selectionCurrent()) return false;
+            const latest = await context.readSettings();
+            return selectionCurrent() && material(latest) === capturedMaterial;
+        };
         if (input && 'machineId' in input && input.machineId && input.machineId !== machineId) return unavailable('execution_machine_changed');
+
+        if (operation === 'tts_preview_stop') {
+            const { localNeuralTtsPreviewController } = await import('./panels/localTts/providers/localNeural/previewLocalNeuralTts');
+            if (!current()) return { status: 'cancelled' };
+            return completed({ stopped: localNeuralTtsPreviewController.stop() });
+        }
 
         if (operation === 'memory_forget') {
             const confirmed = await Modal.confirm(t('settingsVoice.local.conversation.resetVoiceAgent.title'),
@@ -111,13 +134,15 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
             if (!await operationCurrent()) return { status: 'cancelled' };
             return result.ok && result.acknowledged ? completed() : unavailable('diagnostics_session_opt_out_failed');
         }
+        if (operation === 'diagnostics_inspect') {
+            const daemonStatus = machineId ? await createVoiceDiagnosticsClientForMachine(machineId).status(context.signal) : null;
+            if (!await operationCurrent()) return { status: 'cancelled' };
+            return completed({ daemonStatus, clientRuntime: readVoiceDiagnosticsRuntimeStatus(),
+                processingDisclosures: projectVoiceProcessingDisclosures(voice) });
+        }
         if (operation.startsWith('diagnostics_')) {
             if (!machineId) return unavailable('execution_machine_unavailable');
             const client = createVoiceDiagnosticsClientForMachine(machineId);
-            if (operation === 'diagnostics_inspect') {
-                const status = await client.status(context.signal);
-                return await operationCurrent() ? completed(status) : { status: 'cancelled' };
-            }
             if (operation === 'diagnostics_cleanup') {
                 const result = await applyVoiceDiagnosticsMachinePolicy({ machineId, settings: diagnostics, signal: context.signal });
                 if (!await operationCurrent()) return { status: 'cancelled' };
@@ -155,16 +180,20 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
             const previewTts = input?.kind === 'voice_preview' ? { ...tts, localNeural: { ...tts.localNeural, voiceId: input.voiceId } } : tts;
             if (!await operationCurrent()) return { status: 'cancelled' };
             const { createVoicePlaybackController } = await import('@/voice/runtime/playback/VoicePlaybackController');
-            const playback = createVoicePlaybackController();
-            const interrupt = () => playback.interrupt();
+            const { localNeuralTtsPreviewController } = await import('./panels/localTts/providers/localNeural/previewLocalNeuralTts');
+            const preview = previewTts.provider === 'local_neural'
+                ? localNeuralTtsPreviewController.begin(previewTts.localNeural.voiceId) : null;
+            const playback = preview ? null : createVoicePlaybackController();
+            const interrupt = () => { if (preview) preview.finish(); else playback?.interrupt(); };
             context.signal?.addEventListener('abort', interrupt, { once: true });
             try {
                 await spec.test({ cfgTts: previewTts, voice, networkTimeoutMs: cfg.networkTimeoutMs, sample: t('settingsVoice.local.testTtsSample'),
-                    signal: context.signal, isCurrent: selectionCurrent, registerPlaybackStopper: playback.registerStopper.captureAttempt?.() ?? playback.registerStopper });
-                return await operationCurrent() ? completed() : { status: 'cancelled' };
+                    signal: context.signal, isCurrent: () => selectionCurrent() && (preview?.isCurrent() ?? true),
+                    registerPlaybackStopper: preview?.registerPlaybackStopper ?? playback!.registerStopper.captureAttempt!() });
+                return await operationCurrent() && (preview?.isCurrent() ?? true) ? completed() : { status: 'cancelled' };
             } finally {
                 context.signal?.removeEventListener('abort', interrupt);
-                playback.interrupt();
+                interrupt();
             }
         }
         const role = operation.startsWith('tts_') ? 'tts_sherpa' : 'stt_sherpa';
@@ -182,45 +211,15 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
             return invokeVoiceDeviceModelPackOperation({ operation: operation.endsWith('_remove') ? 'remove' : operation.endsWith('_update') ? 'update' : 'prepare',
                 packId, role, signal: context.signal, isCurrent: operationCurrent });
         }
-        if (operation === 'readiness_inspect' && purpose === 'dictation') {
-            const registry = createDefaultVoiceProviderRegistry();
-            const { resolveVoiceDictationNativeLocalNeuralModelSelection } = await import('@/voice/dictation/voiceDictationReadiness');
-            const platform = VoiceRuntimePlatformSchema.safeParse(Platform.OS);
-            const selection = resolveVoiceDictationNativeLocalNeuralModelSelection({ registry, settings, platform: platform.success ? platform.data : 'unknown' });
-            const connectedPurposes = await context.services?.readConnectedAccountPurposes?.(context.signal) ?? null;
-            const rawTargets = projectVoiceRawSpeechReadinessTargets(settings, registry, machineId, 'dictation', connectedPurposes);
-            if (rawTargets === null) return unavailable('connected_purpose_catalog_unavailable');
-            const inspection = await inspectVoiceDictationSettingsReadiness({ packId: selection.packId,
-                rawTarget: rawTargets[0] ?? null, signal: context.signal });
-            return await operationCurrent() ? completed({ providerId: selection.providerId, machineId, nativeModelPackId: selection.packId, ...inspection }) : { status: 'cancelled' };
+        if (operation === 'readiness_inspect') {
+            if (purpose === 'conversation' && !voice.providerId) return unavailable('provider_unselected');
+            const inspection = await inspectVoiceSettingsSemanticReadiness({ settings, purpose, context,
+                machine: resolveVoiceExecutionMachinePresentationFromState(storage.getState()), isCurrent: selectionCurrent });
+            return await operationCurrent() ? completed(inspection) : { status: 'cancelled' };
         }
         if (!machineId) return unavailable('execution_machine_unavailable');
         const client = new DaemonVoiceInferenceClient();
         const scope = { machineId };
-        if (operation === 'readiness_inspect') {
-            const registry = createDefaultVoiceProviderRegistry();
-            const providerId = purpose === 'dictation' ? stt.provider : voice.providerId;
-            if (!providerId) return unavailable('provider_unselected');
-            const entry = registry.get(providerId);
-            if (!entry) return unavailable('provider_unavailable');
-            const envelope = voice.providers[entry.providerId] ?? null;
-            const projection = projectVoiceProviderSettings(entry, envelope);
-            const config = readVoiceProviderSettingsConfig(voice, entry.providerId) ?? entry.providerSettings?.defaultConfig ?? null;
-            const passiveSetup = entry.kind === 'voice.conversation-provider.v1' && entry.declaration?.kind === 'conversation'
-                ? projectVoiceProviderAgentRealtimePassiveSetup(entry.declaration.execution) : null;
-            const connectedServices = readVoiceProviderConnectedServicesBinding({ providerSettings: entry.providerSettings ?? null, providerConfig: config });
-            const connectedPurposes = purpose === 'conversation' && voice.providerId === 'local_conversation'
-                ? await context.services?.readConnectedAccountPurposes?.(context.signal) ?? null : null;
-            const rawTargets = purpose === 'conversation' && voice.providerId === 'local_conversation'
-                ? projectVoiceRawSpeechReadinessTargets(settings, registry, machineId, 'conversation', connectedPurposes) : [];
-            if (rawTargets === null) return unavailable('connected_purpose_catalog_unavailable');
-            if (!await operationCurrent()) return { status: 'cancelled' };
-            const inspection = await inspectVoiceProviderReadiness({ machineId, passiveSetup, connectedServices, rawTargets, signal: context.signal, isCurrent: selectionCurrent });
-            if (!await operationCurrent()) return { status: 'cancelled' };
-            const models = providerId === 'local_direct' || providerId === 'local_conversation' || providerId === 'local_neural'
-                ? await client.getModelsStatus([stt.localNeural.assetId ?? getDefaultModelPackId('stt_sherpa'), tts.localNeural.assetId ?? getDefaultModelPackId('tts_sherpa')].filter((id): id is string => Boolean(id)), scope) : [];
-            return await operationCurrent() ? completed({ providerId, machineId, settings: projection, passiveRealtimeSetup: inspection.passive, rawCredentialAuthorization: inspection.raw, models }) : { status: 'cancelled' };
-        }
         if (operation === 'models_inspect') {
             const [discovered, canonical] = await Promise.all([client.listModels(scope), client.getModelsStatus(listModelPackCatalogEntries().map(entry => entry.packId), scope)]);
             const statuses = [...new Map([...discovered, ...canonical].map(status => [status.packId, status])).values()];

@@ -1,43 +1,46 @@
 import React from 'react';
 import { PluginContributesV2Schema } from '@happier-dev/protocol';
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
 import { createBundledConversationRuntimeHostLease } from '@/voice/registry/bundledConversationRuntimeHost';
 import { VoiceRawCredentialAccessReview } from '@/voice/credentials/VoiceRawCredentialAccessReview';
+import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storageStore';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 
-import { installVoiceSettingsPanelCommonModuleMocks } from './voiceSettingsPanelTestHelpers';
 import { VoiceCredentialSourceField } from './realtime/VoiceCredentialSourceField';
 
-const settingsBoundary = vi.hoisted(() => ({ settings: null as unknown }));
-
-installVoiceSettingsPanelCommonModuleMocks({
-  storage: async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    return createStorageModuleStub({
-      useSettings: () => settingsBoundary.settings ?? settingsParse({}),
-    });
-  },
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+async function renderScreen(...input: Parameters<typeof renderTestScreen>) {
+  await refreshSavedSecretCatalog(account.scope);
+  return renderTestScreen(...input);
+}
+const settingsBoundary = {
+  get settings() { return storage.getState().settings; },
+  set settings(value: Settings | null) { account.replaceSettings(value ?? settingsDefaults); },
+};
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+beforeEach(async () => {
+  account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+  onTestFinished(account.dispose);
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/voice/credentials/CredentialItem', () => ({
-  VoiceCredentialItem: (props: any) => React.createElement('VoiceCredentialItem', props),
-}));
 
 type RawCredentialSourceFixture =
   | Readonly<{ kind: 'savedSecret'; access?: 'raw' | 'mediated' }>
@@ -213,7 +216,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       selectedSource: 'savedSecret' as const,
       expectedSavedSecretRawReviewGrants: 1,
       expectedSourceSelectors: 0,
-      expectedDirectRawCredentialReviews: 0,
+      expectedRawCredentialReviews: 1,
       expectedRawCopy: true,
     },
     {
@@ -223,7 +226,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       selectedSource: 'connectedAccount' as const,
       expectedSavedSecretRawReviewGrants: 0,
       expectedSourceSelectors: 1,
-      expectedDirectRawCredentialReviews: 1,
+      expectedRawCredentialReviews: 1,
       expectedRawCopy: true,
     },
     {
@@ -233,7 +236,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       selectedSource: 'savedSecret' as const,
       expectedSavedSecretRawReviewGrants: 1,
       expectedSourceSelectors: 1,
-      expectedDirectRawCredentialReviews: 0,
+      expectedRawCredentialReviews: 1,
       expectedRawCopy: true,
     },
     {
@@ -243,7 +246,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       selectedSource: 'savedSecret' as const,
       expectedSavedSecretRawReviewGrants: 0,
       expectedSourceSelectors: 0,
-      expectedDirectRawCredentialReviews: 0,
+      expectedRawCredentialReviews: 0,
       expectedRawCopy: false,
     },
     {
@@ -256,7 +259,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       selectedSource: 'savedSecret' as const,
       expectedSavedSecretRawReviewGrants: 0,
       expectedSourceSelectors: 1,
-      expectedDirectRawCredentialReviews: 0,
+      expectedRawCredentialReviews: 0,
       expectedRawCopy: false,
     },
   ])('only renders the generic review control for a selected $label source without a mediated account slot', async ({
@@ -265,7 +268,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     selectedSource,
     expectedSavedSecretRawReviewGrants,
     expectedSourceSelectors,
-    expectedDirectRawCredentialReviews,
+    expectedRawCredentialReviews,
     expectedRawCopy,
   }) => {
     const fixture = await activateRawCredentialOnlyProvider(pluginId, sources);
@@ -275,7 +278,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
       applyAccountVoiceCredentialSourceSelection,
       saveAndUseAccountVoiceCredential,
     } = await import('@/voice/credentials/accountVoiceCredential');
-    settingsBoundary.settings = selectedSource === 'savedSecret'
+    const selected = selectedSource === 'savedSecret'
       ? saveAndUseAccountVoiceCredential({
           settings: settingsParse({}),
           contribution: fixture.contribution,
@@ -288,9 +291,10 @@ describe('VoiceProviderSection raw credential review reachability', () => {
           now: 1,
           expectedSecretId: null,
           expectedSecretUpdatedAt: null,
-        }).settings
+        })
       : applyAccountVoiceCredentialSourceSelection({
           settings: settingsParse({}),
+          connectedPurposes: account.purposes.value,
           mutation: {
             contribution: fixture.contribution,
             credentialSlotId: fixture.declaration.credentials!.slot.id,
@@ -307,7 +311,9 @@ describe('VoiceProviderSection raw credential review reachability', () => {
             expectedSettingsVersion: 0,
           },
           currentDeclaration: fixture.declaration,
-        }).settings;
+        });
+    if ('connectedPurposes' in selected) await account.replaceConnectedPurposes(selected.connectedPurposes);
+    settingsBoundary.settings = selected.settings;
     onTestFinished(() => { settingsBoundary.settings = null; });
 
     const entry = createDefaultVoiceProviderRegistry().get(fixture.providerId);
@@ -331,13 +337,13 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     />);
 
     const reviews = tree.findAllByType(VoiceRawCredentialAccessReview);
-    expect(reviews).toHaveLength(expectedDirectRawCredentialReviews);
-    if (expectedDirectRawCredentialReviews > 0) {
+    expect(reviews).toHaveLength(expectedRawCredentialReviews);
+    if (expectedRawCredentialReviews > 0) {
       expect(reviews[0]?.props.contribution).toEqual(fixture.contribution);
     }
 
     const savedSecretTestId = `settings.voice.externalCredential.${encodeURIComponent(fixture.providerId)}.${fixture.declaration.credentials?.slot.id}`;
-    const savedSecretEntries = tree.findAllByType('VoiceCredentialItem' as any).filter(
+    const savedSecretEntries = tree.findAllByType(VoiceCredentialItem).filter(
       (item) => item.props.testID === savedSecretTestId,
     );
     const sourceSelectors = tree.findAllByType(VoiceCredentialSourceField);
@@ -349,7 +355,7 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     if (expectedSourceSelectors > 0) {
       expect(sourceSelectors[0]?.props.declaration).toStrictEqual(fixture.declaration);
     }
-    const externalCredentialGroups = tree.findAllByType('ItemGroup' as any).filter((group) => (
+    const externalCredentialGroups = tree.findAllByType(ItemGroup).filter((group) => (
       group.props.description === 'settingsVoice.externalCredentials.rawFooter'
       || group.props.description === 'settingsVoice.externalCredentials.footer'
     ));

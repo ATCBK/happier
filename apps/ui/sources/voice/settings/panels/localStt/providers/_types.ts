@@ -1,4 +1,5 @@
 import type * as React from 'react';
+import type { LocalNeuralExecution } from '@happier-dev/protocol';
 
 import type { VoiceLocalSttSettings } from '@/sync/domains/settings/voiceLocalSttSettings';
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
@@ -21,4 +22,5 @@ export type LocalSttProviderSpec = {
   iconName: string;
   detail: string;
   Settings: React.ComponentType<LocalSttProviderSettingsProps>;
+  resolvePreferredExecution?: (requestedExecution: LocalNeuralExecution | null) => 'device' | 'daemon';
 };

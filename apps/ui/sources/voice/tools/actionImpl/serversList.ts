@@ -3,6 +3,7 @@ import { listSessionListLookupServers } from '@/sync/domains/session/listing/ses
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -15,7 +16,7 @@ function resolveVoiceServerLabel(params: Readonly<{
 }>): string {
   const serverId = normalizeId(params.serverId);
   const fallbackLabel = normalizeId(params.fallbackLabel);
-  const profileName = normalizeId(getServerProfileById(serverId)?.name);
+  const profileName = resolveHomeDisplayName(getServerProfileById(serverId));
   if (profileName) return profileName;
   if (fallbackLabel && fallbackLabel !== serverId) return fallbackLabel;
   return params.genericLabel;

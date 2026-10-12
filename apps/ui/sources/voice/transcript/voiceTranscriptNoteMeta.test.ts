@@ -11,9 +11,17 @@ describe('Voice transcript note provenance', () => {
     it('keeps legacy notes visible but missing, malformed and future provenance cannot control capture', () => {
         expect(readVoiceContinuationProvenance(buildVoiceTranscriptNoteMeta())).toBeNull();
         const continuation = { v: 1, deviceId: 'device', conversation: { serverId: 'home', sessionId: 'conversation' } };
-        for (const value of [{ ...continuation, v: 2 }, { ...continuation, deviceId: '' },
-            { ...continuation, conversation: { ...continuation.conversation, remoteEnd: true } }, { ...continuation, lease: 'not-an-authority' }]) {
+        for (const value of [{ ...continuation, v: 2 }, { ...continuation, deviceId: '' }]) {
             expect(readVoiceContinuationProvenance({ happier: { kind: 'voice_note.v1', payload: { v: 1, continuation: value } } })).toBeNull();
         }
+    });
+
+    it('reads retained continuation provenance without giving retired fields authority or relaxing new writes', () => {
+        const continuation = { v: 1 as const, deviceId: 'device', conversation: { serverId: 'home', sessionId: 'conversation' } };
+        const retained = { ...continuation, lease: 'not-an-authority', conversation: { ...continuation.conversation, remoteEnd: true } };
+        expect(readVoiceContinuationProvenance({ happier: { kind: 'voice_note.v1', payload: {
+            v: 1, retiredPayloadField: true, continuation: retained,
+        } } })).toEqual(continuation);
+        expect(() => buildVoiceTranscriptNoteMeta({ continuation: retained })).toThrow();
     });
 });

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import {
   readLocalConversationVoiceSettings,
+  VoiceLocalConversationSchema,
   voiceSettingsDefaults,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
@@ -20,7 +21,12 @@ describe('VoiceConnectionSection', () => {
 
     await act(async () => { field()!.props.onChangeText('90'); });
     await act(async () => { field()!.props.onBlur(); });
-    expect(readLocalConversationVoiceSettings(setVoice.mock.lastCall![0] as VoiceSettings).networkTimeoutMs).toBe(60000);
+    expect(readLocalConversationVoiceSettings(setVoice.mock.lastCall![0] as VoiceSettings).networkTimeoutMs).toBe(90000);
+
+    const admittedMaximumMs = VoiceLocalConversationSchema.shape.networkTimeoutMs.unwrap().maxValue!;
+    await act(async () => { field()!.props.onChangeText(String(Math.ceil(admittedMaximumMs / 1000) + 1)); });
+    await act(async () => { field()!.props.onBlur(); });
+    expect(readLocalConversationVoiceSettings(setVoice.mock.lastCall![0] as VoiceSettings).networkTimeoutMs).toBe(admittedMaximumMs);
 
     await act(async () => { field()!.props.onChangeText('7'); });
     await act(async () => { field()!.props.onBlur(); });

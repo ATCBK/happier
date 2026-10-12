@@ -96,19 +96,17 @@ describe('RealtimeProviderFields', () => {
     const { ELEVENLABS_SETTINGS_SECTION } = await import('../../../../../../../packages/plugins/elevenlabs/src/voiceSettingsPresentation');
     const descriptor = parseRealtimeSettingsDescriptor('acme.native-greeting', ELEVENLABS_SETTINGS_SECTION);
     if (!descriptor) throw new Error('missing native greeting presentation');
-    const onWelcomeSelection = vi.fn();
     const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
       providerId: 'acme.native-greeting', descriptor: { ...descriptor, fields: descriptor.fields.filter((field) => field.kind === 'welcome') },
       owner, config: owner.defaultConfig, credentialStatus: 'ready',
       catalog: { phase: 'idle' }, onRequestCatalog: vi.fn(),
-      welcomeSelection: 'immediate', assistantLanguage: 'ar-SA', onWelcomeSelection,
+      welcomeSelection: 'immediate', assistantLanguage: 'ar-SA',
     }));
     // The service's Greeting is the same shared choice Local voice shows (one control, one owner).
     const row = screen.tree.findAll((node) => node.props?.testIDPrefix === 'settings.voice.greeting' && Array.isArray(node.props?.options))[0]!;
     expect(row.props.options.map((option: { id: string }) => option.id)).toEqual(['off', 'immediate', 'on_first_turn']);
     expect(row.props.value).toBe('immediate');
     expect(row.props.options.find((option: { id: string }) => option.id === 'immediate').description).toBe('voicePresence.greetingLiteralUnavailable');
-    expect(onWelcomeSelection).not.toHaveBeenCalled();
   });
   it('reveals a contributed VAD subfield from search without changing its provider settings', async () => {
     const { voiceSettingsDeclarationRegistry } = await import('@/voice/settings/voiceContributedSettingsDeclarations');
@@ -294,9 +292,17 @@ describe('RealtimeProviderFields', () => {
     }));
     const dropdown = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' });
     const preview = dropdown.props.items[0].rightElement;
-    expect(preview.props.accessibilityRole).toBe('button');
-    expect(preview.props.accessibilityLabel).toContain('Voice A');
-    expect(preview.props.style).toEqual(expect.objectContaining({ minWidth: 44, minHeight: 44 }));
+    const painted = await renderScreen(preview);
+    const button = painted.tree.findAll(node => typeof node.type === 'string'
+      && node.props.role === 'button')[0];
+    expect(button).toBeDefined();
+    expect(button!.props.accessibilityLabel).toContain('Voice A');
+    const { StyleSheet } = await import('react-native');
+    // Native Pressable resolves this callback at the platform boundary.
+    const style = StyleSheet.flatten(typeof button!.props.style === 'function'
+      ? button!.props.style({ pressed: false }) : button!.props.style);
+    expect(style.width).toBeGreaterThanOrEqual(44);
+    expect(style.height).toBeGreaterThanOrEqual(44);
   });
 
   it('does not start a stale catalog preview after the selected provider changes', async () => {

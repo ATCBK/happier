@@ -41,6 +41,7 @@ type GenericSettingsOwner = Readonly<{
   currentSchemaVersion: number;
   defaultConfig: Readonly<Record<string, unknown>>;
   parseConfig(value: unknown): Readonly<Record<string, unknown>> | null;
+  parseStoredConfig(value: unknown): Readonly<Record<string, unknown>> | null;
   readLegacySecret?(value: unknown): unknown | null;
   migrateLegacy?(value: unknown): Readonly<{ config: BundledVoiceSettingsConfig; root?: unknown }> | null;
 }>;
@@ -74,6 +75,10 @@ export function createBundledConversationUi(providerId: string): Readonly<{
       const parsed = rawSettingsOwner.parseConfig(value);
       return isSettingsConfig(parsed) ? parsed : null;
     },
+    parseStoredConfig(value: unknown) {
+      const parsed = rawSettingsOwner.parseStoredConfig(value);
+      return isSettingsConfig(parsed) ? parsed : null;
+    },
     ...('readLegacySecret' in rawSettingsOwner && typeof rawSettingsOwner.readLegacySecret === 'function'
       ? { readLegacySecret: rawSettingsOwner.readLegacySecret }
       : {}),
@@ -97,7 +102,7 @@ export function createBundledConversationUi(providerId: string): Readonly<{
     const current = state.settings?.voice
       ? readVoiceProviderSettingsConfig(state.settings.voice, providerId)
       : null;
-    return settingsOwner.parseConfig(current) ?? settingsOwner.defaultConfig;
+    return settingsOwner.parseStoredConfig(current) ?? settingsOwner.defaultConfig;
   };
   const publicClient = createVoiceSettingsCatalogClient(providerId, readCurrentProviderConfig);
   return Object.freeze({

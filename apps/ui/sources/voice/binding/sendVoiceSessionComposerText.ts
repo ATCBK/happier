@@ -13,6 +13,8 @@ import {
 
 import { voiceSessionBindingStore } from './voiceConversationBindingStore';
 import { resolveVoiceSessionComposerRouting } from './voiceSessionComposerRouting';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { getVoiceSessionPresentedAttemptId, recordVoiceSessionFirstSuccessInput } from '@/voice/session/voiceSessionStore';
 
 export type VoiceTextTurnPendingPort = Readonly<{
     enqueuePendingMessage(params: Readonly<{
@@ -91,6 +93,8 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
         ? params.localId
         : '';
     const localId = requestedLocalId || randomUUID();
+    const attemptId = getVoiceSessionPresentedAttemptId();
+    const lifetime = captureActiveServerAccountScopeLifetime();
     const pendingPort = params.pendingPort ?? voiceTextTurnPendingPort;
     let enqueueResult: Awaited<ReturnType<VoiceTextTurnPendingPort['enqueuePendingMessage']>>;
     try {
@@ -137,6 +141,8 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
     const onAccepted = (): Promise<void> => {
         if (acceptancePromise) return acceptancePromise;
         acceptanceStarted = true;
+        if (attemptId && lifetime) recordVoiceSessionFirstSuccessInput({ attemptId, lifetime,
+            conversationSessionId: params.conversationSessionId, localId });
         acceptancePromise = pendingPort.markPendingDeliveryHandled({
             conversationSessionId: params.conversationSessionId,
             localId,

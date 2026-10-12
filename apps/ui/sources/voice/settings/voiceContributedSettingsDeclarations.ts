@@ -185,6 +185,10 @@ export function getVoiceContributedSettingsDeclarations(
         const pages: SettingsPageId[] = [];
         if (entry.roles.includes('dictation_stt')) pages.push('voiceDictation');
         if (entry.kind === 'voice.conversation-provider.v1' || entry.roles.includes('conversation_stt') || entry.roles.includes('conversation_tts')) pages.push('voiceConversations');
-        return pages.map((pageId) => defineSettingsPage({ pageId, sections: { [`provider.${entry.providerId}`]: { settings: fields } } }));
+        // The section carries the service's own name, so search says which service a control belongs to.
+        const serviceTitle = declaration ? label(declaration.title) : String(tLoose(entry.selectionOptions?.[0]?.titleKey ?? 'settingsVoice.providerSectionTitle'));
+        return pages.map((pageId) => defineSettingsPage({ pageId, sections: { [`provider.${entry.providerId}`]: {
+            ...(serviceTitle ? { title: serviceTitle } : {}), settings: fields,
+        } } }));
     });
 }

@@ -18,8 +18,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
-import { ConnectedAccountCatalogRowMutationV1Schema, ConnectedPurposeCatalogV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
-import { AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol';
+import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import 'fake-indexeddb/auto';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -32,6 +31,9 @@ const boundary = vi.hoisted(() => ({
     log: vi.fn<(message: string) => void>(),
 }));
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 vi.mock('@/log', () => ({ log: { log: boundary.log } }));
@@ -324,39 +326,8 @@ async function renderRow(options: Readonly<{
 
     // The boundary's full personal-promotion transaction is Plain. E2EE
     // material admission is exercised by the canonical resource-owner suites.
-    account = await createSecretSettingsTestHarness({ mode: options.mode ?? 'plain', approvalRequired: options.approvalRequired });
-    const purposesPath = '/v1/account/entity-rows/connected-accounts/purposes';
-    let purposes = options.connectedPurposes ?? { v: 1 as const, bindings: [] };
-    let purposeRevision = 9;
-    account.catalogRows.set(purposesPath, {
-        status: 'present', revision: purposeRevision, content: { t: 'plain', v: { key: 'purposes', value: purposes } },
-    });
-    // The real source owner commits the purpose row and Settings atomically;
-    // extend only this HTTP boundary, retaining its actual DTO and Settings CAS.
-    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    setRuntimeFetch(async (url, init) => {
-        const path = new URL(String(url)).pathname;
-        if (path === '/v1/auth/ping') return Response.json({});
-        if (path !== purposesPath || init?.method !== 'POST') return account!.request(url, init);
-        const input = ConnectedAccountCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
-        if (input.expectedRevision !== purposeRevision) return Response.json({ status: 'conflict', revision: purposeRevision });
-        if (input.content?.t !== 'plain' || input.content.v.key !== 'purposes') throw new Error('Expected Plain purpose row');
-        let settingsVersion: number | undefined;
-        if (input.settingsMutation) {
-            const response = await account!.request(new URL('/v2/account/settings', String(url)), {
-                method: 'POST', body: JSON.stringify({ expectedVersion: input.settingsMutation.expectedSettingsVersion,
-                    content: input.settingsMutation.content }),
-            });
-            const receipt = AccountSettingsV2UpdateResponseSchema.parse(await response.json());
-            if (!receipt.success) return Response.json({ status: 'settings-conflict', revision: receipt.currentVersion });
-            settingsVersion = receipt.version;
-        }
-        purposes = ConnectedPurposeCatalogV1Schema.parse(input.content.v.value);
-        purposeRevision += 1;
-        account!.catalogRows.set(purposesPath, { status: 'present', revision: purposeRevision, content: input.content });
-        return Response.json({ status: 'updated', revision: purposeRevision, cursor: purposeRevision,
-            ...(settingsVersion === undefined ? {} : { settingsVersion }) });
-    });
+    account = await createSecretSettingsTestHarness({ mode: options.mode ?? 'plain', approvalRequired: options.approvalRequired,
+        connectedPurposes: options.connectedPurposes ?? { v: 1, bindings: [] } });
     const { sync } = await import('@/sync/sync');
     const { storage } = await import('@/sync/domains/state/storage');
     const { requireOneShotAccountSettingsMutationApplied } = await import('@/sync/engine/settings/syncSettings');
@@ -530,8 +501,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
                 .toEqual(expect.stringMatching(/^happier:shared-secret:v1:/));
         }, { timeout: CASE_TIMEOUT_MS });
         expect(account!.settingsWrites).toHaveLength(0);
-        expect(account!.catalogRows.get('/v1/account/entity-rows/connected-accounts/purposes'))
-            .toMatchObject({ revision: 9, content: { v: { value: purpose } } });
+        expect(account!.purposes!.value).toEqual(purpose);
+        expect(account!.purposes!.writes).toHaveLength(0);
         expect(account!.persistedSettings.secrets.some((secret) => secret.encryptedValue.value === 'fixture-new-dormant-key')).toBe(false);
     }, CASE_TIMEOUT_MS);
 
@@ -660,9 +631,7 @@ describe('Voice credential row → saved-secret picker → account-settings writ
             credentialSource: { kind: 'savedSecret' },
             credentialBindings: { account: { 'api-key': importedSecretRef(SECRETS[1]!.id) } },
         });
-        expect(account!.catalogRows.get('/v1/account/entity-rows/connected-accounts/purposes')).toMatchObject({
-            content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } },
-        });
+        expect(account!.purposes!.value).toEqual({ v: 1, bindings: [] });
         expect(account!.persistedSettings.secrets).toEqual(savedRecordsBefore);
         expect(savedRecordsBefore).toEqual([]);
         expect(JSON.stringify(account!.settingsWrites)).not.toContain('fixture-live-key');

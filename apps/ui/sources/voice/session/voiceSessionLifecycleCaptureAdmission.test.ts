@@ -181,8 +181,15 @@ describe('Voice session lifecycle capture admission', () => {
         expect(record).toContain('voice_capture_busy_dictation');
     });
 
-    it('retains admission through the realtime session and releases after End Voice', async () => {
+    it('retires End controls but retains admission through teardown and concurrent disposal', async () => {
         const { adapter, captureAdmission, lifecycle } = createHarness();
+        let finishCleanup!: () => void;
+        const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+        const nativeStop = adapter.stop.getMockImplementation()!;
+        adapter.stop.mockImplementationOnce(async (input) => {
+            await cleanup;
+            await nativeStop(input);
+        });
 
         await lifecycle.toggle(sessionAddress('session-1'));
         expect(adapter.start).toHaveBeenCalledOnce();
@@ -191,7 +198,12 @@ describe('Voice session lifecycle capture admission', () => {
             activeOwner: 'conversation',
         });
 
-        await lifecycle.stop('session-1');
+        const stopping = lifecycle.stop('session-1');
+        expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
+        const disposal = lifecycle.dispose();
+        expect(captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
+        finishCleanup();
+        await Promise.all([stopping, disposal]);
         expect(adapter.stop).toHaveBeenCalledOnce();
         const dictation = captureAdmission.acquire('dictation');
         expect(dictation.status).toBe('acquired');

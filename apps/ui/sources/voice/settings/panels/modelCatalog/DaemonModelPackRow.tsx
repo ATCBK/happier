@@ -44,7 +44,7 @@ export function DaemonModelPackRow(props: Readonly<{
             testID={`voice-model-cancel-${row.packId}`}
             accessibilityLabel={`${t('common.cancel')}: ${row.displayName}`}
             variant="plain"
-            size={REMOVE_TARGET_SIZE}
+            minimumInteractiveTargetSize={REMOVE_TARGET_SIZE}
             onPress={(event) => {
                 event?.stopPropagation?.();
                 props.onCancel?.();
@@ -57,7 +57,7 @@ export function DaemonModelPackRow(props: Readonly<{
             accessibilityLabel={`${actionLabel}: ${row.displayName}`}
             disabled={props.actionsDisabled === true}
             variant="plain"
-            size={REMOVE_TARGET_SIZE}
+            minimumInteractiveTargetSize={REMOVE_TARGET_SIZE}
             onPress={(event) => {
                 event?.stopPropagation?.();
                 if (props.actionsDisabled || props.actionInFlight) return;
@@ -82,8 +82,9 @@ export function DaemonModelPackRow(props: Readonly<{
         <Item
             testID={`voice-model-row-${row.packId}`}
             title={row.displayName}
+            // An unknown status is already the row's value; the description stays empty rather than repeat it.
             subtitle={isUnknown
-                ? t('settingsVoice.local.models.unknownSubtitle')
+                ? undefined
                 : row.isDefault
                     ? t('settingsVoice.local.models.defaultSubtitle')
                     : row.canInstall

@@ -1,5 +1,7 @@
 import { PluginContributionIdentityV1Schema, buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { VoiceCredentialBindingV1Schema, VoiceProviderSettingsEnvelopeV1Schema, type VoiceCredentialBindingV1, type VoiceProviderSettingsEnvelopeV1 } from '@happier-dev/protocol/voice/realtime/providerSettings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { areAccountSettingsJsonValuesEqual } from '@happier-dev/protocol/account/settings/accountSettingsStructuralEquality';
 
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
@@ -89,25 +91,29 @@ export function readVoiceCredentialAuthorityRefs(
     credentialBindings?: unknown;
     providers?: unknown;
   }>;
-  const credentialBinding = credentialSlotId !== null && Array.isArray(voice.credentialBindings)
-    ? voice.credentialBindings.find((candidate) => {
-        const parsed = VoiceCredentialBindingV1Schema.safeParse(candidate);
-        return parsed.success
-          && parsed.data.contribution.pluginId === contribution.pluginId
-          && parsed.data.contribution.localId === contribution.localId
-          && parsed.data.credentialSlotId === credentialSlotId;
-      }) as VoiceCredentialBindingV1 | undefined
-    : undefined;
+  let credentialBinding: VoiceCredentialBindingV1 | null = null;
+  if (credentialSlotId !== null && Array.isArray(voice.credentialBindings)) {
+    for (const candidate of voice.credentialBindings) {
+      const parsed = createStoredReadSchema(VoiceCredentialBindingV1Schema).safeParse(candidate);
+      if (!parsed.success || parsed.data.contribution.pluginId !== contribution.pluginId
+        || parsed.data.contribution.localId !== contribution.localId
+        || parsed.data.credentialSlotId !== credentialSlotId) continue;
+      credentialBinding = areAccountSettingsJsonValuesEqual(candidate, parsed.data)
+        ? candidate as VoiceCredentialBindingV1 : parsed.data;
+      break;
+    }
+  }
   const providers = voice.providers;
   const rawProviderEnvelope = providers && typeof providers === 'object' && !Array.isArray(providers)
     ? (providers as Readonly<Record<string, unknown>>)[qualifiedProviderId]
     : undefined;
-  const providerEnvelope = VoiceProviderSettingsEnvelopeV1Schema.safeParse(rawProviderEnvelope);
+  const providerEnvelope = createStoredReadSchema(VoiceProviderSettingsEnvelopeV1Schema).safeParse(rawProviderEnvelope);
 
   return {
-    credentialBinding: credentialBinding ?? null,
+    credentialBinding,
     providerEnvelope: providerEnvelope.success
-      ? rawProviderEnvelope as VoiceProviderSettingsEnvelopeV1
+      ? areAccountSettingsJsonValuesEqual(rawProviderEnvelope, providerEnvelope.data)
+        ? rawProviderEnvelope as VoiceProviderSettingsEnvelopeV1 : providerEnvelope.data
       : null,
   };
 }

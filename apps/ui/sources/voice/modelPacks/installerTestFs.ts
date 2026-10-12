@@ -1,3 +1,5 @@
+import type { InstallerFs } from './installer/types';
+
 /**
  * Test-only in-memory filesystem that models a real directory tree for the
  * native model-pack installer specs. Unlike a flat uri->bytes map, it supports
@@ -147,19 +149,31 @@ export function createMemFs(): MemFs {
     async bytes(): Promise<Uint8Array> {
       return files.get(this.uri) ?? new Uint8Array();
     }
+    open() {
+      const uri = this.uri;
+      let offset = 0;
+      let closed = false;
+      return {
+        readBytes(length: number): Uint8Array<ArrayBuffer> {
+          if (closed) throw new Error('file_handle_closed');
+          const bytes = files.get(uri) ?? new Uint8Array();
+          const chunk = bytes.slice(offset, offset + length);
+          offset += chunk.byteLength;
+          return chunk;
+        },
+        close() { closed = true; },
+      };
+    }
     readableStream() {
-      const bytes = files.get(this.uri) ?? new Uint8Array();
-      let delivered = false;
+      // Expo FS 55.0.14 closes its native read handle on cancel, but not on EOF.
+      const handle = this.open();
       return new ReadableStream<Uint8Array>({
         pull(controller) {
-          if (delivered) {
-            controller.close();
-            return;
-          }
-          delivered = true;
-          controller.enqueue(bytes);
-          controller.close();
+          const bytes = handle.readBytes(1024);
+          if (bytes.length === 0) controller.close();
+          else controller.enqueue(bytes);
         },
+        cancel() { handle.close(); },
       });
     }
     async text(): Promise<string> {
@@ -175,4 +189,40 @@ export function createMemFs(): MemFs {
 
   const fs = { Directory, File, Paths: { document: 'file:///docs/' } };
   return { fs, files, root };
+}
+
+/** Native network/file boundary fixture; production artifact bytes never use fetch. */
+export function createMemNativeDownload(fs: InstallerFs, fetchImpl: typeof fetch) {
+  return async (request: {
+    url: string; fileUri: string; rangeStart?: number; signal: AbortSignal;
+    onProgress?: (loaded: number) => void;
+  }) => {
+    const headers: Record<string, string> = {};
+    if (request.rangeStart) headers.Range = `bytes=${request.rangeStart}-`;
+    const response = await fetchImpl(request.url, { signal: request.signal, headers });
+    if (!response.ok) throw new Error(`model_pack_download_failed:${response.status}`);
+    const file = new fs.File(request.fileUri);
+    file.create?.();
+    let loaded = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          file.write(value, { append: true });
+          loaded += value.byteLength;
+          request.onProgress?.(loaded);
+        }
+      } finally {
+        try { await reader.cancel?.(); } finally { reader.releaseLock?.(); }
+      }
+    } else {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      file.write(bytes);
+      loaded = bytes.byteLength;
+      request.onProgress?.(loaded);
+    }
+    return { status: response.status, headers: { 'content-length': String(loaded) } };
+  };
 }

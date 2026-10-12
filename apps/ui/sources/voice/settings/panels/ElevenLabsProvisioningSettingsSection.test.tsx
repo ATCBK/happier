@@ -33,10 +33,14 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 import 'fake-indexeddb/auto';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 import { BundledConversationSettingsSection } from './BundledConversationSettingsSection';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 const fixtureState = vi.hoisted(() => ({
@@ -89,6 +93,7 @@ describe('ElevenLabs settings provisioning composed path', () => {
   const disposals: Array<() => void | Promise<void>> = [];
 
   beforeEach(() => {
+    disposals.push(installWebLockManagerMock().restore);
     fixtureState.settings = null as unknown as Settings;
   });
 

@@ -1,4 +1,5 @@
-import { AGENT_IDS, getAgentCore, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
+import { getAgentCore, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
+import { listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
 import { AgentsBackendsListOutputSchema, type AgentsBackendsListOutput } from '@happier-dev/protocol/actions/agentBackendInventory';
 import { readLegacyConfiguredAcpBackendId } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actions/resolveActionBackendTargetSelection';
@@ -267,9 +268,7 @@ function resolveBackendCatalogItemsForVoiceTool(params: Readonly<{
 }>): VoiceToolBackendCatalogItem[] {
   const state = storage.getState();
   const backendEnabledByTargetKey = params.backendEnabledByTargetKey === undefined ? state.settings?.backendEnabledByTargetKey ?? null : params.backendEnabledByTargetKey;
-  const enabledBuiltInAgentIds = params.includeDisabled
-    ? Array.from(AGENT_IDS)
-    : Array.from(AGENT_IDS).filter((id) => backendEnabledByTargetKey?.[resolveBackendTargetKeyV2({ kind: 'backend', backendId: id })] !== false);
+  const enabledBuiltInAgentIds = listExecutableAgentUniverseIds();
 
   const items: VoiceToolBackendCatalogItem[] = [];
   for (const entry of getResolvedBackendCatalogEntries({
@@ -428,10 +427,11 @@ export async function listAgentModelsForVoiceTool(params: Readonly<{
 
   const machineId = normalizeId(params.machineId);
   const serverId = normalizeId(params.serverId) || normalizeId(getActiveServerSnapshot()?.serverId) || null;
-  const canonicalTargetKey = selection.selection.backendTargetKey
-    ?? (backendTarget
-      ? resolveBackendTargetKeyV2(backendTarget)
-      : resolveBackendTargetKeyV2({ kind: 'backend', backendId: agentId }));
+  const canonicalTargetKey = resolveBackendTargetKeyV2(
+    selection.selection.backendTargetKey
+      ?? backendTarget
+      ?? { kind: 'backend', backendId: agentId },
+  );
   const withProviderProjection = async (base: VoiceToolModelListResult): Promise<VoiceToolModelListResult> => (
     machineId
       ? projectVoiceToolProviderModels({

@@ -65,7 +65,7 @@ function projection(phase: Phase, overrides: Partial<{ muted: boolean }> = {}): 
         primaryActionLabel: control.primaryAction === 'end' ? 'End Voice' : 'Start Voice',
         primaryActionHint: null,
         recoveryLabel: control.recoveryAvailable ? 'Retry' : null,
-        recoveryShortLabel: control.recoveryAvailable ? 'Retry' : null,
+        recoveryIcon: control.recoveryAvailable ? 'arrow-clockwise' as const : null,
         micStateLabel: 'Microphone active',
         captionLabel: '',
         onPrimaryAction: vi.fn(),
@@ -149,14 +149,12 @@ describe('VoiceTransport', () => {
         expect(voice.onToggle).toHaveBeenCalledTimes(1);
     });
 
-    it('draws the short recovery verb while keeping the full recovery as its accessible name', async () => {
-        const voice = { ...projection('failed'), recoveryLabel: 'Open Settings', recoveryShortLabel: 'Set up' };
+    it('draws and announces the recovery with its one label', async () => {
+        const voice = { ...projection('failed'), recoveryLabel: 'Set up', recoveryIcon: 'gear' as const };
         screen = await renderScreen(<VoiceTransport voice={voice} size="island" />);
 
-        const recover = screen.findByTestId('voice-transport-recover');
-        expect(recover?.props.accessibilityLabel).toBe('Open Settings');
+        expect(screen.findByTestId('voice-transport-recover')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Set up');
-        expect(screen.getTextContent()).not.toContain('Open Settings');
     });
 
     it('pairs recovery with dismissal for a failed attempt with no ended record', async () => {
@@ -424,6 +422,20 @@ describe('VoiceOrb', () => {
             screen.pressByTestId('voice-orb-body');
             expect(voice.onPrimaryAction).toHaveBeenCalledOnce();
         } finally { vi.useRealTimers(); }
+    });
+
+    it('opens its options chip toward the window centre from either side, pinned to one edge only', async () => {
+        // On web the first branch's offsets become the chip's static class; a branch that leaves the
+        // other edge unset keeps it, so a right-resting Orb opened its chip off-screen.
+        for (const [x, near, far] of [[300, 'right', 'left'], [40, 'left', 'right']] as const) {
+            await screen?.unmount();
+            screen = await renderScreen(<VoiceOrb voice={projection('listening')} anchorRef={React.createRef<View>()}
+                sectionOpen={false} onOpenSection={() => {}} shouldSuppressPress={() => false}
+                translateX={makeMutable(x)} hostWidth={400} />);
+            const slot = frameOf(screen, 'voice-orb-options-slot');
+            expect(typeof slot[near]).toBe('number');
+            expect(slot[far]).toBe('auto');
+        }
     });
 });
 

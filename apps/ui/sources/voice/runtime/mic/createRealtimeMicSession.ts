@@ -1,4 +1,4 @@
-import { requestMicrophonePermission, showMicrophonePermissionDeniedAlert } from '@/utils/platform/microphonePermissions';
+import { rejectRefusedMicrophone, requestMicrophonePermission, showMicrophonePermissionDeniedAlert } from '@/utils/platform/microphonePermissions';
 import {
     getVoiceNativeWebRtcRuntime,
     type VoiceNativeWebRtcMediaStream,
@@ -11,11 +11,7 @@ export function createRealtimeMicSession(options: CreateMicSessionOptions = {}) 
     return createNativeMicSession({
         ...(options.onFailure ? { onFailure: options.onFailure } : {}),
         ensurePermission: async () => {
-            const permission = await requestMicrophonePermission();
-            if (!permission.granted) {
-                showMicrophonePermissionDeniedAlert(permission.canAskAgain);
-                throw new Error('mic_permission_denied');
-            }
+            rejectRefusedMicrophone(await requestMicrophonePermission(), showMicrophonePermissionDeniedAlert);
         },
         acquireStream: async () => {
             const { mediaDevices } = getVoiceNativeWebRtcRuntime();

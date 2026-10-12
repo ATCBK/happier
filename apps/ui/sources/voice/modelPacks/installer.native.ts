@@ -65,19 +65,17 @@ function manifestsEqual(a: ModelPackManifest, b: ModelPackManifest): boolean {
 
 async function installViaHost(opts: {
   fs: InstallerFs;
-  fetchImpl: typeof fetch;
+  download?: InstallerOverrides['download'];
   invalidatePackRuntime: InvalidatePackRuntime;
   packId: string;
   manifest: ModelPackManifest;
-  timeoutMs: number | null;
   signal: AbortSignal;
   priorInstall: ModelPackPromotionPriorInstallV1;
   onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
 }): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
   const host = createExpoModelPackInstallerHost({
     fs: opts.fs,
-    fetchImpl: opts.fetchImpl,
-    timeoutMs: opts.timeoutMs,
+    download: opts.download,
     invalidatePackRuntime: opts.invalidatePackRuntime,
   });
   const result = await installModelPackWithHost({
@@ -140,12 +138,11 @@ export async function ensureModelPackInstalled(
       // after the new pack is fully downloaded and verified. A failed/cancelled
       // update leaves the previously-installed pack intact (no data loss).
       return await installViaHost({
+        download: overrides.download,
         fs,
-        fetchImpl,
         invalidatePackRuntime,
         packId: id,
         manifest: remote,
-        timeoutMs: opts.timeoutMs,
         signal: opts.signal,
         priorInstall: Object.freeze({ scopeKey: `expo-model-pack:${rootDir.uri}`, identityKey: id }),
         onProgress: opts.onProgress,
@@ -174,12 +171,11 @@ export async function ensureModelPackInstalled(
   assertManifestPathsSafe(manifest);
 
   return await installViaHost({
+    download: overrides.download,
     fs,
-    fetchImpl,
     invalidatePackRuntime,
     packId: id,
     manifest,
-    timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     priorInstall: null,
     onProgress: opts.onProgress,

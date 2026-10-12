@@ -25,6 +25,7 @@ import { VoicePresenceAppShellMount } from './VoicePresenceAppShellMount';
 import { VoiceTopBarPresenceMount } from './VoiceTopBarPresence';
 
 const keyboard = vi.hoisted(() => ({ height: 0 }));
+const viewport = vi.hoisted(() => ({ width: 390, height: 844, scale: 1, fontScale: 1 }));
 // Settled OS keyboard geometry is the environment boundary.
 vi.mock('@/hooks/ui/useKeyboardHeight', () => ({ useKeyboardHeight: () => keyboard.height }));
 
@@ -33,8 +34,8 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({ useKeyboardHeight: () => keyboa
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
-        useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
-        Dimensions: { get: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }) },
+        useWindowDimensions: () => ({ ...viewport }),
+        Dimensions: { get: () => ({ ...viewport }) },
     });
 });
 
@@ -57,6 +58,13 @@ async function layOutPhonePresence(screen: Awaited<ReturnType<typeof renderScree
 function MeasuredComposer() {
     const report = useReportSessionCockpitComposerChromeHeight(true);
     React.useEffect(() => { report(62); }, [report]);
+    return null;
+}
+
+/** The desktop composer band: 208 tall, lifted 41 px off the window edge by the workspace frame. */
+function FramedDesktopComposer() {
+    const report = useReportSessionCockpitComposerChromeHeight(true);
+    React.useEffect(() => { report(208, 900 - 651); }, [report]);
     return null;
 }
 
@@ -166,7 +174,26 @@ describe('phone Island shell clearance', () => {
             expect(screen.findByTestId(container === 'island' ? 'voice-island-transport-recover' : 'voice-orb-options')).not.toBeNull();
         } finally { await screen.unmount(); }
     });
+    it.each(['island', 'orb'] as const)('rests the desktop %s above a composer the workspace frame lifts off the window edge', async (container) => {
+        viewport.width = 1440;
+        viewport.height = 900;
+        getStorage().setState((state) => ({ localSettings: { ...state.localSettings, voicePresenceContainer: container } }));
+        const screen = await renderScreen(<SessionCockpitChromeRegistryProvider><FramedDesktopComposer /><VoicePresenceAppShellMount /></SessionCockpitChromeRegistryProvider>);
+        try {
+            expect(screen.findHostByTestId('voice-presence-app-shell-root')).not.toBeNull();
+            await act(async () => { screen.findByTestId('voice-presence-float-host')!.props.onLayout({ nativeEvent: { layout: { width: 1440, height: 900 } } }); });
+            const frame = screen.findByTestId('voice-presence-float-body')!.props.style[0];
+            await act(async () => { screen.findByTestId('voice-presence-float-body')!.props.onLayout({ nativeEvent: { layout: { width: frame.width, height: frame.height } } }); });
+            const float = screen.findByTestId('voice-presence-float-body')!.props.style;
+            const y = float[float.length - 1].transform.find((entry: { translateY?: number }) => entry.translateY !== undefined).translateY;
+            // The composer band starts at y 651 (its meters at 665): the float rests above it.
+            expect(y + float[0].height).toBeLessThanOrEqual(651);
+        } finally { await screen.unmount(); }
+    });
+
     afterEach(() => {
+        viewport.width = 390;
+        viewport.height = 844;
         getStorage().setState(initialStorage, true);
         registerVoiceAdapters([]);
         resetVoiceSessionStoreForTests();

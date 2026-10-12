@@ -4,6 +4,8 @@ import { sync } from '@/sync/sync';
 import { resolveMachineForActiveServerFromState, resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { t } from '@/text';
 import { listPreferredMachineIds } from '@/components/settings/pickers/resolvePreferredMachineId';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { promptDaemonUnavailableRetry } from '@/utils/errors/daemonUnavailableAlert';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolvePersistedDaemonConversationSessionId } from '@/voice/binding/voiceConversationBindingPersistence';
@@ -35,6 +37,7 @@ function resolveMachineName(machineId: string | null): string {
 
 function resolveAlternateOnlineMachineId(state: any, stickyMachineId: string | null): string | null {
     const ordered = listPreferredMachineIds({
+        scope: selectActiveServerAccountScopeForServer(state.profileScope, getAppliedActiveServerSnapshot().serverId),
         machines: resolveVisibleMachinesForActiveServerFromState(state),
         recentMachinePaths: Array.isArray(state?.authoringMemory?.recentMachinePaths) ? state.authoringMemory.recentMachinePaths : [],
         preferredMachineId: stickyMachineId,

@@ -8,6 +8,7 @@ import { storage } from '@/sync/domains/state/storage';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import {
   redactVoiceToolResultForProvider,
+  redactVoiceActionExecutionResultForProvider,
   type VoiceToolResultRedactionPrefs,
 } from '@/voice/context/redactVoiceToolResult';
 import {
@@ -16,6 +17,10 @@ import {
   type VoiceToolHandler,
 } from '@/voice/tools/handlers';
 import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
+import { VoiceAssistantActionSchema } from '@happier-dev/protocol/voice/actions';
+import { listVoiceToolActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { resolveVoiceActionExecution, resolveVoiceExecutionToolName, VOICE_ACTION_EXECUTE_TOOL_NAME } from './voiceActionExecution';
+import { isCurrentUiContextVoiceAction } from './resolveDisabledVoiceActionIds';
 import {
   createRealtimeToolBarrier,
   RealtimeToolExecutionError,
@@ -25,6 +30,7 @@ type VoiceToolHandlers = Readonly<Record<string, VoiceToolHandler>>;
 
 type VoiceHandlerBarrierDeps = Readonly<{
   handlers: VoiceToolHandlers;
+  exposure?: 'voice_assistant' | 'current_ui_only';
   /** Omission is intentionally fail-closed for internal and legacy callers. */
   effectCalls?: VoiceConversationToolEffectCalls;
   readRedactionPrefs: () => VoiceToolResultRedactionPrefs;
@@ -40,6 +46,7 @@ type VoiceHandlerBarrierDeps = Readonly<{
 
 type DefaultRealtimeToolBarrierDeps = Readonly<{
   resolveSessionId: (explicitSessionId?: string | null) => string | null;
+  exposure?: 'voice_assistant' | 'current_ui_only';
   currentSessionAddress?: SessionAddress | null;
   /** Provider-local current-context capability; absent means no such tool. */
   currentUiContext?: VoiceCurrentUiToolPort;
@@ -75,11 +82,22 @@ function readSafeHandlerFailure(value: unknown): string | null {
 
 export function createRealtimeToolBarrierForVoiceHandlers(deps: VoiceHandlerBarrierDeps) {
   return createRealtimeToolBarrier({
-    classifyCall: (call) => resolveVoiceToolEffectClass(call.toolName),
+    validateCall: (call) => {
+      const rejected = { status: 'rejected' as const, code: 'invalid_tool_call' };
+      if (deps.exposure === 'current_ui_only') {
+        const spec = listVoiceToolActionSpecs().find((candidate) => candidate.bindings?.voiceClientToolName === call.toolName);
+        if (!spec || !isCurrentUiContextVoiceAction(spec.id)) return rejected;
+      }
+      const valid = call.toolName === VOICE_ACTION_EXECUTE_TOOL_NAME
+        ? resolveVoiceActionExecution(call.arguments) !== null
+        : VoiceAssistantActionSchema.safeParse({ t: call.toolName, args: call.arguments }).success;
+      return valid ? { status: 'allowed' } : rejected;
+    },
+    classifyCall: (call) => resolveVoiceToolEffectClass(call.toolName, call.arguments),
     authorizeCall: async (call) => {
       if (
         deps.effectCalls !== 'stable_ids'
-        && resolveVoiceToolEffectClass(call.toolName) !== 'read_only'
+        && resolveVoiceToolEffectClass(call.toolName, call.arguments) !== 'read_only'
       ) {
         return { status: 'denied', code: 'voice_effect_call_custody_unavailable' };
       }
@@ -96,7 +114,10 @@ export function createRealtimeToolBarrierForVoiceHandlers(deps: VoiceHandlerBarr
       if (failureCode) throw new RealtimeToolExecutionError('error', failureCode);
       return parsed;
     },
-    redactResult: (value, call) => redactVoiceToolResultForProvider(call.toolName, value, deps.readRedactionPrefs()),
+    redactResult: (value, call) => (call.toolName === VOICE_ACTION_EXECUTE_TOOL_NAME
+      ? redactVoiceActionExecutionResultForProvider : redactVoiceToolResultForProvider)(
+      resolveVoiceExecutionToolName(call.toolName, call.arguments), value, deps.readRedactionPrefs(),
+    ),
     submitResults: deps.submitResults,
     continueResponse: deps.continueResponse,
     ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
@@ -112,6 +133,7 @@ export function createDefaultRealtimeToolBarrier(deps: DefaultRealtimeToolBarrie
       ...(deps.currentUiContext ? { currentUiContext: deps.currentUiContext } : {}),
     }),
     effectCalls: deps.effectCalls,
+    exposure: deps.exposure,
     readRedactionPrefs: () => {
       const settings = (storage.getState() as { settings?: unknown }).settings;
       const privacy = readVoicePrivacySettings(settings);

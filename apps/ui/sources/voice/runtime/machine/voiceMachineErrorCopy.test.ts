@@ -24,6 +24,8 @@ const expectedTranslationKeys = {
     update_required: 'settingsVoice.local.machineErrors.update_required',
     feature_unavailable: 'settingsVoice.local.machineErrors.feature_unavailable',
     service_temporarily_unavailable: 'errors.voiceServiceUnavailable',
+    mic_unavailable: 'settingsVoice.local.machineErrors.mic_unavailable',
+    speech_recognition_unavailable: 'settingsVoice.local.machineErrors.speech_recognition_unavailable',
 } as const satisfies Readonly<Record<VoiceMachineErrorKind, string>>;
 
 describe('voiceMachineErrorCopy', () => {

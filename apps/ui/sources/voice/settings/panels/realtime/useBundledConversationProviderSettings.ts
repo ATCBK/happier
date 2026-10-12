@@ -63,10 +63,10 @@ function readCatalogConfig(providerId: string, config: Readonly<Record<string, u
   if (!owner || !field) return config;
   // Selecting a voice does not change the catalog that names it. Preserve every other
   // provider-owned input, and normalize only its declared voice field through its parser.
-  const catalogOwner: RealtimeProviderSettingsOwner = {
+  const catalogOwner = {
     schemaVersion: owner.schemaVersion,
     defaultConfig: owner.defaultConfig,
-    parseConfig(value) {
+    parseConfig(value: unknown) {
       const parsed = owner.parseConfig(value);
       return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
     },

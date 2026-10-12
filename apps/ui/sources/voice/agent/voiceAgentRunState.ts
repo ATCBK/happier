@@ -11,7 +11,7 @@ import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/ses
 import { storage } from '@/sync/domains/state/storage';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
 import { resolveMachineForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
@@ -31,7 +31,7 @@ import {
 import type { VoiceAgentHandle, VoiceAgentStartParams } from './types';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 
 export type VoiceAgentSessionState = Readonly<{
     id?: string;
@@ -136,7 +136,7 @@ export async function assertActiveDaemonTargetSession(target: SessionAddress | s
         );
     }
     const machine = machineId ? resolveMachineForActiveServerFromState(storage.getState(), machineId) : null;
-    if (machine && isMachineOnline(machine) !== true) {
+    if (machine && isMachineReachable(selectActiveServerAccountScopeForServer(state.profileScope, address?.serverId ?? null), machine) !== true) {
         throw Object.assign(
             new Error('Target machine daemon is offline. Start or reconnect the daemon before starting local voice.'),
             { code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' },
@@ -163,7 +163,7 @@ function isReusableDaemonConversationSessionId(sessionId: string | null): sessio
     const machine: any = resolveMachineForActiveServerFromState(storage.getState(), machineId);
     if (!machine) return false;
 
-    return isMachineOnline(machine);
+    return isMachineReachable(captureActiveServerAccountScopeLifetime()?.scope, machine);
 }
 
 /** The bound target keeps its Home: one resolution owner, projected for bare-id callers below. */

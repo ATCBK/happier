@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { t } from '@/text';
 
 import type { Message } from '@happier-dev/session-core/messages';
 import type { VoiceRoleReadiness } from '@/voice/registry/readiness';
@@ -28,7 +29,7 @@ const turn: Message[] = [
 
 function model(input: Readonly<{
     done: readonly [boolean, boolean, boolean, boolean];
-    microphone?: 'granted' | 'denied' | 'unknown';
+    microphone?: 'granted' | 'denied' | 'unavailable' | 'unknown';
 }>): VoiceSetupPanelModel {
     // m-core's real facts owner: the readiness fact is the only input the test chooses beyond the toggles.
     const facts = deriveVoiceSetupFacts({
@@ -89,6 +90,19 @@ describe('VoiceSetupPanel', () => {
         screen.pressByTestId('voice-setup.step.microphone.openSettings');
         expect(handlers.onOpenSystemSettings).toHaveBeenCalledTimes(1);
         expect(handlers.onAllowMicrophone).not.toHaveBeenCalled();
+    });
+
+    it('says a missing microphone plainly and checks again on press, instead of an Allow that does nothing', async () => {
+        const handlers = actions();
+        const facts = model({ done: [true, true, false, false], microphone: 'unavailable' });
+        screen = await renderScreen(<VoiceSetupPanel testID="setup" model={facts} actions={handlers} />);
+
+        expect(facts.facts.steps.find((step) => step.id === 'microphone')?.state).toBe('blocked');
+        expect(screen.getTextContent()).toContain(t('voiceMoments.setupMicrophoneMissingTitle'));
+        expect(screen.findByTestId('voice-setup.step.microphone.allow')).toBeNull();
+        expect(screen.findByTestId('voice-setup.step.microphone.openSettings')).toBeNull();
+        screen.pressByTestId('voice-setup.step.microphone.checkAgain');
+        expect(handlers.onAllowMicrophone).toHaveBeenCalledTimes(1);
     });
 
     it('sends a service that is not ready to its recovery and only then offers Try', async () => {

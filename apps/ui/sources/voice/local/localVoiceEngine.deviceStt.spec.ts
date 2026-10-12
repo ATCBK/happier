@@ -11,6 +11,7 @@ import {
     loadLocalVoiceEngineWithCompatState,
     registerLocalVoiceEngineHarnessHooks,
     setPlatformOs,
+    setSpeechRecRecognitionAvailable,
     speechRecAbort,
     speechRecStart,
     speechRecStop,
@@ -164,7 +165,7 @@ describe('local voice engine device STT (experimental)', () => {
         }
     });
 
-    it('surfaces mic permission denial as a recoverable idle error instead of entering recording', async () => {
+    it('keeps mic permission denial visible as a failed attempt instead of entering recording', async () => {
         speechRecRequestPermissionsAsync.mockResolvedValueOnce({ granted: false });
 
         const storage = await getStorage();
@@ -196,8 +197,9 @@ describe('local voice engine device STT (experimental)', () => {
         await toggleLocalVoiceTurn('s1');
 
         expect(speechRecStart).not.toHaveBeenCalled();
+        // Not a graceful idle end: the presence must keep "Microphone blocked" with Allow on screen.
         expect(getLocalVoiceState()).toMatchObject({
-            status: 'idle',
+            status: 'error',
             sessionId: 's1',
             error: 'mic_permission_denied',
         });
@@ -209,6 +211,152 @@ describe('local voice engine device STT (experimental)', () => {
             recoveryAction: 'open_settings',
             presentation: 'permission_required',
         });
+    });
+
+    it.each(['local_direct', 'local_conversation'] as const)('starts a fresh %s attempt after dismissing a recognizer failure', async (providerId) => {
+        await configureDuplexDeviceSpeech(false);
+        const storage = await getStorage();
+        const settings = storage.getState().settings;
+        const config = settings.voice.providers[providerId].config;
+        storage.__setState({ settings: { ...settings, voice: {
+            ...settings.voice,
+            providerId,
+            providers: { ...settings.voice.providers, [providerId]: { schemaVersion: 1, config: {
+                ...config, stt: { ...config.stt, provider: 'device' },
+                tts: { ...config.tts, autoSpeakReplies: false },
+            } } },
+        } } });
+        await loadLocalVoiceEngineWithCompatState();
+        const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+        const { createLocalConversationVoiceAdapter } = await import('@/voice/adapters/localConversation/localConversationAdapter');
+        const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const { getVoiceSessionEndedAttempt, setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+        registerVoiceAdapters([createLocalDirectVoiceAdapter(), createLocalConversationVoiceAdapter()]);
+        const lifecycle = createVoiceSessionLifecycleController();
+        const unsubscribe = lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle.getSnapshot()));
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+        const target = { serverId: 'server-a', sessionId: 's1' };
+        try {
+            lifecycle.setConfiguredProviderId(providerId);
+            await lifecycle.toggle(target);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'listening' });
+            emitSpeechRecEvent('error', { error: 'not-allowed' });
+            await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({
+                status: 'error', canStop: false, errorCode: 'mic_permission_denied',
+            }));
+            const dismissal = lifecycle.dismissFailedAttempt('s1');
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', adapterId: null });
+            expect(getVoiceSessionEndedAttempt()).toBeNull();
+            const restart = lifecycle.toggle(target);
+            await Promise.all([dismissal, restart]);
+            expect(speechRecStart).toHaveBeenCalledTimes(2);
+            expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'listening' });
+            expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+            expect(submitMessage).not.toHaveBeenCalled();
+        } finally {
+            unsubscribe();
+            await lifecycle.dispose();
+        }
+    });
+
+    it.each([
+        { providerId: 'local_direct', outcome: 'start' },
+        { providerId: 'local_conversation', outcome: 'start' },
+        { providerId: 'local_direct', outcome: 'cancel' },
+        { providerId: 'local_direct', outcome: 'dispose' },
+        { providerId: 'local_direct', outcome: 'account' },
+        { providerId: 'local_direct', outcome: 'provider' },
+    ] as const)('acknowledges pending $providerId Start during End cleanup ($outcome)', async ({ providerId, outcome }) => {
+        await configureDuplexDeviceSpeech(false);
+        const storage = await getStorage();
+        const settings = storage.getState().settings;
+        const config = settings.voice.providers[providerId].config;
+        storage.__setState({ settings: { ...settings, voice: {
+            ...settings.voice, providerId,
+            providers: { ...settings.voice.providers, [providerId]: { schemaVersion: 1, config: {
+                ...config, stt: { ...config.stt, provider: 'device' },
+                tts: { ...config.tts, autoSpeakReplies: false },
+            } } },
+        } } });
+        await loadLocalVoiceEngineWithCompatState();
+        const { createLocalDirectVoiceAdapter } = await import('@/voice/adapters/localDirect/localDirectAdapter');
+        const { createLocalConversationVoiceAdapter } = await import('@/voice/adapters/localConversation/localConversationAdapter');
+        const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const { getVoiceSessionEndedAttempt, setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+        const { resolveVoiceAttemptControl } = await import('@/components/voice/attempt/resolveVoiceAttemptControl');
+        const { resolveVoiceSurfaceState } = await import('@/components/voice/surface/resolveVoiceSurfaceState');
+        const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+        registerVoiceAdapters([createLocalDirectVoiceAdapter(), createLocalConversationVoiceAdapter()]);
+        const lifecycle = createVoiceSessionLifecycleController();
+        const unsubscribe = lifecycle.subscribe(() => setVoiceSessionSnapshot(lifecycle.getSnapshot()));
+        const target = { serverId: 'server-a', sessionId: 's1' };
+        // The recognizer's OS boundary holds cleanup until it acknowledges End.
+        speechRecStop.mockImplementation(() => {});
+        try {
+            lifecycle.setConfiguredProviderId(providerId);
+            await lifecycle.toggle(target);
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'listening' });
+            const end = lifecycle.stop('s1');
+            const snapshot = lifecycle.getSnapshot();
+            expect(snapshot).toMatchObject({ status: 'disconnected', canStop: false });
+            const control = resolveVoiceAttemptControl({
+                ...snapshot, surfaceState: resolveVoiceSurfaceState(snapshot), tone: 'neutral',
+                muted: false, capturing: false, startAdmitted: true, hasRecovery: false,
+            });
+            expect(control).toMatchObject({ surfaceState: 'idle', live: false, primaryAction: 'start' });
+            expect(getVoiceSessionEndedAttempt()).toMatchObject({ sessionId: 's1', reason: { kind: 'stopped' } });
+            expect(getVoiceConversationRuntimeSnapshot().state).toBe('ending');
+            const restart = lifecycle.toggle(target);
+            const pending = lifecycle.getSnapshot();
+            expect(pending).toMatchObject({ adapterId: providerId, sessionId: 's1', status: 'connecting', canStop: true });
+            expect(lifecycle.getAttemptTargetSessionAddress()).toEqual(target);
+            expect(resolveVoiceAttemptControl({
+                ...pending, surfaceState: resolveVoiceSurfaceState(pending), tone: 'pending',
+                muted: false, capturing: false, startAdmitted: true, hasRecovery: false,
+            })).toMatchObject({ surfaceState: 'connecting', live: true, primaryAction: 'end', capturing: false });
+            await Promise.resolve();
+            expect(speechRecStart).toHaveBeenCalledTimes(1);
+            const cancellation = outcome === 'cancel' ? lifecycle.stop('s1')
+                : outcome === 'dispose' ? lifecycle.dispose() : Promise.resolve();
+            if (outcome === 'account') lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
+            if (outcome === 'provider') lifecycle.setConfiguredProviderId('off');
+            if (outcome !== 'start') expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            emitSpeechRecEvent('end');
+            await Promise.all([end, restart, cancellation]);
+            expect(speechRecStart).toHaveBeenCalledTimes(outcome === 'start' ? 2 : 1);
+            if (outcome === 'start') {
+                expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'listening' });
+                expect(getVoiceSessionEndedAttempt()).toBeNull();
+            }
+            expect(submitMessage).not.toHaveBeenCalled();
+        } finally {
+            speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+            emitSpeechRecEvent('end');
+            unsubscribe();
+            await lifecycle.dispose();
+        }
+    });
+
+    it.each(['unavailable', 'service-not-allowed', 'audio-capture'] as const)('keeps %s speech recognition as a failed attempt after capture cleanup', async (reason) => {
+        if (reason === 'audio-capture') setPlatformOs('web');
+        await configureDuplexDeviceSpeech(false);
+        if (reason === 'unavailable') setSpeechRecRecognitionAvailable(false);
+        const engine = await loadLocalVoiceEngineWithCompatState();
+        await engine.toggleLocalVoiceTurn('s1');
+        if (reason !== 'unavailable') emitSpeechRecEvent('error', { error: reason });
+
+        const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+        await vi.waitFor(() => expect(getVoiceConversationRuntimeSnapshot().error).toMatchObject({
+            kind: 'speech_recognition_unavailable',
+            reason: reason === 'unavailable' ? 'device_stt_unavailable' : reason,
+            recoveryAction: 'select_speech_engine',
+            presentation: 'error', recoverable: false,
+        }));
+        expect(engine.getLocalVoiceState()).toMatchObject({ status: 'error', sessionId: 's1' });
+        expect(submitMessage).not.toHaveBeenCalled();
+        await engine.stopLocalVoiceSession();
     });
 
     it('supports provider-based device STT settings', async () => {

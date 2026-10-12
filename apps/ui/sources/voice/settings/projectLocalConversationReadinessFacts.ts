@@ -38,6 +38,17 @@ export type LocalVoiceSpeechReadiness = Readonly<{
   speak: VoiceRoleReadiness | null;
 }>;
 
+/** The card preserves exact daemon feature/target recovery ahead of aggregate unknowns. */
+export function projectLocalConversationProviderReadiness(
+  facts: Pick<ReturnType<typeof projectLocalConversationReadinessFacts>, 'daemonRouteReadiness'>,
+  projected: VoiceRoleReadiness,
+): VoiceRoleReadiness {
+  const daemon = facts.daemonRouteReadiness;
+  return daemon && (daemon.code === 'server_feature_disabled' || daemon.code === 'execution_machine_missing'
+    || daemon.code === 'execution_machine_incompatible' || projected.code === 'execution_machine_missing')
+    ? daemon : projected;
+}
+
 function projectPathFact(
   path: VoiceLocalProviderModeAvailability['paths'][keyof VoiceLocalProviderModeAvailability['paths']],
 ): VoiceReadinessFact {

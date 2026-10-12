@@ -74,7 +74,6 @@ import {
   isVoiceProviderSettingsProjectionCurrent,
   projectVoiceProviderCredentialReadiness,
   projectVoiceProviderSettings,
-  type VoiceProviderCredentialReadinessProjection,
 } from '@/voice/registry/providerRegistry';
 import {
   projectSelectedUnavailableVoiceProvider,
@@ -86,19 +85,21 @@ import {
   type VoiceProviderCredentialSourceKind,
   resolveVoicePassiveSetupReadiness,
   resolveVoiceRoleReadiness,
-  type VoiceCredentialReadinessFact,
+  projectHostedModeAvailabilityReadiness,
+  resolveVoiceProviderCredentialFact,
   type VoiceRoleReadiness,
 } from '@/voice/registry/readiness';
+export { resolveVoiceProviderCredentialFact } from '@/voice/registry/readiness';
 import {
   resolveVoiceProviderAvailability,
   type ResolveVoiceProviderAvailabilityInput,
 } from '@/voice/settings/resolveVoiceProviderAvailability';
-import { projectLocalConversationReadinessFacts } from '@/voice/settings/projectLocalConversationReadinessFacts';
+import { projectLocalConversationReadinessFacts, projectLocalConversationProviderReadiness } from '@/voice/settings/projectLocalConversationReadinessFacts';
 import { getEnabledAgentIds } from '@/agents/catalog/enabled';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from '@/sync/store/settings/acpCatalogSnapshot';
-import { projectVoiceConfiguredAgentTarget } from '@/voice/agent/resolveVoiceConfiguredAgentTarget';
+import { projectVoiceConfiguredAgentTarget } from '@/voice/agent/projectVoiceConfiguredAgentTarget';
 import {
   projectVoiceProviderAgentRealtimePassiveSetup,
   readVoiceProviderConnectedServicesBinding,
@@ -244,52 +245,6 @@ function createVoiceProviderReadinessCheckKey(input: Readonly<{
     accountScope: input.accountScope,
     credentialAuthority: input.credentialAuthority,
   });
-}
-
-function projectHostedModeAvailabilityReadiness(input: Readonly<{
-  providerId: string;
-  role: VoiceRoleReadiness['role'];
-  modeId: string | null;
-  hostedEnabled: boolean;
-}>): VoiceRoleReadiness | null {
-  if (input.modeId !== 'happier' || input.hostedEnabled) return null;
-  return Object.freeze({
-    role: input.role,
-    providerId: input.providerId,
-    status: 'unavailable',
-    code: 'server_feature_disabled',
-    reasonKey: 'voice.readiness.server_feature_disabled',
-    recoveryAction: 'switch_provider',
-  });
-}
-
-export function resolveVoiceProviderCredentialFact(input: Readonly<{
-  sourceKind: 'built_in' | 'bundled' | 'external';
-  projectedCredential: Pick<VoiceProviderCredentialReadinessProjection, 'status'> | null;
-  hasAccountCredentialSlot: boolean;
-  hasAccountCredentialReference: boolean;
-  accountCredentialApprovalRequired?: boolean;
-}>): VoiceCredentialReadinessFact {
-  // The account-credential fallback is for an external row that produced *no*
-  // projection. An explicit `unknown` is a produced fact — the account-settings
-  // snapshot could not be read — and re-deriving it from the reference lookup
-  // turns "I could not check" into "add a credential" for a credential that may
-  // be stored and working.
-  const usesExternalAccountCredentialFallback = input.sourceKind === 'external'
-    && input.hasAccountCredentialSlot
-    && !input.projectedCredential;
-  if (input.sourceKind === 'external'
-    && input.accountCredentialApprovalRequired
-    && (input.projectedCredential?.status === 'missing' || usesExternalAccountCredentialFallback)) {
-    return 'approval_required';
-  }
-  if (input.projectedCredential) {
-    return input.projectedCredential.status;
-  }
-  if (input.sourceKind !== 'external') return 'unknown';
-  return input.hasAccountCredentialSlot
-    ? input.hasAccountCredentialReference ? 'ready' : 'missing'
-    : 'unknown';
 }
 
 /** Read-only projection until a returned user operation is invoked; the gallery and hub share it. */
@@ -544,14 +499,7 @@ export function useVoiceConversationsReadinessModel(props: {
       facts: readinessFacts,
     });
     const descriptorReadiness = row.providerId === 'local_conversation'
-      && localConversationReadinessFacts.daemonRouteReadiness
-      && (
-        localConversationReadinessFacts.daemonRouteReadiness.code === 'server_feature_disabled'
-        || localConversationReadinessFacts.daemonRouteReadiness.code === 'execution_machine_missing'
-        || localConversationReadinessFacts.daemonRouteReadiness.code === 'execution_machine_incompatible'
-        || projectedReadiness.code === 'execution_machine_missing'
-      )
-      ? localConversationReadinessFacts.daemonRouteReadiness
+      ? projectLocalConversationProviderReadiness(localConversationReadinessFacts, projectedReadiness)
       : projectedReadiness;
     const readiness = projectHostedModeAvailabilityReadiness({
       providerId: row.providerId,
@@ -1004,7 +952,7 @@ export function useVoiceConversationsReadinessModel(props: {
       return {
         id: shown.providerId,
         title: resolveServiceTitle(serviceRows),
-        subtitle: serviceRows.length > 1 ? undefined : tLoose(shown.subtitleKey),
+        subtitle: serviceRows.length > 1 || !shown.subtitleKey ? undefined : tLoose(shown.subtitleKey),
         mark: identity ? <VoiceServiceMark identity={identity} /> : undefined,
         badge: badgeKey ? tLoose(badgeKey) : undefined,
         status: ready
@@ -1106,7 +1054,7 @@ export function VoiceProviderSection(props: Parameters<typeof useVoiceConversati
             ? t('settingsVoice.pages.conversations.payWithHappierDescription')
             : row.optionId === 'byo'
               ? t('settingsVoice.pages.conversations.payWithOwnDescription')
-              : tLoose(row.subtitleKey),
+              : row.subtitleKey ? tLoose(row.subtitleKey) : undefined,
           // Why this way to pay cannot be chosen: the reason alone, never a run-on with its recovery action.
           ...(row.selectable ? {} : { unavailableReason: row.readiness.code === 'server_feature_disabled'
             ? t('settingsVoice.pages.conversations.happierBillingUnavailable')

@@ -11,7 +11,6 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import {
-  KOKORO_DEFAULT_TTS_PACK_ID,
   getModelPackCatalogEntry,
   isPublishedModelPackCatalogEntry,
 } from '@happier-dev/protocol/voice/modelPacks/catalog';
@@ -20,8 +19,7 @@ import { getKokoroAssetSetOptions } from '@/voice/kokoro/assets/kokoroAssetSets'
 import { resolveKokoroDaemonTtsPackId } from '@/voice/kokoro/assets/resolveKokoroDaemonTtsPackId';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { isKokoroRuntimeSupported } from '@/voice/kokoro/runtime/kokoroSupport';
-import { previewLocalNeuralTts } from './providers/localNeural/previewLocalNeuralTts';
-import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
+import { localNeuralTtsPreviewController, previewLocalNeuralTts } from './providers/localNeural/previewLocalNeuralTts';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
@@ -33,6 +31,7 @@ import { useLocalNeuralKokoroVoiceCatalog } from './useLocalNeuralKokoroVoiceCat
 import { useLocalNeuralModelPackState } from './useLocalNeuralModelPackState.native';
 import { resolveDaemonTtsVoiceSelection } from './resolveDaemonTtsVoiceSelection';
 import { LocalNeuralTtsSpeedItem } from './LocalNeuralTtsSpeedItem';
+import { resolveLocalNeuralTtsOptions } from '@/voice/local/localVoiceSettings';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useDaemonVoiceModelCatalogController } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
@@ -52,8 +51,8 @@ export function LocalNeuralTtsSettings(props: {
     requestedExecution: props.cfgKokoro.execution,
   }), [props.cfgKokoro.execution]);
 
-  const effectiveSpeed = props.cfgKokoro.speed ?? 1;
-  const effectiveAssetSetId = resolveKokoroDaemonTtsPackId(props.cfgKokoro.assetId ?? KOKORO_DEFAULT_TTS_PACK_ID);
+  const effectiveSpeed = resolveLocalNeuralTtsOptions(props.cfgKokoro).speed;
+  const effectiveAssetSetId = resolveKokoroDaemonTtsPackId(props.cfgKokoro.assetId);
   const usesDaemonExecution = executionPolicy.preferredExecution === 'daemon';
   const assetSets = getKokoroAssetSetOptions().filter((s) => s.id);
   const catalogEntry = getModelPackCatalogEntry(effectiveAssetSetId);
@@ -87,19 +86,25 @@ export function LocalNeuralTtsSettings(props: {
     ? daemonVoiceSelection.selectedVoiceId
     : props.cfgKokoro.voiceId ?? installSummary?.manifest?.defaultVoiceId ?? deviceVoices[0]?.id ?? null;
 
-  const previewController = React.useMemo(() => createVoicePlaybackController(), []);
-  const [previewingVoiceId, setPreviewingVoiceId] = React.useState<string | null>(null);
+  const previewingVoiceId = React.useSyncExternalStore(localNeuralTtsPreviewController.subscribe,
+    localNeuralTtsPreviewController.read, localNeuralTtsPreviewController.read);
+  const pickerPreview = React.useRef<ReturnType<typeof localNeuralTtsPreviewController.begin> | null>(null);
+
+  const retirePickerPreview = React.useCallback(() => {
+    pickerPreview.current?.finish();
+    pickerPreview.current = null;
+  }, []);
 
   const stopPreview = React.useCallback(() => {
-    previewController.interrupt();
-    setPreviewingVoiceId(null);
-  }, [previewController]);
+    localNeuralTtsPreviewController.stop();
+    pickerPreview.current = null;
+  }, []);
+  React.useEffect(() => retirePickerPreview, [retirePickerPreview]);
 
   React.useEffect(() => {
     if (openMenu === 'voiceId') return;
-    if (!previewingVoiceId) return;
-    stopPreview();
-  }, [openMenu, previewingVoiceId, stopPreview]);
+    retirePickerPreview();
+  }, [openMenu, retirePickerPreview]);
 
   const playPreview = React.useCallback(
     async (voiceId: string) => {
@@ -108,22 +113,25 @@ export function LocalNeuralTtsSettings(props: {
         return;
       }
 
-      stopPreview();
-      setPreviewingVoiceId(voiceId);
+      const attempt = localNeuralTtsPreviewController.begin(voiceId);
+      pickerPreview.current = attempt;
 
       try {
         await previewLocalNeuralTts({
           sample: t('settingsVoice.local.testTtsSample'),
-          config: { ...props.cfgKokoro, assetId: effectiveAssetSetId, voiceId, speed: effectiveSpeed },
+          config: { ...props.cfgKokoro, assetId: effectiveAssetSetId, voiceId },
           timeoutMs: Math.max(60000, props.networkTimeoutMs),
-          registerPlaybackStopper: previewController.registerStopper,
+          registerPlaybackStopper: attempt.registerPlaybackStopper,
+          isCurrent: attempt.isCurrent,
         });
-        setPreviewingVoiceId(null);
       } catch {
-        setPreviewingVoiceId(null);
+        // The picker keeps sample failures local; custody is retired below.
+      } finally {
+        attempt.finish();
+        if (pickerPreview.current === attempt) pickerPreview.current = null;
       }
     },
-    [effectiveAssetSetId, effectiveSpeed, previewController.registerStopper, previewingVoiceId, props.cfgKokoro, props.networkTimeoutMs, stopPreview],
+    [effectiveAssetSetId, previewingVoiceId, props.cfgKokoro, props.networkTimeoutMs, stopPreview],
   );
 
   const buildLabel = formatModelPackBuildLabel((installSummary as any)?.manifest);
@@ -205,7 +213,7 @@ export function LocalNeuralTtsSettings(props: {
         onSelect={(id) => {
           props.setKokoro({ ...props.cfgKokoro, assetId: id || null });
           setOpenMenu(null);
-          stopPreview();
+          retirePickerPreview();
         }}
       />
       </SettingAnchor>

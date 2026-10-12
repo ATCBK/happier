@@ -14,13 +14,8 @@ export function useVoiceSetupDismissed(): boolean {
     return useHomeSetupDismissals().hidden.has(VOICE_SETUP_STEP_ID);
 }
 
-/** Home and settings share facts and dismissal; the surface supplies its real tile and steps panel. */
-export function useVoiceSetupItem(input: Omit<VoiceSetupInput, 'messages'> & Readonly<{
-    conversationSessionAddress: SessionAddress | null;
-    renderTile?: (controls: Parameters<SetupBlockItem['renderTile']>[0] & SetupRendererFacts) => React.ReactNode;
-    renderPanel?: (controls: Readonly<{ close: () => void }> & SetupRendererFacts) => React.ReactNode;
-}>) {
-    const address = input.conversationSessionAddress;
+/** Passive exact-conversation read shared by historical setup facts and current-turn observation. */
+export function useVoiceSetupConversationMessages(address: SessionAddress | null) {
     // Only the bound conversation's slice can trigger this consumer. Reading has no hydration/RPC effects.
     const slice = storage((state) => address ? state.sessionMessages[address.sessionId] : undefined);
     const session = storage((state) => address ? state.sessions[address.sessionId] : undefined);
@@ -28,6 +23,17 @@ export function useVoiceSetupItem(input: Omit<VoiceSetupInput, 'messages'> & Rea
         sessions: address && session ? { [address.sessionId]: session } : {},
         sessionMessages: address && slice ? { [address.sessionId]: slice } : {},
     }, address), [address?.serverId, address?.sessionId, session, slice]);
+    const sessionSeq = session?.serverId === address?.serverId && typeof session?.seq === 'number' ? session.seq : null;
+    return React.useMemo(() => ({ messages, sessionSeq }), [messages, sessionSeq]);
+}
+
+/** Home and settings share facts and dismissal; the surface supplies its real tile and steps panel. */
+export function useVoiceSetupItem(input: Omit<VoiceSetupInput, 'messages'> & Readonly<{
+    conversationSessionAddress: SessionAddress | null;
+    renderTile?: (controls: Parameters<SetupBlockItem['renderTile']>[0] & SetupRendererFacts) => React.ReactNode;
+    renderPanel?: (controls: Readonly<{ close: () => void }> & SetupRendererFacts) => React.ReactNode;
+}>) {
+    const { messages } = useVoiceSetupConversationMessages(input.conversationSessionAddress);
     const facts = React.useMemo(() => deriveVoiceSetupFacts({
         providerId: input.providerId, readiness: input.readiness, microphonePermission: input.microphonePermission, messages,
     }), [input.providerId, input.readiness, input.microphonePermission, messages]);

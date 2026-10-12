@@ -99,6 +99,7 @@ export const VOICE_CONVERSATIONS_SETTINGS = defineSettingsPage({
                 ttsRemoveModel: {  operation: voiceSettingsOperation('tts_remove') },
                 ttsUpdateModel: { host: settingsHosts.native, operation: voiceSettingsOperation('tts_update') },
                 ttsPreview: { host: settingsHosts.native, operation: voiceSettingsOperation('tts_preview') },
+                ttsPreviewStop: { host: settingsHosts.native, operation: voiceSettingsOperation('tts_preview_stop') },
                 testTts: {   operation: voiceSettingsOperation('tts_test') },
                 readiness: {  operation: voiceSettingsOperation('readiness_inspect') },
                 agentSource: { storage: voiceLocalConversationBinding('agent.agentSource') },
@@ -176,6 +177,7 @@ export const VOICE_PRIVACY_SETTINGS = defineSettingsPage({
             titleKey: 'settingsVoice.history.sectionTitle',
             settings: {
                 voiceHistory: {},
+                privacyPolicy: { operation: voiceSettingsOperation('privacy_policy_open') },
             },
         },
         diagnostics: {

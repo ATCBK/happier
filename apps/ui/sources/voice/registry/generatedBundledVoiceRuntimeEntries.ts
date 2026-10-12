@@ -116,6 +116,11 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               }
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported"
+          },
           "structuredOutput": {
             "formats": [
               "json"
@@ -447,6 +452,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           "defaultModeId": "oauth",
           "modes": [
             {
+              "callbackUrl": "http://localhost:1455/auth/callback",
               "id": "oauth",
               "kind": "oauthAuthorizationCode",
               "outcomeReconciliation": "none",
@@ -468,6 +474,36 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
                 "email",
                 "offline_access"
               ]
+            },
+            {
+              "fields": [
+                {
+                  "default": "native",
+                  "description": "Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it.",
+                  "id": "source",
+                  "presentation": {
+                    "control": "select",
+                    "options": [
+                      {
+                        "title": "Codex login",
+                        "value": "native"
+                      }
+                    ]
+                  },
+                  "schema": {
+                    "enum": [
+                      "native"
+                    ],
+                    "type": "string"
+                  },
+                  "secret": false,
+                  "title": "Source"
+                }
+              ],
+              "id": "native-import",
+              "kind": "manual",
+              "outcomeReconciliation": "none",
+              "title": "Import native login"
             }
           ]
         },
@@ -547,6 +583,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       "discoverySources": [
         {
           "id": "config",
+          "loadedInHappierSessions": false,
           "metadata": {
             "agentId": "codex"
           },
@@ -732,7 +769,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
           "messages": {
             "agentInput.connectedServiceLabel.codex": "OpenAI Codex",
             "settingsVoice.mode.codexRealtime": "Codex Live",
-            "settingsVoice.mode.codexRealtimeSubtitle": "Parlez directement avec la session active de l’agent Codex."
+            "settingsVoice.mode.codexRealtimeSubtitle": "Parle directement avec la session active de l’agent Codex."
           }
         },
         {
@@ -969,6 +1006,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 
 const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -1005,7 +1046,14 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
@@ -1109,18 +1157,18 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         {
           "locale": "fr",
           "messages": {
-            "settingsVoice.realtimeProviders.elevenLabs.accountFooter": "Après un changement de voix, mettez à jour votre agent pour qu’ElevenLabs l’utilise.",
-            "settingsVoice.realtimeProviders.elevenLabs.agentConfigured": "Identifiant enregistré. Mettez à jour après un changement de voix.",
-            "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Renseigné lorsque Happier crée votre agent.",
-            "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Créez un agent ou saisissez son identifiant ci-dessus.",
+            "settingsVoice.realtimeProviders.elevenLabs.accountFooter": "Après un changement de voix, mets à jour ton agent pour qu’ElevenLabs l’utilise.",
+            "settingsVoice.realtimeProviders.elevenLabs.agentConfigured": "Identifiant enregistré. Mets à jour après un changement de voix.",
+            "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Renseigné lorsque Happier crée ton agent.",
+            "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crée un agent ou saisis son identifiant ci-dessus.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent vocal Happier",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Compte",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversation",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voix",
             "settingsVoice.realtimeProviders.elevenLabs.manageApiKeys": "Gérer les clés API",
             "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Le modèle vocal ElevenLabs qui parle. Le modèle par défaut convient à la plupart des voix.",
-            "settingsVoice.realtimeProviders.elevenLabs.openAccount": "Ouvrir votre compte ElevenLabs",
-            "settingsVoice.realtimeProviders.elevenLabs.privacyDisclosure": "L’audio et le contenu de la conversation sont envoyés depuis cet appareil à ElevenLabs via la connexion cliente d’ElevenLabs. Selon la configuration choisie, Happier peut également envoyer à ElevenLabs des instructions d’agent limitées, des définitions et résultats d’outils côté client, ainsi que les demandes d’authentification ou de provisionnement nécessaires à cette fonctionnalité. Le serveur Happier peut participer à l’authentification hébergée et à la comptabilisation de l’utilisation, mais ni le serveur Happier ni le relais ne transportent l’audio de la conversation en direct. ElevenLabs peut traiter et conserver les données reçues selon les paramètres et les conditions de votre compte ElevenLabs. Les contrôles de partage du contexte vocal sont distincts du traitement par ce fournisseur.",
+            "settingsVoice.realtimeProviders.elevenLabs.openAccount": "Ouvrir ton compte ElevenLabs",
+            "settingsVoice.realtimeProviders.elevenLabs.privacyDisclosure": "L’audio et le contenu de la conversation sont envoyés depuis cet appareil à ElevenLabs via la connexion cliente d’ElevenLabs. Selon la configuration choisie, Happier peut également envoyer à ElevenLabs des instructions d’agent limitées, des définitions et résultats d’outils côté client, ainsi que les demandes d’authentification ou de provisionnement nécessaires à cette fonctionnalité. Le serveur Happier peut participer à l’authentification hébergée et à la comptabilisation de l’utilisation, mais ni le serveur Happier ni le relais ne transportent l’audio de la conversation en direct. ElevenLabs peut traiter et conserver les données reçues selon les paramètres et les conditions de ton compte ElevenLabs. Les contrôles de partage du contexte vocal sont distincts du traitement par ce fournisseur.",
             "settingsVoice.realtimeProviders.elevenLabs.resourcesTitle": "ElevenLabs",
             "settingsVoice.realtimeProviders.elevenLabs.similarityDescription": "Sa ressemblance avec la voix d’origine.",
             "settingsVoice.realtimeProviders.elevenLabs.speedDescription": "La vitesse à laquelle la voix parle.",
@@ -2445,6 +2493,10 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 
 const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -2510,7 +2562,14 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
@@ -3013,6 +3072,10 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 
 const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -3049,7 +3112,14 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],

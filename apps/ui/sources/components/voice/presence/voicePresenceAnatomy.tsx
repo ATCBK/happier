@@ -40,7 +40,8 @@ export function VoiceIslandAnatomy(props: Readonly<{
     width: number; height: number; testID?: string;
     mark: React.ReactNode; body: React.ReactNode; transport: React.ReactNode;
 }>) {
-    const markTarget = resolveMinimumInteractiveTargetSize(Platform.OS);
+    // The mark's slot, like the live island's: never smaller than the drawn mark.
+    const markTarget = Math.max(40, resolveMinimumInteractiveTargetSize(Platform.OS));
     return <GlassPanel testID={props.testID} radius={props.height / 2} shadowLevel={3}
         frameStyle={{ width: props.width, height: props.height }} style={styles.capsule}>
         <View style={[styles.islandMark, { width: markTarget, height: markTarget }]}>{props.mark}</View>

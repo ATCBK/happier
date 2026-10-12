@@ -977,7 +977,13 @@ describe('external Voice provider activation', () => {
     expect(descriptor.projectSettings?.({
       schemaVersion: 1,
       config: { voice: 'bright', expressive: true, apiKey: 'must-not-pass' },
-    })).toEqual({ status: 'invalid', modeId: null });
+    })).toEqual({ status: 'ready', modeId: 'default' });
+    expect(descriptor.providerSettings?.parseStoredConfig({
+      voice: 'bright', expressive: true, apiKey: 'must-not-pass',
+    })).toEqual({ voice: 'bright', expressive: true });
+    expect(descriptor.providerSettings?.parseConfig({
+      voice: 'bright', expressive: true, apiKey: 'must-not-pass',
+    })).toBeNull();
     expect(descriptor.projectSettings?.({
       schemaVersion: 2,
       config: { voice: 'bright', expressive: true },
@@ -1003,6 +1009,28 @@ describe('external Voice provider activation', () => {
       schemaVersion: 1,
       config: { voice: 'calm', expressive: false },
     });
+  });
+
+  it('names an external conversation service by its declared title and never shows its plugin id as a description', async () => {
+    const hostLease = createBundledConversationRuntimeHostLease();
+    const scope = createExternalVoiceProviderActivationScope({
+      pluginId: identity.pluginId,
+      occurrenceId: 'acme-synthetic-voice-presentation-occurrence',
+      declarations: [declaration],
+      hostPlatform: 'web',
+    });
+    onTestFinished(async () => {
+      await scope.unwind();
+      hostLease.revoke();
+    });
+    scope.api.voiceProviders.register(declaration.id, createProviderLeaf());
+    await scope.commit();
+
+    const descriptor = createDefaultVoiceProviderRegistry().get(`${identity.pluginId}/${declaration.id}`)!;
+    const option = descriptor.selectionOptions?.[0];
+    expect(option?.titleKey).toBe('Synthetic Conversation');
+    // The contribution declares no description; the gallery shows the title and readiness rather than an identifier.
+    expect(option?.subtitleKey).toBeUndefined();
   });
 
   it('answers declared settings readiness identically for bundled and external descriptors', async () => {
@@ -1411,8 +1439,10 @@ describe('external Voice provider activation', () => {
       status: 'ready', modeId: 'default',
     });
     expect(descriptor.projectSettings?.({ schemaVersion: 1, config: { extra: true } })).toEqual({
-      status: 'invalid', modeId: null,
+      status: 'ready', modeId: 'default',
     });
+    expect(descriptor.providerSettings?.parseStoredConfig({ extra: true })).toEqual({});
+    expect(descriptor.providerSettings?.parseConfig({ extra: true })).toBeNull();
     expect(resolveVoiceAdapterSurfaceCapabilities(providerId, {
       providerId: null,
       providers: { [providerId]: { schemaVersion: 1, config: {} } },
@@ -1428,7 +1458,10 @@ describe('external Voice provider activation', () => {
     expect(resolveVoiceAdapterSurfaceCapabilities(providerId, {
       providerId,
       providers: { [providerId]: { schemaVersion: 1, config: { extra: true } } },
-    })).toBeNull();
+    })).toEqual(resolveVoiceAdapterSurfaceCapabilities(providerId, {
+      providerId,
+      providers: { [providerId]: { schemaVersion: 1, config: {} } },
+    }));
     await expect(getVoiceAdapterRegistry().get(providerId)?.performRuntimeAction?.('forget_provider_conversation'))
       .resolves.toEqual({ status: 'completed' });
     expect(forgetProviderConversation).toHaveBeenCalledTimes(1);

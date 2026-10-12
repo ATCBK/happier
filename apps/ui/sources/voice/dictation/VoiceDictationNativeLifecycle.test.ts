@@ -39,7 +39,9 @@ vi.mock('react-native', async () => {
     });
 });
 
-vi.mock('@/utils/platform/microphonePermissions', () => ({
+// The platform prompt and alert are the boundary; the refusal decision stays real.
+vi.mock('@/utils/platform/microphonePermissions', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/platform/microphonePermissions')>(),
     requestMicrophonePermission: vi.fn(async () => ({
         granted: true,
         canAskAgain: true,

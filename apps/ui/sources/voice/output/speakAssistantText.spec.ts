@@ -543,7 +543,8 @@ describe('speakAssistantText', () => {
 
   it.each([
     { provider: 'device', metadataAvailable: true, reason: 'voice_preference_unavailable' },
-    { provider: 'local_neural', metadataAvailable: true, reason: 'voice_preference_unavailable' },
+    // Neural speech declares voice selection; the bound Google voice belongs to another provider.
+    { provider: 'local_neural', metadataAvailable: true, reason: 'provider_mismatch' },
     { provider: 'device', metadataAvailable: false, reason: 'session_metadata_unavailable' },
   ])('refuses unsupported bound speech on $provider instead of playing an inherited default', async (selection) => {
     const originalSessions = storage.getState().sessions;

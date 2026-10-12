@@ -20,6 +20,9 @@ import type { VoiceAttemptIdleTarget } from './useVoiceAttemptControl';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Text } from '@/components/ui/text/Text';
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 // Only native crypto adapters are replaced; the isolated dismissal case below
 // uses the real Account, Home Artifact, Action, store and admission owners.
@@ -533,8 +536,8 @@ describe('useVoiceAttemptControl availability ladder', () => {
         // Not 'unavailable': the orb must not vanish on a problem the user can fix.
         expect(control.availability).toBe('recoverable');
         expect(control.primaryAction).toBe('recover');
-        expect(control.primaryActionLabel).toBe(t('modals.openSettings'));
-        expect(control.captionLabel).toBe(t('modals.openSettings'));
+        expect(control.primaryActionLabel).toBe(t('voicePresence.recovery.setUp'));
+        expect(control.recoveryIcon).toBe('gear');
 
         await hook.unmount();
     });
@@ -979,9 +982,9 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         expect(hook.getCurrent().captionLabel).toBe(t('voicePresence.captions.blocked'));
         expect(hook.getCurrent().micStateLabel).toBe(hook.getCurrent().statusLabel);
         expect(hook.getCurrent().surfaceState).toBe('permission_required');
-        // The transport's visible verb is the short one; the full label stays the accessible name.
-        expect(hook.getCurrent().recoveryShortLabel).toBe(t('voicePresence.recovery.allow'));
-        expect(hook.getCurrent().recoveryLabel).toBe(t('modals.openSettings'));
+        // One recovery label for the same action in every placement, drawn and announced alike (R12b).
+        expect(hook.getCurrent().recoveryLabel).toBe(t('voicePresence.recovery.allow'));
+        expect(hook.getCurrent().recoveryIcon).toBe('microphone');
         await hook.unmount();
     });
 
@@ -997,8 +1000,26 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
 
         expect(hook.getCurrent().surfaceState).toBe('error');
         expect(hook.getCurrent().captionLabel).toBe(t('voice.readiness.settings_missing_required_setting', { service: hook.getCurrent().serviceTitle ?? t('voicePresence.title') }));
-        expect(hook.getCurrent().recoveryLabel).toBe(t('modals.openSettings'));
-        expect(hook.getCurrent().recoveryShortLabel).toBe(t('voicePresence.recovery.setUp'));
+        expect(hook.getCurrent().recoveryLabel).toBe(t('voicePresence.recovery.setUp'));
+        expect(hook.getCurrent().recoveryIcon).toBe('gear');
+        await hook.unmount();
+    });
+
+    it('keeps speech unavailability visible with settings recovery and Dismiss', async () => {
+        const hook = await renderControl({
+            adapterId: 'local_direct', sessionId: 'control-1', status: 'error', mode: 'idle',
+            canStop: false,
+            errorCode: 'speech_recognition_unavailable', errorPresentation: 'error',
+            errorRecoveryAction: 'select_speech_engine',
+        });
+        expect(hook.getCurrent()).toMatchObject({
+            surfaceState: 'error',
+            captionLabel: t('settingsVoice.local.machineErrors.speech_recognition_unavailable'),
+            recoveryAvailable: true,
+            recoveryLabel: t('voicePresence.recovery.setUp'),
+            recoveryIcon: 'gear',
+            canDismissFailedAttempt: true,
+        });
         await hook.unmount();
     });
 
@@ -1450,6 +1471,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
             expect(hook.getCurrent().recoveryAvailable).toBe(true);
         });
         expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
+        expect(hook.getCurrent().recoveryIcon).toBe('arrow-clockwise');
 
         await act(async () => {
             hook.getCurrent().onRecover();

@@ -50,10 +50,12 @@ export const VoiceOrb = React.memo(function VoiceOrb(props: Readonly<{
     const showOptions = voice.live || Boolean(voice.ended);
     const width = resolveVoiceOrbContainerWidth(Platform.OS, showOptions);
     const captionInset = (width - VOICE_ORB_BODY_SIZE) / 2 + VOICE_ORB_BODY_SIZE + VOICE_ORB_OPTIONS_GAP;
+    // Each side releases the other edge explicitly: on web the first side's offsets become the
+    // slot's static class, and an unset edge would keep it (both edges pinned, the left one wins).
     const captionSide = useAnimatedStyle(() => (
         translateX.get() + VOICE_ORB_BODY_SIZE / 2 > hostWidth / 2
-            ? { right: captionInset, left: undefined, justifyContent: 'flex-end' as const }
-            : { left: captionInset, right: undefined, justifyContent: 'flex-start' as const }
+            ? { right: captionInset, left: 'auto' as const, justifyContent: 'flex-end' as const }
+            : { left: captionInset, right: 'auto' as const, justifyContent: 'flex-start' as const }
     ));
 
     const onPress = React.useCallback(() => {

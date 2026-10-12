@@ -6,6 +6,7 @@ import {
 
 import {
     isPermissionDeniedMicrophoneError,
+    rejectRefusedMicrophone,
     requestMicrophonePermission,
     showMicrophonePermissionDeniedAlert,
 } from '@/utils/platform/microphonePermissions';
@@ -220,11 +221,7 @@ export function createExpoAudioRecordingMicSession(
 
     return {
         ensureActive: async () => {
-            const permission = await requestPermission();
-            if (!permission.granted) {
-                showPermissionDenied(permission.canAskAgain === true);
-                throw new Error('mic_permission_denied');
-            }
+            rejectRefusedMicrophone(await requestPermission(), showPermissionDenied);
         },
         setMuted: (nextMuted) => {
             if (muted === nextMuted) {
@@ -267,10 +264,7 @@ export function createExpoAudioRecordingMicSession(
                 if (signal?.aborted) {
                     return;
                 }
-                if (!permission.granted) {
-                    showPermissionDenied(permission.canAskAgain === true);
-                    throw new Error('mic_permission_denied');
-                }
+                rejectRefusedMicrophone(permission, showPermissionDenied);
             }
             const nextAudioModeLease = await acquireAudioMode();
             if (signal?.aborted) {

@@ -1,3 +1,6 @@
+import type { File as ExpoFile } from 'expo-file-system';
+import type { NativeModelPackDownload } from './nativeDownload';
+
 export type InstallMode = 'require_installed' | 'download_if_missing';
 export type UpdatePolicy = 'none' | 'manual_update_if_available';
 
@@ -13,6 +16,7 @@ export type ExpoFsFile = {
   /** Byte size of the file (0 when absent), used for resume offsets without reading bytes. */
   readonly size?: number;
   bytes: () => Promise<Uint8Array>;
+  open: () => Pick<ReturnType<ExpoFile['open']>, 'readBytes' | 'close'>;
   text: () => Promise<string>;
   /** Write content; `{ append: true }` appends without rewriting the whole file. */
   write: (content: string | Uint8Array, options?: { append?: boolean }) => void;
@@ -43,6 +47,8 @@ export type InstallerFs = {
 export type InstallerOverrides = {
   fs?: InstallerFs;
   fetch?: typeof fetch;
+  /** Native artifact network/file boundary; fetch is used only for manifests. */
+  download?: NativeModelPackDownload;
   /**
    * Invalidate runtime state derived from the live pack directory, awaited
    * before the bytes at that directory are replaced or deleted. Native voice

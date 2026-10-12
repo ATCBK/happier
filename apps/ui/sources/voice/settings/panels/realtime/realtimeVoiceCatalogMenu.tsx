@@ -119,7 +119,7 @@ export function useRealtimeCatalogMenuItems(
             const preview = row.previewUrl || canPreview ? (
               <IconButton
                 variant="plain"
-                size={PREVIEW_TARGET_SIZE}
+                minimumInteractiveTargetSize={PREVIEW_TARGET_SIZE}
                 accessibilityLabel={t(
                   'settingsVoice.realtimeProviders.catalog.preview',
                   { voice: row.name },

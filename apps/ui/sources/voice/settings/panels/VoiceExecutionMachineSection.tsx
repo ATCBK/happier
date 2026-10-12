@@ -10,7 +10,8 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import {
   voiceSettingsParse,
   type VoiceSettings,
@@ -19,7 +20,6 @@ import { useSettingsSelector } from '@/sync/domains/state/storage';
 import { useAllMachines } from '@/sync/store/hooks';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
-import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { t } from '@/text';
 import { resolveAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
@@ -32,6 +32,7 @@ import {
 } from '@/voice/registry/readiness';
 import { resolveStoredVoiceProviderId } from '@/voice/settings/resolveVoiceProviderId';
 import { applyVoiceExecutionMachineChoice } from '@/voice/settings/executionMachineChoice';
+import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
 import { SettingAnchor, useSettingRevealRequested } from '@/components/settings/shell/SettingRow';
 import { VOICE_ADVANCED_SETTINGS, VOICE_CONVERSATIONS_SETTINGS, VOICE_DICTATION_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 
@@ -53,10 +54,11 @@ export function VoiceExecutionMachineSection(props: Readonly<{
       secrets: settings.secrets,
   }));
   const settingsScope = useAccountSettingsScope();
+  useMachineReachabilityRevision();
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);
-  const rememberedAutoMachineId = useVoiceTargetStore((state) => settingsScope
-    ? state.autoTargetMachineByScope[accountSettingsScopeKeySuffix(settingsScope)]
-    : undefined);
+  // The one machine projection the runtime uses: Automatic names the machine it would use now,
+  // whether a conversation has already remembered it or it is the first online candidate.
+  const executionMachinePresentation = useVoiceExecutionMachinePresentation();
   const [open, setOpen] = React.useState(false);
   const setting = props.intent === 'advanced'
     ? VOICE_ADVANCED_SETTINGS.settings.executionMachine : props.intent === 'dictation'
@@ -135,7 +137,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
     ? String(voice.executionMachine.machineId ?? '').trim()
     : '';
   const stickyAutoMachineId = voice.executionMachine.mode === 'auto'
-    ? String(rememberedAutoMachineId ?? '').trim()
+    ? String(executionMachinePresentation.selectedMachineId ?? '').trim()
     : '';
   const selectedId = fixedMachineId || 'auto';
   const selectedItem = items.find((item) => item.id === selectedId) ?? null;
@@ -168,7 +170,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
           label: t('settingsVoice.pages.conversations.runsOn'),
           valueLabel,
           icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
-          ...(shownMachine ? { presence: isMachineOnline(shownMachine) ? 'online' as const : 'offline' as const } : {}),
+          ...(shownMachine ? { presence: isMachineReachable(settingsScope, shownMachine) ? 'online' as const : 'offline' as const } : {}),
           options: items.map((item) => ({ id: item.id, label: item.title, subtitle: item.subtitle, icon: item.icon })),
           selectedId,
           onChange: selectMachine,

@@ -55,6 +55,9 @@ import {
   getExternalVoiceProviderRegistration,
   getExternalVoiceProviderProjectionAuthority,
 } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+
+const registry = createDefaultVoiceProviderRegistry();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -342,11 +345,7 @@ function BundledSpeechSettings(props: Readonly<{
                     const registration = getExternalVoiceProviderRegistration(captured.entry.providerId);
                     const projection = getExternalVoiceProviderProjectionAuthority();
                     const occurrenceId = projection?.get(captured.entry.providerId);
-                    const admitted = registration
-                      ? (registration.descriptor === captured.entry
-                        || (registration.descriptor === null && captured.entry.source.kind === 'bundled'))
-                        && (projection === null || (!!occurrenceId && registration.occurrenceId === occurrenceId))
-                      : captured.entry.source.kind === 'bundled' && projection === null;
+                    const admitted = registry.get(captured.entry.providerId) === captured.entry;
                     fireAndForget((async () => {
                       const { storage } = await import('@/sync/domains/state/storage');
                       const { areAccountSettingsScopesEqual } = await import('@/sync/domains/settings/scope/accountSettingsScope');
@@ -354,6 +353,7 @@ function BundledSpeechSettings(props: Readonly<{
                       const isCurrent = () => {
                         const currentProjection = getExternalVoiceProviderProjectionAuthority();
                         return admitted && endpointMountedRef.current
+                          && registry.get(captured.entry.providerId) === captured.entry
                           && endpointSettingsRef.current.entry === captured.entry
                           && endpointSettingsRef.current.descriptor === captured.descriptor
                           && getExternalVoiceProviderRegistration(captured.entry.providerId) === registration

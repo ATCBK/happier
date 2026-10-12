@@ -1,5 +1,6 @@
 import {
   isPermissionDeniedMicrophoneError,
+  rejectRefusedMicrophone,
   requestMicrophonePermission,
   showMicrophonePermissionDeniedAlert,
 } from '@/utils/platform/microphonePermissions';
@@ -85,6 +86,18 @@ function safelyNotifyObserver(notify: () => void): void {
   } catch {
     // Observers cannot take ownership of provider state or resource cleanup.
   }
+}
+
+/**
+ * Refusal stays visible. A browser recognizer can fail to use input the shared mic already
+ * acquired; that is speech-engine unavailability. Native provider-managed capture has no
+ * host-acquired input, so its audio-capture failure still names a missing microphone.
+ */
+function resolveRecognizerErrorKind(reason: string, inputAcquired: boolean): 'mic_permission_denied' | 'mic_unavailable' | 'speech_recognition_unavailable' | 'provider_error' {
+  if (reason === 'not-allowed') return 'mic_permission_denied';
+  if (reason === 'service-not-allowed') return 'speech_recognition_unavailable';
+  if (reason === 'audio-capture') return inputAcquired ? 'speech_recognition_unavailable' : 'mic_unavailable';
+  return 'provider_error';
 }
 
 function isEmptyRecognitionTerminalReason(reason: string): boolean {
@@ -321,7 +334,7 @@ export function createDeviceSttController(deps: CreateDeviceSttControllerDeps): 
 
     if (readDeviceSpeechRecognitionAvailability(ExpoSpeechRecognitionModule) !== 'available') {
       const unavailableError = createVoiceMachineError({
-        kind: 'provider_error',
+        kind: 'speech_recognition_unavailable',
         reason: 'device_stt_unavailable',
       });
       completedResult = { error: unavailableError };
@@ -334,11 +347,7 @@ export function createDeviceSttController(deps: CreateDeviceSttControllerDeps): 
       recordSetupCancellation();
       return;
     }
-    const microphonePermission = microphonePermissionStage.value;
-    if (!microphonePermission.granted) {
-      presentPermissionDenied(microphonePermission.canAskAgain);
-      throw new Error('mic_permission_denied');
-    }
+    rejectRefusedMicrophone(microphonePermissionStage.value, presentPermissionDenied);
 
     // `expo-speech-recognition` logs noisy "not supported on web" warnings for this call.
     // Prefer DOM detection over Platform.OS so web builds remain resilient even if Platform.OS is surprising.
@@ -649,7 +658,10 @@ export function createDeviceSttController(deps: CreateDeviceSttControllerDeps): 
         const reason = normalizeNonEmptyString(event?.error) ?? 'device_stt_error';
         resolveSpeechCandidateFalseAlarm();
         const finalText = committedTranscript();
-        const providerError = createVoiceMachineError({ kind: 'provider_error', reason });
+        const providerError = createVoiceMachineError({
+          kind: resolveRecognizerErrorKind(reason, !usesProviderManagedNativeCapture),
+          reason,
+        });
         // A no-speech/speech-timeout event is only a benign empty result when
         // the product already asked the recognizer to stop. When the provider
         // terminates an otherwise active capture on its own, the Voice owner

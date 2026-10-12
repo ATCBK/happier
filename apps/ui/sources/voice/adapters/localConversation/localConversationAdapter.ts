@@ -1,8 +1,7 @@
 import { createLocalVoiceAdapter } from '@/voice/adapters/local/createLocalVoiceAdapter';
 import { resolveLocalConversationTranscriptMode } from './resolveLocalConversationTranscriptMode';
 import type { VoiceAdapterController } from '@/voice/session/types';
-import { readLocalConversationVoiceSettings, voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { VoiceLocalConversationSchema } from './settings';
+import { readLocalConversationVoiceSettings, readVoiceProviderSettingsConfig, voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { resolveActiveLocalVoiceAgentBinding } from '@/voice/context/resolveActiveLocalVoiceAgentBinding';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
@@ -10,10 +9,8 @@ import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolP
 function readConfig(voiceSettings: unknown) {
   const parsedVoice = voiceSettingsParse(voiceSettings);
   const envelope = parsedVoice.providers.local_conversation;
-  const configResult = envelope?.schemaVersion === 1
-    ? VoiceLocalConversationSchema.safeParse(envelope.config)
-    : null;
-  if (!configResult?.success) return null;
+  if (envelope?.schemaVersion !== 1
+    || readVoiceProviderSettingsConfig(parsedVoice, 'local_conversation') === null) return null;
   return readLocalConversationVoiceSettings(parsedVoice);
 }
 

@@ -70,6 +70,14 @@ function status(
     };
 }
 
+function modelRows(tree: ReactTestRenderer) {
+    return tree.root.findAll(
+        (node) => typeof node.props?.testID === 'string'
+            && node.props.testID.startsWith('voice-model-row-')
+            && typeof node.type !== 'string',
+    );
+}
+
 describe('DaemonVoiceModelCatalogSection', () => {
     let confirmSpy: MockInstance<typeof Modal.confirm>;
 
@@ -97,9 +105,11 @@ describe('DaemonVoiceModelCatalogSection', () => {
         };
 
         const tree = await renderSection(client);
-        // The status row should surface the loading state while the RPC is pending.
+        // One line says the catalog is being checked; no model is listed with an unknown state.
         const status = tree.root.findByProps({ testID: 'voice-model-catalog-status' });
-        expect(status.props.detail).toBe('Loading…');
+        expect(status.props.kind).toBe('loading');
+        expect(status.props.title).toBe('Checking the speech models on your Voice machine…');
+        expect(modelRows(tree)).toHaveLength(0);
 
         await act(async () => {
             resolveStatus([]);
@@ -107,10 +117,16 @@ describe('DaemonVoiceModelCatalogSection', () => {
         });
     });
 
-    it('surfaces a daemon error and renders rows as uninstallable when status fails', async () => {
+    it.each([
+        ['machine_unreachable', 'Can’t reach your Voice machine right now.', true],
+        ['feature_disabled', 'Speech models are turned off on this server.', false],
+        ['runtime_unavailable', 'Your Voice machine can’t run speech models.', false],
+        ['request_timeout', 'Your Voice machine didn’t answer in time.', true],
+        ['internal_error', 'Speech models couldn’t be loaded.', true],
+    ] as const)('says once why the catalog is unavailable (%s) instead of an unknown state on every model', async (code, message, retryable) => {
         const installModel = vi.fn(async () => undefined as never);
         const getModelsStatus = vi.fn(async () => {
-            throw Object.assign(new Error('down'), { code: 'machine_unreachable' });
+            throw Object.assign(new Error('down'), { code });
         });
         const client: Client = {
             getModelsStatus,
@@ -124,21 +140,20 @@ describe('DaemonVoiceModelCatalogSection', () => {
         });
 
         const status = tree.root.findByProps({ testID: 'voice-model-catalog-status' });
-        expect(status.props.detail).toBe('Voice-home daemon unavailable.');
-        expect(status.props.destructive).toBe(true);
-
-        // With the daemon health unknown, every model row is inert: it exposes
-        // no press handler at all, so a tap cannot fire an install/remove
-        // against the unreachable daemon.
-        const rows = tree.root.findAll(
-            (node) => typeof node.props?.testID === 'string'
-                && node.props.testID.startsWith('voice-model-row-'),
-        );
-        expect(rows.length).toBeGreaterThan(0);
-        for (const row of rows) {
-            expect(row.props.onPress ?? row.props.onClick).toBeUndefined();
-        }
+        expect(status.props.title).toBe(message);
+        expect(status.props.kind).not.toBe('loading');
+        // No model can be installed or removed while its state is unknown, so none is listed.
+        expect(modelRows(tree)).toHaveLength(0);
         expect(installModel).not.toHaveBeenCalled();
+        if (!retryable) {
+            expect(status.props.action).toBeUndefined();
+            return;
+        }
+        const calls = getModelsStatus.mock.calls.length;
+        await act(async () => {
+            await status.props.action.onPress();
+        });
+        expect(getModelsStatus.mock.calls.length).toBeGreaterThan(calls);
     });
 
     it('can render from an already-created catalog controller without opening a second status request', async () => {
@@ -333,7 +348,9 @@ describe('DaemonVoiceModelCatalogSection', () => {
         expect(competingRow.props.onPress ?? competingRow.props.onClick).toBeUndefined();
         expect(competingRow.props.disabled).toBe(true);
         expect(competingRemove.props.disabled).toBe(true);
-        expect(competingRemove.props.accessibilityState).toEqual({ disabled: true });
+        const removeControl = competingRemove.findAll((node) => typeof node.type === 'string'
+            && (node.props.accessibilityRole === 'button' || node.props.role === 'button'))[0];
+        expect(removeControl?.props.accessibilityState?.disabled ?? removeControl?.props['aria-disabled']).toBe(true);
         await act(async () => { finishReview(false); });
         expect(removeModel).not.toHaveBeenCalled();
     });

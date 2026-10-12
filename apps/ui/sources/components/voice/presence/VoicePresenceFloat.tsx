@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { FrameRect } from '@happier-dev/plugin-ui/presentation';
+import { resolveFloatingFrameRect, type FrameRect } from '@happier-dev/plugin-ui/presentation';
 import { Platform, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
@@ -69,7 +69,6 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
     const [host, setHost] = React.useState({ w: 0, h: 0 });
     const [containerSize, setContainerSize] = React.useState<{ width: number; height: number } | null>(null);
     const [bottomDocked, setBottomDocked] = React.useState(true);
-    const [normalizedPosition, setNormalizedPosition] = React.useState<Readonly<{ x: number; y: number }> | null>(null);
     const passthrough = resolveOverlayPointerEvents(Platform.OS === 'web' ? 'none' : 'box-none');
     const interactionPadding = props.interactionPaddingHorizontal ?? 0;
     const interactive = resolveOverlayPointerEvents(interactionPadding > 0 ? 'box-none' : 'auto');
@@ -93,15 +92,9 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
     });
     const { minX, maxX, minY, maxY } = geometry.dragBounds;
     const bounds = React.useMemo(() => ({ minX, maxX, minY, maxY }), [maxX, maxY, minX, minY]);
-    const restX = normalizedPosition ? minX + normalizedPosition.x * (maxX - minX) : geometry.restingPoint.x;
-    const restY = normalizedPosition ? minY + normalizedPosition.y * (maxY - minY) : geometry.restingPoint.y;
+    const restX = geometry.restingPoint.x;
+    const restY = geometry.restingPoint.y;
     const initialPoint = React.useMemo(() => ({ x: restX, y: restY }), [restX, restY]);
-    React.useLayoutEffect(() => registerVoicePresencePosition((point) => {
-        if (host.w <= 0 || host.h <= 0 || !Number.isFinite(point.x) || !Number.isFinite(point.y)
-            || point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) return false;
-        setNormalizedPosition(current => current?.x === point.x && current.y === point.y ? current : point);
-        return true;
-    }), [host.h, host.w]);
     const onDragRelease = React.useCallback((release: VoicePresenceDragRelease) => {
         setBottomDocked(release.point.y === maxY);
         props.onRectChange?.({ ...release.point, width, height });
@@ -135,6 +128,17 @@ export const VoicePresenceFloat = React.memo(function VoicePresenceFloat(props: 
         containerSize: React.useMemo(() => ({ width, height }), [height, width]),
         avoidRects,
     });
+    React.useLayoutEffect(() => registerVoicePresencePosition((point) => {
+        if (host.w <= 0 || host.h <= 0 || !Number.isFinite(point.x) || !Number.isFinite(point.y)
+            || point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) return false;
+        const placement = resolveFloatingFrameRect({
+            rect: { x: minX + point.x * (maxX - minX), y: minY + point.y * (maxY - minY), width, height },
+            availableRect: geometry.availableRect, avoidRects,
+        });
+        if (!placement.fits) return false;
+        drag.moveTo(placement.rect);
+        return true;
+    }), [avoidRects, drag.moveTo, geometry.availableRect, height, host.h, host.w, maxX, maxY, minX, minY, width]);
     const gesture = React.useMemo(() => drag.gesture.enabled(Platform.OS !== 'web'), [drag.gesture]);
     const { translateX, translateY, dragProgress } = drag;
     const style = useAnimatedStyle(() => ({

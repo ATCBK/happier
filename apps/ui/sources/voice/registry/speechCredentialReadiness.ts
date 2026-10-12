@@ -89,7 +89,7 @@ export function projectVoiceSpeechCredentialReadiness(input: Readonly<{
     const owner = entry.providerSettings;
     const envelope = input.providerEnvelope;
     if (!owner || !envelope || envelope.schemaVersion !== owner.schemaVersion) return 'unknown';
-    const config = owner.parseConfig(envelope.config);
+    const config = owner.parseStoredConfig(envelope.config);
     if (!config || typeof config !== 'object' || Array.isArray(config)) return 'unknown';
     if ((config as Readonly<Record<string, unknown>>)[requirement.settingId] !== requirement.value) {
       return 'ready';

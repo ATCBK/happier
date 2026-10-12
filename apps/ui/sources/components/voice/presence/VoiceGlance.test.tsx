@@ -40,7 +40,7 @@ function attempt(overrides: Partial<{ reconnecting: boolean }> = {}): VoiceAttem
         primaryActionLabel: 'End Voice',
         primaryActionHint: null,
         recoveryLabel: control.recoveryAvailable ? 'Retry' : null,
-        recoveryShortLabel: control.recoveryAvailable ? 'Retry' : null,
+        recoveryIcon: control.recoveryAvailable ? 'arrow-clockwise' as const : null,
         micStateLabel: 'Microphone active',
         captionLabel: '',
         onPrimaryAction: vi.fn(),

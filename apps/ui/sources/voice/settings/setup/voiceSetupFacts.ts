@@ -1,13 +1,14 @@
 import type { Message } from '@happier-dev/session-core/messages';
 import { readConversationTurnOriginV1FromMessageMeta } from '@happier-dev/protocol/messages/structured/conversationTurnOriginV1';
 import { readVoiceAgentTurnPayloadFromMeta } from '@happier-dev/protocol/messages/structured/voiceAgentTurnLocalId';
+import type { MicrophonePermissionState } from '@/utils/platform/microphonePermissions';
 import type { VoiceRoleReadiness } from '@/voice/registry/readiness';
 import { readCanonicalVoiceTranscriptAttemptKey } from '@/voice/transcript/canonicalProjector';
 
 export type VoiceSetupInput = Readonly<{
     providerId: string | null;
     readiness: VoiceRoleReadiness | null;
-    microphonePermission: 'granted' | 'denied' | 'unknown';
+    microphonePermission: MicrophonePermissionState;
     messages: readonly Message[];
 }>;
 export type VoiceSetupStepState = 'done' | 'current' | 'upcoming' | 'blocked' | 'working';
@@ -30,16 +31,19 @@ export function deriveVoiceSetupFacts(input: VoiceSetupInput) {
         const state: VoiceSetupStepState = step.done ? 'done' : index !== currentIndex ? 'upcoming'
             : step.id === 'readiness' && input.readiness?.status === 'installing' ? 'working'
                 : (step.id === 'readiness' && input.readiness && input.readiness.status !== 'ready')
-                    || (step.id === 'microphone' && input.microphonePermission === 'denied') ? 'blocked' : 'current';
+                    || (step.id === 'microphone' && (input.microphonePermission === 'denied' || input.microphonePermission === 'unavailable'))
+                    ? 'blocked' : 'current';
         return { ...step, state };
     });
     const doneCount = observedSteps.filter((step) => step.done).length;
     const complete = doneCount === observedSteps.length;
     return { steps, doneCount, total: observedSteps.length, selectedServiceId: input.providerId,
-        readiness: input.readiness, canTry: infrastructureReady, firstTurnComplete, complete };
+        readiness: input.readiness, canTry: infrastructureReady, firstTurnComplete, complete,
+        // Which microphone fact blocks the step: a denial and a missing device recover differently.
+        microphonePermission: input.microphonePermission };
 }
 
-function hasRetainedVoiceInputAndReply(messages: readonly Message[]): boolean {
+export function hasRetainedVoiceInputAndReply(messages: readonly Message[]): boolean {
     const attempts = new Map<string, { inputSeq: number | null; replySeq: number | null }>();
     for (const message of messages) {
         const seq = message.seq;

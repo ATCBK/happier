@@ -1,6 +1,15 @@
 import * as React from 'react';
 import { act, create } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { storage } from '@/sync/domains/state/storage';
+import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema,
+  DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 
@@ -16,14 +25,16 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const storageBoundary = vi.hoisted(() => ({
-  settings: null as unknown,
   platformOs: 'ios',
 }));
 const nativeModelReadiness = vi.hoisted(() => ({
   read: vi.fn(),
 }));
 const providerFocus = vi.hoisted(() => vi.fn());
-const rawCredentialReadiness = vi.hoisted(() => vi.fn(async () => 'ready' as const));
+const daemonResponse = vi.hoisted(() => vi.fn<(method: string, payload: unknown) => Promise<unknown>>());
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installSessionActionRpcBoundary(request => daemonResponse(request.method.slice(request.method.indexOf(':') + 1), request.params));
 
 installVoiceSettingsPanelCommonModuleMocks({
   reactNative: async () => {
@@ -45,85 +56,24 @@ installVoiceSettingsPanelCommonModuleMocks({
   icons: async () => ({
     Ionicons: (props: any) => React.createElement('Ionicons', props),
   }),
-  storage: async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-      useSettings: () => storageBoundary.settings ?? settingsParse({}),
-    });
-  },
+  storage: async () => await vi.importActual('@/sync/domains/state/storage'),
 });
 
 vi.mock('@/text', () => ({
   t: (key: string) => key,
   tLoose: (key: string) => key,
 }));
-vi.mock('@/voice/credentials/rawCredentialAuthorizationClient', () => ({
-  inspectRawCredentialAuthorizationReadiness: rawCredentialReadiness,
-  rawCredentialAuthorizationClient: {
-    inspect: vi.fn(async () => { throw new Error('unavailable'); }),
-    request: vi.fn(async () => { throw new Error('unavailable'); }),
-  },
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-  ItemGroupSelectionContext: React.createContext(null),
-}));
-vi.mock('@/components/ui/lists/ItemGroupRowPosition', () => ({
-  useItemGroupRowPosition: () => 'middle',
-}));
-vi.mock('@/components/ui/lists/itemGroupRowCorners', () => ({
-  getItemGroupRowCornerRadii: () => ({}),
-}));
-vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
-  normalizeNodeForView: (node: unknown) => node,
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-}));
-vi.mock('@/constants/Typography', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/constants/Typography')>();
-  return {
-    ...actual,
-    Typography: {
-      ...actual.Typography,
-      default: () => ({}),
-      rowMeta: () => ({}),
-    },
-  };
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+  const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
 });
 vi.mock('expo-clipboard', () => ({
   setStringAsync: vi.fn(),
 }));
-vi.mock('@/sync/store/hooks', () => ({
-  useSettingsVersion: () => 1,
-  useSetting: (key: string) => {
-    const value = (storageBoundary.settings as Readonly<Record<string, unknown>> | null)?.[key];
-    return key === 'secrets' && value === undefined ? [] : value;
-  },
-  useLocalSetting: (key: string) => {
-    if (key === 'uiItemDensity') return 'comfortable';
-    if (key === 'uiFontScale') return 1;
-    return null;
-  },
-}));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', async () => {
-  const { Item } = await import('@/components/ui/lists/Item');
-  return {
-    DropdownMenu: (props: any) => React.createElement(
-      'DropdownMenu',
-      props,
-      props.itemTrigger
-        ? React.createElement(Item, {
-            ...props.itemTrigger.itemProps,
-            title: props.itemTrigger.title,
-            subtitle: props.itemTrigger.subtitle,
-            accessibilityRole: 'button',
-            onPress: () => props.onOpenChange(!props.open),
-          })
-        : null,
-    ),
-  };
+vi.mock('@/components/ui/popover', async (importOriginal) => {
+  const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+  return createInlinePopoverModuleMock(importOriginal);
 });
 vi.mock('@/voice/dictation/voiceDictationNativeModelReadiness', () => ({
   readVoiceDictationNativeModelReadiness: (...args: unknown[]) => nativeModelReadiness.read(...args),
@@ -629,7 +579,8 @@ describe('DictationSettingsSection', () => {
           },
         }}
         onRecoveryAction={onRecoveryAction}
-      />);
+      />, { createNodeMock: (node) => node.props.testID === 'settings.voice.dictation.engine.device'
+        ? { focus: providerFocus } : null });
     });
     await act(async () => {
     });
@@ -724,10 +675,44 @@ describe('DictationSettingsSection', () => {
       expectedSecretId: null,
       expectedSecretUpdatedAt: null,
     }).settings;
-    storageBoundary.settings = ready;
-    onTestFinished(() => {
-      storageBoundary.settings = null;
+    const account = await createVoiceSettingsAccountTestHarness(ready);
+    onTestFinished(account.dispose);
+    const subject = { kind: 'credential_access_disclosure', contribution: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
+      credentialSlotId: 'api_key', purpose: declaration.credentials!.slot.purpose,
+      accessDeclarationDigest: 'b'.repeat(64), selectedAuthorityDigest: 'c'.repeat(64), selectedRawAccessDigest: 'd'.repeat(64) };
+    const authoritySource = { kind: 'machine_installation', machineId: 'machine-online', installationId: 'installation-1' };
+    const inspection = DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema.parse({ ok: true,
+      authorization: { pluginId: 'happier.voice.google', capability: 'credentials.materialize.raw', targetScope: { kind: 'account' },
+        subject, authoritySource, disclosures: [{ sourceClass: { kind: 'savedSecret', secretKinds: ['apiKey'] },
+          realm: 'daemon', phase: 'speech', materialization: 'httpHeaders', origin: 'https://generativelanguage.googleapis.com', destination: 'x-goog-api-key' }] },
+      review: { plugin: { id: 'happier.voice.google', name: 'Google', version: '1.0.0' }, package: { identity: 'happier.voice.google' },
+        distribution: { kind: 'bundled' }, publisher: { status: 'bundled_first_party', identity: 'Happier' },
+        contribution: { identity: subject.contribution, name: 'Gemini STT' },
+        credentialSlot: { id: 'api_key', name: 'API key', purpose: declaration.credentials!.slot.purpose } },
     });
+    daemonResponse.mockImplementation(async (method, payload) => {
+      if (method !== RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) throw new Error(`Unexpected Dictation RPC: ${method}`);
+      const request = DaemonVoiceClientRawCredentialAuthorizationRequestV1Schema.parse(payload);
+      expect(request.contribution).toEqual(subject.contribution);
+      expect(request.rawGrant).toMatchObject({ realm: 'daemon', phase: 'speech' });
+      return inspection;
+    });
+    const originalRequest = account.request.getMockImplementation()!;
+    account.request.mockImplementation(async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      const machine = { ...createPlainMachineRowFixture({ id: 'machine-online', accountId: account.scope.accountId }),
+        installationId: 'installation-1' };
+      if (path === '/v1/machines') return Response.json([machine]);
+      if (path === '/v1/machines/machine-online') return Response.json({ machine });
+      if (path !== '/v1/plugins/permissions/grants/list') return originalRequest(url, init);
+      expect(JSON.parse(String(init?.body))).toMatchObject({ pluginId: inspection.authorization.pluginId,
+        capability: inspection.authorization.capability, targetScope: inspection.authorization.targetScope, subject });
+      return Response.json({ grants: [{ v: 1, id: 'grant-1', accountId: account.scope.accountId,
+          ...inspection.authorization, disclosures: undefined, status: 'active', requestId: 'request-1',
+          grantedByUserId: 'user-1', grantedAt: 2, createdAt: 2, updatedAt: 2 }], pendingRequests: [] });
+    });
+    storage.getState().applyMachines([createMachineFixture({ id: 'machine-online', activeAt: Date.now() })], true, { sourceServerId: account.scope.serverId });
+    await refreshSavedSecretCatalog(account.scope);
     const setVoice = vi.fn();
     const render = (nextVoice: typeof ready.voice) => <DictationSettingsSection
       voice={nextVoice}
@@ -737,16 +722,15 @@ describe('DictationSettingsSection', () => {
     />;
     let tree!: ReturnType<typeof create>;
     await act(async () => {
-      tree = create(render(ready.voice));
+      tree = create(render(account.settings.voice));
     });
     await act(async () => {
     });
-    expect(dictationCardReadiness(tree)?.status).toBe('ready');
-
-    const removed = settingsParse({ ...ready, secrets: [] });
-    storageBoundary.settings = removed;
+    await vi.waitFor(() => expect(dictationCardReadiness(tree)?.status).toBe('ready'));
+    expect(account.resources).toHaveLength(1);
+    account.resources.splice(0);
     await act(async () => {
-      tree.update(render(removed.voice));
+      await refreshSavedSecretCatalog(account.scope);
     });
 
     expect(dictationCardReadiness(tree)).toMatchObject({ reasonKey: 'voice.readiness.credential_missing', recoveryAction: 'configure_credential' });

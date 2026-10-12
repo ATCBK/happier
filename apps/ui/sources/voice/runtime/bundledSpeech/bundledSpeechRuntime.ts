@@ -86,7 +86,7 @@ export function createBundledSpeechRuntime(input: Readonly<{
       signal?: AbortSignal | null;
     }>): Promise<string | null> {
       const { contribution, declaration, settings } = readDescriptor(providerId, 'stt');
-      const config = settings.parseConfig(params.providerConfig);
+      const config = settings.parseStoredConfig(params.providerConfig);
       if (!config || !isVoiceProviderSettingsJsonObject(config)) {
         throw createRuntimeError('provider_settings_invalid');
       }
@@ -129,7 +129,7 @@ export function createBundledSpeechRuntime(input: Readonly<{
       signal?: AbortSignal | null;
     }>): Promise<void> {
       const { contribution, declaration, settings } = readDescriptor(providerId, 'tts');
-      let config = settings.parseConfig(params.providerConfig);
+      let config = settings.parseStoredConfig(params.providerConfig);
       if (!config || !isVoiceProviderSettingsJsonObject(config)) {
         throw createRuntimeError('provider_settings_invalid');
       }

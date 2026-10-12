@@ -77,7 +77,7 @@ export const VoicePipelineCard = React.memo(function VoicePipelineCard(props: Vo
                 <Text style={styles.title}>{props.title}</Text>
                 <View style={styles.statusLine}>
                     <VoiceReadinessGlyph tone={props.status.tone} />
-                    <Text style={styles.statusText} numberOfLines={2}>{props.status.text}</Text>
+                    <Text style={styles.statusText}>{props.status.text}</Text>
                 </View>
             </View>
             {props.onPress ? (
@@ -194,11 +194,13 @@ function PipelineStepTile(props: Readonly<{ step: VoicePipelineStep }>) {
             <Text style={styles.role}>{step.roleLabel}</Text>
             <View style={styles.engine}>
                 <View style={styles.mark}>{step.mark}</View>
-                <Text style={styles.engineName} numberOfLines={1}>{step.name}</Text>
+                <Text style={styles.engineName}>{step.name}</Text>
             </View>
             <View style={styles.where}>
-                <Icon name={step.whereIcon} size={13} color={theme.colors.text.secondary} />
-                <Text style={styles.whereText} numberOfLines={1}>{step.where}</Text>
+                <View style={styles.whereGlyph}>
+                    <Icon name={step.whereIcon} size={13} color={theme.colors.text.secondary} />
+                </View>
+                <Text style={styles.whereText}>{step.where}</Text>
             </View>
             {step.readiness ? <StepReadiness readiness={step.readiness} /> : null}
         </View>
@@ -213,7 +215,7 @@ function PipelineStepRow(props: Readonly<{ step: VoicePipelineStep; showDivider?
             <View style={styles.rowBody}>
                 <View style={styles.engine}>
                     <View style={styles.mark}>{step.mark}</View>
-                    <Text style={styles.engineName} numberOfLines={2}>{step.name}</Text>
+                    <Text style={styles.engineName}>{step.name}</Text>
                 </View>
                 <Text style={styles.rowWhere}>{step.where}</Text>
                 {/* Phones recompose: the step's one action sits beneath its reason, never beside the text. */}
@@ -296,7 +298,10 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 14,
         paddingVertical: 12,
         gap: 4,
-        backgroundColor: theme.colors.surface.inset,
+        // A step is one more tint layer inside the card's tint: a breath darker on light and a small
+        // lift on dark (DESIGN.md: dark is layered, not inverted). `inset` is the navigation plane,
+        // which sits below the page on dark and made the steps read sunken.
+        backgroundColor: theme.colors.surface.sectionTint,
     },
     tileNeedsYou: {
         backgroundColor: theme.colors.state.warning.background,
@@ -313,14 +318,17 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 16,
         color: theme.colors.text.secondary,
     },
+    // A name that wraps keeps its mark on the first line; the mark's box is one title line tall.
     engine: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
         minWidth: 0,
     },
     mark: {
         flexShrink: 0,
+        height: happierPageTextMetrics('rowTitle').lineHeight,
+        justifyContent: 'center',
     },
     engineName: {
         ...Typography.default('semiBold'),
@@ -331,9 +339,14 @@ const styles = StyleSheet.create((theme) => ({
     },
     where: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 6,
         minWidth: 0,
+    },
+    whereGlyph: {
+        flexShrink: 0,
+        height: happierPageTextMetrics('rowDescription').lineHeight,
+        justifyContent: 'center',
     },
     whereText: {
         ...Typography.default(),

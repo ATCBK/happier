@@ -24,8 +24,27 @@ describe('createVoiceMachineError', () => {
             retryPolicy: 'user_action',
             recoveryAction: 'open_settings',
             presentation: 'permission_required',
-            recoverable: true,
+            // A blocked microphone stays on screen as "Microphone blocked" with Allow (lab ST): a
+            // recoverable failure projects as a graceful disconnect, which the presence draws as rest.
+            recoverable: false,
         });
+    });
+
+    it('fails a missing microphone visibly with a retry, never as a permission question', () => {
+        expect(createVoiceMachineError({ kind: 'mic_unavailable', reason: 'mic_unavailable' })).toEqual({
+            kind: 'mic_unavailable',
+            reason: 'mic_unavailable',
+            phase: 'preflight',
+            retryPolicy: 'user_action',
+            recoveryAction: 'retry',
+            presentation: 'error',
+            recoverable: false,
+        });
+        expect(classifyVoiceMachineError(Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' })))
+            .toMatchObject({ kind: 'mic_unavailable', presentation: 'error' });
+        expect(classifyVoiceMachineError(new Error('mic_unavailable'))).toMatchObject({ kind: 'mic_unavailable' });
+        expect(classifyRealtimeProviderFailure(Object.assign(new Error('no device'), { name: 'NotFoundError' })))
+            .toMatchObject({ kind: 'mic_unavailable' });
     });
 
     it('mints complete structured policy for active-session microphone revocation', () => {
@@ -163,6 +182,7 @@ describe('classifyMicSessionFailure', () => {
             'update_required',
             'feature_unavailable',
             'service_temporarily_unavailable',
+            'mic_unavailable',
         ] as const;
         expect(kinds.map((kind) => createVoiceMachineError({ kind, reason: kind }).retryPolicy))
             .toEqual([
@@ -185,6 +205,7 @@ describe('classifyMicSessionFailure', () => {
                 'user_action',
                 'user_action',
                 'never',
+                'user_action',
                 'user_action',
             ]);
     });

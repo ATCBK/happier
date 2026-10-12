@@ -12,6 +12,38 @@ afterEach(async () => {
 });
 
 describe('voiceSessionStore', () => {
+  it('keeps accepted Voice input scoped to its captured attempt and Account lifetime through End', async () => {
+    const store = await import('./voiceSessionStore');
+    let current = true;
+    const lifetime = { scope: { serverId: 'home-a', accountId: 'account-a' },
+      isCurrent: () => current, onRetire: () => ({ dispose() {} }) };
+    const binding = { adapterId: 'local_direct', controlSessionId: 'control', conversationSessionId: 'conversation',
+      conversationSessionAddress: { serverId: 'home-a', sessionId: 'conversation' }, targetSessionAddress: null,
+      transcriptMode: 'native_session' as const, updatedAt: 1 };
+    const start = () => store.setVoiceSessionSnapshot({ adapterId: binding.adapterId, sessionId: binding.controlSessionId,
+      status: 'connected', mode: 'listening', canStop: true }, binding, { accountScope: lifetime.scope, conversationScope: { kind: 'voice_home' } });
+    const end = () => store.setVoiceSessionSnapshot({ adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false });
+    start();
+    const oldAttemptId = store.getVoiceSessionPresentedAttemptId()!;
+    end();
+    start();
+    store.recordVoiceSessionFirstSuccessInput({ attemptId: oldAttemptId, lifetime, conversationSessionId: 'conversation', localId: 'old-input' });
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+    const attemptId = store.getVoiceSessionPresentedAttemptId()!;
+    store.recordVoiceSessionFirstSuccessInput({ attemptId, lifetime, conversationSessionId: 'other', localId: 'other-input' });
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+    end();
+    store.recordVoiceSessionFirstSuccessInput({ attemptId, lifetime, conversationSessionId: 'conversation', localId: 'current-input' });
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual(['current-input']);
+    store.recordVoiceSessionFirstSuccess(attemptId, lifetime);
+    expect(store.getVoiceSessionFirstSuccessAttemptId()).toBe(attemptId);
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+    store.recordVoiceSessionFirstSuccessInput({ attemptId, lifetime, conversationSessionId: 'conversation', localId: 'later-input' });
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+    current = false;
+    expect(store.getVoiceSessionFirstSuccessAttemptId()).toBeNull();
+    expect(store.getVoiceSessionFirstSuccessInputIds()).toEqual([]);
+  });
   it('publishes changes to the applied voice and clears it when the attempt is no longer connected', async () => {
     const store = await import('./voiceSessionStore');
     const snapshot = { adapterId: 'realtime', sessionId: 's1', status: 'connected' as const, mode: 'listening' as const, canStop: true };

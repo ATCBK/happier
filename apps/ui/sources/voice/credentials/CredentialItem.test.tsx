@@ -1,111 +1,44 @@
+/**
+ * @vitest-environment jsdom
+ */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import {
-  createRecipientContractDigestV1,
-  normalizeRecipientContractV1,
-  VoiceProviderContributionSchema,
-} from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { renderScreen } from '@/dev/testkit';
+import 'fake-indexeddb/auto';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createRecipientContractDigestV1, normalizeRecipientContractV1, VoiceProviderContributionSchema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import type { IModal } from '@/modal/types';
-import type { Settings } from '@/sync/domains/settings/settings';
-
-type AccountSettingsMutationInput = Parameters<typeof import('@/sync/sync')['sync']['mutateAccountSettingsOnce']>[0];
 
 const boundary = vi.hoisted(() => ({
-  confirm: vi.fn<IModal['confirm']>(async () => false),
+  confirm: vi.fn<IModal['confirm']>(async () => true),
   show: vi.fn<IModal['show']>(() => 'modal-id'),
-  mutateAccountSettings: vi.fn(),
-  mutateAccountSettingsOnce: vi.fn(),
-  prompt: vi.fn(async () => 'SHOULD_NOT_LEAK'),
+  prompt: vi.fn(async () => 'new-secret'),
   log: vi.fn<(message: string) => void>(),
-  settings: null as Settings | null,
-  settingsVersion: 4 as number | null,
 }));
-
-// The console sink is the one report that survives a dismissed overlay; the
-// record itself stays real logic under this boundary.
+installDisconnectedServerSocketBoundary();
 vi.mock('@/log', () => ({ log: { log: boundary.log } }));
-
-vi.mock('react-native', async () => {
-  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock({
-    Platform: {
-      OS: 'web',
-      select: (options: Record<string, unknown>) => options.web ?? options.default,
-    },
-  });
-});
-
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: object) => React.createElement('Item', props),
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/components/ui/popover', async original => (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(original));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+  spies: { confirm: boundary.confirm, prompt: boundary.prompt, show: boundary.show },
+}).module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+  translate: (key, params) => params ? `${key} ${JSON.stringify(params)}` : key,
 }));
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
+vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
+vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
+vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
-vi.mock('./VoiceRawCredentialAccessReview', () => ({
-  VoiceRawCredentialAccessReview: (props: object) => React.createElement('VoiceRawCredentialAccessReview', props),
-}));
-
-vi.mock('@/modal', async () => {
-  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({
-    spies: {
-      confirm: boundary.confirm,
-      prompt: boundary.prompt,
-      show: boundary.show,
-    },
-  }).module;
-});
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: object) => React.createElement('DropdownMenu', props),
-}));
-
-// The shared picker is a modal boundary this unit only hands to `Modal.show`;
-// it owns its own coverage and pulls the live sync singleton into module scope.
-vi.mock('@/components/ui/forms/valueRefs/SavedSecretPickerModal', () => ({
-  SavedSecretPickerModal: (props: object) => React.createElement('SavedSecretPickerModal', props),
-}));
-
-vi.mock('@/sync/api/account/apiAccountEncryptionMode', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/sync/api/account/apiAccountEncryptionMode')>(),
-  fetchAccountEncryptionMode: vi.fn(async () => ({ mode: 'e2ee' })),
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { settingsParse } = await import('@/sync/domains/settings/settings');
-  const { createLiveStorageStoreMock, createStorageModuleStub, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
-  const readSettings = () => boundary.settings ?? settingsParse({});
-  return createStorageModuleStub({
-    storage: createLiveStorageStoreMock(() => ({ settings: readSettings() })),
-    useSettings: readSettings,
-    useSetting: createUseSettingMock({ fallback: (key) => readSettings()[key] }),
-  });
-});
-
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    getCredentials: () => ({ token: 'account-token' }),
-    mutateAccountSettings: boundary.mutateAccountSettings,
-    mutateAccountSettingsOnce: boundary.mutateAccountSettingsOnce,
-  },
-}));
-
-vi.mock('@/sync/store/hooks', async () => {
-  const storageModule = await import('@/sync/domains/state/storage');
-  return {
-    ...storageModule,
-    useSettingsVersion: () => boundary.settingsVersion,
-  };
-});
-
-vi.mock('@/text', async () => {
-  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({
-    translate: (key, params) => params ? `${key} ${JSON.stringify(params)}` : key,
-  });
-});
-
+await loadSyncSingletonForTests();
 const recipientContract = normalizeRecipientContractV1({
   version: 1,
   package: {
@@ -211,1014 +144,298 @@ const credentialSourceDeclaration = VoiceProviderContributionSchema.parse({
   },
 });
 
-const { createVoiceProviderRegistry } = await import('@/voice/registry/providerRegistry');
-const {
-  commitExternalVoiceProviderRegistration,
-  removeExternalVoiceProviderRegistration,
-  replaceExternalVoiceProviderProjectionAuthority,
-} = await import('@/voice/registry/externalVoiceProviderRegistrations');
-const registrationToken = Object.freeze({});
 
-function setCurrentDeclaration(declaration: ReturnType<typeof VoiceProviderContributionSchema.parse> | null): void {
-  removeExternalVoiceProviderRegistration(registrationToken);
-  if (!declaration) {
-    // A current projection without this provider prevents generated fallback
-    // metadata from supplying a declaration the daemon did not admit.
-    replaceExternalVoiceProviderProjectionAuthority(null, registrationToken, new Map());
-    return;
-  }
+const { createVoiceProviderRegistry } = await import('@/voice/registry/providerRegistry');
+const { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration,
+  replaceExternalVoiceProviderProjectionAuthority } = await import('@/voice/registry/externalVoiceProviderRegistrations');
+const { VoiceCredentialItem } = await import('./CredentialItem');
+const { VoiceRawCredentialAccessReview } = await import('./VoiceRawCredentialAccessReview');
+const { storage } = await import('@/sync/domains/state/storage');
+const { refreshSavedSecretCatalog } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
+const token = Object.freeze({});
+const contribution = { pluginId: 'com.acme.voice', localId: 'conversation' } as const;
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+
+function register(declaration: typeof credentialSourceDeclaration | null = credentialSourceDeclaration) {
+  removeExternalVoiceProviderRegistration(token);
+  if (!declaration) { replaceExternalVoiceProviderProjectionAuthority(null, token, new Map()); return; }
   const providerId = 'com.acme.voice/conversation';
   const descriptor = createVoiceProviderRegistry({
-    bundledContributions: [{ pluginId: 'com.acme.voice', providerId, declaration }],
+    bundledContributions: [{ pluginId: contribution.pluginId, providerId, declaration }],
     bundledPresentations: [{ providerId, settingsSectionId: 'voice.acme.conversation' }],
   }).get(providerId);
-  if (!descriptor) throw new Error('credential fixture declaration was not admitted');
-  commitExternalVoiceProviderRegistration({
-    token: registrationToken,
-    pluginId: 'com.acme.voice',
-    localId: 'conversation',
-    providerId,
-    descriptor,
-    adapter: null,
+  if (!descriptor) throw new Error('Fixture Voice declaration not admitted');
+  commitExternalVoiceProviderRegistration({ token, ...contribution, providerId, descriptor, adapter: null });
+}
+
+function secretSettings(source: 'none' | 'savedSecret' = 'none', reference: string | null = null, approvedDigest?: string) {
+  return settingsParse({
+    secrets: [{ id: 'stored-secret', name: 'Acme key', kind: 'apiKey',
+      encryptedValue: { _isSecretValue: true, value: 'retained-secret' }, createdAt: 1, updatedAt: 1 }],
+    voiceSettingsV1: { credentialBindings: reference === null ? [] : [{
+      contribution, credentialSlotId: 'api-key', credentialSource: { kind: source },
+      credentialBindings: { account: { 'api-key': reference } },
+      ...(approvedDigest ? { approvedRecipientContractDigest: approvedDigest } : {}),
+    }] },
   });
 }
 
-// Resolve the real owner graph after boundary registration, outside a timed gesture.
-await import('./CredentialItem');
+async function setup(settings: Settings = settingsParse({}), connectedPurposes: ConnectedPurposeCatalogV1 = { v: 1, bindings: [] }) {
+  account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settings,
+    actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'], 'secrets.shared.create': ['ui'] } },
+  }), connectedPurposes });
+  await account.purposes!.hydrate(account.scope);
+  await refreshSavedSecretCatalog(account.scope);
+  if (settings.secrets.length) {
+    // The catalog publishes its foreground read before the real maintenance import finishes.
+    await vi.waitFor(() => expect(account!.resources).toHaveLength(settings.secrets.length));
+    await refreshSavedSecretCatalog(account.scope);
+  }
+  account.settingsWrites.length = 0;
+  account.promotions.length = 0;
+  account.purposes!.writes.length = 0;
+}
+function storedRef() {
+  const resource = account?.resources.find(resource => resource.entry.name === 'Acme key');
+  if (!resource) throw new Error('Expected acknowledged SavedSecret Resource');
+  return resource.entry.ref;
+}
+function binding() { return account?.persistedSettings.voiceSettingsV1.credentialBindings[0]; }
+function choose(ref = storedRef()) {
+  boundary.show.mockImplementation(config => {
+    const picker = config as unknown as Readonly<{ props: { onSelectId(id: string): void } }>;
+    picker.props.onSelectId(ref);
+    return 'modal-id';
+  });
+}
+async function render(options: Partial<React.ComponentProps<typeof VoiceCredentialItem>> = {}) {
+  return renderScreen(<VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
+    contribution={contribution} credentialSlotId="api-key" credentialSourcePurpose="voice.client-auth"
+    credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options} />);
+}
+async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew' | 'useSavedSecret' = 'enterNew') {
+  const menu = screen.tree.findAllByType(DropdownMenu)[0];
+  if (menu) {
+    const trigger = screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0];
+    if (!trigger) throw new Error('Credential dropdown trigger missing');
+    await act(async () => { trigger.props.onPress(); });
+    await vi.waitFor(() => expect(screen.tree.findAllByType(DropdownMenu)[0]?.props.open).toBe(true));
+    await screen.tree.pressByTestIdAsync(`dropdown-option-${id}`);
+  } else {
+    if (id !== 'enterNew') throw new Error('SavedSecret selector missing');
+    await screen.tree.pressByTestIdAsync('credential');
+  }
+}
+function failures() { return boundary.log.mock.calls.map(([message]) => message).filter(message => message.includes('voice_credential:')); }
 
 describe('VoiceCredentialItem', () => {
+  let webLocks: ReturnType<typeof installWebLockManagerMock>;
   beforeEach(() => {
-    boundary.settingsVersion = 4;
-    setCurrentDeclaration(credentialSourceDeclaration);
+    webLocks = installWebLockManagerMock();
+    register();
+    vi.clearAllMocks();
+    boundary.confirm.mockResolvedValue(true);
+    boundary.prompt.mockResolvedValue('new-secret');
+  });
+  afterEach(async () => {
+    standardCleanup();
+    removeExternalVoiceProviderRegistration(token);
+    await account?.dispose();
+    account = undefined;
+    webLocks.restore();
   });
 
-  afterEach(() => {
-    removeExternalVoiceProviderRegistration(registrationToken);
+  it('mounts raw review only for the selected current source, realm and phase', async () => {
+    await setup(secretSettings('savedSecret', 'stored-secret'));
+    const screen = await render({ rawCredentialReviewGrants: credentialSourceDeclaration.credentials?.sources[0]?.rawGrants ?? [] });
+    const review = screen.tree.findAllByType(VoiceRawCredentialAccessReview)[0];
+    expect(review?.props.contribution).toEqual(contribution);
+    expect(review?.props.rawGrant).toEqual(credentialSourceDeclaration.credentials?.sources[0]?.rawGrants?.[0]);
+    await screen.update(<VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
+      contribution={contribution} credentialSlotId="api-key" credentialSourcePurpose="voice.client-auth"
+      credentialSourceDeclaration={credentialSourceDeclaration} rawCredentialReviewGrants={[]} disclosePlainStorage />);
+    expect(screen.tree.findAllByType(VoiceRawCredentialAccessReview)).toHaveLength(0);
   });
 
-  it('mounts raw review only for the selected source in the current realm and phase', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    const {
-      applyAccountVoiceCredentialSourceSelection,
-      upsertAccountVoiceCredential,
-    } = await import('./accountVoiceCredential');
-    const contribution = { pluginId: 'com.acme.voice', localId: 'conversation' } as const;
-    const withSecret = upsertAccountVoiceCredential({
-      settings: settingsParse({}), contribution, credentialSlotId: 'api-key', value: 'secret',
-      generateId: () => 'secret-id', now: 1, expectedSecretId: null, expectedSecretUpdatedAt: null,
-    }).settings;
-    boundary.settings = applyAccountVoiceCredentialSourceSelection({
-      settings: withSecret,
-      mutation: {
-        contribution,
-        credentialSlotId: 'api-key',
-        selection: { kind: 'savedSecret' },
-        expectedSettingsVersion: 0,
-      },
-      currentDeclaration: credentialSourceDeclaration,
-    }).settings;
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={contribution}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      rawCredentialReviewGrants={credentialSourceDeclaration.credentials?.sources[0]?.rawGrants ?? []}
-      disclosePlainStorage={true}
-    />);
-
-    const review = screen.tree.findByTestId('credential-raw-credential-access');
-    expect(review?.props.contribution).toEqual({
-      pluginId: 'com.acme.voice',
-      localId: 'conversation',
-    });
-    expect(review?.props.rawGrant).toEqual(
-      credentialSourceDeclaration.credentials?.sources[0]?.rawGrants?.[0],
-    );
-
-    await screen.update(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={contribution}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      rawCredentialReviewGrants={[]}
-      disclosePlainStorage={true}
-    />);
-    expect(screen.tree.findByTestId('credential-raw-credential-access')).toBeNull();
-  });
-
-  it('replaces a legacy OpenAI SavedSecret without changing a dormant Account source selection', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'openai-secret',
-        name: 'OpenAI',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-old' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' },
-          credentialSlotId: 'api_key',
-          credentialSource: { kind: 'connectedAccount' },
-          credentialBindings: { account: { api_key: 'openai-secret' } },
-        }],
-      },
-      connectedAccountPurposeBindingsV1: {
-        v: 1,
-        bindings: [{
-          purpose: {
-            consumer: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' },
-            purpose: 'voice.client-auth',
-          },
-          target: {
-            kind: 'account',
-            account: {
-              service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-              accountId: 'codex-account',
-            },
-          },
-        }],
-      },
-    });
-    boundary.confirm.mockReset();
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('sk-replaced');
-    boundary.mutateAccountSettingsOnce.mockReset();
-    let changed: any = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input: AccountSettingsMutationInput) => {
-      if (!boundary.settings) throw new Error('expected Account settings fixture');
-      const applied = input.mutate(boundary.settings);
-      changed = applied.settings;
-      boundary.settings = settingsParse(applied.settings);
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'happier.voice.openai', localId: 'realtime-openai' }}
-      credentialSlotId="api_key"
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('enterNew'));
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce());
-    expect(changed.voiceSettingsV1.credentialBindings[0].credentialSource)
-      .toEqual({ kind: 'connectedAccount' });
-    expect(changed.connectedAccountPurposeBindingsV1).toEqual({
-      v: 1,
-      bindings: [{
-        purpose: {
-          consumer: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' },
-          purpose: 'voice.client-auth',
-        },
-        target: {
-          kind: 'account',
-          account: {
-            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-            accountId: 'codex-account',
-          },
-        },
-      }],
-    });
-    expect(changed.secrets).toEqual([
-      expect.objectContaining({
-        encryptedValue: { _isSecretValue: true, value: 'sk-replaced' },
-      }),
-    ]);
-  });
-
-  it('binds a SavedSecret the account already stores instead of demanding re-entry', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    // The binding row is gone while the SavedSecret record survives: the state
-    // a user is left in after a Voice binding-loss event.
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'elevenlabs-secret',
-        name: 'ElevenLabs',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: { credentialBindings: [] },
-    });
-    boundary.confirm.mockReset();
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('SHOULD_NOT_BE_PROMPTED');
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ selectedId: string | null; onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('elevenlabs-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettingsOnce.mockReset();
-    let changed: any = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input: AccountSettingsMutationInput) => {
-      if (!boundary.settings) throw new Error('expected Account settings fixture');
-      const applied = input.mutate(boundary.settings);
-      changed = applied.settings;
-      boundary.settings = settingsParse(applied.settings);
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'happier.voice.elevenlabs', localId: 'realtime-elevenlabs' }}
-      credentialSlotId="api_key"
-      disclosePlainStorage={true}
-    />);
-
-    const row = screen.tree.findByTestId('credential');
-    expect(row?.props.items.map((item: { id: string }) => item.id))
-      .toEqual(['useSavedSecret', 'enterNew']);
-
-    act(() => row?.props.onSelect('useSavedSecret'));
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce());
-
-    const { SavedSecretPickerModal } = await import('@/components/ui/forms/valueRefs/SavedSecretPickerModal');
-    const shown = boundary.show.mock.calls[0]?.[0] as unknown as Readonly<{
-      component: unknown;
-      props: Readonly<{ includeNoneRow?: boolean; allowAdd?: boolean; allowEdit?: boolean }>;
-    }>;
-    expect(shown.component).toBe(SavedSecretPickerModal);
-    // The picker is opened as a selector over what the account already stores: creating, renaming,
-    // replacing and deleting a record all belong to flows that carry their own disclosure.
-    expect(shown.props).toMatchObject({ includeNoneRow: false, allowAdd: false, allowEdit: false });
+  it('selects a stored SavedSecret without prompting or changing its material', async () => {
+    await setup(secretSettings());
+    const ref = storedRef();
+    const before = structuredClone(account!.resources);
+    choose(ref);
+    const screen = await render();
+    await gesture(screen, 'useSavedSecret');
+    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
+      credentialBindings: { account: { 'api-key': ref } } }));
+    expect(account!.resources).toEqual(before);
     expect(boundary.prompt).not.toHaveBeenCalled();
-    expect(changed.secrets).toEqual(boundary.settings.secrets);
-    expect(changed.voiceSettingsV1.credentialBindings).toEqual([{
-      contribution: { pluginId: 'happier.voice.elevenlabs', localId: 'realtime-elevenlabs' },
-      credentialSlotId: 'api_key',
-      credentialSource: { kind: 'none' },
-      credentialBindings: { account: { api_key: 'elevenlabs-secret' } },
-    }]);
+    const shown = boundary.show.mock.calls[0]?.[0];
+    expect(shown).toMatchObject({ props: { includeNoneRow: false, allowAdd: false, allowEdit: false } });
   });
 
-  it('writes the selected SavedSecret through the source owner when the slot still names a destroyed record', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    // The live state after a binding-loss event: the slot keeps a reference the
-    // account can no longer resolve, so the row reads as unset while every CAS
-    // it can build names a record that is gone.
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'surviving-secret',
-        name: 'Voice: acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-          credentialSlotId: 'api-key',
-          credentialSource: { kind: 'savedSecret' },
-          credentialBindings: { account: { 'api-key': 'destroyed-secret' } },
-        }],
-      },
-    });
-    boundary.settingsVersion = 4;
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.log.mockReset();
-    boundary.confirm.mockReset();
-    boundary.confirm.mockResolvedValue(true);
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('SHOULD_NOT_BE_PROMPTED');
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('surviving-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    let changed: any = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input: any) => {
-      const { settingsParse } = await import('@/sync/domains/settings/settings');
-      const applied = input.mutate(boundary.settings);
-      changed = applied.settings;
-      // An applied write becomes the account snapshot; the gesture verifies
-      // against it, so a stub that reports success without storing anything is
-      // not a faithful stand-in for the transport.
-      boundary.settings = settingsParse(applied.settings);
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      recipientContract={recipientContract}
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('useSavedSecret'));
-    // The contract is the write, not the callback: the gesture is only complete
-    // when the account-settings mutation boundary receives the binding.
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce());
-    expect(boundary.prompt).not.toHaveBeenCalled();
-    // Reaching the boundary is not enough: a rejected mutation produces no
-    // settings at all, which is exactly how this bind failed in the app.
-    expect(changed, 'the account-settings boundary received no settings').not.toBeNull();
-    expect(changed.secrets).toEqual(boundary.settings!.secrets);
-    expect(changed.voiceSettingsV1.credentialBindings).toEqual([{
-      contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api-key',
-      credentialSource: { kind: 'savedSecret' },
-      credentialBindings: { account: { 'api-key': 'surviving-secret' } },
-      approvedRecipientContractDigest: createRecipientContractDigestV1(recipientContract),
-    }]);
-    expect(boundary.log.mock.calls.map(([message]) => message)
-      .filter((message) => message.includes('voice_credential:'))).toEqual([]);
+  it('replaces a dormant SavedSecret without changing the selected Connected Account', async () => {
+    const connectedPurpose = { purpose: { consumer: contribution, purpose: 'voice.client-auth' },
+      target: { kind: 'account' as const, account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'codex-account' } } };
+    const initial = secretSettings('savedSecret', 'stored-secret');
+    await setup(settingsParse({ ...initial,
+      voiceSettingsV1: { credentialBindings: [{ ...initial.voiceSettingsV1.credentialBindings[0], credentialSource: { kind: 'connectedAccount' } }] },
+    }), { v: 1, bindings: [connectedPurpose] });
+    const declaration = VoiceProviderContributionSchema.parse({ ...credentialSourceDeclaration, credentials: {
+      ...credentialSourceDeclaration.credentials, sources: [...credentialSourceDeclaration.credentials!.sources,
+        { kind: 'connectedAccount', service: connectedPurpose.target.account.service }],
+    } });
+    register(declaration);
+    const changed = vi.fn();
+    const screen = await render({ credentialSourcePurpose: undefined, credentialSourceDeclaration: declaration, onChanged: changed });
+    await gesture(screen);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'connectedAccount' } });
+    expect(account.purposes!.value.bindings).toEqual([connectedPurpose]);
+    expect(account.resources).toHaveLength(2);
   });
 
-  it('re-asserts the selected SavedSecret when the slot already names it under a dormant source', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    // Selecting the record the slot already stores is not a no-op: the source
-    // that decides whether it is used can still be dormant, which is exactly
-    // the state the row reports as unusable.
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'surviving-secret',
-        name: 'Voice: acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-          credentialSlotId: 'api-key',
-          credentialSource: { kind: 'none' },
-          credentialBindings: { account: { 'api-key': 'surviving-secret' } },
-        }],
-      },
-    });
-    boundary.settingsVersion = 4;
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.log.mockReset();
-    boundary.confirm.mockReset();
-    boundary.confirm.mockResolvedValue(true);
-    boundary.prompt.mockReset();
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('surviving-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    let changed: any = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input: any) => {
-      const { settingsParse } = await import('@/sync/domains/settings/settings');
-      const applied = input.mutate(boundary.settings);
-      changed = applied.settings;
-      // An applied write becomes the account snapshot; the gesture verifies
-      // against it, so a stub that reports success without storing anything is
-      // not a faithful stand-in for the transport.
-      boundary.settings = settingsParse(applied.settings);
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('useSavedSecret'));
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce());
-    expect(changed.voiceSettingsV1.credentialBindings[0]).toMatchObject({
-      credentialSource: { kind: 'savedSecret' },
-      credentialBindings: { account: { 'api-key': 'surviving-secret' } },
-    });
+  it.each([
+    ['a destroyed reference', 'savedSecret', 'destroyed-secret'],
+    ['the same reference under a dormant source', 'none', 'stored-secret'],
+  ] as const)('repairs %s through the atomic source owner', async (_label, source, reference) => {
+    await setup(secretSettings(source, reference));
+    const ref = storedRef();
+    choose(ref);
+    const screen = await render();
+    await gesture(screen, 'useSavedSecret');
+    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
+      credentialBindings: { account: { 'api-key': ref } } }));
+    expect(account!.purposes!.writes).toHaveLength(1);
+    expect(failures()).toEqual([]);
   });
 
-  it('records one bounded failure instead of silently applying nothing after a selection', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'surviving-secret',
-        name: 'Voice: acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: { credentialBindings: [] },
-    });
-    boundary.settingsVersion = 4;
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.log.mockReset();
-    boundary.confirm.mockReset();
-    // The approval never returns true — declined by the user, or dismissed
-    // before it was ever readable. Both are this same `false`.
+  it('declining recipient approval records a safe failure and changes no credential', async () => {
+    await setup(secretSettings());
+    choose();
     boundary.confirm.mockResolvedValue(false);
-    boundary.prompt.mockReset();
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('surviving-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      recipientContract={recipientContract}
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('useSavedSecret'));
-    await vi.waitFor(() => expect(boundary.log).toHaveBeenCalled());
-    expect(boundary.mutateAccountSettingsOnce).not.toHaveBeenCalled();
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-    expect(boundary.log.mock.calls.map(([message]) => message)).toEqual([
-      `[voiceRuntimeFailure] ${JSON.stringify({
-        providerId: 'com.acme.voice/conversation',
-        outcome: 'declined',
-        kind: 'voice_credential:useSavedSecret',
-        reason: 'recipient_contract_not_approved',
-      })}`,
-    ]);
+    const screen = await render({ recipientContract });
+    await gesture(screen, 'useSavedSecret');
+    await vi.waitFor(() => expect(failures()).toHaveLength(1));
+    expect(failures()[0]).toContain('recipient_contract_not_approved');
+    expect(failures()[0]).not.toContain('retained-secret');
+    expect(binding()).toBeUndefined();
+    expect(account!.purposes!.writes).toHaveLength(0);
   });
 
-  it('records one bounded failure when the binding cannot reach the source owner', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'surviving-secret',
-        name: 'Voice: acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: { credentialBindings: [] },
-    });
-    // No readable settings version: the source mutation has no CAS basis, so
-    // the gesture cannot write and must say so.
-    boundary.settingsVersion = null;
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.log.mockReset();
-    boundary.confirm.mockReset();
-    boundary.confirm.mockResolvedValue(true);
-    boundary.prompt.mockReset();
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('surviving-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('useSavedSecret'));
-    await vi.waitFor(() => expect(boundary.log).toHaveBeenCalled());
-    expect(boundary.mutateAccountSettingsOnce).not.toHaveBeenCalled();
-    expect(boundary.log.mock.calls.map(([message]) => message)).toEqual([
-      `[voiceRuntimeFailure] ${JSON.stringify({
-        providerId: 'com.acme.voice/conversation',
-        outcome: 'failed',
-        kind: 'voice_credential:useSavedSecret',
-        reason: 'voice_credential_source_declaration_unavailable',
-      })}`,
-    ]);
+  it('reports missing Settings CAS authority instead of claiming the selection changed', async () => {
+    await setup(secretSettings());
+    choose();
+    storage.setState({ settingsVersion: null });
+    const screen = await render();
+    await gesture(screen, 'useSavedSecret');
+    await vi.waitFor(() => expect(failures()[0]).toContain('voice_credential_source_declaration_unavailable'));
+    expect(account!.purposes!.writes).toHaveLength(0);
   });
 
-  it('atomically saves and activates a SavedSecret when the selector purpose is declared', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({});
-    boundary.confirm.mockReset();
-    boundary.confirm.mockResolvedValue(false);
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('sk-atomic');
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    boundary.settingsVersion = 4;
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    let changed: unknown = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input) => {
-      const applied = input.mutate(boundary.settings);
-      changed = applied.settings;
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onPress());
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce());
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-    expect(changed).toMatchObject({
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-          credentialSlotId: 'api-key',
-          credentialSource: { kind: 'savedSecret' },
-        }],
-      },
-    });
+  it('atomically creates and activates the new SavedSecret', async () => {
+    await setup();
+    const changed = vi.fn();
+    const screen = await render({ onChanged: changed });
+    await gesture(screen);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' } });
+    expect(account!.resources).toHaveLength(1);
+    expect(account!.persistedSettings.secrets).toEqual([]);
+    expect(account!.promotions).toHaveLength(1);
   });
 
-  it('fails closed instead of falling back when a qualified declaration is unavailable', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({});
-    setCurrentDeclaration(null);
-    boundary.settingsVersion = 4;
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('sk-legacy');
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
+  it('fails closed when the current qualified declaration is unavailable', async () => {
+    await setup();
+    register(null);
     const { Modal } = await import('@/modal');
-    vi.mocked(Modal.alertAsync).mockClear();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'happier.voice.openai-compat', localId: 'stt' }}
-      credentialSlotId="api_key"
-      credentialSourcePurpose="voice.speech.transcribe"
-      disclosePlainStorage={false}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onPress());
-    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.local.voiceCredential.operationFailed',
-    ));
-    expect(boundary.mutateAccountSettingsOnce).not.toHaveBeenCalled();
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
+    const screen = await render({ credentialSourceDeclaration: undefined });
+    await gesture(screen);
+    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('common.error', 'settingsVoice.local.voiceCredential.operationFailed'));
+    expect(account!.resources).toHaveLength(0);
+    expect(binding()).toBeUndefined();
   });
 
-  it('reports a qualified save-and-use conflict without claiming the credential changed', async () => {
+  it('reports a save conflict without claiming the credential changed', async () => {
+    await setup();
+    account!.setRejectSettingsWrites(true);
+    const changed = vi.fn();
     const { Modal } = await import('@/modal');
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({});
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.settingsVersion = 4;
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('sk-loser');
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    boundary.mutateAccountSettingsOnce.mockResolvedValueOnce({
-      status: 'conflict',
-      currentSettingsVersion: 5,
-    });
-    vi.mocked(Modal.alertAsync).mockClear();
-    const onChanged = vi.fn();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-      onChanged={onChanged}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onPress());
-    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsVoice.local.voiceCredential.operationFailed',
-    ));
-
-    expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce();
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-    expect(onChanged).not.toHaveBeenCalled();
+    const screen = await render({ onChanged: changed });
+    await gesture(screen);
+    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('common.error', 'settingsVoice.local.voiceCredential.operationFailed'));
+    expect(changed).not.toHaveBeenCalled();
+    expect(account!.resources).toHaveLength(0);
+    expect(binding()).toBeUndefined();
   });
 
-  it('reports an ambiguous selected SavedSecret binding without claiming it became effective', async () => {
+  it.each(['useSavedSecret', 'enterNew'] as const)('reports an ambiguous %s write without claiming it became effective', async kind => {
+    await setup(kind === 'useSavedSecret' ? secretSettings() : settingsParse({}));
+    if (kind === 'useSavedSecret') choose();
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    let responseLost = false;
+    setRuntimeFetch(async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (responseLost) throw new TypeError('HTTP unavailable after accepted mutation');
+      const response = await account!.request(url, init);
+      if (init?.method === 'POST' && (path === account!.purposes!.path || path.endsWith('/promote'))) {
+        responseLost = true;
+        throw new TypeError('HTTP response lost after accepted mutation');
+      }
+      return response;
+    });
+    const changed = vi.fn();
     const { Modal } = await import('@/modal');
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({
-      secrets: [{
-        id: 'surviving-secret',
-        name: 'Voice: acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'sk-already-stored' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: { credentialBindings: [] },
-    });
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.settingsVersion = 4;
-    boundary.show.mockReset();
-    boundary.show.mockImplementation((config) => {
-      const picker = config as unknown as Readonly<{
-        props: Readonly<{ onSelectId(id: string | null): void }>;
-      }>;
-      picker.props.onSelectId('surviving-secret');
-      return 'modal-id';
-    });
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    boundary.mutateAccountSettingsOnce.mockResolvedValueOnce({
-      status: 'outcomeUnknown',
-      lastKnownSettingsVersion: 5,
-      safeSnapshotVersion: 5,
-    });
-    boundary.log.mockReset();
-    vi.mocked(Modal.alertAsync).mockClear();
-    const onChanged = vi.fn();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-      onChanged={onChanged}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onSelect('useSavedSecret'));
-    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsProviders.errors.mutationOutcomeUnknownDescription',
-    ));
-
-    expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce();
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-    expect(onChanged).not.toHaveBeenCalled();
-    expect(boundary.log.mock.calls.map(([message]) => message)).toContain(
-      `[voiceRuntimeFailure] ${JSON.stringify({
-        providerId: 'com.acme.voice/conversation',
-        outcome: 'unapplied',
-        kind: 'voice_credential:useSavedSecret',
-        reason: 'saved_secret_binding_outcome_unknown',
-      })}`,
-    );
+    const screen = await render({ onChanged: changed });
+    await gesture(screen, kind);
+    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('common.error', 'settingsProviders.errors.mutationOutcomeUnknownDescription'));
+    expect(changed).not.toHaveBeenCalled();
+    expect(failures()[0]).toContain(kind === 'useSavedSecret' ? 'saved_secret_binding_outcome_unknown' : 'saved_secret_replacement_outcome_unknown');
   });
 
-  it('reports an ambiguous new SavedSecret replacement without firing onChanged', async () => {
-    const { Modal } = await import('@/modal');
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    boundary.settings = settingsParse({});
-    setCurrentDeclaration(VoiceProviderContributionSchema.parse(
-      structuredClone(credentialSourceDeclaration),
-    ));
-    boundary.settingsVersion = 4;
-    boundary.prompt.mockReset();
-    boundary.prompt.mockResolvedValue('sk-possibly-applied');
-    boundary.mutateAccountSettings.mockReset();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    boundary.mutateAccountSettingsOnce.mockResolvedValueOnce({
-      status: 'outcomeUnknown',
-      lastKnownSettingsVersion: 5,
-      safeSnapshotVersion: 5,
-    });
-    boundary.log.mockReset();
-    vi.mocked(Modal.alertAsync).mockClear();
-    const onChanged = vi.fn();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(<VoiceCredentialItem
-      testID="credential"
-      title="API key"
-      promptTitle="Connect"
-      promptDescription="Paste key"
-      contribution={{ pluginId: 'com.acme.voice', localId: 'conversation' }}
-      credentialSlotId="api-key"
-      credentialSourcePurpose="voice.client-auth"
-      credentialSourceDeclaration={credentialSourceDeclaration}
-      disclosePlainStorage={true}
-      onChanged={onChanged}
-    />);
-
-    act(() => screen.tree.findByTestId('credential')?.props.onPress());
-    await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith(
-      'common.error',
-      'settingsProviders.errors.mutationOutcomeUnknownDescription',
-    ));
-
-    expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledOnce();
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-    expect(onChanged).not.toHaveBeenCalled();
-    expect(boundary.log.mock.calls.map(([message]) => message)).toContain(
-      `[voiceRuntimeFailure] ${JSON.stringify({
-        providerId: 'com.acme.voice/conversation',
-        outcome: 'unapplied',
-        kind: 'voice_credential:enterNew',
-        reason: 'saved_secret_replacement_outcome_unknown',
-      })}`,
-    );
+  it('discloses bounded recipient facts and cancellation persists or sends nothing', async () => {
+    await setup();
+    boundary.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const screen = await render({ recipientContract });
+    await gesture(screen);
+    await vi.waitFor(() => expect(boundary.confirm).toHaveBeenCalledTimes(2));
+    const body = String(boundary.confirm.mock.calls[1]?.[1]);
+    for (const fact of ['com.acme.voice', '@acme/voice', 'verified', 'npm:https://registry.npmjs.org:@acme', 'conversation', 'voice.session-create',
+      'mutation', 'POST', 'https://api.example.com', '/v1/sessions', 'authorization', 'bearer', '4096', '65536',
+      'voice.catalog', 'read', 'GET', 'https://catalog.example.com', '/v1/voices', 'x-api-key', 'raw', '0', '32768']) expect(body).toContain(fact);
+    expect(body.indexOf('a-create')).toBeLessThan(body.indexOf('z-catalog'));
+    for (const privateValue of ['new-secret', 'DO_NOT_SHOW_STATIC', 'DO_NOT_SHOW_HEADER', 'DO_NOT_SHOW_BODY']) expect(body).not.toContain(privateValue);
+    expect(account!.resources).toHaveLength(0);
+    expect(binding()).toBeUndefined();
   });
 
-  it('shows every bounded recipient fact and cancellation persists or sends nothing', async () => {
-    boundary.settings = null;
-    boundary.confirm.mockClear();
-    boundary.mutateAccountSettings.mockClear();
-    boundary.prompt.mockClear();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
-    const screen = await renderScreen(React.createElement(VoiceCredentialItem, {
-      testID: 'credential',
-      title: 'API key',
-      promptTitle: 'Connect',
-      promptDescription: 'Paste key',
-      contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api-key',
-      recipientContract,
-      recipientContractDigest: createRecipientContractDigestV1(recipientContract),
-      disclosePlainStorage: true,
-    }));
-
-    await act(async () => {
-      screen.tree.findByTestId('credential')?.props.onPress();
-    });
-    await vi.waitFor(() => expect(boundary.confirm).toHaveBeenCalledTimes(1));
-
-    const approvalBody = String(boundary.confirm.mock.calls[0]?.[1]);
-    expect(approvalBody).toContain('com.acme.voice');
-    expect(approvalBody).toContain('@acme/voice');
-    expect(approvalBody).toContain('verified');
-    expect(approvalBody).toContain('npm:https://registry.npmjs.org:@acme');
-    expect(approvalBody).toContain('conversation');
-    expect(approvalBody.indexOf('a-create')).toBeLessThan(approvalBody.indexOf('z-catalog'));
-    expect(approvalBody).toContain('voice.session-create');
-    expect(approvalBody).toContain('mutation');
-    expect(approvalBody).toContain('POST');
-    expect(approvalBody).toContain('https://api.example.com');
-    expect(approvalBody).toContain('/v1/sessions');
-    expect(approvalBody).toContain('authorization');
-    expect(approvalBody).toContain('bearer');
-    expect(approvalBody).toContain('4096');
-    expect(approvalBody).toContain('65536');
-    expect(approvalBody).toContain('voice.catalog');
-    expect(approvalBody).toContain('read');
-    expect(approvalBody).toContain('GET');
-    expect(approvalBody).toContain('https://catalog.example.com');
-    expect(approvalBody).toContain('/v1/voices');
-    expect(approvalBody).toContain('x-api-key');
-    expect(approvalBody).toContain('raw');
-    expect(approvalBody).toContain('0');
-    expect(approvalBody).toContain('32768');
-    expect(approvalBody).not.toContain('SHOULD_NOT_LEAK');
-    expect(approvalBody).not.toContain('DO_NOT_SHOW_STATIC');
-    expect(approvalBody).not.toContain('DO_NOT_SHOW_HEADER');
-    expect(approvalBody).not.toContain('DO_NOT_SHOW_BODY');
-    expect(boundary.mutateAccountSettings).not.toHaveBeenCalled();
-  });
-
-  it('presents a retained credential with an obsolete recipient digest as requiring review', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    const obsoleteSettings = settingsParse({
-      secrets: [{
-        id: 'credential',
-        name: 'Acme Voice',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'retained-secret' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      voiceSettingsV1: {
-        credentialBindings: [{
-          contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-          credentialSlotId: 'api-key',
-          credentialSource: { kind: 'savedSecret' },
-          approvedRecipientContractDigest: `sha256:${'0'.repeat(64)}`,
-          credentialBindings: {
-            account: { 'api-key': 'credential' },
-          },
-        }],
-      },
-    });
-    boundary.settings = obsoleteSettings;
-    boundary.confirm.mockClear();
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
+  it('requires review of a retained credential and stores approval without disclosing or replacing its material', async () => {
+    await setup(secretSettings('savedSecret', 'stored-secret', `sha256:${'0'.repeat(64)}`));
+    const before = structuredClone(account!.resources);
     const onStatusChanged = vi.fn();
-    const screen = await renderScreen(React.createElement(VoiceCredentialItem, {
-      testID: 'credential',
-      title: 'API key',
-      promptTitle: 'Connect',
-      promptDescription: 'Paste key',
-      contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api-key',
-      recipientContract,
-      recipientContractDigest: createRecipientContractDigestV1(recipientContract),
-      disclosePlainStorage: true,
-      onChanged: vi.fn(),
-      onStatusChanged,
-    }));
-
-    expect(screen.tree.findByTestId('credential')?.props.subtitle)
-      .toBe('settingsVoice.externalCredentials.reviewRequired');
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith({
-      status: 'review_required',
-      exists: true,
-      usable: false,
-      source: 'account',
-      credentialIdentity: 'credential',
-    }));
-
-    boundary.confirm.mockResolvedValueOnce(true);
-    boundary.prompt.mockClear();
-    boundary.mutateAccountSettingsOnce.mockReset();
-    let approvedAccountSettings: unknown = null;
-    boundary.mutateAccountSettingsOnce.mockImplementationOnce(async (input: AccountSettingsMutationInput) => {
-      const applied = input.mutate(obsoleteSettings);
-      approvedAccountSettings = applied.settings;
-      boundary.settings = settingsParse(applied.settings);
-      return { status: 'applied', settingsVersion: 5, value: applied.value };
-    });
-    act(() => {
-      screen.tree.findByTestId('credential')?.props.onPress();
-    });
-    expect(boundary.confirm).not.toHaveBeenCalled();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    await vi.waitFor(() => expect(boundary.mutateAccountSettingsOnce).toHaveBeenCalledTimes(1));
+    const screen = await render({ recipientContract, onStatusChanged });
+    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'review_required', usable: false })));
+    expect(screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle).toBe('settingsVoice.externalCredentials.reviewRequired');
+    await gesture(screen);
+    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'ready', usable: true })));
     expect(boundary.prompt).not.toHaveBeenCalled();
+    expect(account!.resources).toEqual(before);
     expect(JSON.stringify(boundary.confirm.mock.calls)).not.toContain('retained-secret');
-    expect((approvedAccountSettings as {
-      secrets: ReadonlyArray<{ id: string; encryptedValue: unknown }>;
-      voiceSettingsV1: {
-        credentialBindings: ReadonlyArray<{
-          approvedRecipientContractDigest?: string;
-        }>;
-      };
-    }).secrets).toEqual(obsoleteSettings.secrets);
-    expect((approvedAccountSettings as {
-      voiceSettingsV1: {
-        credentialBindings: ReadonlyArray<{
-          approvedRecipientContractDigest?: string;
-        }>;
-      };
-    }).voiceSettingsV1.credentialBindings[0]?.approvedRecipientContractDigest)
-      .toBe(createRecipientContractDigestV1(recipientContract));
-
-    boundary.settings = settingsParse(approvedAccountSettings);
-    onStatusChanged.mockClear();
-    await screen.update(React.createElement(VoiceCredentialItem, {
-      testID: 'credential',
-      title: 'API key',
-      promptTitle: 'Connect',
-      promptDescription: 'Paste key',
-      contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api-key',
-      recipientContract,
-      recipientContractDigest: createRecipientContractDigestV1(recipientContract),
-      disclosePlainStorage: true,
-      onStatusChanged,
-    }));
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith({
-      status: 'ready',
-      exists: true,
-      usable: true,
-      source: 'account',
-      credentialIdentity: 'credential',
-    }));
+    const { resolveAccountVoiceCredentialApprovalDigest } = await import('./accountVoiceCredential');
+    const { resolveSavedSecretReference } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
+    expect(binding()).toMatchObject({ approvedRecipientContractDigest: resolveAccountVoiceCredentialApprovalDigest({
+      requiredRecipientContractDigest: createRecipientContractDigestV1(recipientContract),
+      savedSecret: resolveSavedSecretReference(account!.scope, [], storedRef()),
+    }) });
   });
 
-  it('reports an unreadable account-settings snapshot instead of claiming the key is not saved', async () => {
-    const { settingsParse } = await import('@/sync/domains/settings/settings');
-    const parsed = settingsParse({
-      secrets: [{
-        id: 'credential',
-        name: 'Acme',
-        kind: 'apiKey',
-        encryptedValue: { _isSecretValue: true, value: 'stored-secret' },
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-    });
-    // One non-canonical entry makes the whole `credentialBindings` collection
-    // unreadable. The SavedSecret above is still stored; the row must not tell
-    // the user it was never saved.
-    boundary.settings = {
-      ...parsed,
-      voiceSettingsV1: {
-        ...parsed.voiceSettingsV1,
-        credentialBindings: [{ notACredentialBinding: true }],
-      },
-    } as unknown as Settings;
-
-    const { VoiceCredentialItem } = await import('./CredentialItem');
+  it('reports an unreadable Settings snapshot rather than claiming the stored key is missing', async () => {
+    await setup(secretSettings());
+    const current = storage.getState().settings;
+    const invalid: unknown = { ...current, voiceSettingsV1: { ...current.voiceSettingsV1, credentialBindings: [{ notACredentialBinding: true }] } };
+    // Corrupt persisted input is deliberately outside the typed Settings contract.
+    storage.setState({ settings: invalid as Settings });
     const onStatusChanged = vi.fn();
-    const screen = await renderScreen(React.createElement(VoiceCredentialItem, {
-      testID: 'credential',
-      title: 'API key',
-      promptTitle: 'Connect',
-      promptDescription: 'Paste key',
-      contribution: { pluginId: 'com.acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api-key',
-      disclosePlainStorage: true,
-      onStatusChanged,
-    }));
-
-    expect(screen.tree.findByTestId('credential')?.props.subtitle)
-      .toBe('voice.readiness.credential_unknown');
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith({
-      status: 'unknown',
-      exists: false,
-      usable: false,
-      source: null,
-      credentialIdentity: null,
-    }));
+    const screen = await render({ onStatusChanged });
+    expect(screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle).toBe('voice.readiness.credential_unknown');
+    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith({ status: 'unknown', exists: false, usable: false, source: null, credentialIdentity: null }));
   });
 });

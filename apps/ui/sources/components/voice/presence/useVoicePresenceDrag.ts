@@ -50,6 +50,8 @@ export type VoicePresenceDrag = Readonly<{
     pointerHandlers: Readonly<{ onPointerDown?: (event: unknown) => void }>;
     /** A drag past threshold cancels the tap that would otherwise follow it. */
     shouldSuppressPress: () => boolean;
+    /** Explicit mounted presentation placement uses the same live drag coordinates. */
+    moveTo: (point: CompanionPoint) => void;
 }>;
 
 /**
@@ -200,6 +202,18 @@ export function useVoicePresenceDrag(input: Readonly<{
         [isWeb, nativeShouldSuppressPress, webShouldSuppressPress],
     );
 
+    const moveTo = React.useCallback((point: CompanionPoint) => {
+        const next = clampVoicePresencePoint(point, boundsRef.current);
+        const x = isWeb ? webX : pan.translateX;
+        const y = isWeb ? webY : pan.translateY;
+        cancelAnimation(x);
+        cancelAnimation(y);
+        webPointRef.current = next;
+        x.set(next.x);
+        y.set(next.y);
+        onDragRelease({ point: next, velocityX: 0, velocityY: 0 });
+    }, [isWeb, onDragRelease, pan.translateX, pan.translateY, webX, webY]);
+
     return {
         gesture: pan.gesture,
         translateX: isWeb ? webX : pan.translateX,
@@ -208,5 +222,6 @@ export function useVoicePresenceDrag(input: Readonly<{
         dragTargetRef: webDrag.dragTargetRef,
         pointerHandlers: webDrag.pointerHandlers,
         shouldSuppressPress,
+        moveTo,
     };
 }

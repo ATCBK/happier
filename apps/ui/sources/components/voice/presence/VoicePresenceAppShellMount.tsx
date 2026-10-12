@@ -7,6 +7,7 @@ import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPa
 import {
     useSessionCockpitBottomChromeHeight,
     useSessionCockpitComposerChromeHeight,
+    useSessionCockpitComposerChromeTop,
     useReportSessionCockpitFloatingBottomChromeHeight,
     useSessionCockpitViewerRect,
     useSessionCockpitPetRect,
@@ -63,6 +64,7 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const insets = useChromeSafeAreaInsets();
     const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const composerChromeHeight = useSessionCockpitComposerChromeHeight();
+    const composerChromeTop = useSessionCockpitComposerChromeTop();
     const keyboardHeight = useKeyboardHeight();
     const viewport = useWindowDimensions();
     const viewerRect = useSessionCockpitViewerRect();
@@ -93,7 +95,9 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const reservesComposerSpace = visible && phone && !orb && keyboardHeight === 0;
     const reportBottomReservation = useReportSessionCockpitFloatingBottomChromeHeight(reservesComposerSpace);
     const reportPresenceRect = useReportSessionCockpitVoicePresenceRect(visible);
-    React.useLayoutEffect(() => visible ? registerVoiceGlancePresentation(setOpen) : undefined, [visible]);
+    React.useLayoutEffect(() => visible ? registerVoiceGlancePresentation((expanded) => {
+        if (!expanded || !revealVoiceCompanionSection()) setOpen(expanded);
+    }) : undefined, [visible]);
     if (!visible) return null;
 
     // Desktop mascot windows retain their incumbent band. In-app pets publish their actual
@@ -104,7 +108,9 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const restingBottomInset = resolveVoiceOrbRestingBottomInset({
         safeAreaBottom: insets.bottom,
         bottomChromeHeight,
+        // A phone Island docked under the composer lifts it by its own reservation instead.
         composerChromeHeight: reservesComposerSpace ? 0 : composerChromeHeight,
+        composerTopFromBottom: reservesComposerSpace ? 0 : composerChromeTop,
         keyboardHeight,
         petOffset,
     });

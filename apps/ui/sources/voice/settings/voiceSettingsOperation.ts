@@ -3,9 +3,9 @@ import { readBuiltInSettingsOperationPolicyV1 } from '@happier-dev/protocol/acti
 
 export type VoiceSettingsOperation =
     | 'stt_prepare' | 'stt_remove' | 'stt_update'
-    | 'tts_prepare' | 'tts_remove' | 'tts_update' | 'tts_preview' | 'tts_test'
+    | 'tts_prepare' | 'tts_remove' | 'tts_update' | 'tts_preview' | 'tts_preview_stop' | 'tts_test'
     | 'model_install' | 'model_remove' | 'model_default' | 'models_inspect' | 'readiness_inspect'
-    | 'memory_forget'
+    | 'memory_forget' | 'privacy_policy_open'
     | 'diagnostics_enabled' | 'diagnostics_inspect' | 'diagnostics_export' | 'diagnostics_cleanup'
     | 'diagnostics_delete' | 'diagnostics_session_opt_out' | 'diagnostics_retry_shutdown';
 

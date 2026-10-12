@@ -1,3 +1,4 @@
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { t } from '@/text';
 
 import type { ModelCatalogRow, ModelCatalogRowState } from './buildModelCatalogRows';
@@ -28,22 +29,6 @@ export function modelCatalogStateLabel(state: ModelCatalogRowState): string {
     }
 }
 
-/** Compact human-readable byte size (binary units). */
-export function formatArtifactBytes(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-        return '0 B';
-    }
-    const units = ['B', 'KB', 'MB', 'GB'] as const;
-    let value = bytes;
-    let unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-        value /= 1024;
-        unitIndex += 1;
-    }
-    const rounded = unitIndex === 0 ? Math.round(value) : Math.round(value * 10) / 10;
-    return `${rounded} ${units[unitIndex]}`;
-}
-
 /**
  * Build the per-row detail string: the lifecycle state, plus download progress
  * while downloading, declared artifact bytes when the daemon reports them, and the last
@@ -61,7 +46,7 @@ export function formatModelCatalogRowDetail(row: ModelCatalogRow): string {
         typeof row.loadedArtifactBytes === 'number'
         && (row.state === 'ready' || row.state === 'warming' || row.state === 'evicted')
     ) {
-        parts.push(t('settingsVoice.local.models.modelFiles', { size: formatArtifactBytes(row.loadedArtifactBytes) }));
+        parts.push(t('settingsVoice.local.models.modelFiles', { size: formatHappierDataBytes(row.loadedArtifactBytes, { kind: 'storage' }) }));
     }
     return parts.join(' • ');
 }

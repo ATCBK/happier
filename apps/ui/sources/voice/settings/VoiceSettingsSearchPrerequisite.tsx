@@ -9,6 +9,7 @@ import { readLocalConversationVoiceSettings, type VoiceSettings } from '@/sync/d
 import { t, tLoose } from '@/text';
 import { isLocalVoiceProviderSelected, parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings, resolveLocalVoiceAdapterSettings } from '@/voice/local/localVoiceSettings';
 import { resolveStoredVoiceProviderId } from './resolveVoiceProviderId';
+import { resolveVoiceSttCapturePlan } from '@/voice/runtime/input/resolveVoiceSttCapturePlan';
 import { useVoiceContributedSettingsDeclarations } from './useVoiceContributedSettingRefs';
 import { voiceSettingsDeclarationRegistry } from './voiceContributedSettingsDeclarations';
 import { VOICE_CONVERSATIONS_SETTINGS, VOICE_DICTATION_SETTINGS } from './voiceSettingsDeclarations';
@@ -69,6 +70,9 @@ export function VoiceSettingsSearchPrerequisite(props: Readonly<{
             const resolved = resolveRealtimeProviderConfig({ ...owner, parseConfig: (value) => {
                 const parsed = owner.parseConfig(value);
                 return isSettingsRecord(parsed) ? parsed : null;
+            }, parseStoredConfig: (value) => {
+                const parsed = owner.parseStoredConfig(value);
+                return isSettingsRecord(parsed) ? parsed : null;
             } }, props.voice.providers[entry.providerId] ?? null);
             if (descriptor && resolved.status === 'ready') {
                 const visible = resolveVisibleRealtimeSettingsDescriptor(descriptor, resolved.config);
@@ -99,6 +103,12 @@ export function VoiceSettingsSearchPrerequisite(props: Readonly<{
             reason = selectLocalService();
         } else if (props.intent === 'conversations' && local.adapterId === 'local_direct' && (agentSetting || id === 'conversationMode' || id === 'greeting')) {
             reason = selectLocalService();
+        } else if (props.intent === 'conversations' && (id === 'silenceMs' || id === 'minSpeechMs')
+            && !(local.config.handsFree?.enabled === true && resolveVoiceSttCapturePlan({ voice: props.voice }).provider !== 'recorded_audio')) {
+            // Hands-free timing is drawn only while Hands-free is on (VoiceHearControls).
+            reason = resolveVoiceSttCapturePlan({ voice: props.voice }).provider === 'recorded_audio'
+                ? t('settingsVoice.pages.conversations.handsFreeUnsupported')
+                : t('settingsVoice.pages.conversations.handsFreeTimingUnavailable');
         } else if (id.startsWith('stt') && id !== 'sttProvider' && stt.provider !== 'local_neural') {
             reason = select(t('settingsVoice.local.localNeuralStt.provider.title'), t(props.intent === 'dictation'
                 ? 'settingsVoice.dictation.provider' : 'settingsVoice.pages.conversations.speechRecognitionTitle'));

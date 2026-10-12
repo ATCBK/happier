@@ -412,18 +412,18 @@ async function typeIntoRow(rendered: Awaited<ReturnType<typeof renderScreen>>, t
 await import('./BundledSpeechSettings');
 
 describe('BundledSpeechSettings', () => {
-  it.each(['execution machine', 'Account', 'provider', 'retired provider', 'retired projection', 'unrelated settings'] as const)('applies an endpoint approval only to its current context while retaining unrelated changes: %s', async (change) => {
+  it.each(['execution machine', 'Account', 'provider', 'retired provider', 'retired projection', 'unrelated settings', 'installed first-party'] as const)('applies an endpoint approval only to its current context while retaining unrelated changes: %s', async (change) => {
     const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
-    const entry = createVoiceProviderRegistry({
-      bundledContributions: (OPENAI_COMPAT_MANIFEST.contributes.voiceProviders ?? []).map((value) => VoiceProviderContributionSchema.parse(value)).map((declaration) => ({
-        pluginId: OPENAI_COMPAT_MANIFEST.id, providerId: `${OPENAI_COMPAT_MANIFEST.id}/${declaration.id}`, declaration,
-      })), bundledPresentations: OPENAI_COMPAT_PRESENTATIONS,
-    }).get(OPENAI_COMPAT_TTS_ID);
+    const entry = createDefaultVoiceProviderRegistry().get(OPENAI_COMPAT_TTS_ID);
     if (!entry?.providerSettings) throw new Error('missing canonical speech entry');
     const registrationToken = {};
     commitExternalVoiceProviderRegistration({
       token: registrationToken, pluginId: entry.pluginId, localId: 'tts', providerId: entry.providerId,
-      descriptor: entry, adapter: null, occurrenceId: 'speech-occurrence',
+      descriptor: change === 'installed first-party'
+        ? Object.freeze({ ...entry, settingsSectionId: entry.providerId,
+            source: Object.freeze({ kind: 'external' as const, pluginId: entry.pluginId, localId: 'tts' }) })
+        : entry,
+      adapter: null, occurrenceId: 'speech-occurrence',
     });
     onTestFinished(() => removeExternalVoiceProviderRegistration(registrationToken));
     if (change === 'retired projection') replaceExternalVoiceProviderProjectionAuthority(
@@ -471,7 +471,7 @@ describe('BundledSpeechSettings', () => {
       });
     }
     await act(async () => { pending.resolve(true); await Promise.all(fireAndForgetPromises); });
-    if (change === 'unrelated settings') {
+    if (change === 'unrelated settings' || change === 'installed first-party') {
       expect(setVoice).toHaveBeenLastCalledWith(expect.objectContaining({ providers: expect.objectContaining({
         [OPENAI_COMPAT_TTS_ID]: expect.objectContaining({ config: expect.objectContaining({
           baseUrl: 'http://localhost:11434/v1', insecureLocalOriginConsent: 'http://localhost:11434',

@@ -4,6 +4,7 @@ import { VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS } from '@/sync/domains/settings/v
 import type { MicSession } from '@/voice/runtime/mic/MicSession';
 import type { SttSink } from '@/voice/input/sttController';
 import { createTurnEndpointController } from '@/voice/runtime/input/TurnEndpointController';
+import type { MicrophonePermissionResult } from '@/utils/platform/microphonePermissions';
 
 const platformOsMock = vi.hoisted(() => ({ value: 'ios' }));
 const webVadState = vi.hoisted(() => ({
@@ -27,10 +28,12 @@ vi.mock('react-native', async () => {
   });
 });
 
-const requestMicrophonePermission = vi.fn(async () => ({ granted: true, canAskAgain: true }));
+const requestMicrophonePermission = vi.fn(async (): Promise<MicrophonePermissionResult> => ({ granted: true, canAskAgain: true }));
 const showMicrophonePermissionDeniedAlert = vi.fn();
 
-vi.mock('@/utils/platform/microphonePermissions', () => ({
+// The platform permission prompt and its alert are the boundary; the refusal decision stays real.
+vi.mock('@/utils/platform/microphonePermissions', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/utils/platform/microphonePermissions')>(),
   requestMicrophonePermission,
   showMicrophonePermissionDeniedAlert,
 }));
@@ -209,6 +212,7 @@ describe('createDeviceSttController', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
 
     if (previousWindow === undefined) {
       Reflect.deleteProperty(globalThis as object, 'window');
@@ -668,8 +672,11 @@ describe('createDeviceSttController', () => {
       await controller.start({ micSession, sink });
 
       expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'provider_error',
+        kind: 'speech_recognition_unavailable',
         reason: 'device_stt_unavailable',
+        presentation: 'error',
+        recoverable: false,
+        recoveryAction: 'select_speech_engine',
       }));
       expect(isRecognitionAvailable).toHaveBeenCalledTimes(1);
       expect(requestMicrophonePermission).not.toHaveBeenCalled();
@@ -1097,6 +1104,79 @@ describe('createDeviceSttController', () => {
         reason: 'device_stt_error',
       }),
     });
+  });
+
+  it('fails a missing microphone as unavailable without the permission alert', async () => {
+    requestMicrophonePermission.mockResolvedValueOnce({ granted: false, unavailable: true } as never);
+    showMicrophonePermissionDeniedAlert.mockClear();
+    const { createDeviceSttController } = await import('./DeviceSttController');
+    const { isMicrophoneUnavailableError } = await import('@/utils/platform/microphonePermissions');
+    const controller = createDeviceSttController({ getSettings: () => baseSettings(false) });
+
+    const failure = await controller.start({ micSession: createMicSession(), sink: createSink() }).then(() => null, (error: unknown) => error);
+    expect(isMicrophoneUnavailableError(failure)).toBe(true);
+    expect(showMicrophonePermissionDeniedAlert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not-allowed', 'mic_permission_denied', 'permission_required', 'open_settings'],
+    ['audio-capture', 'mic_unavailable', 'error', 'retry'],
+    ['service-not-allowed', 'speech_recognition_unavailable', 'error', 'select_speech_engine'],
+  ] as const)('surfaces a refused recognizer (%s) as an actionable failed attempt', async (reason, kind, presentation, recoveryAction) => {
+    const sink = createSink();
+    const { createDeviceSttController } = await import('./DeviceSttController');
+    const controller = createDeviceSttController({ getSettings: () => baseSettings(false) });
+
+    await controller.start({ micSession: createMicSession(), sink });
+    listeners.error?.({ error: reason });
+
+    await expect(controller.stop()).resolves.toEqual({ error: expect.objectContaining({ kind, reason }) });
+    expect(sink.onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind, reason, presentation, recoveryAction, recoverable: false }));
+    const { deriveLocalVoiceSessionSnapshot } = await import('@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot');
+    const error = sink.onError.mock.calls[0]?.[0];
+    expect(deriveLocalVoiceSessionSnapshot('local_direct', 'local', {
+      adapterId: null, controlSessionId: 'refused-speech', state: 'error',
+      reconnecting: false, micMuted: false, error,
+    })).toMatchObject({ status: 'error', canStop: false, errorCode: kind, errorRecoveryAction: recoveryAction });
+  });
+
+  it.each(['available', 'missing'] as const)('distinguishes recognizer audio-capture from a %s web microphone', async (microphone) => {
+    platformOsMock.value = 'web';
+    const stopTrack = vi.fn();
+    const getUserMedia = vi.fn(async () => {
+      if (microphone === 'missing') throw new DOMException('No input device', 'NotFoundError');
+      return { getTracks: () => [{ stop: stopTrack }] };
+    });
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    const permissionBoundary = await vi.importActual<typeof import('@/utils/platform/microphonePermissions')>(
+      '@/utils/platform/microphonePermissions',
+    );
+    requestMicrophonePermission.mockImplementationOnce(permissionBoundary.requestMicrophonePermission);
+    const { createDeviceSttController } = await import('./DeviceSttController');
+    const { classifyVoiceMachineError } = await import('@/voice/runtime/machine/voiceMachineError');
+    const micSession = createMicSession();
+    const sink = createSink();
+    const controller = createDeviceSttController({ getSettings: () => baseSettings(false) });
+
+    if (microphone === 'missing') {
+      const failure = await controller.start({ micSession, sink }).then(() => null, (error: unknown) => error);
+      expect(classifyVoiceMachineError(failure)).toMatchObject({
+        kind: 'mic_unavailable', presentation: 'error', recoveryAction: 'retry',
+      });
+      expect(micSession.ensureActive).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } else {
+      await controller.start({ micSession, sink });
+      expect(stopTrack).toHaveBeenCalled();
+      expect(micSession.ensureActive).toHaveBeenCalled();
+      listeners.error?.({ error: 'audio-capture' });
+      expect(await controller.stop()).toMatchObject({ error: {
+        kind: 'speech_recognition_unavailable', reason: 'audio-capture',
+        presentation: 'error', recoveryAction: 'select_speech_engine', recoverable: false,
+      } });
+      expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({ kind: 'speech_recognition_unavailable' }));
+    }
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
   });
 
   it('uses the same typed provider failure for the error sink and terminal stop result', async () => {

@@ -13,6 +13,7 @@ import { resolveDaemonTtsVoiceSelection } from './resolveDaemonTtsVoiceSelection
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import { LocalNeuralTtsSpeedItem } from './LocalNeuralTtsSpeedItem';
+import { resolveLocalNeuralTtsOptions } from '@/voice/local/localVoiceSettings';
 
 export function LocalNeuralTtsSettings(props: {
     cfgKokoro: VoiceLocalTtsSettings['localNeural'];
@@ -28,7 +29,7 @@ export function LocalNeuralTtsSettings(props: {
         platformOs: 'web',
     }), [props.cfgKokoro.execution]);
     const execution = executionPolicy.selectableExecution as 'auto' | 'daemon';
-    const effectiveSpeed = props.cfgKokoro.speed ?? 1;
+    const effectiveSpeed = resolveLocalNeuralTtsOptions(props.cfgKokoro).speed;
     const daemonPackId = React.useMemo(
         () => resolveKokoroDaemonTtsPackId(props.cfgKokoro.assetId),
         [props.cfgKokoro.assetId],

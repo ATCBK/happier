@@ -24,7 +24,12 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { checkMicrophonePermission, requestMicrophonePermission } from '@/utils/platform/microphonePermissions';
+import {
+    checkMicrophonePermission,
+    readMicrophonePermissionState,
+    requestMicrophonePermission,
+    type MicrophonePermissionState,
+} from '@/utils/platform/microphonePermissions';
 import { findVoiceConversationSessionId } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import { useVoiceConversationsReadinessModel } from '@/voice/settings/panels/VoiceProviderSection';
 import { resolveVoiceProviderReadinessPresentation, translateVoiceReadiness } from '@/voice/settings/panels/voiceProviderReadinessPresentation';
@@ -33,12 +38,9 @@ import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutabl
 import { resolveVoiceSettingsRecoveryFocus } from '@/voice/settings/voiceSettingsRouteFocus';
 
 import { useVoiceSetupItem, VOICE_SETUP_STEP_ID } from './useVoiceSetupItem';
-import { useVoiceSetupFirstSuccessEvent } from './useVoiceSetupFirstSuccessEvent';
 import { VoiceSetupPanel, type VoiceSetupPanelActions, type VoiceSetupPanelModel } from './VoiceSetupPanel';
 import type { VoiceSetupFacts } from './voiceSetupFacts';
 import { isVoiceSetupFailed, readVoiceSetupLight, readVoiceSetupNextStep } from './voiceSetupPresentation';
-
-type MicrophonePermission = 'granted' | 'denied' | 'unknown';
 
 /**
  * "Set up voice" as a Get set up block (lab `voice-moments` SA–SV): one item, two hosts — Home's Get
@@ -76,7 +78,7 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
         microphonePermission: microphone.permission,
         conversationSessionAddress,
     });
-    const firstSuccess = useVoiceSetupFirstSuccessEvent(setup.facts.firstTurnComplete, voice.live);
+    const firstSuccess = voice.firstSuccessEvent ?? null;
     const serviceTitle = readinessModel.serviceTiles.find((tile) => tile.selected)?.title ?? null;
     const readinessText = React.useMemo(() => {
         if (!readiness) return null;
@@ -121,8 +123,9 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
         id: VOICE_SETUP_STEP_ID,
         span: input.span,
         registerPresentation: ({ open, close }) => registerVoiceSetupPresentation((expanded) => {
+            if (!(expanded ? open() : close())) return false;
             setPanelOpen(expanded);
-            if (expanded) open(); else close();
+            return true;
         }),
         renderTile: ({ open }) => (
             <VoiceSetupTile
@@ -224,11 +227,15 @@ const VoiceSetupTryReadout = React.memo(function VoiceSetupTryReadout(props: Rea
  * mounts and again when the app comes back to the foreground (the person may have just allowed it in
  * system settings). `allow` is the only path that prompts, and only on a press.
  */
-function useObservedMicrophonePermission(): Readonly<{ permission: MicrophonePermission; allow: () => void }> {
-    const [permission, setPermission] = React.useState<MicrophonePermission>('unknown');
+function useObservedMicrophonePermission(): Readonly<{ permission: MicrophonePermissionState; allow: () => void }> {
+    const [permission, setPermission] = React.useState<MicrophonePermissionState>('unknown');
     const read = React.useCallback(() => {
         void checkMicrophonePermission().then((result) => {
-            setPermission(result.granted ? 'granted' : result.canAskAgain === false ? 'denied' : 'unknown');
+            // A passive read cannot see a missing device; keep the answer the last press observed.
+            setPermission((current) => {
+                const next = readMicrophonePermissionState(result);
+                return next === 'unknown' && current === 'unavailable' ? current : next;
+            });
         });
     }, []);
     React.useEffect(() => {
@@ -239,9 +246,7 @@ function useObservedMicrophonePermission(): Readonly<{ permission: MicrophonePer
         return () => subscription.remove();
     }, [read]);
     const allow = React.useCallback(() => {
-        void requestMicrophonePermission().then((result) => {
-            setPermission(result.granted ? 'granted' : result.canAskAgain === false ? 'denied' : 'unknown');
-        });
+        void requestMicrophonePermission().then((result) => setPermission(readMicrophonePermissionState(result)));
     }, []);
     return { permission, allow };
 }

@@ -301,6 +301,7 @@ describe('bundled realtime provider settings projection', () => {
         schemaVersion: providerSettings.schemaVersion,
         defaultConfig: providerSettings.defaultConfig,
         parseConfig: providerSettings.parseConfig as (value: unknown) => Readonly<Record<string, unknown>> | null,
+        parseStoredConfig: providerSettings.parseStoredConfig as (value: unknown) => Readonly<Record<string, unknown>> | null,
       }, null);
       expect(resolved.status).toBe('ready');
       if (resolved.status !== 'ready') throw new Error('expected ready provider config');

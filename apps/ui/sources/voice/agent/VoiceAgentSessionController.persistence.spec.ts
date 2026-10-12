@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // Install Metro's lazy-loader bridge before storage can import its consumers.
 // The helper returns the actual Sync singleton, without replacing its methods.
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -12,6 +15,8 @@ import {
   type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { AccessibleMachineAccessV1Schema, MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import { storage } from '@/sync/domains/state/storage';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
@@ -19,6 +24,7 @@ import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/acc
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
@@ -208,9 +214,25 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   if (path === '/health') return json({});
   if (path === '/v2/cursor') return json({ cursor: 0, changesFloor: 0 });
   if (path === '/v2/changes') return json({ changes: [], nextCursor: 0 });
+  if (path === '/v2/session-organization') return json({ snapshot: { schemaVersion: 1, version: 1,
+    pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
+  } });
   if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
   if (path === '/v2/account/settings') return json({ content: { t: 'plain', v: state.settings }, version: 1 });
   if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
+  if (path === ACP_CATALOG_ROWS_ROUTE_V1) return json({ status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, definitions: [] } } });
+  if (path === '/v1/account/authoring-memory') return json({ rows: [] });
+  if (path === '/v1/account/project-rows/list') return json({ status: 'listed', rows: [], coverage: 'complete' });
+  if (path === '/v1/artifacts') return json([]);
+  const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
+  if (machineAccess) {
+    const id = decodeURIComponent(machineAccess[1]);
+    const access = AccessibleMachineAccessV1Schema.parse(createPlainMachineRowFixture({ id, accountId: 'account-a' }).access);
+    return json(MachineAccessGrantsListResponseV1Schema.parse({ machineId: id,
+      custodian: access.custodian, access, canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }));
+  }
   if (/^\/v1\/sessions\/[^/]+\/messages$/.test(path)) return json({ messages: [], hasMore: false });
   // Named list resources must precede the generic session-by-id route.
   if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions') {
@@ -243,22 +265,35 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
     }
     return json({ session: current });
   }
-  if (path === '/v1/machines') {
+  const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
+  if (path === '/v1/machines' || machineDetail) {
     await readMachines();
-    return json(Object.values(state.machines).map((machine: any) => ({
-      ...machine, metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null,
+    const rows = Object.values(state.machines).map((machine: any) => ({
+      ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+      ...machine, metadata: machine.metadata ? encodePlainMachineStoredContent({
+        ...createMachineFixture().metadata, ...machine.metadata,
+      }) : null,
       daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-    })));
+    }));
+    return json(machineDetail ? { machine: rows.find(machine => machine.id === decodeURIComponent(machineDetail[1])) } : rows);
   }
   return new Response('{}', { status: 404 });
 }
 
 installDisconnectedServerSocketBoundary((socket) => {
-  socket.connected = true;
-  // This synthetic connected Socket has no network engine; keep outgoing
-  // presence/disconnect packets at the external transport boundary.
-  vi.spyOn(socket.io, '_packet').mockImplementation(() => {});
-  vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
+  vi.mocked(socket.connect).mockImplementation(() => {
+    if (socket.connected) return socket;
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  // The real scoped pool may retain this external Socket across Account
+  // lifetimes; restoring per-test spies must not restore a live SDK transport.
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+    if (event === 'rpc-call') {
+      const request = payload as { method: string; params: unknown };
+      return { ok: true, result: await dispatchMachineRpc(request.method.slice(request.method.indexOf(':') + 1), request.params) };
+    }
     if (event !== 'update-metadata') throw new Error(`Unexpected socket acknowledgement: ${event}`);
     return { result: 'success', version: payload.expectedVersion + 1, metadata: payload.metadata };
   });
@@ -274,17 +309,13 @@ vi.mock('@/modal', async () => {
   }).module;
 });
 
-// Native daemon RPC is the genuine boundary for current Session creation;
-// the retired flat machine-spawn adapter must not replace Action execution.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-  machineRpcWithServerScope: async (request: {
-    method: string;
-    payload: unknown;
-    onIssued?: () => void;
-  }) => {
-    if (request.method !== RPC_METHODS.SESSION_SPAWN_NEW) throw new Error(`Unexpected machine RPC: ${request.method}`);
-    const input = SessionSpawnNewInputV2Schema.parse(request.payload);
-    request.onIssued?.();
+// Fake the external daemon ACK, preserving real scoped RPC/Account routing.
+async function dispatchMachineRpc(method: string, payload: unknown) {
+    if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+      return { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
+    }
+    if (method !== RPC_METHODS.SESSION_SPAWN_NEW) throw new Error(`Unexpected machine RPC: ${method}`);
+    const input = SessionSpawnNewInputV2Schema.parse(payload);
     const spawned = await spawnSession({
       ...input,
       machineId: input.executionTarget.machineId,
@@ -297,10 +328,10 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
       organizationPlacement: { folderId: null, tagIds: [] },
       initialInput: { status: 'notRequested' },
     };
-  },
-}));
+}
 
-// sessionExecutionRunGet is a protocol boundary; keep the mock flexible as the run schema evolves.
+// Pre-existing adapters remain in unchanged Run-only cases. The retained-global
+// authority case below reloads their real owners and uses actual RPC transport.
 const sessionExecutionRunGet = vi.fn(async (..._args: any[]): Promise<any> => ({
   run: buildExecutionRunPublicState({
     transcript: { persistenceMode: 'persistent', epoch: 1 },
@@ -334,6 +365,17 @@ const restoreActionExecutorModuleLoader = await installRealActionExecutorModuleL
 afterAll(() => restoreActionExecutorModuleLoader());
 
 async function loadVoiceAgentPersistenceHarness() {
+  // These client rows are projections of the plain Home census, including its
+  // access authority; an ad-hoc id/metadata object is not a spawn target.
+  for (const [id, value] of Object.entries(state.machines) as Array<[string, Record<string, unknown>]>) {
+    state.machines[id] = { ...value,
+      metadata: value.metadata ? { ...createMachineFixture().metadata, ...value.metadata as Record<string, unknown> } : null,
+      access: createPlainMachineRowFixture({ id, accountId: 'account-a' }).access,
+    };
+  }
+  for (const [serverId, rows] of Object.entries(state.machineListByServerId) as Array<[string, Array<{ id: string }>]>) {
+    state.machineListByServerId[serverId] = rows.map(row => state.machines[row.id] ?? row);
+  }
   const normalize = (id: string, session: Parameters<typeof createSessionFixture>[0]) =>
     createSessionFixture({ ...session, id, serverId: homeId,
       metadata: { path: '/voice', host: 'voice.test',
@@ -352,6 +394,7 @@ async function loadVoiceAgentPersistenceHarness() {
   }
   connection = await restoreServerAccountForTest({
     serverUrl: 'https://voice-persistence.example.test',
+    credentialScope: 'restored-home',
     request: respondToServerRequest,
   });
   storage.setState({ ...state, profileScope: { serverId: homeId, accountId: 'account-a' } });
@@ -1325,6 +1368,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
       daemonState: null,
       daemonStateVersion: 0,
     };
+    state.machineListByServerId = { [homeId]: [state.machines.m1] };
 
     const { VOICE_AGENT_GLOBAL_SESSION_ID, createVoiceExecutionTransport, voiceSessionBindingStore } =
       await loadVoiceAgentPersistenceHarness();
@@ -1772,7 +1816,7 @@ describe('retained global Voice Run authority', () => {
       '@/voice/agent/daemonVoiceAgentClient', '@/voice/context/buildVoiceInitialContext',
       '@/voice/agent/resolveDaemonVoiceAgentModels', '@/voice/agent/ensureVoiceAgentInstallablesBackground',
       '@/sync/ops/sessionExecutionRuns', '@/sync/domains/features/featureDecisionInputs',
-      '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', '@/modal',
+      '@/modal',
     ] as const;
     const incumbentMocks = await Promise.all(internalModules.map(async (id) => [id, await vi.importMock(id)] as const));
     for (const id of internalModules) vi.doUnmock(id);
@@ -1794,7 +1838,7 @@ describe('retained global Voice Run authority', () => {
       const dispatch = vi.fn(async (method: string, _input: unknown): Promise<unknown> => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [retainedRun] };
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return { run: retainedRun };
-        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START) return { ok: true, runId: retainedRun.runId, created: false };
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) return { ok: true, runId: retainedRun.runId, created: false };
         throw new Error(`Unexpected retained Run RPC: ${method}`);
       });
       harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch, initializeSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -1806,7 +1850,7 @@ describe('retained global Voice Run authority', () => {
       });
       expect(harness.handle.voiceAgentId).toBe('run_legacy');
       expect(harness.handle.voicePolicy).toEqual(retainedPolicy);
-      const admitted = dispatch.mock.calls.findIndex(([method]) => method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START);
+      const admitted = dispatch.mock.calls.findIndex(([method]) => method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1);
       expect(dispatch.mock.calls[admitted]?.[1]).toMatchObject({ runId: 'run_legacy' });
       expect(dispatch.mock.calls.slice(0, admitted).some(([method]) => method === SESSION_RPC_METHODS.EXECUTION_RUN_GET)).toBe(true);
       expect(dispatch.mock.calls.slice(admitted + 1).some(([method]) => method === SESSION_RPC_METHODS.EXECUTION_RUN_GET)).toBe(true);

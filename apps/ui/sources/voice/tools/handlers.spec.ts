@@ -20,6 +20,9 @@ import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch'
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import type { AuthContextType } from '@/auth/context/AuthContext';
 import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 import { createVoiceToolHandlers, serializeVoiceActionExecuteResult } from './handlers';
 
@@ -276,7 +279,9 @@ async function createElevenLabsToolHarness() {
   const start = vi.spyOn(Conversation, 'startSession').mockImplementation(async (options) =>
     Reflect.construct(TextConversation, [options, network]));
   onTestFinished(() => start.mockRestore());
-  const runtime = createElevenLabsVoiceProviderRuntime();
+  const runtime = createElevenLabsVoiceProviderRuntime({
+    loadConversationSdk: () => import('@elevenlabs/client'),
+  });
   const lifetime = new AbortController();
   const directEffect = vi.fn(async () => { throw new Error('voice_effect_call_custody_unavailable'); });
   const connection = await runtime.createConnection({
@@ -519,6 +524,7 @@ vi.mock('@/sync/ops', () => ({
 }));
 
 vi.mock('@/track', () => ({
+  tracking: null,
   trackPermissionResponse: (...args: any[]) => trackPermissionResponse(...args),
 }));
 
@@ -537,7 +543,8 @@ vi.mock('@/sync/sync', () => ({
   },
 }));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage', () => ({
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage')>(),
   sendSessionMessageWithServerScope: (args: any) => sendSessionMessageWithServerScope(args),
 }));
 
@@ -587,7 +594,7 @@ vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
 
 const authFixture = {
   isAuthenticated: true,
-  credentials: { token: 'account-token' },
+  credentials: { token: 'e30.eyJzdWIiOiJ2b2ljZS10b29scy1hY2NvdW50In0.signature' },
   credentialAuthorityKind: 'account',
   login: async () => ({ kind: 'completed' as const }),
   loginWithCredentials: async () => ({ kind: 'completed' as const }),
@@ -728,8 +735,24 @@ describe('voice tool handlers', () => {
       if (pathname === '/v1/account/encryption') {
         return Response.json({ mode: 'plain', updatedAt: 1 });
       }
+      if (pathname === '/v1/account/encryption/currentness') {
+        return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+      }
       if (pathname === '/v2/account/settings') {
         return Response.json({ content: { t: 'plain', v: state.settings }, version: 1 });
+      }
+      if (pathname === ACP_CATALOG_ROWS_ROUTE_V1) {
+        return Response.json({ status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, definitions: [] } } });
+      }
+      const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(pathname);
+      if (machineAccess) {
+        const custodian = { accountId: 'voice-tools-account', displayName: 'Voice Tools Account' };
+        return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+          machineId: decodeURIComponent(machineAccess[1]), custodian,
+          access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+          canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+        }));
       }
       if (pathname === '/v1/artifacts' && init?.method === 'POST') {
         const request = JSON.parse(String(init.body)) as {
@@ -1220,6 +1243,11 @@ describe('voice tool handlers', () => {
   });
 
   it('routes strict V2 session creation through the canonical Voice Action executor', async () => {
+    const { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const incumbentHome = getAppliedActiveServerSnapshot();
+    // Restored runtime scopes carry the durable Home identity, not its device alias.
+    publishAppliedActiveServerSnapshot({ ...incumbentHome, serverId: 'server-identity-a' });
+    onTestFinished(() => publishAppliedActiveServerSnapshot(incumbentHome));
     const spawnInput = {
       creationKey: 'manual:voice-v2-contract',
       executionTarget: {
@@ -1405,12 +1433,18 @@ describe('voice tool handlers', () => {
   });
 
   it('can list agent backends and models for spawning via voice', async () => {
+    const { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const incumbentHome = getAppliedActiveServerSnapshot();
+    publishAppliedActiveServerSnapshot({ ...incumbentHome, serverId: 'server-identity-a' });
+    onTestFinished(() => publishAppliedActiveServerSnapshot(incumbentHome));
     const { createVoiceToolHandlers } = await import('./handlers');
-    const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1' });
+    const tools = createVoiceToolHandlers({ resolveSessionId: () => 's1',
+      currentSessionAddress: { serverId: 'server-a', sessionId: 's1' },
+    });
 
     const backendsRaw = await tools.listAgentBackends({});
     const backends = JSON.parse(backendsRaw);
-    expect(backends).toMatchObject({ ok: true });
+    expect(backends, backendsRaw).toMatchObject({ ok: true });
     expect(Array.isArray(backends.items)).toBe(true);
     expect(backends.items.length).toBeGreaterThan(0);
 
@@ -1955,6 +1989,23 @@ describe('voice tool handlers', () => {
     expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: 'server-a', sessionId: 's2' });
   });
 
+  it('does not expose raw Action failure prose in Voice tool results', () => {
+    const serialized = serializeVoiceActionExecuteResult('session.spawn_new', {
+      ok: false,
+      errorCode: 'action_failed',
+      error: 'private connected-service credential refresh transport detail',
+      details: { sessionId: 's1' },
+    });
+
+    expect(JSON.parse(serialized)).toMatchObject({
+      ok: false,
+      errorCode: 'action_failed',
+      errorMessage: 'action_failed',
+      sessionId: 's1',
+    });
+    expect(serialized).not.toContain('private connected-service');
+  });
+
   it('does not serialize a partial tracked-set Action result as full success', () => {
     const serialized = serializeVoiceActionExecuteResult('session.target.tracked.set', {
       ok: true,
@@ -1989,6 +2040,7 @@ describe('voice tool handlers', () => {
 
     const defaultRes = await tools.listSessions({ view: 'summary', limit: 1 });
     const defaultParsed = JSON.parse(defaultRes) as any;
+    expect(defaultParsed, defaultRes).toHaveProperty('sessions');
     expect(defaultParsed.sessions[0].lastMessagePreview).toBeUndefined();
 
     const res = await tools.listSessions({ view: 'summary', limit: 1, includeLastMessagePreview: true });
@@ -2308,7 +2360,7 @@ describe('voice tool handlers', () => {
 });
 
 describe('voice tool reset Account authority', () => {
-  it('increments and persists the transcript epoch through real host admission and Account settings', async () => {
+  it('executes a non-hot-path Action through generic Voice discovery and execution with real approval and Account settings', async () => {
     // Keep untouched incumbent mock families separate from this authoritative case.
     const internalModules = [
       '@/sync/domains/state/storage', '@/auth/storage/tokenStorage', '@/voice/session/voiceSession',
@@ -2328,9 +2380,7 @@ describe('voice tool reset Account authority', () => {
     try {
       const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
       installDisconnectedServerSocketBoundary();
-      const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
-      await adoptHomeProfile({ descriptor: { serverUrl: 'https://voice-settings.example.test',
-        homeServerIdentityId: 'srv_voice-settings-account', displayName: 'Voice Settings Home' }, source: 'manual' });
+      const { adoptHomeProfile, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
       const { settingsParse } = await import('@/sync/domains/settings/settings');
       const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
       account = await createVoiceSettingsAccountTestHarness(settingsParse({ experiments: true,
@@ -2338,6 +2388,10 @@ describe('voice tool reset Account authority', () => {
         voiceSettingsV1: { providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1,
           config: { agent: { transcript: { persistenceMode: 'persistent', epoch: 2 } } } } } },
       }));
+      const accountHome = getServerProfileById(account.scope.serverId);
+      if (!accountHome) throw new Error('Restored Account Home missing');
+      await adoptHomeProfile({ descriptor: { serverUrl: accountHome.serverUrl,
+        homeServerIdentityId: 'srv_voice-settings-account', displayName: 'Voice Settings Home' }, source: 'manual' });
       const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
       const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => account?.scope.accountId ?? null, encryptionMode: 'plain' });
       const settingsRequest = account.request.getMockImplementation();
@@ -2348,7 +2402,15 @@ describe('voice tool reset Account authority', () => {
       });
       const { createVoiceToolHandlers } = await import('./handlers');
       const tools = createVoiceToolHandlers({ resolveSessionId: () => null });
-      pendingReset = tools.resetGlobalVoiceAgent({}, { serverId: account.scope.serverId, effectId: 'voice-reset-test', signal: controller.signal });
+      const { getActionSpec, isVoicePromptHotPathSpec } = await import('@happier-dev/protocol');
+      const { readHappierActionToolResultCandidates } = await import('@happier-dev/protocol/actions/happierActionToolResult');
+      expect(isVoicePromptHotPathSpec(getActionSpec('ui.voice_global.reset'))).toBe(false);
+      const searched = JSON.parse(await tools.searchActionSpecs({ query: 'ui.voice_global.reset' }));
+      expect(searched.actionSpecs).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'ui.voice_global.reset' })]));
+      const discovered = JSON.parse(await tools.getActionSpec({ id: 'ui.voice_global.reset' }));
+      expect(discovered.ok).toBe(true);
+      pendingReset = tools.action_execute({ actionId: 'ui.voice_global.reset', input: {} },
+        { serverId: account.scope.serverId, effectId: 'voice-reset-test', signal: controller.signal });
       const { ApprovalRequestSchema } = await import('@happier-dev/protocol');
       const approval = await vi.waitFor(() => {
         const row = artifacts.list().find((candidate) => {
@@ -2371,6 +2433,9 @@ describe('voice tool reset Account authority', () => {
       expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
       const result = JSON.parse(await pendingReset);
       expect(result).toMatchObject({ ok: true });
+      expect(readHappierActionToolResultCandidates(result)).toContainEqual({ ok: true, result: expect.objectContaining({
+        kind: 'approval_request_created', actionId: 'ui.voice_global.reset', artifactId: approval.id,
+      }) });
       await vi.waitFor(() => expect(account?.persistedSettings.voice.providers.local_conversation?.config).toMatchObject({
         agent: { transcript: { persistenceMode: 'persistent', epoch: 3 } },
       }));

@@ -1,143 +1,69 @@
 import React from 'react';
-import { act, ReactTestRenderer } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import { voiceSettingsDefaults } from '@/sync/domains/settings/voiceSettings';
-import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { findAllHostTestInstances, renderScreen, standardCleanup } from '@/dev/testkit';
+import { readLocalConversationVoiceSettings, voiceSettingsDefaults } from '@/sync/domains/settings/voiceSettings';
+import { t } from '@/text';
+import { LocalVoiceTtsGroup } from './LocalVoiceTtsGroup';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-installLocalTtsCommonModuleMocks();
-
-const providerTestSpy = vi.fn();
-const primeWebAudioPlaybackSpy = vi.fn();
-
-vi.mock('@expo/vector-icons', () => ({
-  Ionicons: 'Ionicons',
+const deviceSpeech = vi.hoisted(() => ({
+  speak: vi.fn<typeof import('expo-speech').speak>(),
+  stop: vi.fn<typeof import('expo-speech').stop>(),
 }));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: any) => React.createElement('Item', props),
-}));
+// The device speech SDK is the external boundary; the provider catalog,
+// settings controls, playback lease and speaking state remain real.
+vi.mock('expo-speech', () => deviceSpeech);
+vi.mock('react-native', async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock();
+});
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-  DropdownMenu: (props: any) =>
-    React.createElement(
-      'DropdownMenu',
-      props,
-      typeof props.trigger === 'function' ? props.trigger({ open: false, toggle: () => {} }) : props.trigger,
-    ),
-}));
-
-vi.mock('@/components/ui/forms/Switch', () => ({
-  Switch: (props: any) => React.createElement('Switch', props),
-}));
-
-vi.mock('@/voice/settings/panels/localTts/providers/registry', () => ({
-  useLocalTtsProviderSpecs: () => [{ id: 'local_neural', title: 'Local neural', subtitle: '', iconName: 'sparkle' }],
-  getLocalTtsProviderSpec: () => ({
-    id: 'local_neural',
-    title: 'Local neural',
-    subtitle: '',
-    iconName: 'sparkle',
-    Settings: () => null,
-    test: (...args: any[]) => providerTestSpy(...args),
-  }),
-}));
-
-vi.mock('@/voice/local/formatVoiceTestFailureMessage', () => ({
-  formatVoiceTestFailureMessage: (_title: string, err: unknown) => String((err as any)?.message ?? err),
-}));
-
-vi.mock('@/voice/output/webAudioContext', () => ({
-  primeWebAudioPlayback: () => primeWebAudioPlaybackSpy(),
-}));
+async function renderTtsGroup() {
+  return await renderScreen(<LocalVoiceTtsGroup
+    cfgTts={{ ...readLocalConversationVoiceSettings(voiceSettingsDefaults).tts, provider: 'device' }}
+    setTts={vi.fn()}
+    voice={voiceSettingsDefaults}
+    setVoice={vi.fn()}
+    networkTimeoutMs={15000}
+    popoverBoundaryRef={null}
+  />);
+}
 
 describe('LocalVoiceTtsGroup', () => {
   beforeEach(() => {
-    providerTestSpy.mockReset();
-    primeWebAudioPlaybackSpy.mockReset();
+    deviceSpeech.speak.mockReset();
+    deviceSpeech.stop.mockReset();
   });
+  afterEach(standardCleanup);
 
   it('uses the localized row title as the accessible name of its switch', async () => {
-    const { LocalVoiceTtsGroup } = await import('./LocalVoiceTtsGroup');
-    const screen = await renderScreen(React.createElement(LocalVoiceTtsGroup, {
-      cfgTts: {
-        provider: 'local_neural',
-        autoSpeakReplies: false,
-        bargeInEnabled: false,
-        localNeural: { model: 'kokoro', assetId: null, voiceId: null, speed: null, execution: 'auto' },
-        openaiCompat: { baseUrl: null, apiKey: null, model: null, voice: null, format: null },
-        googleCloud: null,
-      } as any,
-      setTts: vi.fn(),
-      voice: voiceSettingsDefaults,
-      setVoice: vi.fn(),
-      networkTimeoutMs: 15000,
-      popoverBoundaryRef: null,
-    }));
-
-    const switchRows = screen.tree.root.findAllByType('Item' as any)
-      .filter((row) => row.props.rightElement?.props?.accessibilityLabel !== undefined);
-    expect(switchRows.map((row) => ({
-      title: row.props.title,
-      accessibilityLabel: row.props.rightElement.props.accessibilityLabel,
-    }))).toEqual([
-      {
-        title: 'settingsVoice.local.autoSpeak',
-        accessibilityLabel: 'settingsVoice.local.autoSpeak',
-      },
-    ]);
+    const screen = await renderTtsGroup();
+    const switches = findAllHostTestInstances(screen.tree.root, node => (
+      (node.props.accessibilityRole ?? node.props.role) === 'switch'
+    ));
+    expect(switches).toHaveLength(1);
+    expect(switches[0].props.accessibilityLabel ?? switches[0].props['aria-label']).toBe(t('settingsVoice.local.autoSpeak'));
   });
 
-  it('shows a speaking status while test is running', async () => {
-    let resolve!: () => void;
-    providerTestSpy.mockImplementationOnce(() => new Promise<void>((r) => { resolve = r; }));
-
-    const { LocalVoiceTtsGroup } = await import('./LocalVoiceTtsGroup');
-
-    let tree!: ReactTestRenderer;
-    tree = (await renderScreen(React.createElement(LocalVoiceTtsGroup, {
-          cfgTts: {
-            provider: 'local_neural',
-            autoSpeakReplies: false,
-            bargeInEnabled: false,
-            localNeural: { model: 'kokoro', assetId: null, voiceId: null, speed: null, execution: 'auto' },
-            openaiCompat: { baseUrl: null, apiKey: null, model: null, voice: null, format: null },
-            googleCloud: null,
-          } as any,
-          setTts: vi.fn(),
-          voice: voiceSettingsDefaults,
-          setVoice: vi.fn(),
-          networkTimeoutMs: 15000,
-          popoverBoundaryRef: null,
-        }))).tree;
-
-    const getTestItem = () =>
-      tree.root
-        .findAll((n) => n.props?.title === 'settingsVoice.local.testTts')
-        .find((n) => typeof n.props?.onPress === 'function')!;
-
-    expect(getTestItem().props.detail).toBe('common.none');
-
-    await act(async () => {
-      await pressTestInstanceAsync(getTestItem());
+  it('shows a speaking status until the device speech operation settles', async () => {
+    let finishSpeech: (() => void) | undefined;
+    deviceSpeech.speak.mockImplementation((_text, options) => {
+      finishSpeech = () => options?.onDone?.();
     });
-    await act(async () => {});
+    const screen = await renderTtsGroup();
+    expect(screen.getTextContent()).toContain(t('settingsVoice.local.testTtsSubtitle'));
 
-    expect(primeWebAudioPlaybackSpy).toHaveBeenCalledTimes(1);
-    expect(getTestItem().props.detail).toBe('settingsVoice.local.speaking');
-
+    await screen.pressByTestIdAsync('settings.voice.local.testTts');
     await act(async () => {
-      resolve();
+      expect(finishSpeech).toBeTypeOf('function');
     });
-    await act(async () => {});
+    expect(screen.getTextContent()).toContain(t('settingsVoice.local.speaking'));
+    expect(screen.getTextContent()).not.toContain(t('settingsVoice.local.testTtsSubtitle'));
 
-    expect(getTestItem().props.detail).toBe('common.none');
+    await act(async () => { finishSpeech?.(); });
+    expect(screen.getTextContent()).toContain(t('settingsVoice.local.testTtsSubtitle'));
+    expect(screen.getTextContent()).not.toContain(t('settingsVoice.local.speaking'));
   });
 });

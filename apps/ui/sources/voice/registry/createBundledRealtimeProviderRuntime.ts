@@ -1464,6 +1464,7 @@ export function createBundledRealtimeProviderRuntime(
       controlSessionId,
       adapterId: providerId,
       effectCalls: config.protocol.toolEffectCalls ?? 'none',
+      exposure: config.execution.kind === 'direct_media' ? 'voice_assistant' : 'current_ui_only',
       resolveSessionId: (explicitSessionId) => explicitSessionId
         ?? host.resolveConversationSessionId(controlSessionId, providerId),
       async submitResults(_responseId, results, signal) {

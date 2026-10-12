@@ -16,6 +16,9 @@ import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { AccountProfileSchema, type AccountProfile } from '@happier-dev/protocol/account/profile';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 // Genuine unavailable native/platform boundaries only; Dropdown, Account,
 // Sync, purpose loading, normalization and mutation owners stay real.
@@ -180,6 +183,7 @@ function installCodexDescriptor(options: Readonly<{
         modes: [{
           id: 'oauth',
           kind: 'oauthAuthorizationCode',
+          callbackUrl: 'http://127.0.0.1:4000/auth/callback',
           scopes: ['openid', 'profile', 'email', 'offline_access'],
           pkce: 'required',
           outcomeReconciliation: 'none',

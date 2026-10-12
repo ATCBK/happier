@@ -51,9 +51,8 @@ export const VoiceTransport = React.memo(function VoiceTransport(props: Readonly
                 size="mini"
                 capsuleHeight={geometry.recovery}
                 textStyle={{ fontSize: geometry.recoveryFont, lineHeight: Math.round(geometry.recoveryFont * 1.3) }}
-                // The short verb (Allow · Retry · Set up) is drawn; the full recovery is its name.
-                title={voice.recoveryShortLabel ?? voice.recoveryLabel}
-                accessibilityLabel={voice.recoveryLabel}
+                // One label (Allow · Retry · Set up), drawn and announced alike.
+                title={voice.recoveryLabel}
                 onPress={voice.onRecover}
             />
         )

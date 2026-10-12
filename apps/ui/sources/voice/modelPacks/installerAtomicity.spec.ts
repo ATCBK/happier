@@ -8,7 +8,7 @@ import {
   getModelPackInstallSummary,
   removeModelPack,
 } from '@/voice/modelPacks/installer.native';
-import { createMemFs } from '@/voice/modelPacks/installerTestFs';
+import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
@@ -85,7 +85,7 @@ describe('modelPacks installer (native) atomicity', () => {
       manifestUrl: 'https://example.com/manifest.json',
       timeoutMs: 5000,
       signal: new AbortController().signal,
-    }, { fs, fetch: fetchImpl as any });
+    }, { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any });
     await downloadStarted;
 
     await expect(removeModelPack({ packId }, { fs }))
@@ -210,7 +210,7 @@ describe('modelPacks installer (native) atomicity', () => {
           timeoutMs: 5000,
           signal: new AbortController().signal,
         },
-        { fs, fetch: fetchImpl as any },
+        { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any },
       ),
     ).rejects.toThrow();
 
@@ -291,7 +291,7 @@ describe('modelPacks installer (native) atomicity', () => {
         timeoutMs: 5000,
         signal: new AbortController().signal,
       },
-      { fs, fetch: fetchImpl as any },
+      { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any },
     );
 
     expect(result.manifest.version).toBe('v2');
@@ -354,7 +354,7 @@ describe('modelPacks installer (native) atomicity', () => {
       const live = files.get(`${liveRoot}/model.onnx`);
       observed.push({ packDirUri, liveBytes: live ? sha256Hex(live) : null });
     };
-    const overrides = { fs, fetch: fetchImpl as any, invalidatePackRuntime };
+    const overrides = { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any, invalidatePackRuntime };
 
     await ensureModelPackInstalled({
       packId,
@@ -511,7 +511,7 @@ describe('modelPacks installer (native) atomicity', () => {
         },
       } as any;
     };
-    const overrides = { fs, fetch: fetchImpl as any, invalidatePackRuntime };
+    const overrides = { download: createMemNativeDownload(fs, fetchImpl as any), fs, fetch: fetchImpl as any, invalidatePackRuntime };
 
     await ensureModelPackInstalled({
       packId,

@@ -9,6 +9,7 @@ import {
   type VoiceUiRuntimeContribution,
 } from './providerRegistry';
 import { createDefaultVoiceProviderRegistry } from './defaultRegistry';
+import { projectVoiceProviderSelectionRows } from './providerSelection';
 import { BUILT_IN_VOICE_UI_ENTRIES } from './builtInEntries';
 import {
   commitExternalVoiceProviderRegistration,
@@ -410,10 +411,10 @@ describe('voice provider registry', () => {
   });
 
   it('uses one projection-authoritative unique identity for get and list', () => {
-    const providerId = 'happier.voice.google/gemini-stt';
+    const providerId = 'happier.voice.fixture/installed-stt';
     const registry = createDefaultVoiceProviderRegistry();
-    const fallback = registry.get(providerId);
-    if (!fallback) throw new Error('expected generated fallback provider');
+    const fallback = createVoiceProviderRegistry({ builtIn: [contribution(providerId)] }).get(providerId);
+    if (!fallback) throw new Error('expected external fixture descriptor');
     const token = Object.freeze({});
     try {
       replaceExternalVoiceProviderProjectionAuthority(null, token, new Map([[providerId, 'google-occurrence-7']]));
@@ -460,7 +461,62 @@ describe('voice provider registry', () => {
       removeExternalVoiceProviderRegistration(token);
     }
 
-    expect(registry.get(providerId)?.source.kind).toBe('bundled');
+    expect(registry.get(providerId)).toBeNull();
+  });
+
+  it('keeps each first-party service and its declared gallery modes identical before and after installed admission', () => {
+    const registry = createDefaultVoiceProviderRegistry();
+    const services = registry.list().filter((entry) => entry.source.kind === 'bundled');
+    const settings = { providerId: 'happier.voice.openai/realtime-openai', providers: {} };
+    const discoveryRows = projectVoiceProviderSelectionRows(settings, registry);
+    expect(discoveryRows).toHaveLength(6);
+    const token = Object.freeze({});
+    try {
+      for (const service of services) {
+        if (!service.declaration || !service.providerSettings) throw new Error('expected declared first-party settings');
+        const selectionOptions = service.kind === 'voice.conversation-provider.v1'
+          ? [{ id: 'default', modeId: 'default', order: 10_000,
+              titleKey: service.declaration.id, subtitleKey: '', configPatch: service.providerSettings.defaultConfig }]
+          : [];
+        // The real installed declaration projector creates this generic descriptor.
+        commitExternalVoiceProviderRegistration({
+          token, pluginId: service.pluginId, localId: service.declaration.id,
+          providerId: service.providerId, occurrenceId: `${service.providerId}-current`, adapter: null,
+          descriptor: Object.freeze({
+            ...service,
+            ...projectVoiceProviderDeclarationRegistryBase({
+              declaration: service.declaration, providerSettings: service.providerSettings, selectionOptions,
+            }),
+            settingsSectionId: service.providerId,
+            presentation: undefined,
+            source: { kind: 'external' as const, pluginId: service.pluginId, localId: service.declaration.id },
+          }),
+        });
+      }
+      const installedRows = projectVoiceProviderSelectionRows(settings, registry);
+      replaceExternalVoiceProviderProjectionAuthority(null, token, new Map(
+        services.map((service) => [service.providerId, `${service.providerId}-current`]),
+      ));
+      const admittedRows = projectVoiceProviderSelectionRows(settings, registry);
+      expect(installedRows).toEqual(discoveryRows);
+      expect(admittedRows).toEqual(discoveryRows);
+      for (const service of services) {
+        expect(registry.get(service.providerId)).toBe(service);
+        expect(registry.list().filter((entry) => entry.providerId === service.providerId)).toEqual([service]);
+      }
+      const disabled = createDefaultVoiceProviderRegistry({ enabledPluginIds: new Set() });
+      expect(disabled.list().every((entry) => entry.source.kind === 'built_in')).toBe(true);
+      const service = services[0]!;
+      commitExternalVoiceProviderRegistration({
+        token, pluginId: service.pluginId, localId: service.declaration!.id,
+        providerId: service.providerId, occurrenceId: `${service.providerId}-stale`, adapter: null,
+        descriptor: service,
+      });
+      expect(registry.get(service.providerId)).toBeNull();
+    } finally {
+      removeExternalVoiceProviderRegistration(token);
+    }
+    expect(projectVoiceProviderSelectionRows(settings, registry)).toEqual(discoveryRows);
   });
 
   it('does not re-admit disabled generated providers while projection authority is available', () => {

@@ -35,6 +35,15 @@ export type VoiceOrbBottomChrome = Readonly<{
     /** The session composer band that floats above the tab bar. `0` when no composer is on screen. */
     composerChromeHeight: number;
     /**
+     * Where the composer band actually starts: its measured top edge, as a distance up from the
+     * host's bottom edge (`0` when unmeasured or not on screen).
+     *
+     * The height alone only says how tall the band is. On a phone the band sits flush on the tab
+     * bar, so safe area + bar + height is its top; on desktop the workspace frame lifts it above
+     * the window edge, and a float placed from the height alone lands on the composer's meters.
+     */
+    composerTopFromBottom?: number;
+    /**
      * The soft keyboard, above the safe-area inset.
      *
      * It **replaces** the tab bar rather than stacking on it: the mobile bottom chrome collapses to
@@ -59,9 +68,12 @@ function nonNegative(value: number): number {
  * re-derive it.
  */
 export function resolveVoiceOrbRestingBottomInset(chrome: VoiceOrbBottomChrome): number {
-    return nonNegative(chrome.safeAreaBottom)
+    // The stacked bands are a floor: they stay right while the keyboard lifts the composer past
+    // its last measured top. The measured top wins wherever the band sits higher than the stack.
+    const stacked = nonNegative(chrome.safeAreaBottom)
         + Math.max(nonNegative(chrome.bottomChromeHeight), nonNegative(chrome.keyboardHeight))
-        + nonNegative(chrome.composerChromeHeight)
+        + nonNegative(chrome.composerChromeHeight);
+    return Math.max(stacked, nonNegative(chrome.composerTopFromBottom ?? 0))
         + VOICE_ORB_CHROME_GAP
         + nonNegative(chrome.petOffset);
 }

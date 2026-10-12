@@ -9,7 +9,7 @@ import { parseLocalVoiceSttSettings, parseLocalVoiceTtsSettings, resolveLocalVoi
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import type { VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { projectVoiceProviderRequirements, type VoiceRoleReadiness } from '@/voice/registry/readiness';
-import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
+import type { LocalSttProviderSpec } from '@/voice/settings/panels/localStt/providers/_types';
 import { getLocalSttProviderSpec } from '@/voice/settings/panels/localStt/providers/registry';
 import { getLocalTtsProviderSpec } from '@/voice/settings/panels/localTts/providers/registry';
 import {
@@ -44,9 +44,11 @@ function speechPlacement(
     providerId: string,
     localNeuralExecution: LocalNeuralExecution | null,
     machine: VoicePipelineMachine,
+    spec: Pick<LocalSttProviderSpec, 'resolvePreferredExecution'> | null,
 ): Placement {
-    if (providerId === 'local_neural') {
-        return resolveLocalNeuralExecutionPolicy({ requestedExecution: localNeuralExecution }).preferredExecution === 'daemon'
+    const execution = spec?.resolvePreferredExecution?.(localNeuralExecution);
+    if (execution) {
+        return execution === 'daemon'
             ? onMachine(machine)
             : { kind: 'this_device' };
     }
@@ -94,14 +96,14 @@ export function buildLocalVoiceConversationSteps(
         {
             roles: ['hear'],
             engine: { kind: 'speech', providerId: stt.provider, title: sttSpec?.title ?? stt.provider },
-            placement: speechPlacement(registry, stt.provider, stt.localNeural?.execution ?? null, machine),
+            placement: speechPlacement(registry, stt.provider, stt.localNeural?.execution ?? null, machine, sttSpec),
             readiness: speechReadiness?.hear ?? null,
         },
         think,
         {
             roles: ['speak'],
             engine: { kind: 'speech', providerId: tts.provider, title: ttsSpec?.title ?? tts.provider },
-            placement: speechPlacement(registry, tts.provider, tts.localNeural?.execution ?? null, machine),
+            placement: speechPlacement(registry, tts.provider, tts.localNeural?.execution ?? null, machine, ttsSpec),
             readiness: speechReadiness?.speak ?? null,
         },
     ];
@@ -199,7 +201,8 @@ export function buildVoiceDictationPipeline(input: Readonly<{
             {
                 roles: ['hear'],
                 engine: { kind: 'speech', providerId: input.sttProviderId, title: input.sttTitle },
-                placement: speechPlacement(registry, input.sttProviderId, input.localNeuralExecution, input.machine),
+                placement: speechPlacement(registry, input.sttProviderId, input.localNeuralExecution, input.machine,
+                    getLocalSttProviderSpec(input.sttProviderId, 'dictation_stt')),
                 readiness: input.readiness,
             },
             {

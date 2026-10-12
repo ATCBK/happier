@@ -91,6 +91,9 @@ let state: any = {
 
 installVoiceAgentCommonModuleMocks();
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 
@@ -155,6 +158,7 @@ describe('initializeVoiceAgentHandle', () => {
         let wireSession: V2SessionByIdResponse['session'] | undefined;
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://voice-initialize.example.test',
+            credentialScope: 'restored-home',
             // Session HTTP is a genuine boundary. Retained-run adoption writes
             // its pointer through the real metadata tuple owner, not a stub.
             request: async (url, init) => {
@@ -583,6 +587,10 @@ describe('initializeVoiceAgentHandle', () => {
             },
         });
 
+        // Publish the parsed Account settings through the real store. Async
+        // Account restoration may have replaced the previously captured root.
+        storage.setState({ settings: state.settings });
+
         try {
             await initializeVoiceAgentHandle({
                 sessionId: 's1',
@@ -613,6 +621,7 @@ describe('initializeVoiceAgentHandle', () => {
             }));
         } finally {
             state.settings = originalSettings;
+            storage.setState({ settings: originalSettings });
         }
     });
 

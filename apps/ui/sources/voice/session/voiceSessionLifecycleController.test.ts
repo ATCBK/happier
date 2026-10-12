@@ -1085,7 +1085,7 @@ describe('createVoiceSessionLifecycleController', () => {
 
         controller.setConfiguredProviderId('local_conversation');
         expect(sourceAdapter.stop).toHaveBeenCalledTimes(1);
-        expect(targetAdapter.start).toHaveBeenCalledTimes(1);
+        expect(targetAdapter.start).not.toHaveBeenCalled();
         expect(controller.getSnapshot()).toMatchObject({
             adapterId: null,
             sessionId: null,
@@ -1109,7 +1109,10 @@ describe('createVoiceSessionLifecycleController', () => {
             mode: 'idle',
             canStop: false,
         });
-        expect(targetAdapter.start).toHaveBeenCalledTimes(1);
+        expect(targetAdapter.start).not.toHaveBeenCalled();
+
+        stopDeferred.resolve();
+        await vi.waitFor(() => expect(targetAdapter.start).toHaveBeenCalledTimes(1));
 
         targetAdapter.setSnapshot({
             adapterId: 'local_conversation',
@@ -1127,7 +1130,6 @@ describe('createVoiceSessionLifecycleController', () => {
             canStop: true,
         });
 
-        stopDeferred.resolve();
         await sourceAdapter.stop.mock.results[0]?.value;
         targetStartDeferred.resolve();
         await targetAdapter.start.mock.results[0]?.value;

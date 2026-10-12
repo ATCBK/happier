@@ -23,6 +23,19 @@ describe('readVoiceCredentialAuthorityRefs', () => {
     config: { voice: 'marin' },
   } as const;
 
+  it('projects retired stored fields without changing selected credential authority', () => {
+    const refs = readVoiceCredentialAuthorityRefs({ credentialBindings: [{ ...selectedBinding, retired: true,
+      contribution: { ...selectedBinding.contribution, retired: true },
+      credentialSource: { ...selectedBinding.credentialSource, retired: true },
+      credentialBindings: { ...selectedBinding.credentialBindings, retired: true } }],
+      providers: { [selectedProviderId]: { ...providerEnvelope, retired: true } },
+    }, selectedProviderId, 'api_key');
+    expect(refs).toEqual({ credentialBinding: selectedBinding, providerEnvelope });
+    expect(readVoiceCredentialAuthorityRefs({ credentialBindings: [{ ...selectedBinding,
+      credentialSource: { kind: 'retired' } }], providers: { [selectedProviderId]: providerEnvelope },
+    }, selectedProviderId, 'api_key').credentialBinding).toBeNull();
+  });
+
   it('reads only the selected qualified contribution from canonical Voice settings', () => {
     expect(readVoiceCredentialAuthorityRefs({
       credentialBindings: [

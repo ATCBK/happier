@@ -71,7 +71,9 @@ import { activate as activateOpenAiVoice } from '../../../../../packages/plugins
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import { createVoiceClientRawCredentialAccess } from '@/voice/credentials/rawCredentialClient';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -79,13 +81,19 @@ import { createBundledConversationRuntimeHostLease } from './bundledConversation
 import { BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS } from './generatedBundledVoiceEntries';
 
 let preparationHome: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+let preparationPurposes: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary>;
 beforeEach(async () => {
+  preparationPurposes = createConnectedPurposeCatalogHttpBoundary();
   const response = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async path =>
-    path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
+  preparationHome = await createPlainArtifactHomeFixture('https://voice-preparation.example', { handleRequest: async (path, init) =>
+    await preparationPurposes.handle(new URL(path, 'https://voice-preparation.example'), init)
+      ?? (path === '/v2/account/settings' ? response({ version: 1, content: { t: 'plain', v: {} } })
       : path === PROMPT_LIBRARY_ROWS_ROUTE_V1 ? response({ status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
         key, revision: 1, content: key === 'voice' ? { t: 'plain', v: { key, value: { v: 1, scope: { kind: 'voice' }, entries: [] } } } : null,
-      })) }) : null });
+      })) }) : null) });
+  await preparationPurposes.hydrate({ serverId: preparationHome.home.id, accountId: 'artifact-account' });
+  const machine = createMachineFixture({ activeAt: Date.now() });
+  storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [preparationHome.home.id]: [machine] } });
 });
 afterEach(() => preparationHome.dispose());
 
@@ -132,11 +140,6 @@ function provideClientActionSchemas(action: PluginProjectedActionV2): void {
     mediatedCredentialMachineRpc.mockImplementation(previousImplementation ?? (() => undefined));
   });
 }
-
-vi.mock('@/voice/settings/executionMachine', () => ({
-  resolveVoiceExecutionMachineId: () => 'machine-1',
-  isCapturedVoiceExecutionMachineCurrent: (machineId: string) => machineId === 'machine-1',
-}));
 
 const providerId = 'acme.synthetic-voice/conversation';
 const parsedDeclaration = PluginContributesV2Schema.parse({ voiceProviders: [{
@@ -1283,24 +1286,15 @@ describe('external Voice provider host composition', () => {
             credentialBindings: { account: {} },
           }],
         },
-        connectedAccountPurposeBindingsV1: {
-          v: 1 as const,
-          bindings: [{
-            purpose: { consumer: contribution, purpose: 'voice.client-auth' },
-            target: {
-              kind: 'account' as const,
-              account: {
-                service: {
-                  pluginId: 'happier.agent.codex',
-                  localId: 'openai-codex',
-                },
-                accountId: 'codex-work',
-              },
-            },
-          }],
-        },
       },
     }) as never);
+    preparationPurposes = createConnectedPurposeCatalogHttpBoundary({ initialValue: {
+      v: 1,
+      bindings: [{ purpose: { consumer: contribution, purpose: 'voice.client-auth' },
+        target: { kind: 'account', account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'codex-work' } },
+      }],
+    } });
+    await preparationPurposes.hydrate({ serverId: preparationHome.home.id, accountId: 'artifact-account' });
     mediatedCredentialMachineRpc.mockResolvedValue({
       ok: true,
       response: { status: 200, finalUrl: 'https://voice.example.test/v1/session', headers: { 'content-type': 'application/json' }, bodyBase64: 'eyJvayI6dHJ1ZX0=' },

@@ -72,6 +72,9 @@ export const VoiceGlance = React.memo(function VoiceGlance(props: Readonly<{
             title={boundName ? t('sessionVoice.talkingTo', { name: boundName }) : t('voicePresence.title')}
             source={source}
             menu={props.menu}
+            // Alone on its own floating surface (popover, sheet) the surface is the boundary; the
+            // "next item" hairline belongs only between Companion items.
+            grouped={props.presentation !== 'companion'}
             // The call's clock reads with its title ("Voice 2:14"), not across the header.
             titleMeta={startedAt !== null ? <VoiceElapsed startedAt={startedAt} /> : undefined}
             fresh={props.fresh}
@@ -275,13 +278,18 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
     const voice = props.model.attemptControl;
     const size = props.sheet ? 'normal' : 'small';
     const iconSize = props.sheet ? 18 : 14;
+    // Lab `.vo-sheet .vo-cb`: on the sheet the row's controls share its full width.
+    const control = props.sheet ? styles.sheetControl : undefined;
     const recover = voice.recoveryAvailable && voice.recoveryLabel ? (
         <RoundButton
             testID={`${props.testID}-recover`}
             size={size}
+            style={control}
             title={voice.recoveryLabel}
             onPress={voice.onRecover}
-            leading={<Icon name="arrow-clockwise" size={iconSize} color={theme.colors.button.primary.tint} />}
+            leading={voice.recoveryIcon
+                ? <Icon name={voice.recoveryIcon} size={iconSize} color={theme.colors.button.primary.tint} />
+                : undefined}
         />
     ) : null;
     const mute = voice.canStop && !recover ? (
@@ -289,6 +297,7 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             testID={`${props.testID}-mute`}
             display="secondary"
             size={size}
+            style={control}
             disabled={!voice.canMute}
             title={voice.muted ? t('voicePresence.unmute') : t('voicePresence.mute')}
             accessibilityLabel={voice.muted ? t('voiceSurface.a11y.unmute') : t('voiceSurface.a11y.mute')}
@@ -301,6 +310,7 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             testID={`${props.testID}-interrupt`}
             display="secondary"
             size={size}
+            style={control}
             title={t('voicePresence.interrupt')}
             onPress={props.model.onBargeIn}
             leading={<Icon name="hand" size={iconSize} color={theme.colors.text.secondary} />}
@@ -312,6 +322,7 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             testID={`${props.testID}-cancel-reply`}
             display="secondary"
             size={size}
+            style={control}
             title={t('voiceSurface.a11y.cancelTurn')}
             onPress={props.model.onCancelTurn}
             leading={<Icon name="stop" size={iconSize} color={theme.colors.text.secondary} />}
@@ -322,6 +333,7 @@ const VoiceGlanceControls = React.memo(function VoiceGlanceControls(props: Reado
             testID={`${props.testID}-end`}
             display="destructive"
             size={size}
+            style={control}
             title={t('voicePresence.end')}
             accessibilityLabel={t('voiceAssistant.endVoice')}
             onPress={voice.onToggle}
@@ -372,6 +384,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     handoffLabel: { ...Typography.default(), flexShrink: 1, fontSize: 12.5, lineHeight: 16, color: theme.colors.text.secondary },
     controls: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     controlsSheet: { gap: 8 },
+    sheetControl: { flex: 1 },
     endedControls: { gap: 8, justifyContent: 'flex-start' },
     startAgain: { color: theme.colors.text.secondary },
     grow: { flex: 1 },

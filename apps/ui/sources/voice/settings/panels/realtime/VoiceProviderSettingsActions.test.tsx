@@ -1,40 +1,85 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   createRecipientContractDigestV1,
   VoiceProviderContributionSchema,
 } from '@happier-dev/protocol';
 import type {
-  InteractionTransientRequesterV1,
   PluginSettingsActionDeclarationV2,
   VoiceProviderSettingsActionDeclaration,
 } from '@happier-dev/protocol';
 import { PLUGIN_MANIFEST } from '@happier-dev/plugins-elevenlabs/manifest';
 import { createElevenLabsVoiceProviderRuntime } from '@happier-dev/plugins-elevenlabs/ui/voice';
+import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '@happier-dev/plugins-elevenlabs/protocol/voice';
 
 import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
+import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration, type ExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
+import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 
-const state = vi.hoisted(() => ({
-  config: { billingMode: 'byo', agentId: '', tts: {} } as Record<string, unknown>,
-  schemaVersion: 2,
-  settingsVersion: 4,
+let accountFixture: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
+let registration: ExternalVoiceProviderRegistration | null = null;
+function replaceVoiceFixture(change: Partial<Settings['voice']>) {
+  accountFixture.replaceVoice({ ...storage.getState().settings.voice, ...change });
+}
+function withProviderConfig(settings: Settings, config: Record<string, unknown>) {
+  const voice = { ...settings.voice, providers: { ...settings.voice.providers,
+    [PROVIDER_ID]: { schemaVersion: 2, config } } };
+  return settingsParse({ ...settings, ...normalizeVoiceSettingsLocalDelta({ voice }, settings) });
+}
+const state = {
+  get config() { return storage.getState().settings.voice.providers[PROVIDER_ID]?.config as Record<string, unknown>; },
+  set config(config: Record<string, unknown>) {
+    replaceVoiceFixture({ providers: { ...storage.getState().settings.voice.providers,
+      [PROVIDER_ID]: { schemaVersion: state.schemaVersion, config: {
+        ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, ...config,
+        tts: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts, ...(config.tts as object) },
+      } } } });
+  },
+  get schemaVersion() { return storage.getState().settings.voice.providers[PROVIDER_ID]?.schemaVersion ?? 2; },
+  set schemaVersion(schemaVersion: number) {
+    replaceVoiceFixture({ providers: { ...storage.getState().settings.voice.providers,
+      [PROVIDER_ID]: { schemaVersion, config: state.config } } });
+  },
+  get settingsVersion() { return storage.getState().settingsVersion ?? 1; },
   conflict: null as null | 'unrelated' | 'provider',
   mutationAttempts: 0,
   outcomeUnknown: false,
   mutationApplied: false,
   advanceDuringPreparation: false,
-  registration: null as any,
-  selectedProviderId: '' as string,
-  accountSettings: null as Record<string, unknown> | null,
-}));
+  get registration() { return registration; },
+  set registration(next: ExternalVoiceProviderRegistration | null) {
+    if (registration) removeExternalVoiceProviderRegistration(registration.token);
+    registration = next;
+    if (next) commitExternalVoiceProviderRegistration(next);
+  },
+  get selectedProviderId() { return storage.getState().settings.voice.providerId; },
+  set selectedProviderId(providerId: string | null) { replaceVoiceFixture({ providerId }); },
+  set accountSettings(value: Record<string, unknown> | null) {
+    if (value) accountFixture.replaceSettings(settingsParse({ ...storage.getState().settings, ...value,
+      voiceSettingsV1: { ...storage.getState().settings.voiceSettingsV1,
+        ...(value.voiceSettingsV1 as Record<string, unknown> | undefined) } }));
+  },
+};
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+function mountActionView(element: React.ReactElement) {
+  const tree = renderer.create(element);
+  onTestFinished(async () => { await act(async () => { tree.unmount(); }); });
+  return tree;
+}
 
 const PROVIDER_ID = vi.hoisted(() => 'happier.voice.elevenlabs/realtime-elevenlabs');
 
 const spies = vi.hoisted(() => ({
-  interactionRequesters: [] as InteractionTransientRequesterV1[],
   modalConfigs: [] as any[],
   show: vi.fn((config: any) => {
     spies.modalConfigs.push(config);
@@ -46,27 +91,12 @@ const spies = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
-vi.mock('@/components/appShell/plugins/appShellQuestionInteractions', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/components/appShell/plugins/appShellQuestionInteractions')>();
-  return {
-    ...actual,
-    createAppShellTransientInteractions: (input: Parameters<typeof actual.createAppShellTransientInteractions>[0]) => {
-      spies.interactionRequesters.push(input.requester);
-      return actual.createAppShellTransientInteractions(input);
-    },
-  };
-});
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: any) => React.createElement('Item', props, props.rightElement),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: (props: any) => React.createElement('Text', props, props.children),
-  TextInput: (props: any) => React.createElement('TextInput', props),
-}));
-vi.mock('@/modal', () => ({
-  Modal: { show: spies.show, hide: spies.hide, alertAsync: spies.alertAsync },
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+  spies: { show: spies.show, hide: spies.hide, alertAsync: spies.alertAsync },
+}).module);
 vi.mock('@/log', () => ({ log: { log: spies.log } }));
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -78,96 +108,6 @@ vi.mock('@/text', async () => {
     ),
   });
 });
-vi.mock('@/utils/system/fireAndForget', () => ({
-  fireAndForget: (promise: Promise<unknown>) => { void promise; },
-}));
-vi.mock('@/sync/domains/state/storage', () => ({
-  storage: {
-    getState: () => ({
-      settings: {
-        voice: {
-          providerId: state.selectedProviderId,
-          providers: {
-            [PROVIDER_ID]: { schemaVersion: state.schemaVersion, config: state.config },
-          },
-        },
-        ...(state.accountSettings ?? {}),
-      },
-      settingsScope: { serverId: 'server-1', accountId: 'account-1' },
-      settingsVersion: state.settingsVersion,
-    }),
-  },
-}));
-vi.mock('@/sync/store/settingsWriters', () => ({
-  useAccountSettingsScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
-}));
-vi.mock('@/sync/domains/settings/voiceSettings', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/sync/domains/settings/voiceSettings')>();
-  return {
-    ...actual,
-    voiceSettingsParse: (value: unknown) => value,
-    readVoiceProviderSettingsConfig: (voice: any, providerId: string) =>
-      voice.providers?.[providerId]?.config ?? null,
-    writeVoiceProviderSettingsConfig: (voice: any, providerId: string, config: unknown) => ({
-      ...voice,
-      providers: { ...voice.providers, [providerId]: { schemaVersion: 2, config } },
-    }),
-  };
-});
-vi.mock('@/voice/settings/resolveVoiceProviderId', () => ({
-  resolveVoiceProviderIdForSettingsAction: (_settings: unknown, fallback: unknown) => (
-    state.selectedProviderId || fallback
-  ),
-}));
-vi.mock('@/voice/registry/externalVoiceProviderRegistrations', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/voice/registry/externalVoiceProviderRegistrations')>();
-  return {
-    ...actual,
-    getExternalVoiceProviderRegistration: () => state.registration,
-  };
-});
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-  getSyncSingleton: () => ({
-    prepareAccountSettingsForDaemonSpawn: async () => {
-      const accountSettingsVersionHint = state.settingsVersion;
-      if (state.advanceDuringPreparation) {
-        state.settingsVersion += 1;
-        state.config = { ...state.config, billingMode: 'hosted' };
-      }
-      return { accountSettingsVersionHint };
-    },
-    mutateAccountSettingsOnce: async (input: any) => {
-      state.mutationAttempts += 1;
-      if (state.conflict) {
-        const conflict = state.conflict;
-        state.conflict = null;
-        state.settingsVersion += 1;
-        if (conflict === 'provider') {
-          state.config = { ...state.config, billingMode: 'hosted' };
-        }
-        return { status: 'conflict', currentSettingsVersion: state.settingsVersion };
-      }
-      const result = input.mutate({
-        voiceSettingsV1: {
-          providerId: PROVIDER_ID,
-          providers: {
-            [PROVIDER_ID]: { schemaVersion: state.schemaVersion, config: state.config },
-          },
-        },
-      });
-      if (state.outcomeUnknown) {
-        return {
-          status: 'outcomeUnknown',
-          lastKnownSettingsVersion: state.settingsVersion + 1,
-          safeSnapshotVersion: state.settingsVersion + 1,
-        };
-      }
-      state.mutationApplied = true;
-      state.config = result.settings.voiceSettingsV1.providers[PROVIDER_ID].config;
-      return { status: 'applied', settingsVersion: state.settingsVersion + 1, value: result.value };
-    },
-  }),
-}));
 
 const action: PluginSettingsActionDeclarationV2 = {
   id: 'create-agent',
@@ -191,7 +131,7 @@ const conditionalUpdateAction: VoiceProviderSettingsActionDeclaration = {
 
 const owner = {
   schemaVersion: 2,
-  defaultConfig: state.config,
+  defaultConfig: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, billingMode: 'byo', agentId: '' },
   parseConfig(value: unknown) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const candidate = value as Record<string, unknown>;
@@ -210,7 +150,7 @@ describe('VoiceProviderSettingsActions', () => {
     const render = (agentId: string) => <VoiceProviderSettingsActions providerId={PROVIDER_ID} owner={owner}
       actions={actions} config={{ ...state.config, agentId }} agentAction={agentAction}
       placement={{ kind: 'afterField', fieldId: 'agentId' }} />;
-    await act(async () => { tree = renderer.create(render('')); });
+    await act(async () => { tree = mountActionView(render('')); });
     const buttons = () => [...new Set(tree.root.findAll((node) => typeof node.props.testID === 'string'
       && node.props.testID.startsWith('voice-settings-action-')).map((node) => node.props.testID))];
     expect(buttons()).toEqual(['voice-settings-action-create-agent']);
@@ -218,9 +158,46 @@ describe('VoiceProviderSettingsActions', () => {
     expect(buttons()).toEqual(['voice-settings-action-update-agent']);
     await act(async () => { tree.unmount(); });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
+    accountFixture = await createVoiceSettingsAccountTestHarness(settingsParse({
+      voice: { providerId: PROVIDER_ID, providers: { [PROVIDER_ID]: {
+        schemaVersion: 2, config: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS, billingMode: 'byo', agentId: '' },
+      } } },
+    }));
+    onTestFinished(async () => { state.registration = null; await accountFixture.dispose(); });
+    accountFixture.replaceSettings(storage.getState().settings, { version: 4 });
+    const request = accountFixture.request.getMockImplementation()!;
+    accountFixture.request.mockImplementation(async (url, init) => {
+      if (new URL(url).pathname === '/v2/account/settings') {
+        if (state.advanceDuringPreparation) {
+          state.advanceDuringPreparation = false;
+          accountFixture.replaceSettings(withProviderConfig(storage.getState().settings,
+            { ...state.config, billingMode: 'happier' }), { version: 5, publish: false });
+        }
+        if (init?.method === 'POST') {
+          const body = JSON.parse(String(init.body));
+          if (body.content?.t === 'plain' && body.content.v?.voiceSettingsV1?.providers?.[PROVIDER_ID]?.config?.agentId === 'agent-created') {
+            state.mutationAttempts += 1;
+          }
+          if (state.conflict) {
+            const providerChanged = state.conflict === 'provider';
+            state.conflict = null;
+            const current = storage.getState().settings;
+            accountFixture.replaceSettings(providerChanged
+              ? withProviderConfig(current, { ...state.config, billingMode: 'happier' })
+              : settingsParse({ ...current, analyticsOptOut: !current.analyticsOptOut }),
+              { version: state.settingsVersion + 1, publish: false });
+          }
+          if (state.outcomeUnknown) throw new Error('transport_response_lost');
+          const result = await request(url, init);
+          state.mutationApplied = result.ok && (await result.clone().json()).success === true;
+          return result;
+        }
+        if (state.outcomeUnknown && state.mutationAttempts > 0) throw new Error('transport_read_unavailable');
+      }
+      return request(url, init);
+    });
     state.config = { billingMode: 'byo', agentId: '', tts: {} };
-    state.settingsVersion = 4;
     state.schemaVersion = 2;
     state.conflict = null;
     state.mutationAttempts = 0;
@@ -230,7 +207,6 @@ describe('VoiceProviderSettingsActions', () => {
     state.selectedProviderId = PROVIDER_ID;
     state.accountSettings = null;
     spies.modalConfigs.length = 0;
-    spies.interactionRequesters.length = 0;
     spies.show.mockClear();
     spies.hide.mockClear();
     spies.alertAsync.mockClear();
@@ -241,6 +217,8 @@ describe('VoiceProviderSettingsActions', () => {
       pluginId: 'happier.voice.elevenlabs',
       localId: 'realtime-elevenlabs',
       providerId: PROVIDER_ID,
+      descriptor: null,
+      adapter: null,
       occurrenceId: 'voice-occurrence-a',
       settingsActions: Object.freeze({ execute: spies.execute }),
     });
@@ -302,7 +280,7 @@ describe('VoiceProviderSettingsActions', () => {
     expect(spies.execute).not.toHaveBeenCalled();
   });
 
-  it('uses the producer occurrence as the transient requester identity and changes it on replacement', async () => {
+  it('retires the old producer confirmation and admits a fresh confirmation after occurrence replacement', async () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     const props = {
       providerId: PROVIDER_ID,
@@ -312,17 +290,11 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions {...props} />);
+      tree = mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.interactionRequesters).toHaveLength(1));
-    });
-    expect(spies.interactionRequesters[0]).toMatchObject({
-      pluginId: 'happier.voice.elevenlabs',
-      contributionId: 'realtime-elevenlabs',
-      occurrenceId: 'voice-occurrence-a',
-      invocationId: 'create-agent',
+      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(1));
     });
 
     state.registration = Object.freeze({
@@ -340,11 +312,15 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(spies.interactionRequesters).toHaveLength(2));
+      await vi.waitFor(() => expect(spies.modalConfigs).toHaveLength(2));
     });
-    expect(spies.interactionRequesters[1]).toMatchObject({
-      occurrenceId: 'voice-occurrence-b',
-      invocationId: 'create-agent',
+    await act(async () => {
+      spies.modalConfigs[0].props.onConfirm();
+    });
+    expect(spies.execute).not.toHaveBeenCalled();
+    await act(async () => {
+      spies.modalConfigs[1].props.onConfirm();
+      await vi.waitFor(() => expect(state.config.agentId).toBe('agent-created'));
     });
     await act(async () => {
       tree.unmount();
@@ -352,14 +328,15 @@ describe('VoiceProviderSettingsActions', () => {
   });
 
   it('fails closed when a settings-action registration has no producer occurrence', async () => {
+    // Malformed external plugin registration exercises the host's runtime admission guard.
     state.registration = Object.freeze({
       ...state.registration,
       occurrenceId: undefined,
-    });
+    }) as ExternalVoiceProviderRegistration;
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -373,7 +350,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[conditionalUpdateAction]}
@@ -405,7 +382,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -435,10 +412,12 @@ describe('VoiceProviderSettingsActions', () => {
 
   it('pairs action values with the same canonical revision when settings advance during preparation', async () => {
     state.advanceDuringPreparation = true;
+    const { sync } = await import('@/sync/sync');
+    sync.applySettings({ analyticsOptOut: true }, { expectedSettingsScope: accountFixture.scope });
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -453,7 +432,7 @@ describe('VoiceProviderSettingsActions', () => {
     });
 
     expect(spies.execute).toHaveBeenCalledWith(expect.objectContaining({
-      settings: expect.objectContaining({ billingMode: 'hosted' }),
+      settings: expect.objectContaining({ billingMode: 'happier' }),
       settingsRevision: '5',
     }));
     expect(state.mutationAttempts).toBe(1);
@@ -464,7 +443,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -487,7 +466,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -502,7 +481,7 @@ describe('VoiceProviderSettingsActions', () => {
     });
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');
-    expect(state.config.billingMode).toBe('hosted');
+    expect(state.config.billingMode).toBe('happier');
     expect(state.mutationAttempts).toBe(1);
     expect(spies.alertAsync).toHaveBeenCalledWith(
       'common.error',
@@ -515,7 +494,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -564,7 +543,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -579,7 +558,7 @@ describe('VoiceProviderSettingsActions', () => {
       await vi.waitFor(() => expect(spies.alertAsync).toHaveBeenCalled());
     });
 
-    expect(spies.log).toHaveBeenCalledOnce();
+    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
     expect(spies.log).toHaveBeenCalledWith(
       '[VoiceProviderSettingsActions] settings action failed {"actionId":"create-agent","code":"provider_response_invalid","stage":"update_agent","responseFailure":{"kind":"http_status","status":422,"statusClass":"4xx"}}',
     );
@@ -702,6 +681,8 @@ describe('VoiceProviderSettingsActions', () => {
       localId: declaration.id,
       providerId: PROVIDER_ID,
       occurrenceId: 'voice-occurrence-composed',
+      descriptor: null,
+      adapter: null,
       settingsActions: Object.freeze({
         async execute(input: Parameters<typeof runtimeActions.execute>[0] & Readonly<{
           signal: AbortSignal;
@@ -715,7 +696,6 @@ describe('VoiceProviderSettingsActions', () => {
             signal: input.signal,
             isCurrent: () => true,
             fetch,
-            materializeSecret: () => 'elevenlabs-secret',
           });
           return await runtimeActions.execute(input, {
             credentials: { phase: 'settings', mediated: accountOperations, raw: null },
@@ -730,7 +710,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[conditionalUpdateAction]}
@@ -783,7 +763,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -823,7 +803,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -847,7 +827,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -860,7 +840,7 @@ describe('VoiceProviderSettingsActions', () => {
     });
     expect(spies.execute).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
-    expect(spies.log).toHaveBeenCalledOnce();
+    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
     expect(spies.log).toHaveBeenCalledWith(
       '[VoiceProviderSettingsActions] settings action failed'
       + ' {"actionId":"create-agent","code":"voice_provider_settings_action_confirmation_unavailable"}',
@@ -874,7 +854,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -901,7 +881,7 @@ describe('VoiceProviderSettingsActions', () => {
     });
     expect(spies.execute).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
-    expect(spies.log).toHaveBeenCalledOnce();
+    expect(spies.log.mock.calls.filter(([message]) => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
     expect(spies.log).toHaveBeenCalledWith(
       '[VoiceProviderSettingsActions] settings action failed'
       + ' {"actionId":"create-agent","retired":true,"code":"plugin_settings_action_generation_retired"}',
@@ -915,7 +895,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -949,7 +929,7 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions {...props} />);
+      tree = mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -989,7 +969,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = renderer.create(<VoiceProviderSettingsActions
+      tree = mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -1027,7 +1007,7 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let staleTree!: renderer.ReactTestRenderer;
     await act(async () => {
-      staleTree = renderer.create(<VoiceProviderSettingsActions {...props} />);
+      staleTree = mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       staleTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -1041,7 +1021,7 @@ describe('VoiceProviderSettingsActions', () => {
 
     let replacementTree!: renderer.ReactTestRenderer;
     await act(async () => {
-      replacementTree = renderer.create(<VoiceProviderSettingsActions {...props} />);
+      replacementTree = mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       replacementTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();

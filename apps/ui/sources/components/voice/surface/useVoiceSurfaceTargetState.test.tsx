@@ -48,10 +48,6 @@ describe('useVoiceSurfaceTargetState', () => {
                     surfaceLocation: 'session',
                 },
             },
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().bindingScope).toBe('session');
@@ -70,10 +66,6 @@ describe('useVoiceSurfaceTargetState', () => {
             serverId: 'server-b',
             variant: 'session',
             voice: null,
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().startSessionAddress).toEqual({
@@ -117,7 +109,6 @@ describe('useVoiceSurfaceTargetState', () => {
             serverId: null,
             variant: 'session',
             voice: null,
-            voicePrivacy: { shareFilePaths: true, shareSessionSummary: true },
         }));
 
         expect(hook.getCurrent().bindingScope).toBe('session');
@@ -138,7 +129,6 @@ describe('useVoiceSurfaceTargetState', () => {
             serverId: 'server-a',
             variant: 'session',
             voice: null,
-            voicePrivacy: { shareFilePaths: true, shareSessionSummary: true },
         }));
 
         expect(hook.getCurrent().startSessionAddress).toBeNull();
@@ -161,10 +151,6 @@ describe('useVoiceSurfaceTargetState', () => {
                     surfaceLocation: 'sidebar',
                 },
             },
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().bindingScope).toBe('session');
@@ -183,10 +169,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar',
             voice: null,
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().startSessionId).toBe('split-focused-session');
@@ -204,10 +186,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar',
             voice: null,
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().startSessionAddress).toEqual({
@@ -233,10 +211,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar',
             voice: null,
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().bindingScope).toBe('global');
@@ -262,10 +236,6 @@ describe('useVoiceSurfaceTargetState', () => {
                     surfaceLocation: 'session',
                 },
             },
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         }));
 
         expect(hook.getCurrent().startSessionId).toBe('exact-session');
@@ -282,7 +252,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar',
             voice: {},
-            voicePrivacy: { shareFilePaths: false, shareSessionSummary: false },
         }));
 
         expect(hook.getCurrent().allowsGlobalStart).toBe(true);
@@ -300,7 +269,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar',
             voice: {},
-            voicePrivacy: { shareFilePaths: false, shareSessionSummary: false },
         }));
 
         expect(hook.getCurrent().allowsGlobalStart).toBe(false);
@@ -318,10 +286,6 @@ describe('useVoiceSurfaceTargetState', () => {
             sessionId: null,
             variant: 'sidebar' as const,
             voice: null,
-            voicePrivacy: {
-                shareFilePaths: true,
-                shareSessionSummary: true,
-            },
         };
         let unmountHook: (() => Promise<void>) | null = null;
 
@@ -506,14 +470,8 @@ describe('useVoiceSurfaceTargetState', () => {
             });
             expect(hook.getCurrent().targetLabel).toBe('Raw selected summary');
 
-            await hook.rerender({
-                ...baseParams,
-                voicePrivacy: {
-                    shareFilePaths: false,
-                    shareSessionSummary: false,
-                },
-            });
-            expect(hook.getCurrent().targetLabel).toBe('the current session');
+            // Voice privacy limits what the provider is told, never what this device shows its own
+            // user: the label is the Session's display name, never a redacted placeholder (R12a).
 
             await act(async () => {
                 storage.setState((state) => ({
@@ -533,7 +491,7 @@ describe('useVoiceSurfaceTargetState', () => {
                 }));
                 await flushHookEffects({ cycles: 1, turns: 2 });
             });
-            expect(hook.getCurrent().targetLabel).toBe('the current session');
+            expect(hook.getCurrent().targetLabel).toBe('Raw selected summary');
 
             await act(async () => {
                 storage.setState((state) => {
@@ -543,7 +501,8 @@ describe('useVoiceSurfaceTargetState', () => {
                 });
                 await flushHookEffects({ cycles: 1, turns: 2 });
             });
-            expect(hook.getCurrent().targetLabel).toBe('the current session');
+            // Not on this device: no invented name.
+            expect(hook.getCurrent().targetLabel).toBe(null);
 
         } finally {
             await unmountHook?.();

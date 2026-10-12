@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, createSessionMessagesFixture, renderScreen, type RenderScreenResult } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { createReadOnlySessionTranscriptSource } from '@/components/sessions/transcript/source/readOnlySessionTranscriptSource';
@@ -33,16 +33,18 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 
 const initialState = storage.getState();
 let screen: RenderScreenResult | null = null;
+let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
+beforeEach(async () => { home = await serveSessionActionHome(); });
 afterEach(async () => {
     await screen?.unmount();
     screen = null;
+    home.dispose();
     storage.setState(initialState);
 });
 
 describe('VoiceNeedsYouPrompts', () => {
     it.each([false, true])('answers the exact conversation independently of an unrelated surrounding transcript (%s)', async (surrounded) => {
         sessionRpcTransport.mockClear();
-        await loadSyncSingletonForTests();
         const address = { serverId: getActiveServerSnapshot().serverId, sessionId: 'voice-needs-you' };
         const session = createSessionFixture({
             id: address.sessionId, serverId: address.serverId, active: true,

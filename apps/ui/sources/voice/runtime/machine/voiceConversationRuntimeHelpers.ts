@@ -18,6 +18,9 @@ function resolveVoiceMachineErrorKind(reason: string, preferredKind?: VoiceMachi
     if (reason.includes('permission_denied')) {
         return 'mic_permission_denied';
     }
+    if (reason === 'mic_unavailable') {
+        return 'mic_unavailable';
+    }
     return 'provider_error';
 }
 

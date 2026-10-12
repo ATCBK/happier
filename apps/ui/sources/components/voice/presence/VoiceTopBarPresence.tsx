@@ -73,7 +73,9 @@ const VoiceTopBarPill = React.memo(function VoiceTopBarPill(props: Readonly<{
     const { voice } = props;
     const anchorRef = React.useRef<View | null>(null);
     const [open, setOpen] = React.useState(false);
-    React.useLayoutEffect(() => registerVoiceGlancePresentation(setOpen), []);
+    React.useLayoutEffect(() => registerVoiceGlancePresentation((expanded) => {
+        if (!expanded || !revealVoiceCompanionSection()) setOpen(expanded);
+    }), []);
     const close = React.useCallback(() => setOpen(false), []);
     // The label shows the Voice section: in the Companion when it is beside the work, otherwise
     // anchored under the pill. The mark never does this — it is always start/end.

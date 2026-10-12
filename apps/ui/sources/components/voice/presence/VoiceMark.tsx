@@ -193,7 +193,9 @@ export const VoiceMarkArt = React.memo(function VoiceMarkArt(props: Readonly<{
         } else if (morph.value !== target) {
             morph.value = withTiming(target, MORPH_TIMING);
         }
-    }, [animationActive, gather, leave, live, morph, previewMorph, reduced]);
+        // `eventId`: a newer fact can supersede a leave before it lands (its hand-back to the rest
+        // glyph never runs). The morph settles from wherever the dots are instead of staying away.
+    }, [animationActive, eventId, gather, leave, live, morph, previewMorph, reduced]);
     React.useLayoutEffect(() => {
         if (nextKey === planetLookKey(poses.to)) return;
         cancelAnimation(poseProgress);

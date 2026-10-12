@@ -166,7 +166,6 @@ export function useVoiceSurfaceModel(props: VoiceSurfaceProps): VoiceSurfaceView
         serverId: props.sessionAddress?.serverId ?? props.serverId ?? null,
         variant: props.variant,
         voice,
-        voicePrivacy,
     });
     const idleTarget = React.useMemo<VoiceAttemptIdleTarget>(
         () => bindingScope === 'global'

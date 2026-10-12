@@ -603,8 +603,8 @@ describe('VoiceDiagnosticsIndicator', () => {
       updateVoiceDiagnosticsRevocationObligation(failedObligation, 'failed');
     });
     const retryActionStyle = tree.root.findByType('Pressable' as any).props.style;
-    expect(retryActionStyle.minWidth).toBeGreaterThanOrEqual(44);
-    expect(retryActionStyle.minHeight).toBeGreaterThanOrEqual(44);
+    expect(retryActionStyle.minWidth).toBeGreaterThanOrEqual(resolveMinimumInteractiveTargetSize('web'));
+    expect(retryActionStyle.minHeight).toBeGreaterThanOrEqual(resolveMinimumInteractiveTargetSize('web'));
 
     configureState.failedCalls.delete('m1:disabled');
     const oldMachineDisableCallsBeforeRetry = configure.mock.calls.filter(

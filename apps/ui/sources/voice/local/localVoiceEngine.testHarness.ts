@@ -6,6 +6,10 @@ import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/session
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import type {
     getMachineContributionRegistryProjectionRevision as getMachineContributionRegistryProjectionRevisionFn,
@@ -506,14 +510,30 @@ export async function installLocalVoiceAccountHarness() {
             const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
             connection = await restoreServerAccountForTest({
                 serverUrl: 'https://local-voice-actions.example.test',
+                credentialScope: 'restored-home',
                 request: async (input, init) => {
                     const path = new URL(String(input)).pathname;
                     if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
                     if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                     if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: { session: { pendingInput: { protocolVersion: 1 } } } }));
                     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: localVoiceAccountSettings }, version: 1 });
+                    if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
+                        content: { t: 'plain', v: { v: 1, definitions: [] } } });
+                    if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+                        snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
+                            pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+                    }));
                     const storage = await getStorage();
                     const state = storage.getState();
+                    const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
+                    if (machineAccess) {
+                        const custodian = { accountId: 'account-a', displayName: 'Test Account' };
+                        return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+                            machineId: decodeURIComponent(machineAccess[1]), custodian,
+                            access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                            canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+                        }));
+                    }
                     if (path === '/v1/machines') return Response.json((Object.values(state.machines) as Array<Parameters<typeof createMachineFixture>[0]>).map((value) => {
                         const machine = createMachineFixture(value);
                         return { ...machine, metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
@@ -550,6 +570,11 @@ export async function installLocalVoiceAccountHarness() {
                 },
             });
             localVoiceHomeId = connection.home.id;
+            // Login readiness can return before its background bootstrap
+            // settles. Join the public refresh owner before a case seeds
+            // newer raw fixture settings; otherwise that older read wins.
+            const { sync } = await import('@/sync/sync');
+            await sync.resumeSync('manual');
             const storage = await getStorage();
             const state = storage.getState();
             storage.__setState({
@@ -913,7 +938,6 @@ vi.mock('@happier-dev/sherpa-native', () => ({
 
 vi.mock('@/sync/domains/state/storage', () => {
     const subscribers = new Set<() => void>();
-    let throwNextGetState: unknown = null;
     const state: any = {
         settings: {
             ...BASE_SETTINGS,
@@ -931,14 +955,7 @@ vi.mock('@/sync/domains/state/storage', () => {
             Object.assign(state, typeof patch === 'function' ? patch(readLiveStorageState()) : patch);
             subscribers.forEach((fn) => fn());
         },
-        getState: () => {
-            if (throwNextGetState) {
-                const error = throwNextGetState;
-                throwNextGetState = null;
-                throw error;
-            }
-            return readLiveStorageState();
-        },
+        getState: () => readLiveStorageState(),
         subscribe: (fn: () => void) => {
             subscribers.add(fn);
             return () => subscribers.delete(fn);
@@ -981,9 +998,6 @@ vi.mock('@/sync/domains/state/storage', () => {
             Object.assign(state, normalizedPatch);
         },
         __notify: () => subscribers.forEach((fn) => fn()),
-        __throwGetStateOnce: (err: unknown) => {
-            throwNextGetState = err;
-        },
     });
 
     return createStorageModuleStub({

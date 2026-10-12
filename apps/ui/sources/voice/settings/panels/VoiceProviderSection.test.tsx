@@ -7,13 +7,25 @@ import type {
     MachineCapabilitiesCacheState,
     MachineCapabilitiesSnapshot,
 } from '@/hooks/server/useMachineCapabilitiesCache';
+import { prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
+import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
+import { PluginPermissionGrantListActionOutputV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
-import { findTestInstanceByTypeWithProps, renderScreen } from '@/dev/testkit';
+import { findTestInstanceByTypeWithProps, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { settingsDefaults, settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storageStore';
-import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
-import { sealSecretsDeep } from '@/sync/encryption/secretSettings';
+import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { VoiceGlobalConnectedServicesBindingField } from './realtime/VoiceGlobalConnectedServicesBindingField';
 import {
     ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
 } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
@@ -24,162 +36,167 @@ import {
     XAI_REALTIME_DEFAULT_SETTINGS,
 } from '../../../../../../packages/plugins/xai/src/protocol/voice/settings';
 
-import { installVoiceSettingsPanelCommonModuleMocks } from './voiceSettingsPanelTestHelpers';
 
 // This third-party SDK export is unavailable on some workers and is never used by these settings rows.
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected streaming Markdown in Voice settings test'); },
 }));
 
 
-// Synthetic device-local secret encryption, not Account E2EE material.
-const deviceSecretFixtureKey = new Uint8Array(32).fill(7);
+let accountFixture: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 const storageBoundary = {
     get settings(): Settings { return storage.getState().settings; },
     set settings(settings: Settings | null) {
-        storage.getState().applySettings(sealSecretsDeep(settings ?? settingsDefaults, deviceSecretFixtureKey),
-            (storage.getState().settingsVersion ?? 0) + 1);
+        accountFixture.replaceSettings(settings ?? settingsDefaults);
     },
 };
+async function renderScreen(...input: Parameters<typeof renderTestScreen>) {
+    await refreshSavedSecretCatalog(accountFixture.scope);
+    if (passiveSetupBoundary.state.status === 'loaded') await primeCapabilities();
+    return renderTestScreen(...input);
+}
 beforeEach(async () => {
-    getPersistenceStorage().clearAll();
-    await storage.getState().activateSettingsScope({ serverId: 'voice-provider-section', accountId: 'voice-account' });
-    storageBoundary.settings = settingsDefaults;
+    accountFixture = await createVoiceSettingsAccountTestHarness(settingsDefaults);
+    onTestFinished(accountFixture.dispose);
+    passiveSetupBoundary.profile = null;
+    passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
+    capabilityState = { status: 'idle' };
+    rawCredentialReadiness.mockClear();
+    const request = accountFixture.request.getMockImplementation()!;
+    accountFixture.request.mockImplementation(async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const machineRow = (id: string) => ({ ...createPlainMachineRowFixture({ id,
+            accountId: storage.getState().profile.id || accountFixture.scope.accountId }),
+            active: machineTarget.isOnline, activeAt: Date.now(), daemonStateVersion: machineTarget.daemonStateVersion,
+        });
+        if (path.startsWith('/v1/machines/')) return Response.json({ machine: machineRow(decodeURIComponent(path.slice('/v1/machines/'.length))) });
+        if (path === '/v1/machines') return Response.json(['machine-1', 'machine-2', 'machine-online'].map(machineRow));
+        if (path === '/v1/plugins/permissions/grants/list') {
+            const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return Response.json(PluginPermissionGrantListActionOutputV1Schema.parse({ grants: [{
+                v: 1, id: 'voice-raw-grant', accountId: accountFixture.scope.accountId,
+                pluginId: input.pluginId, capability: input.capability, targetScope: input.targetScope,
+                subject: input.subject, authoritySource: { kind: 'machine_installation', machineId: 'machine-online', installationId: 'installation-a' },
+                status: 'active', grantedByUserId: accountFixture.scope.accountId, grantedAt: 1, createdAt: 1, updatedAt: 1,
+            }], pendingRequests: [] }));
+        }
+        return request(url, init);
+    });
 });
-const passiveSetupBoundary = vi.hoisted(() => ({
-    profile: null as unknown,
-    machineTarget: { daemonStateVersion: 0, isOnline: false },
-    state: { status: 'idle' } as MachineCapabilitiesCacheState,
+let machineTarget = { daemonStateVersion: 0, isOnline: false };
+let capabilityState: MachineCapabilitiesCacheState = { status: 'idle' };
+const pendingDetections: Array<Readonly<{ resolve(value: unknown): void; reject(error: Error): void }>> = [];
+function primeCapabilities() {
+    return prefetchMachineCapabilities({ machineId: 'machine-1', serverId: accountFixture.scope.serverId,
+        cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt({ id: 'machine-1' }, accountFixture.scope.serverId),
+        staleMs: -1, request: { requests: [{ id: 'cli.codex' }], bypassCache: true } });
+}
+const passiveSetupBoundary = {
+    get profile() { return storage.getState().profile; },
+    set profile(value: Partial<Profile> | null) {
+        storage.setState({ profile: { ...profileDefaults, id: accountFixture.scope.accountId, ...value } });
+    },
+    get machineTarget() { return machineTarget; },
+    set machineTarget(value: typeof machineTarget) {
+        machineTarget = value;
+        storage.getState().applyMachines(['machine-1', 'machine-2', 'machine-online'].map(id => createMachineFixture({
+            id, active: value.isOnline, activeAt: Date.now(), daemonStateVersion: value.daemonStateVersion,
+        })), true, { sourceServerId: accountFixture.scope.serverId });
+    },
+    get state() { return capabilityState; },
+    set state(next: MachineCapabilitiesCacheState) {
+        capabilityState = next;
+        if (next.status !== 'loading') for (const pending of pendingDetections.splice(0)) {
+            if (next.status === 'error') pending.reject(new Error('daemon_capabilities_unavailable'));
+            else pending.resolve('snapshot' in next && next.snapshot ? next.snapshot.response : { protocolVersion: 1, results: {} });
+        }
+        if (accountFixture && next.status !== 'idle') void primeCapabilities();
+    },
     refresh: vi.fn(),
     invoke: vi.fn<(...args: unknown[]) => Promise<unknown>>(
         async () => ({ supported: false, reason: 'error' }),
     ),
-}));
-const rawCredentialReadiness = vi.hoisted(() => vi.fn(async () => 'ready' as const));
-const projectedPluginText = vi.hoisted(() => vi.fn((pluginId: string, value: string | Readonly<{ key: string; fallback: string }>) => (
-    typeof value === 'string' ? value : `${pluginId}:${value.key}`
-)));
-
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', async () => {
-    const { getConnectedServiceRegistrySnapshot } = await import(
-        '@/sync/domains/connectedServices/connectedServiceRegistry'
-    );
-    return {
-        useProjectedPluginLocalizedTextResolver: () => projectedPluginText,
-        useProjectedConnectedServicesRegistry: getConnectedServiceRegistrySnapshot,
-    };
+};
+const rawCredentialReadiness = vi.fn((contribution: Readonly<{ pluginId: string; localId: string }>) => contribution);
+installSessionActionRpcBoundary(async request => {
+    const separator = request.method.indexOf(':');
+    const machineId = request.method.slice(0, separator);
+    const method = request.method.slice(separator + 1);
+    if (method === RPC_METHODS.CAPABILITIES_DETECT) {
+        passiveSetupBoundary.refresh(request.params);
+        if (capabilityState.status === 'loading') return await new Promise((resolve, reject) => { pendingDetections.push({ resolve, reject }); });
+        if (capabilityState.status === 'error') throw new Error('daemon_capabilities_unavailable');
+        return 'snapshot' in capabilityState && capabilityState.snapshot
+            ? capabilityState.snapshot.response : { protocolVersion: 1, results: {} };
+    }
+    if (method === RPC_METHODS.CAPABILITIES_INVOKE) {
+        const answer = await passiveSetupBoundary.invoke(machineId, request.params);
+        return answer && typeof answer === 'object' && 'response' in answer ? answer.response : { error: 'unavailable' };
+    }
+    if (method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) {
+        const input = request.params as { contribution: { pluginId: string; localId: string }; rawGrant: { realm: string; phase: string; request: { origin: string; headerNames: string[] } } };
+        const contribution = rawCredentialReadiness(input.contribution);
+        return DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema.parse({ ok: true,
+            authorization: { pluginId: contribution.pluginId, capability: 'credentials.materialize.raw',
+                targetScope: { kind: 'account' }, subject: { kind: 'credential_access_disclosure', contribution,
+                    credentialSlotId: 'api_key', purpose: 'voice.speech', accessDeclarationDigest: 'b'.repeat(64),
+                    selectedAuthorityDigest: 'c'.repeat(64), selectedRawAccessDigest: 'd'.repeat(64) },
+                authoritySource: { kind: 'machine_installation', machineId, installationId: 'installation-a' },
+                disclosures: [{ sourceClass: { kind: 'savedSecret', secretKinds: ['apiKey'] },
+                    realm: input.rawGrant.realm, phase: input.rawGrant.phase, materialization: 'httpHeaders',
+                    origin: input.rawGrant.request.origin, destination: input.rawGrant.request.headerNames[0] }],
+            }, review: { plugin: { id: contribution.pluginId, name: 'Voice', version: '1.0.0' },
+                package: { identity: contribution.pluginId }, distribution: { kind: 'unavailable' }, publisher: { status: 'unavailable' },
+                contribution: { identity: contribution, name: 'Speech' }, credentialSlot: { id: 'api_key', name: 'API key', purpose: 'voice.speech' } },
+        });
+    }
+    return { error: 'unavailable' };
 });
 
-vi.mock('@/voice/credentials/rawCredentialAuthorizationClient', () => ({
-    inspectRawCredentialAuthorizationReadiness: rawCredentialReadiness,
-    rawCredentialAuthorizationClient: {
-        inspect: vi.fn(async () => { throw new Error('unavailable'); }),
-        request: vi.fn(async () => { throw new Error('unavailable'); }),
-    },
-}));
-
-const activeAccountLifetimeBoundary = vi.hoisted(() => ({
-    value: null as Readonly<{
-        scope: Readonly<{ serverId: string; accountId: string }>;
-        isCurrent(): boolean;
-    }> | null,
-}));
-
-function createActiveAccountLifetime(accountId: string): Readonly<{
-    scope: Readonly<{ serverId: string; accountId: string }>;
-    isCurrent(): boolean;
-    retire(): void;
-}> {
-    let current = true;
-    return Object.freeze({
-        scope: Object.freeze({ serverId: 'server-1', accountId }),
-        isCurrent: () => current,
-        retire: () => { current = false; },
+async function createActiveAccountLifetime(accountId: string, requestedServerUrl?: string) {
+    const profile = passiveSetupBoundary.profile;
+    const target = passiveSetupBoundary.machineTarget;
+    const serverUrl = requestedServerUrl ?? (await import('@/sync/domains/server/serverRuntime')).getActiveServerSnapshot().serverUrl;
+    // A second Account is a logout/restore, not a second cold bootstrap of
+    // the still-running Sync owner and its Account A requests.
+    await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+    const connection = await restoreServerAccountForTest({
+        serverUrl,
+        accountId, request: async (url, init) => new URL(String(url)).pathname === '/v1/account/profile'
+            ? Response.json({ ...profile, id: accountId }) : accountFixture.request(url, init),
+        credentialScope: 'restored-home',
     });
+    onTestFinished(connection.dispose);
+    const { sync } = await import('@/sync/sync');
+    await Promise.all([
+        (Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync).awaitQueue(),
+        sync.refreshProfile(),
+    ]);
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('Voice settings Account lifetime missing');
+    passiveSetupBoundary.machineTarget = target;
+    return { ...lifetime, retire: retireActiveServerAccountScopeLifetime };
 }
 
 afterEach(() => {
-    projectedPluginText.mockClear();
-    activeAccountLifetimeBoundary.value = null;
     passiveSetupBoundary.invoke.mockReset();
     passiveSetupBoundary.invoke.mockResolvedValue({ supported: false, reason: 'error' });
 });
 
-installVoiceSettingsPanelCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Pressable: (props: any) => React.createElement('Pressable', props, props.children),
-        });
-    },
-    icons: async () => ({
-        Ionicons: (props: any) => React.createElement('Ionicons', props),
-    }),
-    storage: () => vi.importActual<typeof import('@/sync/domains/state/storage')>('@/sync/domains/state/storage'),
-});
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-    ItemGroupSelectionContext: React.createContext(null),
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    Pressable: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Pressable', props, props.children),
 }));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props, props.children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroupRowPosition', () => ({
-    useItemGroupRowPosition: () => 'middle',
-}));
-
-vi.mock('@/components/ui/lists/itemGroupRowCorners', () => ({
-    getItemGroupRowCornerRadii: () => ({}),
-}));
-
-vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
-    normalizeNodeForView: (node: unknown) => node,
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-    TextInput: (props: any) => React.createElement('TextInput', props),
-}));
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/hooks/server/useDaemonScopedMachineCapabilitiesCache', () => ({
-    useDaemonScopedMachineCapabilitiesCache: () => ({
-        state: passiveSetupBoundary.state,
-        refresh: passiveSetupBoundary.refresh,
-    }),
-}));
-
-vi.mock('@/sync/ops/capabilities', () => ({
-    machineCapabilitiesInvoke: (...args: unknown[]) => passiveSetupBoundary.invoke(...args),
-}));
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/store/hooks')>(),
-    useMachineCliDetectionTarget: () => passiveSetupBoundary.machineTarget,
-    useProfile: () => passiveSetupBoundary.profile ?? { connectedServicesV2: [] },
-    useLocalSetting: (key: string) => key === 'uiFontScale' ? 1 : null,
-    // Device-local preferences (e.g. hiding connected-account identities) read as unset.
-    useLocalSettingMutable: () => [null, () => {}],
-}));
-
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => activeAccountLifetimeBoundary.value,
-}));
-
-vi.mock('./realtime/VoiceGlobalConnectedServicesBindingField', () => ({
-    VoiceGlobalConnectedServicesBindingField: (props: any) =>
-        React.createElement('VoiceGlobalConnectedServicesBindingField', props),
-}));
 
 function elevenLabsByoConfig() {
     return {
@@ -211,6 +228,7 @@ function installCodexConnectedAccountDescriptor() {
                 modes: [{
                     id: 'oauth',
                     kind: 'oauthAuthorizationCode',
+                    callbackUrl: 'http://127.0.0.1:4000/auth/callback',
                     scopes: ['openid', 'profile', 'email', 'offline_access'],
                     pkce: 'required',
                     outcomeReconciliation: 'none',
@@ -316,6 +334,50 @@ await import('./VoiceProviderSection');
 await import('./BundledConversationSettingsSection');
 
 describe('VoiceProviderSection', () => {
+    it.each([null, 'machine-1'])('settles credential-scoped consumers through Account and Home replacement and settings remount (%s)', async (machineId) => {
+        const { useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
+        const { readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+        const { useAgentInstallJob } = await import('@/agents/machineAgents/installJobs/useAgentInstallJob');
+        const { useAgentSignIn } = await import('@/agents/machineAgents/signIn/useAgentSignIn');
+        const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const configured = readLocalConversationVoiceSettings(accountFixture.settings.voice);
+        accountFixture.replaceVoice(writeLocalConversationVoiceSettings(accountFixture.settings.voice, {
+            ...configured, conversationMode: 'agent',
+            agent: { ...configured.agent, agentSource: 'agent', agentId: 'claude' },
+        }));
+        const observedAccounts: Array<string | null> = [];
+        function SettingsConsumers() {
+            const scope = storage((state) => state.settingsScope);
+            const voice = storage((state) => state.settings.voice);
+            useVoiceConversationsReadinessModel({ voice, setVoice: accountFixture.replaceVoice,
+                executionMachineId: machineId, happierVoiceSupported: true, platformOs: 'web' });
+            useAgentInstallJob({ serverId: scope?.serverId ?? '', machineId: machineId ?? '', agentId: 'codex' });
+            const signIn = useAgentSignIn({ serverId: scope?.serverId, machineId, agentId: 'codex' });
+            const credential = useServerCredentialAccountScopeBinding(scope?.serverId);
+            observedAccounts.push(credential.binding?.accountId ?? null);
+            return React.createElement('CredentialNavigationProbe', {
+                accountId: credential.binding?.accountId ?? null,
+                serverId: credential.binding?.serverId ?? null,
+                signInAvailable: signIn.available,
+            });
+        }
+        const screen = await renderScreen(React.createElement(SettingsConsumers));
+        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe(accountFixture.scope.accountId));
+        await act(async () => { await createActiveAccountLifetime('account-navigation-next'); });
+        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-next'));
+        await act(async () => { await createActiveAccountLifetime('account-navigation-other-home', 'https://voice-navigation-other.example.test'); });
+        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-other-home'));
+        expect(screen.root.findByType('CredentialNavigationProbe').props.serverId).not.toBe(accountFixture.scope.serverId);
+        await screen.update(React.createElement('WorkspaceNavigationProbe'));
+        await screen.update(React.createElement(SettingsConsumers));
+        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-other-home'));
+        const settledRenders = observedAccounts.length;
+        await act(async () => {});
+        await act(async () => {});
+        expect(observedAccounts).toHaveLength(settledRenders);
+        expect(screen.root.findByType('CredentialNavigationProbe').props.signInAvailable).toBe(machineId !== null);
+    });
+
     it('does not render a second declarative settings writer for a provider-owned settings section', async () => {
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const screen = await renderScreen(React.createElement(VoiceProviderSection, {
@@ -440,7 +502,6 @@ describe('VoiceProviderSection', () => {
                     },
                 },
             },
-            { timeoutMs: 30_000 },
         );
         const readinessHost = checkedReadinessRow(screen.tree);
         expect(readinessHost?.props.subtitle).toContain('voice.readiness.runtime_unknown');
@@ -461,7 +522,7 @@ describe('VoiceProviderSection', () => {
         });
         await act(async () => {});
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(1);
-        expect(passiveSetupBoundary.invoke).toHaveBeenCalledWith('machine-2', expect.anything(), { timeoutMs: 30_000 });
+        expect(passiveSetupBoundary.invoke).toHaveBeenCalledWith('machine-2', expect.anything());
     }, 120_000);
 
     it('marks Codex setup ready only from the strict passive owner result', async () => {
@@ -598,7 +659,7 @@ describe('VoiceProviderSection', () => {
 
         // The page checked the new machine on its own; machine-1's late answer never lands.
         expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(2);
-        expect(passiveSetupBoundary.invoke).toHaveBeenLastCalledWith('machine-2', expect.anything(), { timeoutMs: 30_000 });
+        expect(passiveSetupBoundary.invoke).toHaveBeenLastCalledWith('machine-2', expect.anything());
         const readiness = checkedReadinessRow(screen.tree);
         expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
         expect(readiness?.props.subtitle).not.toContain('voice.readiness.runtime_unknown');
@@ -612,11 +673,13 @@ describe('VoiceProviderSection', () => {
             }],
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
-        const accountA = createActiveAccountLifetime('account-a');
-        activeAccountLifetimeBoundary.value = accountA;
-        passiveSetupBoundary.invoke
-            .mockResolvedValueOnce({ supported: true, response: { ok: true, result: { v: 1, status: 'unavailable' } } })
-            .mockResolvedValueOnce({ supported: true, response: { ok: true, result: { v: 1, status: 'ready' } } });
+        const accountA = await createActiveAccountLifetime('account-a');
+        passiveSetupBoundary.invoke.mockImplementation(async () => ({
+            supported: true,
+            response: { ok: true, result: { v: 1,
+                status: captureActiveServerAccountScopeLifetime()?.scope.accountId === 'account-b'
+                    ? 'ready' : 'unavailable' } },
+        }));
         onTestFinished(() => {
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
@@ -655,16 +718,19 @@ describe('VoiceProviderSection', () => {
 
         await act(async () => {});
         expect(checkedReadinessRow(screen.tree)).not.toBeNull();
+        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
 
         accountA.retire();
-        activeAccountLifetimeBoundary.value = createActiveAccountLifetime('account-b');
+        const accountB = await createActiveAccountLifetime('account-b');
+        expect(accountB.scope.accountId).toBe('account-b');
+        expect(accountB.isCurrent()).toBe(true);
+        expect(storage.getState().settingsScope?.accountId).toBe('account-b');
         await act(async () => {
             screen.tree.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
         await act(async () => {});
-        // Account A's answer is gone; the page checked again for account B.
-        expect(passiveSetupBoundary.invoke).toHaveBeenCalledTimes(2);
+        // Account A was unavailable; only a fresh Account B answer can be ready.
         const readiness = checkedReadinessRow(screen.tree);
         expect(readiness?.props.subtitle).toContain('voice.readiness.ready');
         expect(readiness?.props.subtitle).not.toContain('voice.readiness.runtime_unknown');
@@ -678,8 +744,7 @@ describe('VoiceProviderSection', () => {
             }],
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
-        const accountA = createActiveAccountLifetime('account-a');
-        activeAccountLifetimeBoundary.value = accountA;
+        const accountA = await createActiveAccountLifetime('account-a');
         passiveSetupBoundary.invoke.mockResolvedValue({
             supported: true,
             response: { ok: true, result: { v: 1, status: 'ready' } },
@@ -721,15 +786,22 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(React.createElement(VoiceProviderSection, sectionProps));
 
         await act(async () => {});
-        expect(checkedReadinessRow(screen.tree)).not.toBeNull();
+        expect(checkedReadinessRow(screen.tree)?.props.subtitle).toContain('voice.readiness.ready');
 
+        let settleFreshCheck!: (value: unknown) => void;
+        const freshCheck = new Promise(resolve => { settleFreshCheck = resolve; });
+        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck);
         accountA.retire();
-        activeAccountLifetimeBoundary.value = createActiveAccountLifetime('account-a');
+        await createActiveAccountLifetime('account-a');
         await act(async () => {
             screen.tree.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        expect(checkedReadinessRow(screen.tree)).toBeNull();
+        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
+        await act(async () => {
+            settleFreshCheck({ supported: true, response: { ok: true, result: { v: 1, status: 'unavailable' } } });
+        });
+        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
     }, 120_000);
 
     it('does not commit a stale passive result after the active Account lifetime restarts', async () => {
@@ -740,15 +812,13 @@ describe('VoiceProviderSection', () => {
             }],
         };
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 7, isOnline: true };
-        const accountA = createActiveAccountLifetime('account-a');
-        activeAccountLifetimeBoundary.value = accountA;
+        const accountA = await createActiveAccountLifetime('account-a');
         let settlePassiveCheck: ((value: unknown) => void) | null = null;
         const pendingPassiveCheck = new Promise<unknown>((resolve) => {
             settlePassiveCheck = resolve;
         });
         passiveSetupBoundary.invoke.mockImplementation(async () => await pendingPassiveCheck);
         onTestFinished(() => {
-            activeAccountLifetimeBoundary.value = null;
             passiveSetupBoundary.profile = null;
             passiveSetupBoundary.machineTarget = { daemonStateVersion: 0, isOnline: false };
             passiveSetupBoundary.state = { status: 'idle' };
@@ -785,8 +855,12 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(render());
 
         await act(async () => {});
+        passiveSetupBoundary.invoke.mockResolvedValue({
+            supported: true,
+            response: { ok: true, result: { v: 1, status: 'unavailable' } },
+        });
         accountA.retire();
-        activeAccountLifetimeBoundary.value = createActiveAccountLifetime('account-a');
+        await createActiveAccountLifetime('account-a');
         await act(async () => {
             screen.tree.update(render());
         });
@@ -798,7 +872,7 @@ describe('VoiceProviderSection', () => {
             await Promise.resolve();
         });
 
-        expect(checkedReadinessRow(screen.tree)).toBeNull();
+        expect(checkedReadinessRow(screen.tree)?.props.subtitle).not.toContain('voice.readiness.ready');
     }, 120_000);
 
     it('does not commit a delayed passive result after the selected daemon restarts', async () => {
@@ -1076,6 +1150,7 @@ describe('VoiceProviderSection', () => {
             snapshot: unavailableRuntimeSnapshot,
         };
         await act(async () => {
+            await primeCapabilities();
             tree.update(render());
         });
         expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.runtime_unknown');
@@ -1272,6 +1347,7 @@ describe('VoiceProviderSection', () => {
         };
         const selected = applyAccountVoiceCredentialSourceSelection({
             settings: settingsParse({ voice }),
+            connectedPurposes: accountFixture.purposes.value,
             mutation: {
                 contribution: {
                     pluginId: provider.pluginId,
@@ -1283,6 +1359,7 @@ describe('VoiceProviderSection', () => {
             },
             currentDeclaration: provider.declaration,
         });
+        await accountFixture.replaceConnectedPurposes(selected.connectedPurposes);
         storageBoundary.settings = selected.settings;
         passiveSetupBoundary.profile = {
             connectedAccountsV4: [account],
@@ -1369,6 +1446,7 @@ describe('VoiceProviderSection', () => {
         };
         const selected = applyAccountVoiceCredentialSourceSelection({
             settings: settingsParse({ voice }),
+            connectedPurposes: accountFixture.purposes.value,
             mutation: {
                 contribution: {
                     pluginId: provider.pluginId,
@@ -1380,6 +1458,7 @@ describe('VoiceProviderSection', () => {
             },
             currentDeclaration: provider.declaration,
         });
+        await accountFixture.replaceConnectedPurposes(selected.connectedPurposes);
         storageBoundary.settings = selected.settings;
         passiveSetupBoundary.profile = {
             connectedAccountsV4: [account],
@@ -1450,17 +1529,11 @@ describe('VoiceProviderSection', () => {
                 updatedAt: 1,
             }],
             voiceSettingsV1: { credentialBindings: [] },
-            connectedAccountPurposeBindingsV1: {
-                v: 1,
-                bindings: [{
-                    purpose: {
-                        consumer: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' },
-                        purpose: 'voice.client-auth',
-                    },
-                    target: { kind: 'account', account: account.ref },
-                }],
-            },
         });
+        await accountFixture.replaceConnectedPurposes({ v: 1, bindings: [{
+            purpose: { consumer: { pluginId: 'happier.voice.openai', localId: 'realtime-openai' }, purpose: 'voice.client-auth' },
+            target: { kind: 'account', account: account.ref },
+        }] });
         passiveSetupBoundary.profile = {
             connectedAccountsV4: [account],
             connectedAccountGroupsV4: [],
@@ -1511,7 +1584,7 @@ describe('VoiceProviderSection', () => {
                 voice: selectedVoice,
             }),
         ));
-        const sourceField = findTestInstanceByTypeWithProps(selected.tree, 'DropdownMenu' as any, {
+        const sourceField = findTestInstanceByTypeWithProps(selected.tree, DropdownMenu, {
             testID: 'voice-credential-source-api_key',
         });
         expect(sourceField?.props.items).toContainEqual(expect.objectContaining({
@@ -2532,6 +2605,7 @@ describe('VoiceProviderSection', () => {
         }).settings;
         rawCredentialReadiness.mockClear();
         storageBoundary.settings = ready;
+        accountFixture.replaceVoice({ ...ready.voice, executionMachine: { mode: 'fixed', machineId: 'machine-online' } });
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 1, isOnline: true };
         onTestFinished(() => {
             storageBoundary.settings = null;
@@ -2562,29 +2636,36 @@ describe('VoiceProviderSection', () => {
         const { tree } = screen;
 
         await act(async () => {});
-        expect(rawCredentialReadiness).toHaveBeenCalledTimes(2);
+        expect(new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId))).toEqual(new Set(['gemini-stt', 'google-cloud-tts']));
         expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.ready');
 
+        const hydrated = storage.getState().settings;
         const missingVoiceNameVoice = writeVoiceProviderSettingsConfig(
-            ready.voice, 'happier.voice.google/google-cloud-tts', {
+            hydrated.voice, 'happier.voice.google/google-cloud-tts', {
                 voiceName: '', languageCode: 'en-US', format: 'mp3', speakingRate: 1, pitch: 0,
             },
         );
         const missingVoiceName = {
-            ...ready,
+            ...hydrated,
             voice: missingVoiceNameVoice,
-            voiceSettingsV1: { ...ready.voiceSettingsV1, providers: missingVoiceNameVoice.providers },
+            voiceSettingsV1: { ...hydrated.voiceSettingsV1, providers: missingVoiceNameVoice.providers },
         };
         storageBoundary.settings = missingVoiceName;
         await act(async () => { tree.update(render(missingVoiceName.voice)); });
         await act(async () => {});
         expect(checkedReadinessRow(tree)?.props.subtitle).toContain('voice.readiness.settings_missing_required_setting');
 
-        const removed = settingsParse({
-            ...ready,
-            secrets: ready.secrets.filter((secret) => secret.id !== 'google-stt-secret'),
-        });
+        const current = storage.getState().settings;
+        const { resolveAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
+        const sttRef = resolveAccountVoiceCredential(current,
+            { pluginId: 'happier.voice.google', localId: 'gemini-stt' }, 'api_key', 'machine-online')?.secretId;
+        const resourceIndex = accountFixture.resources.findIndex(resource => resource.entry.ref === sttRef);
+        expect(resourceIndex).toBeGreaterThanOrEqual(0);
+        accountFixture.resources.splice(resourceIndex, 1);
+        const removed = settingsParse({ ...current,
+            voiceSettingsV1: { ...current.voiceSettingsV1, providers: hydrated.voice.providers } });
         storageBoundary.settings = removed;
+        await refreshSavedSecretCatalog(accountFixture.scope);
         await act(async () => {
             tree.update(render(removed.voice));
         });
@@ -2643,6 +2724,7 @@ describe('VoiceProviderSection', () => {
         }
         rawCredentialReadiness.mockClear();
         storageBoundary.settings = settings;
+        accountFixture.replaceVoice({ ...settings.voice, executionMachine: { mode: 'fixed', machineId: 'machine-online' } });
         passiveSetupBoundary.machineTarget = { daemonStateVersion: 1, isOnline: true };
         onTestFinished(() => {
             storageBoundary.settings = null;
@@ -2854,13 +2936,13 @@ describe('VoiceProviderSection', () => {
             platformOs: 'web',
         }));
 
-        const select = findTestInstanceByTypeWithProps(tree, 'DropdownMenu' as any, {
+        const select = findTestInstanceByTypeWithProps(tree, DropdownMenu, {
             selectedId: JSON.stringify('calm'),
         });
-        expect(select?.props.itemTrigger.title).toBe('acme.synthetic-configurable:settings.voice.title');
+        expect(select?.props.itemTrigger.title).toBe('Provider voice');
         expect(select?.props.items.map((item: Readonly<{ title: string }>) => item.title)).toEqual([
-            'acme.synthetic-configurable:settings.voice.calm',
-            'acme.synthetic-configurable:settings.voice.bright',
+            'Calm',
+            'Bright',
         ]);
         await act(async () => select?.props.onSelect(JSON.stringify('bright')));
         expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
@@ -3008,17 +3090,11 @@ describe('VoiceProviderSection', () => {
                 updatedAt: 1,
             }],
             voiceSettingsV1: { credentialBindings: [] },
-            connectedAccountPurposeBindingsV1: {
-                v: 1,
-                bindings: [{
-                    purpose: {
-                        consumer: { pluginId: 'acme.selectable-voice', localId: 'conversation' },
-                        purpose: 'voice.client-auth',
-                    },
-                    target: { kind: 'account', account: account.ref },
-                }],
-            },
         });
+        await accountFixture.replaceConnectedPurposes({ v: 1, bindings: [{
+            purpose: { consumer: { pluginId: 'acme.selectable-voice', localId: 'conversation' }, purpose: 'voice.client-auth' },
+            target: { kind: 'account', account: account.ref },
+        }] });
         passiveSetupBoundary.profile = {
             connectedAccountsV4: [account],
             connectedAccountGroupsV4: [],
@@ -3162,6 +3238,7 @@ describe('VoiceProviderSection', () => {
         };
         const selected = applyAccountVoiceCredentialSourceSelection({
             settings: settingsParse({ voice }),
+            connectedPurposes: accountFixture.purposes.value,
             mutation: {
                 contribution: { pluginId: 'acme.external-credential', localId: 'conversation' },
                 credentialSlotId: 'api_key',
@@ -3170,6 +3247,7 @@ describe('VoiceProviderSection', () => {
             },
             currentDeclaration: declaration,
         });
+        await accountFixture.replaceConnectedPurposes(selected.connectedPurposes);
         storageBoundary.settings = selected.settings;
         passiveSetupBoundary.profile = {
             connectedAccountsV4: [account],
@@ -3297,7 +3375,7 @@ describe('VoiceProviderSection', () => {
             platformOs: 'web',
         }));
 
-        const field = tree.findAllByType('VoiceGlobalConnectedServicesBindingField' as any)
+        const field = tree.findAllByType(VoiceGlobalConnectedServicesBindingField)
             .find((candidate: any) => candidate.props.title === 'Claude account');
         expect(field).toBeTruthy();
         expect(field?.props.agentId).toEqual({
@@ -3345,7 +3423,7 @@ describe('VoiceProviderSection', () => {
             platformOs: 'web',
         }));
 
-        const fields = tree.findAllByType('VoiceGlobalConnectedServicesBindingField' as any)
+        const fields = tree.findAllByType(VoiceGlobalConnectedServicesBindingField)
             .filter((candidate: any) => candidate.props.title === 'Codex account'
                 && candidate.props.agentId?.pluginId === 'happier.agent.codex'
                 && candidate.props.agentId?.localId === 'codex');

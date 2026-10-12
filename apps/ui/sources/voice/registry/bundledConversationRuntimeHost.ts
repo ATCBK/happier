@@ -11,7 +11,8 @@ import type {
 } from './bundledConversationRuntimeContract';
 import { AgentSessionRealtimeInspectResultV1Schema } from '@happier-dev/protocol/voice/realtime/agentSession';
 import { describeActionForVoiceTool } from '@happier-dev/protocol/actions/actionVoiceToolSummary';
-import { isVoiceSdkSafeActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isVoiceSdkSafeActionSpec, isVoicePromptHotPathSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { resolveVoiceActionExecution, VoiceActionExecuteInputSchema, VOICE_ACTION_EXECUTE_TOOL_NAME } from '@/voice/tools/voiceActionExecution';
 import { SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol/sessions/control/contract';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { VoiceRealtimeJsonValueSchema, type VoiceRealtimeJsonValue } from '@happier-dev/protocol/voice/realtime/events';
@@ -54,7 +55,7 @@ import {
   unbindVoiceRuntimeAttemptBindingIfOwned,
   voiceSessionBindingStore,
 } from '@/voice/binding/voiceConversationBindingStore';
-import { redactVoiceToolResultForProvider } from '@/voice/context/redactVoiceToolResult';
+import { redactVoiceToolResultForProvider, redactVoiceActionExecutionResultForProvider } from '@/voice/context/redactVoiceToolResult';
 import {
   createCurrentUiContextAutomaticUpdateProjector,
   voiceHooks,
@@ -473,7 +474,7 @@ function createRealtimeClientToolParameters(
   // Action schemas are host-generated strict JSON metadata. The realtime
   // argument/result bounds apply to live provider values, not to the depth of
   // this canonical schema description.
-  const value = StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(inputSchema));
+  const value = StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(inputSchema, { reused: 'ref' }));
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('voice_client_tool_parameters_invalid');
   }
@@ -647,14 +648,15 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
       // disclosure policy above already authorized.
       const actionSpecs = exposure === 'current_ui_only'
         ? enabledSpecs.filter((spec) => isCurrentUiContextVoiceAction(spec.id as ActionId))
-        : enabledSpecs;
+        : enabledSpecs.filter((spec) => isVoicePromptHotPathSpec(spec)
+          || spec.id === 'action.spec.search' || spec.id === 'action.spec.get');
       // A direct SDK callback has no response/call identity. It therefore
       // remains strictly read-only even when the provider separately declares
       // stable effect custody for canonical `tool_calls` below.
       const directHandlers = createRealtimeReadOnlyClientTools({
         ...(input.currentUiContext ? { currentUiContext: input.currentUiContext } : {}),
       });
-      return Object.freeze(actionSpecs.flatMap((spec) => {
+      const definitions = actionSpecs.flatMap((spec) => {
         const name = String(spec.bindings?.voiceClientToolName ?? '').trim();
         const isReadOnly = isVoiceSdkSafeActionSpec(spec);
         const handler = directHandlers[name];
@@ -692,7 +694,33 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
             ));
           },
         })];
-      }));
+      });
+      if (exposure !== 'current_ui_only') {
+        definitions.push(Object.freeze({
+          name: VOICE_ACTION_EXECUTE_TOOL_NAME,
+          description: 'Execute a built-in Voice Action by actionId and input discovered with searchActionSpecs and getActionSpec. Returns {ok:true,result} or {ok:false,errorCode,error}. Contributed plugin Actions use invokeAction instead.',
+          parameters: createRealtimeClientToolParameters(VoiceActionExecuteInputSchema),
+          async execute(parameters: VoiceRealtimeJsonValue): Promise<VoiceRealtimeJsonValue> {
+            if (!generation.isCurrent()) throw new Error('voice_runtime_generation_revoked');
+            const target = resolveVoiceActionExecution(parameters);
+            if (!target) throw new Error('invalid_parameters');
+            if (!isVoiceActionAvailableInState(storage.getState(), target.spec.id as ActionId, scope)) {
+              throw new Error('voice_action_unavailable');
+            }
+            if (!isVoiceSdkSafeActionSpec(target.spec)) throw directVoiceEffectExecutionUnavailable();
+            const handler = directHandlers[target.toolName];
+            if (!handler) throw new Error('voice_read_tool_unavailable');
+            const value: unknown = JSON.parse(await handler(target.input));
+            const privacy = readVoicePrivacySettings(storage.getState().settings);
+            const result = value && typeof value === 'object' && 'ok' in value && value.ok === false
+              ? value : { ok: true, result: value };
+            return VoiceRealtimeJsonValueSchema.parse(redactVoiceActionExecutionResultForProvider(
+              target.toolName, result, privacy,
+            ));
+          },
+        }));
+      }
+      return Object.freeze(definitions);
     },
     createMachineError: createVoiceMachineError,
     machine: Object.freeze({

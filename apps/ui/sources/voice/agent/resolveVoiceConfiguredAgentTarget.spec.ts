@@ -1,8 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+import { PluginProjectionV2Schema, SessionSpawnNewInputV2Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -12,29 +16,46 @@ import { refreshAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/
 import { resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { createDeferred } from '@/dev/testkit';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readLocalConversationVoiceSettings, voiceSettingsDefaults, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { ensureVoiceConversationSessionForVoiceHome } from '@/voice/persistence/voiceConversationSession';
 
-installDisconnectedServerSocketBoundary();
+installDisconnectedServerSocketBoundary(socket => {
+  vi.mocked(socket.connect).mockImplementation(() => {
+    if (socket.connected) return socket;
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+  // The real scoped pool may retain this external Socket across Account
+  // lifetimes; restoring per-test spies must not restore a live SDK transport.
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+    if (event !== 'rpc-call') throw new Error(`Unexpected socket acknowledgement: ${event}`);
+    const request = payload as { method: string; params: unknown };
+    const separator = request.method.indexOf(':');
+    if (separator < 1) throw new Error('Expected machine-addressed Socket RPC');
+    return { ok: true, result: await machineRpc({ machineId: request.method.slice(0, separator),
+      method: request.method.slice(separator + 1), payload: request.params }) };
+  });
+});
+const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+const restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+afterAll(restoreActionExecutorModuleLoader);
+
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let rowDefinitions: readonly unknown[];
 
-type MachineContributionRegistryProjectionDescribeFn =
-  typeof import('@/sync/ops/machineContributionRegistryProjection').machineContributionRegistryProjectionDescribe;
+// The wire is untyped until the real RPC client's protocol reader admits it.
+type MachineRpcFn = (params: { machineId: string; method: string; payload: unknown }) => Promise<unknown>;
 
-const { machineContributionRegistryProjectionDescribe } = vi.hoisted(() => ({
-  machineContributionRegistryProjectionDescribe: vi.fn<MachineContributionRegistryProjectionDescribeFn>(
-    async () => ({ supported: false, reason: 'not-supported' }) as never,
-  ),
+const { machineRpc } = vi.hoisted(() => ({
+  machineRpc: vi.fn<MachineRpcFn>(async () => ({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' })),
 }));
 
-vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>(),
-  machineContributionRegistryProjectionDescribe,
-}));
+// Only Socket.IO acknowledgements are synthetic. The scoped RPC adapter,
+// Account crypto, registry parsing and lifetime admission remain real.
 
 import {
   resolveVoiceConfiguredAgentTarget,
@@ -52,8 +73,8 @@ const EXTERNAL_AGENT_ID = 'acme-voice-agent';
 
 function enableExternalAgentProjection(generation: number): void {
   clearDaemonMergedProjectionCacheForTests();
-  machineContributionRegistryProjectionDescribe.mockResolvedValue({
-    supported: true,
+  machineRpc.mockResolvedValue({
+    protocolVersion: 1,
     projection: PluginProjectionV2Schema.parse({
       v: 2,
       generation,
@@ -88,19 +109,19 @@ function enableExternalAgentProjection(generation: number): void {
 }
 
 function expectProjectionDescribeCallsForMachine(machineId: string): void {
-  expect(machineContributionRegistryProjectionDescribe).toHaveBeenCalledWith(
+  expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({
     machineId,
-    expect.objectContaining({ serverId: getActiveServerSnapshot().serverId }),
-  );
+    method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+  }));
 }
 
 beforeEach(async () => {
   account = undefined;
   rowDefinitions = [];
   clearDaemonMergedProjectionCacheForTests();
-  machineContributionRegistryProjectionDescribe.mockReset();
-  machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
-  account = await restoreServerAccountForTest({ serverUrl: 'https://voice-resolver.example.test', accountId: 'voice-resolver-account',
+  machineRpc.mockReset();
+  machineRpc.mockResolvedValue({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
+  account = await restoreServerAccountForTest({ serverUrl: 'https://voice-resolver.example.test', accountId: 'voice-resolver-account', credentialScope: 'restored-home',
     request: async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
@@ -108,8 +129,21 @@ beforeEach(async () => {
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
       if (path === '/v2/account/settings') return Response.json({ version: 4, content: { t: 'plain', v: {} } });
       if (path === '/v1/artifacts') return Response.json([]);
+      if (path === '/v1/machines') return Response.json([
+        createPlainMachineRowFixture({ id: 'machine-1', accountId: 'voice-resolver-account' }),
+      ]);
+      if (path === '/v1/machines/machine-1') return Response.json({ machine:
+        createPlainMachineRowFixture({ id: 'machine-1', accountId: 'voice-resolver-account' }),
+      });
       if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
       if (path === '/v1/account/project-rows/list') return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
+      if (path === '/v1/machines/machine-1/access') {
+        const custodian = { accountId: 'voice-resolver-account', displayName: 'Voice Account' };
+        return Response.json(MachineAccessGrantsListResponseV1Schema.parse({ machineId: 'machine-1', custodian,
+          access: { custodian, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+          canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+        }));
+      }
       if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 3,
         content: { t: 'plain', v: { v: 1, definitions: rowDefinitions } } });
       return new Response(null, { status: 404 });
@@ -117,6 +151,9 @@ beforeEach(async () => {
   });
   const scope = { serverId: account.home.id, accountId: 'voice-resolver-account' };
   storage.setState({ profileScope: scope, settingsScope: scope, settings: settingsParse({}), machines: {}, sessions: {} });
+  const { sync } = await import('@/sync/sync');
+  await sync.refreshMachines();
+  expect(storage.getState().machines['machine-1']).toMatchObject({ storageMode: 'plain' });
   await refreshAcpCatalog(scope);
 });
 
@@ -129,7 +166,7 @@ afterEach(async () => {
 describe('resolveVoiceConfiguredAgentTarget', () => {
   it('loads the exact configured Voice target from destination rows without the raw Settings root', async () => {
     const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 });
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
     rowDefinitions = [definition];
     resetAcpCatalogSnapshotsForTests();
     await expect(resolveVoiceConfiguredAgentTarget({ machineId: null, selection: {
@@ -140,7 +177,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
 
   it('resolves a legacy configured ACP carrier through the ready destination catalog', async () => {
     rowDefinitions = [AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 })];
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 })];
     resetAcpCatalogSnapshotsForTests();
     await expect(resolveVoiceConfiguredAgentTarget({ machineId: null, selection: {
       agentId: 'acp:row-review', agentTargetKey: null, agentIdentity: null,
@@ -148,9 +185,18 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       backendTarget: { kind: 'backend', backendId: 'row-review', configuredBackendId: 'row-review' } });
   });
 
+  it('does not resolve a different configured ACP id from an otherwise ready catalog', async () => {
+    rowDefinitions = [AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 })];
+    resetAcpCatalogSnapshotsForTests();
+    await expect(resolveVoiceConfiguredAgentTarget({ machineId: null, selection: {
+      agentId: 'acp:another-row', agentTargetKey: null, agentIdentity: null,
+    } })).resolves.toMatchObject({ ok: false, errorCode: VOICE_AGENT_SELECTION_UNAVAILABLE_ERROR_CODE });
+  });
+
   it.each(['exact', 'legacy'] as const)('refuses a %s configured target when destination rows have an incomplete inventory', async kind => {
     rowDefinitions = [AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 }), { id: 'malformed-neighbor' }];
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 }), { id: 'malformed-neighbor' }];
     resetAcpCatalogSnapshotsForTests();
     await expect(resolveVoiceConfiguredAgentTarget({ machineId: null, selection: {
       agentId: kind === 'legacy' ? 'acp:row-review' : 'row-review',
@@ -160,7 +206,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
 
   it.each(['ready', 'incomplete'] as const)('uses %s destination facts through the real Voice persistence entrypoint', async status => {
     const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 });
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
     rowDefinitions = status === 'ready' ? [definition] : [definition, { id: 'malformed-neighbor' }];
     resetAcpCatalogSnapshotsForTests();
     const cfg = readLocalConversationVoiceSettings(voiceSettingsDefaults);
@@ -168,26 +214,34 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       executionMachine: { mode: 'fixed', machineId: 'machine-1' } }, { ...cfg, conversationMode: 'agent', agent: {
       ...cfg.agent, agentSource: 'agent', agentId: 'row-review', agentTargetKey: 'backend:row-review:configured:row-review', agentIdentity: null,
     } });
-    storage.setState({ settings: settingsParse({ voice }), machines: {
-      'machine-1': createMachineFixture({ activeAt: Date.now() }),
-    } });
-    // The ready row reaches installed-Agent admission. This fixture's genuine
-    // daemon boundary has no installed owner; it cannot fabricate that identity.
-    await expect(ensureVoiceConversationSessionForVoiceHome()).rejects.toMatchObject({
-      code: status === 'ready' ? 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE' : 'VOICE_AGENT_SELECTION_UNAVAILABLE',
+    storage.setState({ settings: settingsParse({ voice }) });
+    machineRpc.mockImplementation(async request => {
+      if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) {
+        const input = SessionSpawnNewInputV2Schema.parse(request.payload);
+        expect(input.agentTarget).toMatchObject({ definitionId: 'row-review' });
+        return { type: 'error', code: 'incompatible_target', retryable: false };
+      }
+      return { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
     });
+    // A ready catalog must carry the exact selected definition to the real
+    // creation owner. The external daemon has no compatible installed target.
+    await expect(ensureVoiceConversationSessionForVoiceHome()).rejects.toMatchObject({
+      code: status === 'ready' ? 'incompatible_target' : 'VOICE_AGENT_SELECTION_UNAVAILABLE',
+    });
+    const spawnRequests = machineRpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW);
+    expect(spawnRequests).toHaveLength(status === 'ready' ? 1 : 0);
   });
 
   it('refuses an external selection when its Account lifetime retires during daemon resolution', async () => {
     const entered = createDeferred<void>();
-    const response = createDeferred<Awaited<ReturnType<MachineContributionRegistryProjectionDescribeFn>>>();
-    machineContributionRegistryProjectionDescribe.mockImplementation(() => { entered.resolve(); return response.promise; });
+    const response = createDeferred<Awaited<ReturnType<MachineRpcFn>>>();
+    machineRpc.mockImplementation(() => { entered.resolve(); return response.promise; });
     const pending = resolveVoiceConfiguredAgentTarget({ machineId: 'machine-1', selection: {
       agentId: EXTERNAL_AGENT_ID, agentTargetKey: EXTERNAL_TARGET_KEY, agentIdentity: EXTERNAL_IDENTITY,
     } });
     await entered.promise;
     retireActiveServerAccountScopeLifetime();
-    response.resolve({ supported: true, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 7,
+    response.resolve({ protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 7,
       agentsById: { [EXTERNAL_AGENT_ID]: { id: EXTERNAL_AGENT_ID, identity: EXTERNAL_IDENTITY } }, familiesById: {},
     }) });
     await expect(pending).resolves.toMatchObject({ ok: false, errorCode: VOICE_AGENT_SELECTION_UNAVAILABLE_ERROR_CODE });
@@ -195,23 +249,21 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
 
   it('refuses Voice persistence launch when its captured Account retires during final daemon admission', async () => {
     rowDefinitions = [AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
-      command: 'review', createdAt: 1, updatedAt: 1 })];
+      launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 })];
     await refreshAcpCatalog({ serverId: account!.home.id, accountId: 'voice-resolver-account' });
     const cfg = readLocalConversationVoiceSettings(voiceSettingsDefaults);
     const voice = writeLocalConversationVoiceSettings({ ...voiceSettingsDefaults,
       executionMachine: { mode: 'fixed', machineId: 'machine-1' } }, { ...cfg, conversationMode: 'agent', agent: {
       ...cfg.agent, agentSource: 'agent', agentId: 'row-review', agentTargetKey: 'backend:row-review:configured:row-review', agentIdentity: null,
     } });
-    storage.setState({ settings: settingsParse({ voice }), machines: {
-      'machine-1': createMachineFixture({ activeAt: Date.now() }),
-    } });
+    storage.setState({ settings: settingsParse({ voice }) });
     const entered = createDeferred<void>();
-    const response = createDeferred<Awaited<ReturnType<MachineContributionRegistryProjectionDescribeFn>>>();
-    machineContributionRegistryProjectionDescribe.mockImplementation(() => { entered.resolve(); return response.promise; });
+    const response = createDeferred<Awaited<ReturnType<MachineRpcFn>>>();
+    machineRpc.mockImplementation(() => { entered.resolve(); return response.promise; });
     const pending = ensureVoiceConversationSessionForVoiceHome();
     await entered.promise;
     retireActiveServerAccountScopeLifetime();
-    response.resolve({ supported: false, reason: 'not-supported' });
+    response.resolve({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
     await expect(pending).rejects.toMatchObject({ code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
   });
 
@@ -242,8 +294,8 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
     const targetKey = 'agent:acme.voice/agents/reviewer';
     const agentId = 'acme-voice-reviewer';
     clearDaemonMergedProjectionCacheForTests();
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({
-      supported: true,
+    machineRpc.mockResolvedValue({
+      protocolVersion: 1,
       projection: PluginProjectionV2Schema.parse({
         v: 2,
         generation: 9,
@@ -283,8 +335,8 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
     const agentId = 'max-identity-agent';
     const targetKey = `agent:${pluginId}/${localId}`;
     clearDaemonMergedProjectionCacheForTests();
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({
-      supported: true,
+    machineRpc.mockResolvedValue({
+      protocolVersion: 1,
       projection: PluginProjectionV2Schema.parse({
         v: 2,
         generation: 10,
@@ -315,7 +367,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
   });
 
   it('resolves a released bundled backend key to the canonical Agent target without requiring a machine projection', async () => {
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
+    machineRpc.mockResolvedValue({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
 
     const result = await resolveVoiceConfiguredAgentTarget({
       machineId: null,
@@ -333,14 +385,14 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       backendTarget: { kind: 'backend', backendId: 'claude' },
       targetKey: 'agent:happier.agent.claude/claude',
     });
-    expect(machineContributionRegistryProjectionDescribe).not.toHaveBeenCalled();
+    expect(machineRpc).not.toHaveBeenCalled();
   });
 
   it('fails closed when the persisted external selection no longer exists in the current machine catalog', async () => {
     // The machine projects a different generation where the Agent was uninstalled.
     clearDaemonMergedProjectionCacheForTests();
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({
-      supported: true,
+    machineRpc.mockResolvedValue({
+      protocolVersion: 1,
       projection: PluginProjectionV2Schema.parse({
         v: 2,
         generation: 8,
@@ -412,7 +464,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
   );
 
   it('keeps a legacy persisted Agent id working as a raw backend target when no exact facts were recorded', async () => {
-    machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
+    machineRpc.mockResolvedValue({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
 
     const result = await resolveVoiceConfiguredAgentTarget({
       machineId: null,
@@ -430,7 +482,7 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       backendTarget: { kind: 'backend', backendId: 'codex' },
       targetKey: null,
     });
-    expect(machineContributionRegistryProjectionDescribe).not.toHaveBeenCalled();
+    expect(machineRpc).not.toHaveBeenCalled();
   });
 
   it('recovers a malformed persisted key only from the authoritative current identity', async () => {
@@ -472,6 +524,6 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
       agentId: 'untrusted-backend-id',
       agentTargetKey: 'not-a-target-key',
     });
-    expect(machineContributionRegistryProjectionDescribe).not.toHaveBeenCalled();
+    expect(machineRpc).not.toHaveBeenCalled();
   });
 });

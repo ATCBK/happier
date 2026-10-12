@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getActionSpec,
+  isVoicePromptHotPathSpec,
   isVoiceSdkSafeActionSpec,
   listVoiceToolActionSpecs,
 } from '@happier-dev/protocol';
@@ -94,6 +95,55 @@ describe('bundled Conversation runtime host tool projection', () => {
 
       expect(withoutStableIds).not.toContain(effectfulToolName);
       expect(withStableIds).toContain(effectfulToolName);
+    } finally {
+      lease.revoke();
+    }
+  });
+
+  it('projects hot-path tools and discovery while retaining non-hot-path Actions through generic execution', () => {
+    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: {
+      readCurrentUiContext: () => ({ navigation: { area: 'app', screen: 'home' }, commands: [] }),
+      resolveCurrentUiCommand: () => null,
+      subscribe: () => () => {},
+    } });
+    try {
+      const enabled = resolveEnabledVoiceToolActionSpecsFromState(storage.getState());
+      const nonHotPath = enabled.find((spec) => !isVoicePromptHotPathSpec(spec)
+        && spec.id !== 'action.spec.search' && spec.id !== 'action.spec.get');
+      expect(nonHotPath).toBeDefined();
+      const names = lease.host.getRealtimeClientToolDefinitions({ effectCalls: 'stable_ids', exposure: 'voice_assistant' })
+        .map((tool) => tool.name);
+      expect(names).toContain('action_execute');
+      expect(names).toEqual(expect.arrayContaining(['searchActionSpecs', 'getActionSpec']));
+      expect(names).not.toContain(nonHotPath?.bindings?.voiceClientToolName);
+      expect(names.filter((name) => name !== 'action_execute').sort()).toEqual(enabled.filter((spec) =>
+        isVoicePromptHotPathSpec(spec) || spec.id === 'action.spec.search' || spec.id === 'action.spec.get',
+      ).map((spec) => spec.bindings?.voiceClientToolName).sort());
+    } finally {
+      lease.revoke();
+    }
+  });
+
+  it('keeps generic direct SDK callbacks read-only and rechecks target availability', async () => {
+    const lease = createBundledConversationRuntimeHostLease({ currentUiContext: {
+      readCurrentUiContext: () => ({ navigation: { area: 'app', screen: 'home' }, commands: [] }),
+      resolveCurrentUiCommand: () => null,
+      subscribe: () => () => {},
+    } });
+    try {
+      const generic = lease.host.getRealtimeClientToolDefinitions({ effectCalls: 'none', exposure: 'voice_assistant' })
+        .find((tool) => tool.name === 'action_execute');
+      expect(generic).toBeDefined();
+      if (!generic) throw new Error('Expected generic Voice tool');
+      await expect(generic.execute({ actionId: 'ui.current_context.read', input: {} }))
+        .resolves.toMatchObject({ ok: true, result: { navigation: { area: 'app', screen: 'home' } } });
+      await expect(generic.execute({ actionId: 'session.message.send', input: { message: 'do not send' } }))
+        .rejects.toMatchObject({ code: 'voice_effect_call_custody_required' });
+      storage.setState((current) => ({ ...current, settings: { ...current.settings, voice: {
+        ...current.settings.voice, privacy: { ...current.settings.voice.privacy, currentUiContextMode: 'off' },
+      } } }));
+      await expect(generic.execute({ actionId: 'ui.current_context.read', input: {} }))
+        .rejects.toThrow('voice_action_unavailable');
     } finally {
       lease.revoke();
     }
@@ -211,8 +261,8 @@ describe('bundled Conversation runtime host tool projection', () => {
     const tool = lease.host.getRealtimeClientToolDefinitions({
       effectCalls: 'none',
       exposure: 'voice_assistant',
-    }).find((candidate) => candidate.name === 'listMachines');
-    if (!tool) throw new Error('Expected listMachines direct read');
+    }).find((candidate) => candidate.name === 'action_execute');
+    if (!tool) throw new Error('Expected generic read tool');
 
     try {
       storage.setState((current) => ({
@@ -229,7 +279,7 @@ describe('bundled Conversation runtime host tool projection', () => {
         },
       }) as never);
 
-      await expect(tool.execute({})).rejects.toThrow('voice_action_unavailable');
+      await expect(tool.execute({ actionId: 'machines.list', input: {} })).rejects.toThrow('voice_action_unavailable');
     } finally {
       lease.revoke();
       storage.setState((current) => ({ ...current, settings: previousSettings }) as never);
@@ -246,8 +296,8 @@ describe('bundled Conversation runtime host tool projection', () => {
     const tool = lease.host.getRealtimeClientToolDefinitions({
       effectCalls: 'none',
       exposure: 'voice_assistant',
-    }).find((candidate) => candidate.name === 'listMachines');
-    if (!tool) throw new Error('Expected listMachines direct read');
+    }).find((candidate) => candidate.name === 'action_execute');
+    if (!tool) throw new Error('Expected generic read tool');
 
     try {
       storage.setState((current) => ({
@@ -264,7 +314,7 @@ describe('bundled Conversation runtime host tool projection', () => {
         },
       }) as never);
 
-      await expect(tool.execute({})).rejects.toThrow('voice_action_unavailable');
+      await expect(tool.execute({ actionId: 'machines.list', input: {} })).rejects.toThrow('voice_action_unavailable');
     } finally {
       lease.revoke();
       storage.setState((current) => ({ ...current, settings: previousSettings }) as never);
@@ -302,7 +352,9 @@ describe('bundled Conversation runtime host tool projection', () => {
       expect(assistantNames).toEqual(expect.arrayContaining(scopedNames));
       // A cross-session discovery tool proves the unscoped surface is broader,
       // so the narrowing above is real rather than an empty inventory.
-      expect(assistantNames).toContain('listMachines');
+      expect(assistantNames).toContain('searchActionSpecs');
+      expect(assistantNames).toContain('action_execute');
+      expect(scopedNames).not.toContain('action_execute');
       expect(scopedNames).not.toContain('listMachines');
     } finally {
       lease.revoke();

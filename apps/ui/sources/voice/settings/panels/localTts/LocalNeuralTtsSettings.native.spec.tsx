@@ -1,6 +1,9 @@
 import React from 'react';
 import { act, ReactTestRenderer } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { speakKokoroText } from '@/voice/output/KokoroTtsController';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { readLocalConversationVoiceSettings, voiceSettingsParse, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { installLocalTtsCommonModuleMocks } from './localTtsTestHelpers';
 import { DaemonVoiceModelCatalogProvider } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
@@ -15,6 +18,7 @@ const localModelPackState = vi.hoisted(() => ({
   modelStatus: 'idle' as 'idle' | 'downloading' | 'ready' | 'error',
 }));
 const modelPackStateParamsSpy = vi.hoisted(() => vi.fn());
+const speechBoundary = vi.hoisted(() => vi.fn<typeof speakKokoroText>());
 installLocalTtsCommonModuleMocks({
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -29,6 +33,11 @@ installLocalTtsCommonModuleMocks({
 vi.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
 }));
+
+vi.mock('react-native', async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock({ Platform: { OS: 'ios' } });
+});
 
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
   DropdownMenu: (props: any) =>
@@ -79,11 +88,27 @@ vi.mock('@/voice/kokoro/assets/kokoroAssetSets', () => ({
 }));
 
 vi.mock('@/voice/output/KokoroTtsController', () => ({
-  speakKokoroText: vi.fn(),
+  speakKokoroText: speechBoundary,
 }));
 
 // Load the real settings owner during collection; a cold graph import is not playback behavior.
 const { LocalNeuralTtsSettings } = await import('./LocalNeuralTtsSettings.native');
+const { localNeuralTtsPreviewController } = await import('./providers/localNeural/previewLocalNeuralTts');
+const { invokeVoiceSettingsOperation } = await import('@/voice/settings/voiceSettingsOperationInvoker');
+
+const previewConfig = { model: 'kokoro' as const, assetId: null, voiceId: 'af_heart', speed: 1, execution: 'device' as const };
+async function mountPreviewPicker() {
+  const screen = await renderScreen(<LocalNeuralTtsSettings cfgKokoro={previewConfig} setKokoro={vi.fn()} networkTimeoutMs={1000} />);
+  const menu = () => screen.tree.root.findAllByType('DropdownMenu')
+    .find(node => node.props.itemTrigger?.title === 'settingsVoice.local.kokoro.voice.title')!;
+  const sampleButton = () => {
+    const accessory = menu().props.items[0].rightElement as React.ReactElement<{
+      children: React.ReactElement<{ onPress: () => void }>;
+    }>;
+    return accessory.props.children;
+  };
+  return { screen, menu, sampleButton };
+}
 
 describe('LocalNeuralTtsSettings (native)', () => {
   beforeEach(() => {
@@ -92,6 +117,87 @@ describe('LocalNeuralTtsSettings (native)', () => {
     cancelPrepareSpy.mockClear();
     localModelPackState.modelStatus = 'idle';
     modelPackStateParamsSpy.mockClear();
+    localNeuralTtsPreviewController.stop();
+    speechBoundary.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(async () => { await act(async () => { localNeuralTtsPreviewController.stop(); }); });
+
+  it.each(['pending', 'active'] as const)('leaves another caller’s %s sample current with the menu closed and after unmount', async phase => {
+    const { screen, menu } = await mountPreviewPicker();
+    const voice = voiceSettingsParse({ providerId: 'local_conversation' });
+    const local = readLocalConversationVoiceSettings(voice);
+    const settings = settingsParse({ voice: writeLocalConversationVoiceSettings(voice, {
+      ...local, tts: { ...local.tts, provider: 'local_neural', localNeural: previewConfig },
+    }) });
+    let settle!: () => void;
+    const stopper = vi.fn();
+    speechBoundary.mockImplementation(input => {
+      if (phase === 'active') input.registerPlaybackStopper(stopper);
+      return new Promise<void>(resolve => { settle = resolve; });
+    });
+    let operation!: ReturnType<typeof invokeVoiceSettingsOperation>;
+    // This is the real Settings Action operation owner, with its settings and speech boundaries controlled.
+    await act(async () => {
+      operation = invokeVoiceSettingsOperation('tts_preview', 'conversation', {
+        input: { kind: 'voice_preview', voiceId: 'af_heart' }, isCurrent: () => true,
+        readSettings: async () => settings, mutateSettings: async () => { throw new Error('Preview must not change settings'); },
+      });
+      await vi.waitFor(() => expect(speechBoundary).toHaveBeenCalledOnce());
+    });
+    expect(menu().props.open).toBe(false);
+    expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
+    await screen.unmount();
+    if (phase === 'pending') speechBoundary.mock.calls[0]![0].registerPlaybackStopper(stopper);
+    expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
+    expect(stopper).not.toHaveBeenCalled();
+    settle();
+    expect(await operation).toMatchObject({ status: 'completed' });
+    expect(stopper).toHaveBeenCalledOnce();
+  });
+
+  it.each(['close', 'unmount'] as const)('retires only its own pending sample on picker %s, including late playback', async retirement => {
+    let settle!: () => void;
+    speechBoundary.mockImplementation(() => new Promise<void>(resolve => { settle = resolve; }));
+    const { screen, menu, sampleButton } = await mountPreviewPicker();
+    await act(async () => { menu().props.onOpenChange(true); });
+    await act(async () => { sampleButton().props.onPress(); });
+    expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
+    expect(speechBoundary).toHaveBeenCalledOnce();
+    const sample = speechBoundary.mock.calls[0]![0];
+    if (retirement === 'close') await act(async () => { menu().props.onOpenChange(false); });
+    else await screen.unmount();
+    expect(sample.registerPlaybackStopper).toBeDefined();
+    const lateStopper = vi.fn();
+    sample.registerPlaybackStopper(lateStopper);
+    expect(lateStopper).toHaveBeenCalledOnce();
+    expect(localNeuralTtsPreviewController.read()).toBeNull();
+    await act(async () => { settle(); });
+  });
+
+  it('preserves a replacement Action sample when the picker closes and its old sample settles late', async () => {
+    let settle!: () => void;
+    speechBoundary.mockImplementation(() => new Promise<void>(resolve => { settle = resolve; }));
+    const { screen, menu, sampleButton } = await mountPreviewPicker();
+    await act(async () => { menu().props.onOpenChange(true); });
+    await act(async () => { sampleButton().props.onPress(); });
+    const pickerSample = speechBoundary.mock.calls[0]![0];
+    let replacement!: ReturnType<typeof localNeuralTtsPreviewController.begin>;
+    const replacementStopper = vi.fn();
+    await act(async () => {
+      replacement = localNeuralTtsPreviewController.begin('af_heart');
+      replacement.registerPlaybackStopper(replacementStopper);
+      menu().props.onOpenChange(false);
+    });
+    await screen.unmount();
+    const latePickerStopper = vi.fn();
+    pickerSample.registerPlaybackStopper(latePickerStopper);
+    await act(async () => { settle(); });
+    expect(latePickerStopper).toHaveBeenCalledOnce();
+    expect(replacement.isCurrent()).toBe(true);
+    expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
+    expect(replacementStopper).not.toHaveBeenCalled();
+    replacement.finish();
+    expect(replacementStopper).toHaveBeenCalledOnce();
   });
 
   it('reflects and stops the shared preview attempt instead of keeping an independent mounted player', async () => {
@@ -121,8 +227,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
     expect(nativeStop).toHaveBeenCalledOnce();
   });
 
-  it('changes supported neural playback speed without replacing the selected pack or voice', async () => {
-    const cfgKokoro = { model: 'kokoro' as const, assetId: 'dummy', voiceId: 'af_heart', speed: 1, execution: 'device' as const };
+  it.each([null, 1, Number.NaN])('shows effective default speed for %s and changes it without replacing the selected pack or voice', async (storedSpeed) => {
+    const cfgKokoro = { model: 'kokoro' as const, assetId: 'dummy', voiceId: 'af_heart', speed: storedSpeed, execution: 'device' as const };
     const setKokoro = vi.fn();
     const { tree } = await renderScreen(<LocalNeuralTtsSettings
       cfgKokoro={cfgKokoro}
@@ -132,6 +238,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
     const speed = tree.root.findAll((node) => node.props.itemTrigger?.title === 'settingsVoice.local.kokoro.speed.title'
       && typeof node.props.onSelect === 'function')[0];
     expect(speed).toBeDefined();
+    expect(speed!.props.selectedId).toBe('1');
+    expect(setKokoro).not.toHaveBeenCalled();
     await act(async () => { speed!.props.onSelect('1.2'); });
     expect(setKokoro).toHaveBeenCalledWith({ ...cfgKokoro, speed: 1.2 });
   });

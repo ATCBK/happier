@@ -108,9 +108,11 @@ describe('voice session lifecycle edge contracts', () => {
             const dismissal = controller.dismissFailedAttempt('voice-session');
             if (replaceDuringCleanup) {
                 const target = { serverId: 'home-b', sessionId: 'new-session' };
-                await controller.toggle(target);
-                snapshots.publish({ ...failure, sessionId: target.sessionId });
+                const replacement = controller.toggle(target);
+                expect(start).toHaveBeenCalledTimes(1);
                 releaseCleanup();
+                await replacement;
+                snapshots.publish({ ...failure, sessionId: target.sessionId });
                 await dismissal;
                 expect(controller.getSnapshot()).toMatchObject({ ...failure, sessionId: target.sessionId });
                 await controller.retry('voice-session');

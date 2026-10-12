@@ -58,6 +58,7 @@ export type RealtimeProviderSettingsOwner = Readonly<{
   schemaVersion: number;
   defaultConfig: Readonly<Record<string, unknown>>;
   parseConfig(value: unknown): Readonly<Record<string, unknown>> | null;
+  parseStoredConfig(value: unknown): Readonly<Record<string, unknown>> | null;
   readLegacySecret?(value: unknown): unknown | null;
   migrateLegacy?(value: unknown): Readonly<{ config: Readonly<Record<string, unknown>>; root?: unknown }> | null;
 }>;
@@ -135,7 +136,7 @@ export function resolveRealtimeProviderConfig(
   if (envelope.schemaVersion > owner.schemaVersion) return Object.freeze({ status: 'unsupported_version' });
   if (envelope.schemaVersion < owner.schemaVersion) {
     const migrated = owner.migrateLegacy?.(envelope.config) ?? null;
-    const parsed = migrated ? owner.parseConfig(migrated.config) : null;
+    const parsed = migrated ? owner.parseStoredConfig(migrated.config) : null;
     return parsed
       ? Object.freeze({
         status: 'ready', source: 'legacy', config: parsed,
@@ -143,7 +144,7 @@ export function resolveRealtimeProviderConfig(
       })
       : Object.freeze({ status: 'needs_migration' });
   }
-  const parsed = owner.parseConfig(envelope.config);
+  const parsed = owner.parseStoredConfig(envelope.config);
   return parsed
     ? Object.freeze({ status: 'ready', source: 'persisted', config: parsed, legacySecretValue: null })
     : Object.freeze({ status: 'invalid' });
@@ -171,7 +172,7 @@ function writePath(
 }
 
 export function updateRealtimeProviderConfig(
-  owner: RealtimeProviderSettingsOwner,
+  owner: Pick<RealtimeProviderSettingsOwner, 'parseConfig'>,
   config: Readonly<Record<string, unknown>>,
   path: string | readonly string[],
   value: unknown,

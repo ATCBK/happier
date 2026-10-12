@@ -4,23 +4,20 @@ import { resolveVoiceSurfaceRecovery } from './resolveVoiceSurfaceRecovery';
 
 describe('resolveVoiceSurfaceRecovery', () => {
   it.each([
-    ['review_credentials', 'review_credentials', 'voiceSurface.reviewCredentials'],
-    ['open_settings', 'open_settings', 'modals.openSettings'],
-    ['open_settings_then_reconnect', 'open_settings', 'modals.openSettings'],
-    ['retry', 'retry', 'common.retry'],
-    ['reconnect', 'reconnect', 'voiceSurface.reconnect'],
-    ['connect_agent', 'connect_agent', 'voiceSurface.connectAgent'],
-    ['install_agent_runtime', 'install_agent_runtime', 'voiceSurface.installAgentRuntime'],
-    ['update_agent_runtime', 'update_agent_runtime', 'voiceSurface.updateAgentRuntime'],
-  ] as const)('maps %s to one actionable %s recovery', (action, kind, labelKey) => {
-    expect(resolveVoiceSurfaceRecovery(action)).toEqual({ kind, labelKey });
-  });
-
-  it('uses the existing localized execution-machine action for unavailable machine recovery', () => {
-    expect(resolveVoiceSurfaceRecovery('select_execution_machine')).toEqual({
-      kind: 'select_execution_machine',
-      labelKey: 'voice.readiness.actions.select_execution_machine',
-    });
+    ['review_credentials', 'review_credentials', 'voicePresence.recovery.setUp', 'gear'],
+    ['select_execution_machine', 'select_execution_machine', 'voicePresence.recovery.setUp', 'gear'],
+    ['select_speech_engine', 'select_speech_engine', 'voicePresence.recovery.setUp', 'gear'],
+    ['open_settings', 'open_settings', 'voicePresence.recovery.setUp', 'gear'],
+    ['open_settings_then_reconnect', 'open_settings', 'voicePresence.recovery.allow', 'microphone'],
+    ['retry', 'retry', 'common.retry', 'arrow-clockwise'],
+    ['reconnect', 'reconnect', 'voiceSurface.reconnect', 'arrow-clockwise'],
+    ['connect_agent', 'connect_agent', 'voiceSurface.connectAgent', 'gear'],
+    ['install_agent_runtime', 'install_agent_runtime', 'voiceSurface.installAgentRuntime', 'gear'],
+    ['update_agent_runtime', 'update_agent_runtime', 'voiceSurface.updateAgentRuntime', 'gear'],
+  ] as const)('maps %s to one actionable %s recovery with one label and glyph', (action, kind, labelKey, icon) => {
+    // One label per action, drawn and announced alike in every placement (R12b): settings
+    // recoveries read as "Set up", never "Open Settings" (the system Settings app).
+    expect(resolveVoiceSurfaceRecovery(action)).toEqual({ kind, labelKey, icon });
   });
 
   it('does not render a recovery action for terminal none', () => {

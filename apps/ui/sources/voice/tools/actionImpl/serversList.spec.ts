@@ -6,9 +6,8 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import type { ConcurrentSessionListCacheByServerId } from '@/sync/domains/session/listing/concurrentSessionListCache';
 import type { StorageState } from '@/sync/store/types';
 import type { StoreApi, UseBoundStore } from 'zustand';
+import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
-const getActiveServerSnapshot = vi.fn();
-const getServerProfileById = vi.fn();
 const state = vi.hoisted(() => ({
     settings: {
         voice: {
@@ -83,14 +82,6 @@ installVoiceToolActionImplCommonModuleMocks({
     },
 });
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot,
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getServerProfileById,
-}));
-
 describe('listServersForVoiceTool', () => {
     beforeEach(() => {
         vi.resetAllMocks();
@@ -101,27 +92,15 @@ describe('listServersForVoiceTool', () => {
         state.concurrentSessionListCacheByServerId = { 'server-b': { serverName: 'Review Server' } };
         state.ordinarySessionListMembershipByServerId = { 'server-b': ['s-review'] };
         state.sessionListRowsByServerId = { 'server-b': { 's-review': createCachedSession('s-review') } };
-        getActiveServerSnapshot.mockReturnValue({ serverId: 'server-a' });
-        getServerProfileById.mockImplementation((serverId: string) => {
-            if (serverId === 'server-a') {
-                return {
-                    id: 'server-a',
-                    name: 'Primary Server',
-                    serverUrl: 'http://server-a.local',
-                    createdAt: 1,
-                    updatedAt: 1,
-                    lastUsedAt: 1,
-                };
-            }
-            return null;
-        });
+        const active = await upsertServerProfile({ serverUrl: 'http://server-a.local', name: 'Primary Server' });
+        await setActiveServerId(active.id);
 
         const { listServersForVoiceTool } = await import('./serversList');
         const result = await listServersForVoiceTool({ limit: 10 });
 
         expect(result).toEqual({
             items: [
-                { serverId: 'server-a', label: 'Primary Server' },
+                { serverId: active.id, label: 'Primary Server' },
                 { serverId: 'server-b', label: 'Review Server' },
             ],
         });
@@ -141,15 +120,15 @@ describe('listServersForVoiceTool', () => {
             'server-b': { 's-review': createCachedSession('s-review') },
             'server-c': { 's-mobile': createCachedSession('s-mobile') },
         };
-        getActiveServerSnapshot.mockReturnValue({ serverId: 'server-a' });
-        getServerProfileById.mockReturnValue(null);
+        const active = await upsertServerProfile({ serverUrl: 'http://unnamed-home.local', name: '' });
+        await setActiveServerId(active.id);
 
         const { listServersForVoiceTool } = await import('./serversList');
         const result = await listServersForVoiceTool({ limit: 10 });
 
         expect(result).toEqual({
             items: [
-                { serverId: 'server-a', label: 'Current server' },
+                { serverId: active.id, label: 'Current server' },
                 { serverId: 'server-b', label: 'Connected server 1' },
                 { serverId: 'server-c', label: 'Connected server 2' },
             ],

@@ -4,6 +4,7 @@ const qaAddress = (sessionId: string): SessionAddress => ({ serverId: getActiveS
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_ERROR_CODES, VOICE_TOOL_RESULTS_JSON_PREFIX } from '@happier-dev/protocol';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { attachVoiceAgentActionEffectId } from '@/voice/agent/types';
 import { createVoiceTextTurnRejectedBeforeEffectError } from '@/voice/session/types';
@@ -11,6 +12,7 @@ import {
   installDisconnectedServerSocketBoundary,
   restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 import { resetVoiceQaStoreForTests, useVoiceQaStore } from './voiceQaStore';
 installDisconnectedServerSocketBoundary();
@@ -859,15 +861,28 @@ describe('voiceQaController', () => {
 
   it('sends text prompts through the bound hidden voice conversation for native-session local voice agent bindings, executes tool rounds, and appends the follow-up answer', async () => {
     const settings = storage.getState().settings;
-    const account = await restoreServerAccountForTest({ serverUrl: getActiveServerSnapshot().serverUrl });
-    storage.setState({
-      settings: {
-        ...settings,
-        voice: {
-          ...settings.voice,
-          privacy: { ...settings.voice.privacy, shareDeviceInventory: true },
-        },
+    const qaSettings = {
+      ...settings,
+      voice: {
+        ...settings.voice,
+        privacy: { ...settings.voice.privacy, shareDeviceInventory: true },
       },
+    };
+    const account = await restoreServerAccountForTest({
+      serverUrl: getActiveServerSnapshot().serverUrl,
+      credentialScope: 'restored-home',
+      request: async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: qaSettings }, version: 1 });
+        if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, definitions: [] } } });
+        return Response.json({}, { status: 404 });
+      },
+    });
+    storage.setState({
+      settings: qaSettings,
     });
     const pendingPort = {
       enqueuePendingMessage: vi.fn(async ({ localId }: Readonly<{ localId: string }>) => ({
@@ -927,6 +942,12 @@ describe('voiceQaController', () => {
     });
 
     try {
+      const { refreshAcpCatalog } = await import('@/sync/engine/settings/acpCatalogEngine');
+      const { getAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
+      const scope = storage.getState().settingsScope;
+      if (!scope) throw new Error('Expected the restored Account scope');
+      await refreshAcpCatalog(scope);
+      expect(getAcpCatalogSnapshot(scope)?.catalog.status).toBe('ready');
       await controller.sendPrompt({ sessionAddress: qaAddress('s1'), prompt: 'List the available backends.' });
     } finally {
       await account.dispose();
@@ -949,7 +970,16 @@ describe('voiceQaController', () => {
       expect.stringContaining(VOICE_TOOL_RESULTS_JSON_PREFIX),
       { userTranscript: { mode: 'suppress' } },
     );
-    expect(sendLocalTurn.mock.calls[1]?.[1]).toMatch(/"ok"\s*:\s*true/);
+    const toolResultsPrompt = sendLocalTurn.mock.calls[1]?.[1];
+    if (!toolResultsPrompt) throw new Error('Expected the follow-up tool results');
+    const toolResults: unknown = JSON.parse(toolResultsPrompt.slice(VOICE_TOOL_RESULTS_JSON_PREFIX.length).trim().split('\n')[0]);
+    expect(toolResults).toMatchObject({
+      toolResults: [{ t: 'listAgentBackends', result: { ok: true, items: expect.arrayContaining([
+        expect.objectContaining({ agentId: 'claude' }),
+        expect.objectContaining({ agentId: 'codex' }),
+        expect.objectContaining({ agentId: 'opencode' }),
+      ]) } }],
+    });
     expect(useVoiceQaStore.getState().entries.some((entry) => entry.kind === 'user' && entry.text.includes('List the available backends.'))).toBe(true);
     expect(useVoiceQaStore.getState().entries.some((entry) => entry.kind === 'assistant' && entry.text === 'I checked the tools.')).toBe(true);
     expect(

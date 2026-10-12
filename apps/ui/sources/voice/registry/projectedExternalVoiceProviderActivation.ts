@@ -73,10 +73,12 @@ function projectExternalSpeechDescriptor(input: Readonly<{
   );
   const hasStt = declaration.roles.some((role) => role.endsWith('_stt'));
   const hasTts = declaration.roles.some((role) => role.endsWith('_tts'));
+  const title = localizedText(declaration.title, declaration.id);
   const speechPresentation: VoiceSpeechSettingsPresentation = Object.freeze({
-    titleKey: localizedText(declaration.title, declaration.id),
-    subtitleKey: input.pluginId,
-    detailKey: input.pluginId,
+    titleKey: title,
+    // A speech contribution declares no description; its raw plugin id is never shown in its place.
+    subtitleKey: '',
+    detailKey: title,
     iconName: 'extension',
     ...(declaration.credentials
       ? {

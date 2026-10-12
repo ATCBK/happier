@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelCatalogRow } from './buildModelCatalogRows';
-import { formatArtifactBytes, formatModelCatalogRowDetail } from './formatModelCatalogRowDetail';
+import { formatModelCatalogRowDetail } from './formatModelCatalogRowDetail';
 
 function row(overrides: Partial<ModelCatalogRow>): ModelCatalogRow {
     return {
@@ -22,17 +22,6 @@ function row(overrides: Partial<ModelCatalogRow>): ModelCatalogRow {
     };
 }
 
-describe('formatArtifactBytes', () => {
-    it('formats binary byte sizes compactly', () => {
-        expect(formatArtifactBytes(0)).toBe('0 B');
-        expect(formatArtifactBytes(512)).toBe('512 B');
-        expect(formatArtifactBytes(1024)).toBe('1 KB');
-        expect(formatArtifactBytes(1536)).toBe('1.5 KB');
-        expect(formatArtifactBytes(5 * 1024 * 1024)).toBe('5 MB');
-        expect(formatArtifactBytes(2 * 1024 * 1024 * 1024)).toBe('2 GB');
-    });
-});
-
 describe('formatModelCatalogRowDetail', () => {
     it('renders download progress as a percentage', () => {
         const detail = formatModelCatalogRowDetail(row({ state: 'downloading', progress: 0.42 }));
@@ -45,13 +34,13 @@ describe('formatModelCatalogRowDetail', () => {
             state: 'ready',
             loadedArtifactBytes,
         }));
-        expect(ready).toContain('5 MB model files');
+        expect(ready).toContain('5.24 MB model files');
         // Installed (cold) reports no loaded-artifact line even if a value leaks through.
         const installed = formatModelCatalogRowDetail(row({
             state: 'installed',
             loadedArtifactBytes,
         }));
-        expect(installed).not.toContain('5 MB');
+        expect(installed).not.toContain('model files');
     });
 
     it('appends the last error message for error rows', () => {

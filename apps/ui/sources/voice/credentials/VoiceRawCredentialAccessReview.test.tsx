@@ -1,25 +1,29 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { PluginPermissionSubjectV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
-const boundary = vi.hoisted(() => ({
-  settingsVersion: 1 as number | null,
-}));
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+installDisconnectedServerSocketBoundary();
 
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock();
 });
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: object) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/plugins/permissions/PluginPermissionGrantSheet', () => ({
-  PluginPermissionGrantSheet: (props: object) => React.createElement('PluginPermissionGrantSheet', props),
-}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
+vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
+vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
+vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
+vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
 
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -28,9 +32,34 @@ vi.mock('@/text', async () => {
   });
 });
 
-vi.mock('@/sync/store/hooks', () => ({
-  useSettingsVersion: () => boundary.settingsVersion,
-}));
+await loadSyncSingletonForTests();
+const { createPluginPermissionGrantActions } = await import('@/sync/domains/plugins/permissions/actions');
+const { createPluginPermissionGrantHttpActionExecutor } = await import('@/sync/domains/plugins/permissions/api');
+const { PluginPermissionGrantSheet } = await import('@/components/plugins/permissions/PluginPermissionGrantSheet');
+const { RawCredentialAuthorizationClient } = await import('./rawCredentialAuthorizationClient');
+
+function machineClient(responses: Readonly<{ inspect: (...args: never[]) => unknown; request: (...args: never[]) => unknown }>) {
+  return new RawCredentialAuthorizationClient({ machineRpc: async ({ method, payload }) => {
+    const input = payload as { contribution: unknown; rawGrant: unknown };
+    const respond = method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT ? responses.inspect
+      : method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_REQUEST ? responses.request : null;
+    if (!respond) throw new Error(`Unexpected Machine RPC: ${method}`);
+    return Reflect.apply(respond, undefined, [input.contribution, input.rawGrant]);
+  } });
+}
+
+function httpActions(responders: Readonly<Record<string, (input: never) => unknown>>) {
+  return createPluginPermissionGrantActions({ execute: createPluginPermissionGrantHttpActionExecutor({
+    request: async (path, init) => {
+      const operation = String(path).split('/').at(-1)!;
+      const respond = responders[operation];
+      if (!respond) throw new Error(`Unexpected permission request: ${path}`);
+      // HTTP fixture dispatch is untyped; the real executor validates both wire sides.
+      const response: unknown = await Reflect.apply(respond, undefined, [JSON.parse(String(init?.body))]);
+      return Response.json(response);
+    },
+  }) });
+}
 
 const contribution = Object.freeze({ pluginId: 'acme.voice', localId: 'browser' });
 const rawGrant = Object.freeze({
@@ -42,14 +71,14 @@ const rawGrant = Object.freeze({
     headerNames: Object.freeze(['authorization']),
   }),
 });
-const subject = Object.freeze({
+const subject = PluginPermissionSubjectV1Schema.parse({
   kind: 'credential_access_disclosure' as const,
   contribution,
-  credentialSlotId: 'api_key' as never,
-  purpose: 'voice.browser' as never,
-  accessDeclarationDigest: 'b'.repeat(64) as never,
-  selectedAuthorityDigest: 'c'.repeat(64) as never,
-  selectedRawAccessDigest: 'd'.repeat(64) as never,
+  credentialSlotId: 'api_key',
+  purpose: 'voice.browser',
+  accessDeclarationDigest: 'b'.repeat(64),
+  selectedAuthorityDigest: 'c'.repeat(64),
+  selectedRawAccessDigest: 'd'.repeat(64),
 });
 // The daemon only ever authorizes as an exact machine installation; a grant
 // approved by another machine, or by an installation this one replaced, is a
@@ -115,9 +144,9 @@ const pendingRequest = Object.freeze({
   updatedAt: 1,
 });
 
-const subjectB = Object.freeze({
+const subjectB = PluginPermissionSubjectV1Schema.parse({
   ...subject,
-  selectedAuthorityDigest: 'e'.repeat(64) as never,
+  selectedAuthorityDigest: 'e'.repeat(64),
 });
 const authorizationB = Object.freeze({
   ...authorization,
@@ -154,9 +183,19 @@ const grant = Object.freeze({
 });
 
 describe('VoiceRawCredentialAccessReview', () => {
-  beforeEach(() => {
-    boundary.settingsVersion = 1;
+  beforeEach(async () => {
+    account = await restoreServerAccountForTest({ serverUrl: `https://raw-${crypto.randomUUID()}.example.test`,
+      accountId: 'account-1', credentialScope: 'restored-home', request: async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+        return new Response('{}', { status: 404 });
+      } });
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ settingsVersion: 1, settingsScope: { serverId: account.home.id, accountId: 'account-1' } });
+    storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now(), installationId: 'installation-1' })], true, { sourceServerId: account.home.id });
   });
+  afterEach(async () => { standardCleanup(); await account.dispose(); });
 
   it('lists, requests, approves, and revokes the exact host-derived raw credential subject', async () => {
     const client = {
@@ -180,8 +219,8 @@ describe('VoiceRawCredentialAccessReview', () => {
       <VoiceRawCredentialAccessReview
         contribution={contribution}
         rawGrant={rawGrant}
-        client={client}
-        actions={actions}
+        client={machineClient(client)}
+        actions={httpActions(actions)}
         testID="raw-access"
       />,
     );
@@ -200,7 +239,7 @@ describe('VoiceRawCredentialAccessReview', () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith(contribution, rawGrant));
-    const sheet = screen.tree.findByTestId('raw-access-sheet');
+    const sheet = screen.tree.findAllByType(PluginPermissionGrantSheet)[0] ?? null;
     expect(sheet).not.toBeNull();
     expect(JSON.stringify(sheet?.props.detailRows)).toContain('@acme/voice');
     expect(JSON.stringify(sheet?.props.detailRows)).toContain('https://registry.npmjs.org');
@@ -220,9 +259,9 @@ describe('VoiceRawCredentialAccessReview', () => {
     expect(decisionBody).not.toContain('credentials.materialize.raw');
 
     await act(async () => {
-      sheet?.props.onGrant({ requestId: pendingRequest.id });
+      screen.tree.pressByTestId('raw-access-sheet-grant');
     });
-    await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access')?.props.destructive).toBe(true));
+    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
 
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
@@ -256,16 +295,16 @@ describe('VoiceRawCredentialAccessReview', () => {
       <VoiceRawCredentialAccessReview
         contribution={contribution}
         rawGrant={rawGrant}
-        client={client}
-        actions={actions as never}
+        client={machineClient(client)}
+        actions={httpActions(actions)}
         testID="raw-access"
       />,
     );
 
     await vi.waitFor(() => expect(actions.list).toHaveBeenCalled());
-    await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access')?.props.loading).toBe(false));
-    expect(screen.tree.findByTestId('raw-access')?.props.destructive).toBe(false);
-    expect(screen.tree.findByTestId('raw-access')?.props.detail)
+    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.loading).toBe(false));
+    expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(false);
+    expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
       .toBe('settingsVoice.externalCredentials.reviewRequired');
     // Another installation's pending request must never be presented here as
     // this installation's decision.
@@ -303,13 +342,13 @@ describe('VoiceRawCredentialAccessReview', () => {
       <VoiceRawCredentialAccessReview
         contribution={contribution}
         rawGrant={rawGrant}
-        client={client}
-        actions={actions as never}
+        client={machineClient(client)}
+        actions={httpActions(actions)}
         testID="raw-access"
       />,
     );
 
-    await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access')?.props.destructive).toBe(true));
+    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
@@ -339,12 +378,14 @@ describe('VoiceRawCredentialAccessReview', () => {
       dismissRequest: vi.fn(),
     };
     const { VoiceRawCredentialAccessReview } = await import('./VoiceRawCredentialAccessReview');
+    const permissionActions = httpActions(actions);
+    const rawClient = machineClient(client);
     const renderReview = () => (
       <VoiceRawCredentialAccessReview
         contribution={contribution}
         rawGrant={rawGrant}
-        client={client}
-        actions={actions as never}
+        client={rawClient}
+        actions={permissionActions}
         testID="raw-access"
       />
     );
@@ -354,42 +395,45 @@ describe('VoiceRawCredentialAccessReview', () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith(contribution, rawGrant));
-    const staleSheet = screen.tree.findByTestId('raw-access-sheet');
+    const staleSheet = screen.tree.findAllByType(PluginPermissionGrantSheet)[0] ?? null;
     expect(staleSheet).not.toBeNull();
-    const staleGrant = staleSheet?.props.onGrant;
-    const staleDismiss = staleSheet?.props.onDismiss;
+    const staleGrant = screen.tree.findByTestId('raw-access-sheet-grant')?.props.onPress;
+    const staleDismiss = screen.tree.findByTestId('raw-access-sheet-dismiss')?.props.onPress;
 
     selectedAccount = 'B';
-    boundary.settingsVersion = 2;
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.setState({ settingsVersion: 2 });
 
     // A user decision can race the subscription render. The action itself
     // must therefore re-inspect rather than decide the captured request.
     await act(async () => {
-      staleGrant?.({ requestId: pendingRequest.id });
+      staleGrant?.();
     });
     await vi.waitFor(() => {
-      expect(screen.tree.findByTestId('raw-access-sheet')?.props.pendingRequest.id).toBe(pendingRequestB.id);
+      expect(screen.tree.findAllByType(PluginPermissionGrantSheet)[0]?.props.pendingRequest.id).toBe(pendingRequestB.id);
     });
+    expect(JSON.stringify(screen.tree.findAllByType(PluginPermissionGrantSheet)[0]?.props.detailRows)).toContain('Account B API key');
     expect(actions.grant).not.toHaveBeenCalled();
 
-    await act(async () => {
-      staleDismiss?.({ requestId: pendingRequest.id });
+    const inspectedBeforeDismissal = createDeferred<void>();
+    client.inspect.mockImplementationOnce(async () => {
+      inspectedBeforeDismissal.resolve();
+      return inspectionForSelectedAccount();
     });
-    // Five inspections so far: mount, the explicit request, the settings-version
-    // refresh committed with account B, and one per captured decision.
-    await vi.waitFor(() => expect(client.inspect).toHaveBeenCalledTimes(5));
+    await act(async () => { staleDismiss?.(); await inspectedBeforeDismissal.promise; });
+    await flushHookEffects();
     expect(actions.dismissRequest).not.toHaveBeenCalled();
 
     // A further settings switch must re-derive the authorization on its own,
     // without any decision driving it.
-    const inspectionsBeforeSettingsRefresh = client.inspect.mock.calls.length;
-    boundary.settingsVersion = 3;
+    selectedAccount = 'A';
+    storage.setState({ settingsVersion: 3 });
     await act(async () => {
       screen.tree.update(renderReview());
     });
-    await vi.waitFor(() => expect(client.inspect).toHaveBeenCalledTimes(inspectionsBeforeSettingsRefresh + 1));
-    const freshSheet = screen.tree.findByTestId('raw-access-sheet');
-    expect(freshSheet?.props.pendingRequest.id).toBe(pendingRequestB.id);
-    expect(JSON.stringify(freshSheet?.props.detailRows)).toContain('Account B API key');
+    await vi.waitFor(() => expect(actions.list).toHaveBeenLastCalledWith(expect.objectContaining({ subject })));
+    await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access-sheet')).toBeNull());
+    expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
+      .toBe('settingsVoice.externalCredentials.reviewRequired');
   });
 });

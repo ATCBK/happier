@@ -51,13 +51,14 @@ export function createDefaultVoiceProviderRegistry(input: Readonly<{
         const occurrenceId = projectionAuthority.get(registration.providerId);
         if (!occurrenceId || registration.occurrenceId !== occurrenceId) continue;
       }
-      // The live projection is the installed/enabled/occurrence authority. Its
-      // exact descriptor replaces generated fallback metadata for the same ID.
-      // A bundled conversation registration deliberately carries no duplicate
-      // descriptor: its live registration still admits the one generated
-      // descriptor for that exact ID. Without a live registration it remains
-      // absent, so fallback bytes never bypass enablement or activation.
-      const descriptor = registration.descriptor ?? base.get(registration.providerId);
+      // Occurrence admission above decides availability. First-party descriptor
+      // and presentation ownership stays with the plugin's generated declaration,
+      // even when its installed activation supplies a generic descriptor. Other
+      // plugins own their installed descriptors.
+      const bundled = base.get(registration.providerId);
+      const descriptor = bundled?.source.kind === 'bundled' && bundled.pluginId === registration.pluginId
+        ? bundled
+        : registration.descriptor;
       if (!descriptor || descriptor.pluginId !== registration.pluginId) continue;
       byProviderId.set(registration.providerId, descriptor);
     }

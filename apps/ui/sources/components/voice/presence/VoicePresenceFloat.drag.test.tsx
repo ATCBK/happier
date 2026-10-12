@@ -35,7 +35,7 @@ function attempt(reconnecting = false): VoiceAttemptControlProjection {
             hasRecovery: reconnecting }),
         statusWord: state, statusLabel: state, elapsedStartedAt: null, canHoldToTalk: false,
         beginHoldToTalk: () => null,
-        primaryActionLabel: 'End Voice', primaryActionHint: null, recoveryLabel: reconnecting ? 'Retry' : null, recoveryShortLabel: reconnecting ? 'Retry' : null,
+        primaryActionLabel: 'End Voice', primaryActionHint: null, recoveryLabel: reconnecting ? 'Retry' : null, recoveryIcon: reconnecting ? 'arrow-clockwise' as const : null,
         micStateLabel: '', captionLabel: '', openConversationSessionId: null,
         openConversationSessionAddress: null, canOpenConversation: false,
         onPrimaryAction: vi.fn(), onToggle: vi.fn(), onToggleMute: vi.fn(), onRecover: vi.fn(), onOpenConversation: vi.fn(),

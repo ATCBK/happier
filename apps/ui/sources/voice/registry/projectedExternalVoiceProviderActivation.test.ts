@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   createRecipientContractDigestV1,
   createVoiceProviderRecipientContractFromCredentialsV1,
@@ -35,6 +35,11 @@ import type { PluginArtifactDaemonByteFetcher } from '@/sync/domains/plugins/ava
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { storage } from '@/sync/domains/state/storage';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import {
   EMPTY_PLUGIN_UI_PROJECTION,
   resolvePluginUiProjectionState,
@@ -75,11 +80,19 @@ vi.mock('@/sync/domains/plugins/availability/artifactDaemonSource', async (impor
   ...await importOriginal<typeof import('@/sync/domains/plugins/availability/artifactDaemonSource')>(),
   fetchPluginArtifactBytesViaMachineRpc: reactNativeArtifactDaemonTransport.fetch,
 }));
-vi.mock('@/voice/settings/executionMachine', () => ({
-  resolveVoiceExecutionMachineId: () => 'machine-1',
-  isCapturedVoiceExecutionMachineCurrent: (machineId: string | null) => machineId === 'machine-1',
-}));
+let account: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>;
+beforeEach(async () => {
+  const purposes = createConnectedPurposeCatalogHttpBoundary();
+  account = await createPlainArtifactHomeFixture('https://projected-voice.example.test', {
+    handleRequest: async (path, init) => await purposes.handle(new URL(path, 'https://projected-voice.example.test'), init)
+      ?? answerVoiceRealtimePreparationHttpRequest(new URL(path, 'https://projected-voice.example.test'), storage.getState().settings),
+  });
+  await purposes.hydrate({ serverId: account.home.id, accountId: 'artifact-account' });
+  const machine = createMachineFixture({ activeAt: Date.now() });
+  storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.home.id]: [machine] } });
+});
 afterEach(() => {
+  account?.dispose();
   rawCredentialMachineRpc.mockReset();
   reactNativeArtifactDaemonTransport.fetch.mockReset();
 });
@@ -425,6 +438,12 @@ describe('projected external Voice provider activation', () => {
     const installedEntry = installedRegistrations
       .map((registration) => registration.descriptor)
       .find((entry) => entry?.kind === 'voice.speech-engine.v1') ?? null;
+    // A projected engine is named by its own title; its raw plugin id is never shown as its description.
+    expect(installedEntry?.presentation?.createSettingsSpec()).toMatchObject({
+      titleKey: 'Never-before-seen Speech',
+      subtitleKey: '',
+      detailKey: 'Never-before-seen Speech',
+    });
     expect(installedEntry?.accountCredentialSlot).toEqual({
       id: 'api_key',
       scope: 'account',
@@ -457,6 +476,8 @@ describe('projected external Voice provider activation', () => {
     })).resolves.toEqual({ patch: { voiceName: 'synthetic-voice-v2' } });
     expect(rawCredentialMachineRpc).toHaveBeenCalledWith({
       machineId: 'machine-1',
+      serverId: account.home.id,
+      accountId: 'artifact-account',
       method: 'daemon.voice.speech.settingsAction.execute',
       payload: {
         target: { pluginId, localId: declaration.id },

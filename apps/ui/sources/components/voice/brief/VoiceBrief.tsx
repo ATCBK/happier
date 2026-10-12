@@ -71,7 +71,7 @@ export const VoiceBriefBlock = React.memo(function VoiceBriefBlock(props: Readon
 function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
     const styles = stylesheet;
     const router = useRouter();
-    const { brief, voice, delivery, waitingUnavailable, retry, canStopReply, stopReply } = useVoiceBriefRequest();
+    const { brief, voice, delivery, waitingUnavailable, retry, canStopReply, stopReply, closeBrief } = useVoiceBriefRequest(props.onClose);
 
     const open = React.useCallback((item: VoiceBriefItem) => {
         if (typeof item.route === 'string') {
@@ -108,7 +108,7 @@ function VoiceBriefContent(props: Readonly<{ onClose: () => void }>) {
                     iconSize={13}
                     accessibilityLabel={t('common.close')}
                     tooltip={t('common.close')}
-                    onPress={props.onClose}
+                    onPress={closeBrief}
                 />
             </View>
             {delivery === 'refused' && !waitingUnavailable ? <Text style={styles.note}>{t('voiceMoments.briefNotSpoken')}</Text> : null}

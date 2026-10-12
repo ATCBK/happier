@@ -21,9 +21,9 @@ export function resolveSessionVoicePreference(input: SessionVoicePreferenceResol
   const { field, providerConfig } = resolved;
   const value = field ? readSessionVoiceSettingValueV1(providerConfig, field) : undefined;
   const selection = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  const id = typeof value === 'string' ? value : typeof selection?.id === 'string' ? selection.id : null;
+  const id = typeof value === 'string' ? value : selection !== null && 'id' in selection && typeof selection.id === 'string' ? selection.id : null;
   const row = input.catalog?.find(row => row.id === id);
-  const custom = selection?.kind === 'custom' || (typeof value === 'string' && field?.customIdAllowed);
+  const custom = (selection !== null && 'kind' in selection && selection.kind === 'custom') || (typeof value === 'string' && field?.customIdAllowed);
   const inUseVoice: VoiceConversationInUseVoice | null = field && value !== undefined && id?.trim() && (row || custom)
     ? { providerContributionId: input.providerContributionId, settingFieldPath: field.path, value,
       displayName: row?.name ?? t('voicePresence.customVoice') }

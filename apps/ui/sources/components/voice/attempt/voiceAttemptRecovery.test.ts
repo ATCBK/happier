@@ -89,6 +89,17 @@ describe('the one Voice recovery dispatch every placement fires', () => {
     });
   });
 
+  it('reveals the Conversations speech engine without opening system microphone settings or retrying', async () => {
+    const navigate = vi.fn();
+    const { executeVoiceAttemptRecovery } = await import('./voiceAttemptRecovery');
+    expect(await executeVoiceAttemptRecovery({
+      recoveryAction: 'select_speech_engine', setupIncomplete: false, context: context(), navigate,
+    })).toBe(true);
+    expect(navigate).toHaveBeenCalledWith('/settings/voice/conversations?setting=voiceConversations.sttProvider');
+    expect(state.openSettings).not.toHaveBeenCalled();
+    expect(state.retry).not.toHaveBeenCalled();
+  });
+
   it('forwards the canonical selected service and account route for Connect recovery', async () => {
     const navigate = vi.fn();
     const route = {

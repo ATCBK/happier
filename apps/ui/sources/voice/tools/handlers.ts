@@ -32,6 +32,7 @@ import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/ses
 import { resolveVoiceActionSessionReference } from './actionImpl/resolveVoiceActionSessionReference';
 import { acquireAdmittedSessionReferenceCorpusOptions } from './actionImpl/admittedSessionReferenceCorpus';
 import type { VoiceCurrentUiToolPort } from './currentUiContextToolPort';
+import { resolveVoiceActionExecution, resolveVoiceExecutionToolName, VOICE_ACTION_EXECUTE_TOOL_NAME } from './voiceActionExecution';
 import {
   isCurrentUiContextVoiceAction,
   isVoiceActionAvailableInState,
@@ -144,7 +145,7 @@ export function serializeVoiceActionExecuteResult(
   if (!result.ok) {
     const details = asPlainObject(result.details);
     const errorDetail = normalizeSpawnSessionErrorDetail(details?.errorDetail);
-    return jsonError(result.errorCode, result.error, {
+    return jsonError(result.errorCode, result.errorCode, {
       actionId,
       ...(typeof details?.sessionId === 'string' ? { sessionId: details.sessionId } : {}),
       ...(errorDetail ? { errorDetail } : {}),
@@ -244,8 +245,8 @@ const ACTION_INVOKE_TOOL_NAME = String(
   getActionSpec(ACTION_INVOKE_ACTION_ID).bindings?.voiceClientToolName ?? '',
 ).trim();
 
-export function resolveVoiceToolEffectClass(toolName: string): VoiceToolEffectClass {
-  const actionId = VOICE_TOOL_ACTION_ID_BY_TOOL_NAME[toolName];
+export function resolveVoiceToolEffectClass(toolName: string, parameters?: unknown): VoiceToolEffectClass {
+  const actionId = VOICE_TOOL_ACTION_ID_BY_TOOL_NAME[resolveVoiceExecutionToolName(toolName, parameters)];
   if (!actionId) return 'external';
   const sideEffectClass = getActionSpec(actionId).sideEffectClass;
   if (sideEffectClass === 'none' || sideEffectClass === 'read') return 'read_only';
@@ -450,6 +451,7 @@ export function createVoiceToolHandlers(
     toolName: string,
     parameters: unknown,
     ctx?: VoiceToolInvocationContext,
+    canonicalResult = false,
   ): Promise<string> => {
     const actionId = VOICE_TOOL_ACTION_ID_BY_TOOL_NAME[toolName];
     if (!actionId) return jsonError('unsupported_action', `unsupported_action:${toolName}`);
@@ -492,6 +494,7 @@ export function createVoiceToolHandlers(
     )) {
       return jsonError('tool_cancelled', 'tool_cancelled');
     }
+    if (canonicalResult && res.ok) return JSON.stringify(res);
     if (res.ok && actionId === 'session.list') {
       const awareness = parseSessionAwarenessListResultV1(res.result);
       if (awareness) {
@@ -711,6 +714,27 @@ export function createVoiceToolHandlers(
 
   // Voice surface overrides (extra UX behavior).
   handlers.answerUserActionRequest = answerUserActionRequest;
+
+  handlers[VOICE_ACTION_EXECUTE_TOOL_NAME] = async (parameters, context) => {
+    const target = resolveVoiceActionExecution(parameters);
+    if (!target) return JSON.stringify({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    const handler = handlers[target.toolName];
+    if (!handler || !isVoiceActionAvailableInState(storage.getState(), target.spec.id as ActionId)) {
+      return JSON.stringify({ ok: false, errorCode: 'action_unavailable', error: 'action_unavailable' });
+    }
+    // Reuse the same executor and Voice overrides, including durable Ask
+    // approval and tap-only human decisions. This tool supplies no authority.
+    const isOverride = target.toolName === 'answerUserActionRequest'
+      || isCurrentUiContextVoiceAction(target.spec.id as ActionId);
+    const result: unknown = JSON.parse(isOverride
+      ? await handler(target.input, context)
+      : await execute(target.toolName, target.input, context, true));
+    const failure = asPlainObject(result);
+    if (!isOverride && failure?.ok === true) return JSON.stringify(result);
+    return JSON.stringify(failure?.ok === false
+      ? { ok: false, errorCode: failure.errorCode, error: failure.errorCode, details: result }
+      : { ok: true, result });
+  };
 
   return Object.freeze(handlers);
 }

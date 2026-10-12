@@ -16,6 +16,7 @@ import { getLocalTtsProviderSpec, useLocalTtsProviderSpecs } from '@/voice/setti
 import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voiceProviderLocalAvailability';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Icon } from '@/components/ui/icons/Icon';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 
@@ -101,9 +102,16 @@ export function LocalVoiceTtsGroup(props: {
       <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.testTts}>
       <Item
         title={t('settingsVoice.local.testTts')}
-        subtitle={t('settingsVoice.local.testTtsSubtitle')}
-        detail={testStatus === 'speaking' ? t('settingsVoice.local.speaking') : t('common.none')}
-        onPress={() => {
+        subtitle={testStatus === 'speaking' ? t('settingsVoice.local.speaking') : t('settingsVoice.local.testTtsSubtitle')}
+        showChevron={false}
+        rightElementOutsidePressable
+        rightElement={<IconButton
+          testID="settings.voice.local.testTts"
+          iconName="play"
+          accessibilityLabel={t('settingsVoice.local.testTts')}
+          tooltip={t('settingsVoice.local.testTts')}
+          disabled={testStatus === 'speaking'}
+          onPress={() => {
           primeWebAudioPlayback();
           fireAndForget((async () => {
             try {
@@ -126,7 +134,8 @@ export function LocalVoiceTtsGroup(props: {
               setTestStatus('idle');
             }
           })(), { tag: 'LocalVoiceTtsGroup.testTts' });
-        }}
+          }}
+        />}
       />
       </SettingAnchor>
     </ItemGroup>

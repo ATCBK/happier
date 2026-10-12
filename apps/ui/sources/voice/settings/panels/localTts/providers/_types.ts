@@ -1,4 +1,5 @@
 import type * as React from 'react';
+import type { LocalNeuralExecution } from '@happier-dev/protocol';
 
 import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
@@ -32,5 +33,6 @@ export type LocalTtsProviderSpec = {
   iconName: string;
   detail: string;
   Settings: React.ComponentType<LocalTtsProviderSettingsProps>;
+  resolvePreferredExecution?: (requestedExecution: LocalNeuralExecution | null) => 'device' | 'daemon';
   test: (ctx: LocalTtsProviderTestContext) => Promise<void>;
 };

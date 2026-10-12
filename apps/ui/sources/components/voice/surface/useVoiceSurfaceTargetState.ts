@@ -2,7 +2,7 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useFocusedSessionAddress } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { useSessionListPreferredMetadata } from '@/sync/store/hooks';
 import { getVoiceAgentSessionTeleportAvailability } from '@/voice/agent/getVoiceAgentSessionTeleportAvailability';
-import { resolveVoiceSessionLabel } from '@/voice/context/resolveVoiceSessionLabel';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 import {
     useVoiceTargetStore,
     resolveVoiceIdleTarget,
@@ -20,11 +20,6 @@ function resolveSessionIdFromPathname(pathname: string | null | undefined): stri
     return sessionId.length > 0 ? sessionId : null;
 }
 
-type VoiceSurfacePrivacySettings = Readonly<{
-    shareFilePaths: boolean;
-    shareSessionSummary: boolean;
-}>;
-
 export function useVoiceSurfaceTargetState(params: Readonly<{
     pathname: string | null | undefined;
     providerId: string;
@@ -33,7 +28,6 @@ export function useVoiceSurfaceTargetState(params: Readonly<{
     serverId?: string | null;
     variant: VoiceSurfaceVariant;
     voice: any;
-    voicePrivacy: VoiceSurfacePrivacySettings;
 }>) {
     const ui = params.voice?.ui ?? {};
     const scopeDefault = ui.scopeDefault === 'session' ? 'session' : 'global';
@@ -69,15 +63,19 @@ export function useVoiceSurfaceTargetState(params: Readonly<{
         params.variant === 'session'
         && getVoiceAgentSessionTeleportAvailability({ voice: params.voice, sessionId: params.sessionId ?? null }).ok;
 
-    const targetLabel =
-        startSessionId
-            ? (
-                resolveVoiceSessionLabel(startSessionAddress!, {
-                    voiceShareSessionSummary: params.voicePrivacy.shareSessionSummary,
-                    voiceShareFilePaths: params.voicePrivacy.shareFilePaths,
-                }, displayedBindingSessionMetadata ? { metadata: displayedBindingSessionMetadata } : undefined)
-            )
-            : null;
+    /*
+     * What this device shows its own user: the target Session's display name, from the same
+     * display-name owner as every other Session label. Voice privacy limits what is shared with the
+     * provider (`resolveVoiceSessionLabel`, for the model); it never hides a name from the person
+     * who owns it. A target whose row is not on this device has no name to show.
+     */
+    const targetLabel = startSessionAddress && displayedBindingSessionMetadata
+        ? getSessionName({
+            id: startSessionAddress.sessionId,
+            serverId: startSessionAddress.serverId,
+            metadata: displayedBindingSessionMetadata,
+        }, startSessionAddress.serverId)
+        : null;
 
     return {
         activityFeedEnabled,
