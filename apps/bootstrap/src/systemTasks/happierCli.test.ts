@@ -160,7 +160,11 @@ describe('runLocalHappierJsonCommand', () => {
     }
   });
 
-  it('treats ok:false json responses as failed commands', async () => {
+  it.each([
+    { cliCode: 'not_installed', expectedCode: 'cli_command_failed', status: 0 },
+    { cliCode: 'service_manager_unavailable', expectedCode: 'service_manager_unavailable', status: 0 },
+    { cliCode: 'service_manager_unavailable', expectedCode: 'service_manager_unavailable', status: 1 },
+  ])('reports $cliCode from a failed CLI command (exit $status)', async ({ cliCode, expectedCode, status }) => {
     const rootDir = mkdtempSync(join(tmpdir(), 'hsetup-cli-json-failure-'));
     const cliPath = join(rootDir, 'fake-happier');
 
@@ -172,8 +176,8 @@ describe('runLocalHappierJsonCommand', () => {
       );
       chmodSync(cliPath, 0o755);
       runCommandCaptureMock.mockResolvedValue({
-        status: 0,
-        stdout: '{"ok":false,"error":{"code":"not_installed"},"message":"service missing"}\n',
+        status,
+        stdout: `${JSON.stringify({ ok: false, error: cliCode === 'service_manager_unavailable' ? cliCode : { code: cliCode }, message: 'service missing' })}\n`,
         stderr: '',
       });
 
@@ -184,7 +188,7 @@ describe('runLocalHappierJsonCommand', () => {
           HAPPIER_BOOTSTRAP_CLI_PATH: cliPath,
         },
       })).rejects.toMatchObject({
-        code: 'cli_command_failed',
+        code: expectedCode,
         message: 'service missing',
       });
     } finally {
