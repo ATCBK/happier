@@ -195,6 +195,17 @@ describe('ChatHeaderView', () => {
         expect(screen.getTextContent()).toContain('RIGHT');
     });
 
+    it('renders a pressable role accessory alongside the session title', async () => {
+        const onPress = vi.fn();
+        const screen = await renderScreen(<ChatHeaderView title="Payments rollout" titleAccessory={
+            React.createElement('Pressable', { testID: 'header-role-fixture', onPress },
+                React.createElement('Text', null, 'Orchestrator'))
+        } />);
+        expect(screen.getTextContent()).toContain('Orchestrator');
+        await screen.pressByTestIdAsync('header-role-fixture');
+        expect(onPress).toHaveBeenCalledOnce();
+    });
+
     it('stretches header width when constrainWidth is false', async () => {
         const { ChatHeaderView } = await import('./ChatHeaderView');
 

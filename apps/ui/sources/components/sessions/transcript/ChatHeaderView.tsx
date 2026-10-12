@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
-import { View, Platform, Pressable } from 'react-native';
+import { View, Platform, Pressable, type LayoutChangeEvent } from 'react-native';
 import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { useSetting } from '@/sync/domains/state/storage';
 import { Typography } from '@/constants/Typography';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
+import { ChatHeaderCompactContext } from './chatHeaderCompact';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -22,6 +23,8 @@ import {
 
 interface ChatHeaderViewProps {
     title: string;
+    /** A summary-only control beside the title; detailed readers mount only after it opens. */
+    titleAccessory?: React.ReactNode;
     subtitle?: string;
     subtitleEllipsizeMode?: 'head' | 'tail';
     badges?: ReadonlyArray<string>;
@@ -54,6 +57,7 @@ interface ChatHeaderViewProps {
 
 export const ChatHeaderView = React.memo(function ChatHeaderView({
     title,
+    titleAccessory,
     subtitle,
     subtitleEllipsizeMode = 'tail',
     badges,
@@ -80,6 +84,16 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
     const avatarButtonTestId = resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-header-avatar');
     const shouldUseWebSubtitleStartEllipsis = subtitleEllipsizeMode === 'head' && Platform.OS === 'web';
     const identityMode = useSetting('sessionHeaderIdentityDisplay');
+    // The band's width and its actions' full width (measured while not compact, so taking the compact
+    // form never flips the decision back).
+    const [bandWidth, setBandWidth] = React.useState(0);
+    const [fullActionsWidth, setFullActionsWidth] = React.useState(0);
+    const [compactActions, setCompactActions] = React.useState(false);
+    React.useEffect(() => {
+        if (bandWidth <= 0 || fullActionsWidth <= 0) return;
+        const next = bandWidth - fullActionsWidth < fullActionsWidth;
+        setCompactActions((current) => current === next ? current : next);
+    }, [bandWidth, fullActionsWidth]);
 
     // Which identity leads the header is the user's call. `agentLogo` with no resolvable agent
     // renders nothing rather than silently falling back to the avatar — that would answer a question
@@ -104,7 +118,12 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
 
     return (
         <View style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
-            <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}>
+            <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}
+                onLayout={(event: LayoutChangeEvent) => {
+                    const width = Math.round(event.nativeEvent.layout.width);
+                    // The band is the wrapper's width, capped by the layout's max width when constrained.
+                    setBandWidth(constrainWidth && typeof maxWidth === 'number' ? Math.min(width, maxWidth) : width);
+                }}>
                 <HeaderBand
                     onPullAllTabs={onPullAllTabs}
                     hintTop={0}
@@ -155,6 +174,7 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
                         >
                             {title}
                         </Text>
+                        {titleAccessory ? <View style={styles.titleAccessory}>{titleAccessory}</View> : null}
                         {badges && badges.length > 0 ? (
                             badges.map((badge, index) => (
                                 <View
@@ -206,8 +226,11 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
                 </HeaderPullTarget>
 
                 {rightElement ? (
-                    <View style={styles.rightElementContainer}>
-                        {rightElement}
+                    <View style={styles.rightElementContainer} onLayout={compactActions ? undefined
+                        : (event: LayoutChangeEvent) => setFullActionsWidth(Math.round(event.nativeEvent.layout.width))}>
+                        <ChatHeaderCompactContext.Provider value={compactActions}>
+                            {rightElement}
+                        </ChatHeaderCompactContext.Provider>
                     </View>
                 ) : null}
 
@@ -290,6 +313,13 @@ const styles = StyleSheet.create(() => ({
         ...HEADER_BAND_TITLE_TEXT,
         flexShrink: 1,
     },
+    // The title owns the row. Its accessory (role chip) and badges give up their space first —
+    // ellipsizing, then collapsing — so a narrow pane never cuts the session's name to "Pa…".
+    titleAccessory: {
+        flexShrink: 100,
+        minWidth: 0,
+        overflow: 'hidden',
+    },
     subtitle: HEADER_BAND_SUBTITLE_TEXT,
     subtitleHeadWeb: {
         writingDirection: 'rtl' as const,
@@ -303,14 +333,18 @@ const styles = StyleSheet.create(() => ({
     // chrome, 8px radius. A bordered capsule in the header read as a different species from every
     // other badge in the product.
     badge: {
+        flexShrink: 100,
+        minWidth: 0,
+        overflow: 'hidden',
         borderWidth: 0,
         borderRadius: 8,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
     },
+    // The inset lives on the label so a collapsed badge leaves no empty capsule behind.
     badgeText: {
         fontSize: 10,
         lineHeight: 14,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
     },
     avatarLeading: {
         marginRight: 10,
