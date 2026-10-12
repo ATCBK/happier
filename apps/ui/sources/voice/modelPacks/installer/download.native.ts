@@ -1,12 +1,13 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
 import type { File as ExpoFile } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import type { ModelPackManifest } from '@/voice/modelPacks/manifest';
 
 import type { InstallerFs, Progress } from './types';
 import { filePathParts } from './paths';
-import { createTimeoutPromise, raceWithAbort, throwIfAborted } from './network';
+import { throwIfAborted } from './network';
 
 // Model files are tens to hundreds of MB; whole-file reads exceed Android's per-app JS heap, so
 // files are hashed through bounded reads.
@@ -30,52 +31,74 @@ async function sha256FileHex(file: Pick<ExpoFile, 'open'>, signal: AbortSignal):
   return bytesToHex(hash.digest());
 }
 
-async function writeResponseToFile(opts: {
-  response: Response;
-  file: Pick<ExpoFile, 'open'>;
+async function downloadToFile(opts: {
+  url: string;
+  fileUri: string;
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
-}): Promise<{ loaded: number; total: number }> {
-  const contentLength = opts.response.headers.get('content-length');
-  const total = contentLength ? Number(contentLength) : 0;
-  let loaded = 0;
-
-  const reader = opts.response.body?.getReader();
-  // Buffering the whole response would exceed the JS heap for large model files.
-  if (!reader) throw new Error('model_pack_download_stream_unavailable');
-
-  let handle: ReturnType<ExpoFile['open']> | undefined;
-  try {
-    // Own the handle directly: an errored WritableStream cannot close its native sink.
-    handle = opts.file.open();
-    while (true) {
-      throwIfAborted(opts.signal);
-      const { done, value } = await raceWithAbort(opts.signal, [reader.read()]);
-      if (done) break;
-      handle.writeBytes(value);
-      loaded += value.byteLength;
-      opts.onProgress?.({ loaded, total });
-    }
-  } finally {
-    try {
-      handle?.close();
-    } finally {
+}): Promise<void> {
+  throwIfAborted(opts.signal);
+  const { createDownloadResumable, FileSystemSessionType } = await import('expo-file-system/legacy');
+  throwIfAborted(opts.signal);
+  // Expo fetch queues native events without backpressure. Keep artifact bytes entirely native;
+  // only numeric progress crosses into JS, followed by bounded disk reads for verification.
+  const task = createDownloadResumable(opts.url, opts.fileUri, {
+    sessionType: FileSystemSessionType.FOREGROUND,
+  }, (progress) => opts.onProgress?.({
+    loaded: progress.totalBytesWritten,
+    total: progress.totalBytesExpectedToWrite,
+  }));
+  let releasePromise: Promise<void> | undefined;
+  const release = () => releasePromise ??= (async () => {
+    if (Platform.OS === 'android') {
+      // Android's cancel alone retains the native task. Pause removes it; cancel also removes
+      // the JS progress subscription when native setup failed before task registration.
       try {
-        await reader.cancel();
+        await task.pauseAsync();
       } finally {
-        reader.releaseLock();
+        await task.cancelAsync();
       }
+    } else {
+      // iOS unregisters completed tasks itself, so pause would fail before unsubscribing.
+      await task.cancelAsync();
+    }
+  })();
+  const onAbort = () => {
+    // The same promise is awaited below; attach a handler now to avoid an unhandled rejection.
+    void release().catch(() => undefined);
+  };
+  const download = task.downloadAsync();
+  opts.signal.addEventListener('abort', onAbort, { once: true });
+  if (opts.signal.aborted) onAbort();
+  let transferFailed = false;
+  try {
+    // A cancellation request is not terminal: native writes must settle before hashing/deleting.
+    // Model files use native network timeouts; the configured deadline still owns manifest fetches.
+    const result = await download;
+    throwIfAborted(opts.signal);
+    if (!result) throw new Error('model_pack_download_cancelled');
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`model_pack_download_failed:${result.status}`);
+    }
+  } catch (error) {
+    transferFailed = true;
+    throw error;
+  } finally {
+    opts.signal.removeEventListener('abort', onAbort);
+    try {
+      await release();
+    } catch (error) {
+      if (!transferFailed) throw error;
+      // Preserve the causal transfer error, but keep failed cleanup visible by default.
+      console.warn('[modelPacks] Failed to release native download', error);
     }
   }
-  return { loaded, total: total || loaded };
 }
 
 async function downloadAndVerifyFile(opts: {
   fs: InstallerFs;
-  fetchImpl: typeof fetch;
   rootDir: any;
   entry: ModelPackManifest['files'][number];
-  timeoutMs: number;
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
 }): Promise<void> {
@@ -110,22 +133,10 @@ async function downloadAndVerifyFile(opts: {
     }
   }
 
-  const response = await raceWithAbort(opts.signal, [
-    opts.fetchImpl(opts.entry.url, { signal: opts.signal }),
-    createTimeoutPromise(opts.timeoutMs),
-  ]);
-  if (!response.ok) throw new Error(`model_pack_download_failed:${response.status}`);
-
   try {
-    if (!file.exists) {
-      try {
-        file.create();
-      } catch {
-        // ignore
-      }
-    }
-
-    await writeResponseToFile({ response, file, signal: opts.signal, onProgress: opts.onProgress });
+    await downloadToFile({
+      url: opts.entry.url, fileUri: file.uri, signal: opts.signal, onProgress: opts.onProgress,
+    });
 
     const actual = await sha256FileHex(file, opts.signal);
     if (actual !== opts.entry.sha256.toLowerCase()) {
@@ -148,10 +159,8 @@ async function downloadAndVerifyFile(opts: {
 
 export async function downloadManifestFiles(opts: {
   fs: InstallerFs;
-  fetchImpl: typeof fetch;
   rootDir: any;
   manifest: ModelPackManifest;
-  timeoutMs: number;
   signal: AbortSignal;
   onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
 }): Promise<void> {
@@ -162,10 +171,8 @@ export async function downloadManifestFiles(opts: {
     let loadedThisFile = 0;
     await downloadAndVerifyFile({
       fs: opts.fs,
-      fetchImpl: opts.fetchImpl,
       rootDir: opts.rootDir,
       entry: f,
-      timeoutMs: opts.timeoutMs,
       signal: opts.signal,
       onProgress: (p) => {
         const delta = Math.max(0, p.loaded - loadedThisFile);
