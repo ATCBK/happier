@@ -18,7 +18,7 @@ export function collectBrowserDiagnostics(params: Readonly<{ page: Page }>): () 
   const responseErrors: string[] = [];
 
   params.page.on('console', (message) => pageConsole.push(`[${message.type()}] ${message.text()}`));
-  params.page.on('pageerror', (error) => pageErrors.push(String(error)));
+  params.page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
   params.page.on('requestfailed', (request) => {
     const failure = request.failure();
     requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
