@@ -1,4 +1,5 @@
 import { machineCapabilitiesDetect } from '@/sync/ops/capabilities';
+import { readExecutionRunProtocolV2Support } from '@happier-dev/protocol/execution/runs/protocolSupport';
 
 /**
  * Whether an exact machine can host a truly detached Execution Run.
@@ -16,23 +17,6 @@ export type DetachedExecutionRunSupport =
     | 'machine_not_selected'
     /** The probe has not answered yet, or could not be reached. */
     | 'unknown';
-
-/**
- * The canonical shape check for the detached-capable execution-run protocol.
- *
- * Both `detachedScope` and `startAndWait` are required because the workflow
- * coordinator's detached leaf uses the detached RPC scope *and* the bounded
- * wait; a host with only one of them cannot carry the whole contract.
- */
-export function readProtocolV2ExecutionRunSupport(value: unknown): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const record = value as Readonly<Record<string, unknown>>;
-    if (record.protocolVersion !== 2) return false;
-    const features = record.features;
-    if (!features || typeof features !== 'object' || Array.isArray(features)) return false;
-    return (features as Readonly<Record<string, unknown>>).detachedScope === true
-        && (features as Readonly<Record<string, unknown>>).startAndWait === true;
-}
 
 /**
  * Asks the canonical machine-capability owner about one exact machine.
@@ -59,10 +43,11 @@ export async function detectDetachedExecutionRunSupport(params: Readonly<{
                 ...(params.signal ? { signal: params.signal } : {}),
             },
         );
-        if (!capability.supported) return 'unknown';
-        const executionRuns = capability.response.results['tool.executionRuns'];
-        if (!executionRuns?.ok) return 'unsupported';
-        return readProtocolV2ExecutionRunSupport(executionRuns.data) ? 'supported' : 'unsupported';
+        const support = readExecutionRunProtocolV2Support(capability, {
+            detachedScope: true, startAndWait: true, exactInputResults: false,
+            runScopedAgentBindings: false, secretReferenceOverlay: false,
+        }, params.signal);
+        return support.ok ? 'supported' : support.errorCode === 'execution_run_protocol_unsupported' ? 'unsupported' : 'unknown';
     } catch {
         return 'unknown';
     }

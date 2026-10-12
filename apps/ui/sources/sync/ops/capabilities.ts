@@ -4,6 +4,7 @@
 
 import { isPlainObject } from './_shared';
 import { RPC_METHODS, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpc';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import {
     parseCapabilitiesDescribeResponse,
     parseCapabilitiesDetectResponse,
@@ -54,7 +55,8 @@ export async function machineCapabilitiesDescribe(
 
 export type MachineCapabilitiesDetectResult =
     | { supported: true; response: CapabilitiesDetectResponse }
-    | { supported: false; reason: 'not-supported' | 'error' | 'server-switch-abort' };
+    | { supported: false; reason: 'not-supported' | 'error' | 'server-switch-abort';
+        error?: Readonly<{ name?: string; rpcErrorCode?: string }> };
 
 export async function machineCapabilitiesDetect(
     machineId: string,
@@ -89,7 +91,13 @@ export async function machineCapabilitiesDetect(
         if (error instanceof ServerFetchAbortedForServerSwitchError) {
             return { supported: false, reason: 'server-switch-abort' };
         }
-        return { supported: false, reason: 'error' };
+        const rpcErrorCode = readRpcErrorCode(error);
+        // Retain classification evidence without retaining a transport's
+        // message, request configuration, credentials or stack.
+        return { supported: false, reason: 'error', error: {
+            ...(error instanceof Error ? { name: error.name } : {}),
+            ...(rpcErrorCode ? { rpcErrorCode } : {}),
+        } };
     }
 }
 

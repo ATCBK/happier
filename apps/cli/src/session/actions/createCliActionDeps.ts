@@ -374,6 +374,7 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult, RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { readExecutionRunProtocolV2Support, type ExecutionRunCapabilityObservation } from '@happier-dev/protocol/execution/runs/protocolSupport';
 import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
 import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
 import {
@@ -2252,6 +2253,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     const target = await resolveExecutionRunMachineTarget(sessionId, opts);
     if (!target.ok) return executionRunActionFailure(target.errorCode);
+    let observation: ExecutionRunCapabilityObservation;
     try {
       const response = await callMachineAction({
         machineId: target.machineId,
@@ -2260,30 +2262,12 @@ export function createCliActionDeps(params: Readonly<{
         ...(opts?.authority ? { authority: opts.authority } : {}),
         ...(opts?.signal ? { signal: opts.signal } : {}),
       });
-      const result = readRecord(readRecord(response).results)['tool.executionRuns'];
-      const data = readRecord(readRecord(result).data);
-      const features = readRecord(data.features);
-      if (
-        readRecord(result).ok !== true
-        || data.protocolVersion !== 2
-        || (requirement.detachedScope && features.detachedScope !== true)
-        || (requirement.startAndWait && features.startAndWait !== true)
-        || (requirement.exactInputResults && features.exactInputResults !== true)
-        || (requirement.runScopedAgentBindings && features.runScopedAgentBindings !== true)
-        || (requirement.secretReferenceOverlay && features.secretReferenceOverlay !== true)
-      ) {
-        return executionRunActionFailure('execution_run_protocol_unsupported');
-      }
-      return { ok: true, exactMachineId: target.machineId };
+      observation = { supported: true, response };
     } catch (error) {
-      if (isExecutionRunActionAbort(error, opts?.signal)) {
-        return executionRunActionFailure('cancelled');
-      }
-      if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
-        return executionRunActionFailure('execution_run_protocol_unsupported');
-      }
-      return executionRunActionFailure('execution_run_target_unavailable');
+      observation = { supported: false, reason: 'error', error };
     }
+    const support = readExecutionRunProtocolV2Support(observation, requirement, opts?.signal);
+    return support.ok ? { ok: true, exactMachineId: target.machineId } : support;
   };
 
   const callSessionRpcForTransport = async (

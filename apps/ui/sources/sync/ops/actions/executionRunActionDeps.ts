@@ -4,7 +4,7 @@ import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { machineCapabilitiesDetect } from '@/sync/ops/capabilities';
-import { readProtocolV2ExecutionRunSupport } from '@/sync/ops/actions/executionRunDetachedSupport';
+import { readExecutionRunProtocolV2Support } from '@happier-dev/protocol/execution/runs/protocolSupport';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import {
     sessionExecutionRunAction,
@@ -125,19 +125,8 @@ export function createUiExecutionRunActionDeps(scope?: ServerAccountScope): UiEx
                     ...(opts?.signal ? { signal: opts.signal } : {}),
                 },
             );
-            const executionRuns = capability.supported
-                ? capability.response.results['tool.executionRuns']
-                : null;
-            if (!executionRuns?.ok || !readProtocolV2ExecutionRunSupport(executionRuns.data)) {
-                return executionRunFailure('execution_run_protocol_unsupported');
-            }
-            const data = executionRuns.data as Readonly<Record<string, unknown>>;
-            const features = data.features as Readonly<Record<string, unknown>>;
-            if (
-                (requirement.exactInputResults && features.exactInputResults !== true)
-                || (requirement.runScopedAgentBindings && features.runScopedAgentBindings !== true)
-                || (requirement.secretReferenceOverlay && features.secretReferenceOverlay !== true)
-            ) return executionRunFailure('execution_run_protocol_unsupported');
+            const support = readExecutionRunProtocolV2Support(capability, requirement, opts?.signal);
+            if (!support.ok) return support;
             return { ok: true, exactMachineId: machineId };
         },
         executionRunStart: async (sessionId, request, opts) => sessionId === null

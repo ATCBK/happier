@@ -1236,6 +1236,26 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     expect(callSessionRpc).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['ACP_CATALOG_UNAVAILABLE', 'execution_run_target_unavailable'],
+    ['unknown-capability', 'execution_run_protocol_unsupported'],
+  ] as const)('classifies the capability observation %s without inventing protocol support', async (code, errorCode) => {
+    const deps = createCliActionDeps({
+      token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async () => ({
+        protocolVersion: 1,
+        results: { 'tool.executionRuns': { ok: false, checkedAt: 1,
+          error: { code, message: 'Capability unavailable' } } },
+      }) },
+    });
+    await expect(deps.executionRunCheckProtocolV2?.(null, {
+      detachedScope: true, startAndWait: false,
+    }, { exactMachineId: 'machine-1' })).resolves.toMatchObject({
+      ok: false, errorCode,
+    });
+  });
+
   it('classifies a failed V2 capability probe as target-unavailable before start dispatch', async () => {
     const credentials = {
       token: 'token',

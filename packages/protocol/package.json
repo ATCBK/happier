@@ -3909,6 +3909,11 @@
       "types": "./dist/execution/runs/responseSchemas.d.ts",
       "default": "./dist/execution/runs/responseSchemas.js"
     },
+    "./execution/runs/protocolSupport": {
+      "happier-source": "./src/execution/runs/protocolSupport.ts",
+      "types": "./dist/execution/runs/protocolSupport.d.ts",
+      "default": "./dist/execution/runs/protocolSupport.js"
+    },
     "./sessions/permissions/respondRpcParamsV1": {
       "happier-source": "./src/sessions/permissions/respondRpcParamsV1.ts",
       "types": "./dist/sessions/permissions/respondRpcParamsV1.d.ts",
