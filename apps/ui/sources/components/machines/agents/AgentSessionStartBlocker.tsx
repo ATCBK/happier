@@ -17,6 +17,13 @@ export const AgentSessionStartBlocker = React.memo(function AgentSessionStartBlo
     const block = resolveAgentSessionStartBlock(props.agent);
     if (!block || !props.agent) return null;
     const agent = props.agent;
+    const setUp: AttentionBannerAction = {
+        label: block === 'notInstalled' ? t('machineAgents.setUp') : t('machineAgents.actionSignIn'),
+        onPress: () => props.onSetUp?.(agent),
+        disabled: !props.onSetUp,
+        testID: 'new-session-agent-blocker.action',
+    };
+    const recovery = block === 'signedOut' ? props.connectedServicesRecoveryAction ?? null : null;
     return (
         <AttentionBanner
             testID="new-session-agent-blocker"
@@ -25,13 +32,11 @@ export const AgentSessionStartBlocker = React.memo(function AgentSessionStartBlo
                 ? t('machineAgents.blockNotInstalled', { agent: agent.title, machine: props.machineName })
                 : t('machineAgents.blockSignedOut', { agent: agent.title, machine: props.machineName })}
             description={block === 'notInstalled' ? t('machineAgents.blockSetUpToStart') : undefined}
-            action={{
-                label: block === 'notInstalled' ? t('machineAgents.setUp') : t('machineAgents.actionSignIn'),
-                onPress: () => props.onSetUp?.(agent),
-                disabled: !props.onSetUp,
-                testID: 'new-session-agent-blocker.action',
-            }}
-            secondaryAction={block === 'signedOut' ? props.connectedServicesRecoveryAction : null}
+            // A healthy connected account is one tap and immediate, so it leads; setting up or signing in
+            // natively stays as the second way forward. Every blocker state keeps its actions in one place.
+            action={recovery ?? setUp}
+            secondaryAction={recovery ? setUp : null}
+            actionPlacement="below"
         />
     );
 });

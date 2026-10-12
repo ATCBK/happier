@@ -37,6 +37,23 @@ describe('AgentSessionStartBlocker', () => {
         await screen.unmount();
     });
 
+    it('leads with the one-tap connected account and keeps native sign-in as the second way forward', async () => {
+        // Orchestrator ruling 2026-10-11 (DESIGN-SESSION #17): switching to a healthy connected account is
+        // immediate, so it is the primary; native sign-in stays reachable after it.
+        const recover = vi.fn();
+        const openSetup = vi.fn();
+        const screen = await renderScreen(<AgentSessionStartBlocker agent={signedOutAgent} machineName="Devbox" onSetUp={openSetup}
+            connectedServicesRecoveryAction={{ label: 'Use Claude (work)', onPress: recover, testID: 'new-session-agent-blocker.connected' }} />);
+        const actionIds = [...new Set(screen.tree.root.findAll(node => typeof node.type === 'string'
+            && /^new-session-agent-blocker\.(action|connected)$/.test(String(node.props.testID ?? ''))).map(node => node.props.testID as string))];
+        expect(actionIds).toEqual(['new-session-agent-blocker.connected', 'new-session-agent-blocker.action']);
+        await screen.pressByTestIdAsync('new-session-agent-blocker.connected');
+        expect(recover).toHaveBeenCalledOnce();
+        await screen.pressByTestIdAsync('new-session-agent-blocker.action');
+        expect(openSetup).toHaveBeenCalledWith(signedOutAgent);
+        await screen.unmount();
+    });
+
     it('allows setup once its consumer has a resolved destination', async () => {
         const openSetup = vi.fn();
         const screen = await renderScreen(<AgentSessionStartBlocker agent={signedOutAgent} machineName="Devbox" onSetUp={openSetup} />);

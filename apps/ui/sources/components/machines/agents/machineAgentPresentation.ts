@@ -121,6 +121,7 @@ export function resolveMachineAgentStatus(
     session?: MachineAgentSignInSession | null,
 ): MachineAgentStatus {
     if (agent.stale) {
+        if (agent.staleReason === 'error') return { kind: 'unknown', tone: 'quiet' };
         const lastKnown = !agent.installed
             ? 'notInstalled'
             : agent.signIn.status === 'signedIn' ? 'signedIn' : agent.signIn.status === 'signedOut' ? 'signedOut' : 'unknown';
