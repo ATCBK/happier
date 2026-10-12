@@ -9,7 +9,8 @@ import { validateWorkflowDefinition } from '../workflows/workflowValidationV1.js
 
 export const LEGACY_AUTOMATION_WORKFLOW_STEP_ID = 'step-1';
 
-type LegacyStoredTemplate = Readonly<{ template: AutomationTemplatePayloadV1; targetType: 'new_session' | 'existing_session' }>;
+/** Retained 0.2 template ingress; decodeAutomationTemplate owns the legacy fold. */
+type LegacyStoredTemplate = Readonly<{ template: AutomationTemplatePayloadV1 & { mcpSelection?: unknown }; targetType: 'new_session' | 'existing_session' }>;
 
 function storedTemplateSelection(params: LegacyStoredTemplate, machineId: string | null) {
   const template = decodeAutomationTemplate(JSON.stringify(params.template));

@@ -9,7 +9,7 @@ import { SessionAuthoringCheckoutCreationDraftV1Schema } from '../sessions/autho
 import { SessionExecutionTargetV1Schema } from '../sessions/creation/sessionExecutionTargetV1.js';
 import { SessionOrganizationPlacementV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
 import { SessionModelSelectionV1Schema } from '../providers/selection/v1.js';
-import { SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema } from '../reach/sessionCapabilitySelectionV1.js';
 import { WindowsRemoteSessionLaunchModeSchema } from '../sessions/metadata/windowsRemoteSessionLaunchMode.js';
 import { WindowsTerminalWindowNameSchema } from '../sessions/metadata/windowsTerminalWindowName.js';
 
@@ -35,7 +35,7 @@ export const AutomationTemplatePayloadV1Schema = lazyZodSchema(() => z.object({
     modelId: z.string().optional(),
     modelUpdatedAt: z.number().int().optional(),
     sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-    mcpSelection: SessionMcpSelectionV1Schema.optional(),
+    capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
     terminal: z.unknown().optional(),
     windowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchModeSchema.optional(),
     windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
@@ -146,8 +146,15 @@ export function decodeAutomationTemplate(payload: string): AutomationTemplate | 
     const trimmed = payload.trim();
     if (trimmed.length === 0) return null;
     try {
-        const parsed = JSON.parse(trimmed);
-        return createStoredReadSchema(AutomationTemplateSchema).parse(parsed);
+        const parsed: unknown = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+        const { mcpSelection, ...canonical } = parsed as Record<string, unknown>;
+        const capabilitySelection = readCapabilitySelectionCarrierV1(parsed);
+        return createStoredReadSchema(AutomationTemplateSchema).parse({
+            ...canonical,
+            ...(capabilitySelection ? { capabilitySelection } : canonical.capabilitySelection === undefined && mcpSelection != null
+                ? { capabilitySelection: { mcp: mcpSelection } } : {}),
+        });
     } catch {
         return null;
     }

@@ -56,7 +56,7 @@ describe('canonical legacy Automation inline conversion', () => {
     }, session: { project: { machineId: 'machine-1', directory: '/actual' }, executionSelection: {
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } }, profileId: 'stale-profile',
     } } })).toMatchObject({ kind: 'available', project: { machineId: 'machine-1', directory: '/actual' }, definition: { defaults: {
-      profileId: 'incoming-profile', mcpSelection: { managedServersEnabled: false, forceIncludeServerIds: ['release-server'] },
+      profileId: 'incoming-profile', capabilitySelection: { mcp: { managedServersEnabled: false, forceIncludeServerIds: ['release-server'] } },
       connectedServices: { v: 2, bindingsByServiceId: {} }, transcriptStorage: 'direct', terminal: { mode: 'plain' },
       windowsRemoteSessionLaunchMode: 'console', windowsRemoteSessionConsole: 'visible', windowsTerminalWindowName: 'Release',
       acpSessionModeId: 'review',
