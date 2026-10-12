@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { MachineCapabilitiesCacheState } from '@/hooks/server/useMachineCapabilitiesCache';
 
 import { PluginInstallationReviewSchema } from '@happier-dev/protocol/marketplace/internal';
+import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 
 import {
@@ -15,6 +17,7 @@ import {
     projectAccountInstalledPlugins,
     projectInstalledPluginPresentation,
     readDevelopmentPlugins,
+    readInstalledPlugins,
     readPendingPluginChangeReview,
     readPendingPluginChangeStatus,
     readPendingPluginChanges,
@@ -151,6 +154,37 @@ describe('installed plugin lifecycle capabilities', () => {
         expect(rows.map((row) => row.pluginId)).toEqual(['example.plugin', 'elsewhere.plugin']);
         expect(rows[0]).toBe(installed);
         expect(projectInstalledPluginLifecycleCapabilities(rows[1]!)).toEqual({ canEnable: false, canDisable: false, canRollback: false, canUninstall: false, canForgetTrust: false, canUpdate: false });
+    });
+    it('names an Account installation without a declaration by its catalog Agent, never by its raw id', () => {
+        const rows = projectAccountInstalledPlugins([], {
+            kind: 'available', availabilityCursor: 1, completeness: 'complete',
+            plugins: [{ pluginId: 'happier.agent.claude', installations: [{
+                materialization: { serverIdentityId: 'home', machineId: 'machine-b', materializationId: 'claude', pluginId: 'happier.agent.claude', version: '0.3.0', sourceClass: 'bundledFirstParty', portableRelease: true, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 10 },
+                declaration: null, declarationState: 'preparing', uiDeclarationState: 'preparing', release: null,
+                execution: { releaseContent: 'unknown', validation: { kind: 'rejected', reason: 'unknown' } },
+            }] }],
+        });
+        expect(rows[0]?.title).not.toBe('happier.agent.claude');
+        expect(rows[0]?.title.length).toBeGreaterThan(0);
+    });
+    it('names every bundled first-party Account installation without a declaration, including non-Agent plugins', async () => {
+        const { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } = await import('../../../../../../cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests');
+        const plugins = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.map(({ pluginId }) => {
+            return { pluginId, installations: [{
+                materialization: { serverIdentityId: 'home', machineId: 'machine-b', materializationId: pluginId, pluginId, version: '0.3.0', sourceClass: 'bundledFirstParty' as const, portableRelease: true, uiArtifacts: [], enabled: true, trustState: 'trusted' as const, observedAt: 10 },
+                declaration: null, declarationState: 'preparing' as const, uiDeclarationState: 'preparing' as const, release: null,
+                execution: { releaseContent: 'unknown' as const, validation: { kind: 'rejected' as const, reason: 'unknown' as const } },
+            }] };
+        });
+        const rows = projectAccountInstalledPlugins([], { kind: 'available', availabilityCursor: 1, completeness: 'complete', plugins } as never);
+        expect(rows).toHaveLength(BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.length);
+        for (const row of rows) {
+            expect(row.title).not.toBe(row.pluginId);
+            expect(row.title.length).toBeGreaterThan(0);
+            const manifest = ingestPluginManifestV2(BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === row.pluginId)!.manifest);
+            if (!manifest.ok) throw new Error('Bundled manifest fixture must be admitted');
+            expect(row.description).toBe(manifest.manifest.description ?? null);
+        }
     });
     it('does not advertise user-managed lifecycle mutations for host-bundled plugins', () => {
         expect(projectInstalledPluginLifecycleCapabilities({
@@ -469,14 +503,12 @@ describe('installed marketplace catalog formatting', () => {
             pluginId: 'example.plugin',
             change: {
                 kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-                pendingChangeId: 'pending-too-many-blocked-newer',
+                pendingChangeId: 'pending-invalid-blocked-newer',
                 review: {
                     ...review,
                     compatibility: {
                         ...review.compatibility,
-                        blockedNewerVersions: Array.from({ length: 33 }, () => (
-                            review.compatibility.blockedNewerVersions[0]
-                        )),
+                        blockedNewerVersions: [{ version: '2.1.0', diagnostics: [{ code: 'plugin_manifest_semantic_invalid' }] }],
                     },
                 },
             },
@@ -612,7 +644,7 @@ describe('installed marketplace catalog formatting', () => {
             change: {
                 kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
                 pendingChangeId: 'pending-1',
-                review: { ...completeReview, displayName: 'x'.repeat(32_769) },
+                review: { ...completeReview, displayName: '' },
             },
         }, 'install', 'example.plugin')).toBeNull();
 
@@ -1002,6 +1034,20 @@ describe('development plugin row presentation', () => {
 });
 
 describe('development status projection', () => {
+    it('drops malformed daemon status instead of exposing unvalidated development actions', () => {
+        const state = {
+            status: 'loaded',
+            snapshot: { response: { protocolVersion: 1, results: { 'tool.plugins': {
+                ok: true, checkedAt: 1,
+                data: { installedPlugins: [installed], developmentStatus: { roots: null, plugins: [{
+                    pluginId: installed.pluginId, sourceRootPath: '/daemon/root', phase: 'active',
+                }] } },
+            } } } },
+        } satisfies MachineCapabilitiesCacheState;
+        expect(readInstalledPlugins(state)).toEqual([installed]);
+        expect(readDevelopmentPlugins(state, [installed])).toEqual([]);
+    });
+
     it('uses the daemon phase, occurrence, digest, root, and diagnostic instead of deriving reload state from the catalog', () => {
         const developmentInstalled = {
             ...installed,

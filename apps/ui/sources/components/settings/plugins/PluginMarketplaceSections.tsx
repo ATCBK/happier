@@ -34,7 +34,7 @@ import { PluginMark } from './PluginMark';
 import { PluginCardStatus } from './collection/PluginCardStatus';
 import { PluginsPageCollection } from './collection/PluginsPageCollection';
 import { buildPluginMarketplaceDiscoverIssues } from './model/pluginMarketplaceDiscoverIssues';
-import { resolvePluginContributionKindLabel } from './model/pluginContributionKindLabel';
+import { PLUGIN_KIND_SHELF_ORDER, pluginKindShelfTitle, resolvePluginKindShelf, type PluginKindShelfKey } from './model/pluginContributionKindLabel';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 
 /** The machine's contribution projection facts a plugin row reads: its Agent mark and what it adds. */
@@ -98,6 +98,8 @@ export function InstalledPluginsSection(props: Readonly<{
     serverId?: string | null;
     /** Where each plugin runs across the Account ("On 3 machines"), from the machine matrix owner. */
     machineCoverageByPluginId?: Readonly<Record<string, string>>;
+    /** The chosen machine described its plugins (no registry or snapshot notice). Default: true. */
+    machineAnswered?: boolean;
     onClearSearch: () => void;
     onDiscover: () => void;
     onRetry: () => void;
@@ -122,10 +124,32 @@ export function InstalledPluginsSection(props: Readonly<{
         if (key === null) onClosePlugin?.();
         else onNavigateToPlugin(key);
     }, [onClosePlugin, onNavigateToPlugin]);
+    // What ships with Happier waits behind one quiet line; a search or filter opens it, so a match is never hidden.
+    const [includedShown, setIncludedShown] = React.useState(false);
+    const includedOpen = includedShown || props.filtering === true;
+    const groups = React.useMemo(() => buildInstalledPluginShelves(rows, includedOpen), [rows, includedOpen]);
+    const filter = React.useMemo(
+        () => (includedOpen ? undefined : (row: InstalledPluginRow) => row.group === 'added'),
+        [includedOpen],
+    );
+    const filtering = props.filtering === true;
+    const includedCount = rows.filter((row) => row.group === 'included').length;
+    // A quiet text action on the line, like Browse's "See all": the line is a disclosure, not a button bar.
+    const groupAction = React.useCallback((groupKey: string) => (groupKey !== INCLUDED_SHELF || filtering ? null : {
+        label: includedShown
+            ? t('settingsPlugins.surfaces.includedHide')
+            : t('settingsPlugins.surfaces.includedShow', { count: includedCount }),
+        onPress: () => setIncludedShown((shown) => !shown),
+        kind: 'link' as const,
+    }), [filtering, includedCount, includedShown]);
+    // Only a machine that answered can say nothing was added; an offline one shows what it last reported.
+    const nothingAdded = props.collectionState === 'ready' && props.machineAnswered !== false && rows.length > 0 && rows.every((row) => row.group !== 'added');
     const model = useHappierCollection<InstalledPluginRow>({
         items: rows,
         keyOf: readInstalledPluginRowKey,
-        groups: INSTALLED_PLUGIN_GROUPS,
+        groups,
+        order: orderInstalledPluginRows,
+        ...(filter ? { filter } : {}),
         openKey: props.selectedPluginId ?? null,
         onOpenChange,
     });
@@ -176,24 +200,7 @@ export function InstalledPluginsSection(props: Readonly<{
                     </View>
                 );
             case 'empty':
-                return (
-                    <View style={[styles.stateFrame, maxWidthStyle]}>
-                        <EmptyState
-                            testID="settings.plugins.marketplace.installed.empty"
-                            scene="noPlugins"
-                            title={t('settingsPlugins.surfaces.emptyTitle')}
-                            subtitle={t('settingsPlugins.surfaces.emptyBody')}
-                            action={(
-                                <RoundButton
-                                    testID="settings.plugins.marketplace.installed.empty.browse"
-                                    size="normal"
-                                    title={t('settingsPlugins.surfaces.browsePlugins')}
-                                    onPress={props.onDiscover}
-                                />
-                            )}
-                        />
-                    </View>
-                );
+                return installedInvite(props.onDiscover, maxWidthStyle);
             case 'noMatch':
                 return (
                     <PluginsNoMatch
@@ -226,8 +233,10 @@ export function InstalledPluginsSection(props: Readonly<{
                 anatomy={anatomy}
                 presentation={props.presentation}
                 accessibilityLabel={t('settingsPlugins.surfaces.navigationTitle')}
-                header={props.header}
+                // Nothing added yet: the invitation leads, above the line that holds what ships with Happier.
+                header={nothingAdded && !filtering ? <>{props.header}{installedInvite(props.onDiscover, maxWidthStyle, true)}</> : props.header}
                 footer={props.footer}
+                groupAction={groupAction}
                 loading={props.collectionState === 'loading'}
                 {...(empty === undefined ? {} : { empty })}
                 // Cards use the anatomy's footer action; only list rows carry the accessory beside the body.
@@ -237,9 +246,34 @@ export function InstalledPluginsSection(props: Readonly<{
     );
 }
 
+/** The first-plugin invitation: what plugins are for, and the one way to get one. */
+function installedInvite(onDiscover: () => void, maxWidthStyle: ReturnType<typeof useLayoutMaxWidthStyle>, nothingAdded = false) {
+    return (
+        <View style={[sectionStylesheet.stateFrame, maxWidthStyle]}>
+            <EmptyState
+                testID="settings.plugins.marketplace.installed.empty"
+                scene="noPlugins"
+                // With included plugins present, the truthful fact is that nothing was added yet.
+                title={nothingAdded ? t('settingsPlugins.surfaces.nothingAddedTitle') : t('settingsPlugins.surfaces.emptyTitle')}
+                subtitle={t('settingsPlugins.surfaces.emptyBody')}
+                action={(
+                    <RoundButton
+                        testID="settings.plugins.marketplace.installed.empty.browse"
+                        size="normal"
+                        title={t('settingsPlugins.surfaces.browsePlugins')}
+                        onPress={onDiscover}
+                    />
+                )}
+            />
+        </View>
+    );
+}
+
 type InstalledPluginRow = Readonly<{
     entry: InstalledPluginEntry;
     group: 'added' | 'included';
+    /** The shelf it sits on: Added, the kind an included plugin adds, or the included rest. */
+    shelf: InstalledPluginShelfKey;
     statusLabel: string | null;
     statusTone: 'quiet' | 'warning' | 'danger';
     control: React.ReactNode;
@@ -252,16 +286,51 @@ const NO_ROW_ACTIONS = Object.freeze({});
 
 const readInstalledPluginRowKey = (row: InstalledPluginRow) => row.entry.pluginId;
 
-/** What the user added, then what ships with Happier: the column's own two groups. */
-const INSTALLED_PLUGIN_GROUPS = {
-    get axis() {
-        return [
-            { key: 'added', title: t('settingsPlugins.surfaces.addedGroup') },
-            { key: 'included', title: t('settingsPlugins.rowSource.bundled') },
-        ];
-    },
-    groupOf: (row: InstalledPluginRow) => row.group,
-};
+/**
+ * Within a shelf, plugins that say what they are for come first, then compact tiles, each in their given
+ * order: grid rows share their tallest card's height, so mixing the two would stretch tiles into hollow cards.
+ */
+const orderInstalledPluginRows = (left: InstalledPluginRow, right: InstalledPluginRow): number => (
+    Number(!left.entry.description) - Number(!right.entry.description)
+);
+
+type InstalledPluginShelfKey = 'added' | 'included' | PluginKindShelfKey;
+
+const INCLUDED_SHELF = 'included';
+const INCLUDED_REST_SHELF = 'includedRest';
+
+/**
+ * What the user added, then one quiet line for what ships with Happier, named by the kinds it holds. Opened,
+ * that line is followed by a shelf per kind (Agents, Machines, Code hosting…) and the included plugins whose
+ * kind is not known; with no kinds known at all, those sit under the line itself.
+ */
+function buildInstalledPluginShelves(rows: readonly InstalledPluginRow[], includedOpen: boolean) {
+    const present = new Set(rows.map((row) => row.shelf));
+    const kindShelves = PLUGIN_KIND_SHELF_ORDER.filter((key) => present.has(key));
+    const hasIncluded = rows.some((row) => row.group === 'included');
+    const axis: { key: string; title: string; description?: string }[] = [];
+    if (present.has('added')) axis.push({ key: 'added', title: t('settingsPlugins.surfaces.addedGroup') });
+    if (hasIncluded) {
+        axis.push({
+            key: INCLUDED_SHELF,
+            title: t('settingsPlugins.rowSource.bundled'),
+            ...(kindShelves.length > 0 ? { description: kindShelves.map(pluginKindShelfTitle).join(' · ') } : {}),
+        });
+    }
+    if (includedOpen) {
+        for (const key of kindShelves) axis.push({ key, title: pluginKindShelfTitle(key) });
+        if (kindShelves.length > 0 && present.has('included')) {
+            axis.push({ key: INCLUDED_REST_SHELF, title: t('settingsPlugins.surfaces.kinds.other') });
+        }
+    }
+    const restShelf = kindShelves.length > 0 ? INCLUDED_REST_SHELF : INCLUDED_SHELF;
+    return {
+        axis,
+        groupOf: (row: InstalledPluginRow) => (row.shelf === 'included' ? restShelf : row.shelf),
+        // The included line keeps its place while it is closed and holds no cards.
+        retainEmpty: true,
+    };
+}
 
 /** Each row's one control (the switch, or Review), read by the row where the List draws it. */
 const InstalledPluginControlsContext = React.createContext<ReadonlyMap<string, React.ReactNode>>(new Map());
@@ -275,6 +344,7 @@ function useInstalledPluginRowActions(row: InstalledPluginRow): CollectionRowAct
 function projectInstalledPluginRows(
     props: Readonly<{
         installedPlugins: readonly InstalledPluginEntry[];
+        projectionByPluginId?: PluginProjectionFactsById;
         presentation: PluginsCollectionPresentation;
         machineCoverageByPluginId?: Readonly<Record<string, string>>;
         canRunActions: boolean;
@@ -297,9 +367,10 @@ function projectInstalledPluginRows(
             || presentation.status.id === 'trustRemoved'
             || presentation.status.id === 'needsAttention');
         // Cards always name their state in the footer; a healthy list row needs no repeated boilerplate.
+        // An Account installation has nothing to say yet: "Installed" in the Installed view repeats the view,
+        // and its details arrive when its own machine describes it (never a "Loading…" that may not end).
         const statusLabel = observedOnly
-            ? entry.accountInstallations!.some((installation) => installation.declarationState === 'preparing')
-                ? t('common.loading') : t('common.installed')
+            ? null
             : offline
             ? t('settingsPlugins.surfaces.lastKnown', { status: presentation.status.label })
             : presentation.status.id === 'enabled' && props.presentation === 'list'
@@ -336,10 +407,16 @@ function projectInstalledPluginRows(
         // A plugin that ships with Happier and cannot be switched off says so quietly instead of
         // showing a switch that does nothing.
         const locked = !showReview && !canToggle && isPluginIncludedWithHappier({ installed: entry });
+        const kindShelf = group === 'included'
+            ? resolvePluginKindShelf(props.projectionByPluginId?.[entry.pluginId]?.contributionKinds)?.key ?? null
+            : null;
         return {
             entry,
             group,
-            statusLabel: coverage ?? statusLabel,
+            shelf: group === 'added' ? 'added' : kindShelf ?? 'included',
+            // An included plugin that cannot be switched off has no control to label: while it is healthy it
+            // says nothing, rather than "Enabled" on every card.
+            statusLabel: coverage ?? (locked && !observedOnly && entry.enabled && !needsDecision && !offline ? null : statusLabel),
             statusTone,
             control: locked || observedOnly ? null : control,
             byline: group === 'included' || observedOnly ? null : presentation.sourceLabel,
@@ -362,11 +439,9 @@ function useInstalledPluginAnatomy(projectionByPluginId: PluginProjectionFactsBy
         title: (row) => row.entry.title,
         // The version, and the source unless the group names it.
         where: (row) => [installedPluginVersionLabel(row.entry), row.byline].filter(Boolean).join(' · ') || null,
-        // What it is for, else the kind of thing it adds. An empty grid value reserves the canonical two-line
-        // slot even before purpose facts arrive; it states nothing the machine has not supplied.
-        description: (row) => row.entry.description
-            ?? resolvePluginContributionKindLabel(projectionByPluginId?.[row.entry.pluginId]?.contributionKinds)
-            ?? (presentation === 'grid' ? '' : null),
+        // What it is for (its shelf already names its kind). None declared: no slot, so the shared grid
+        // card composes it as a compact tile instead of reserving an empty band (R-APP-14).
+        description: (row) => row.entry.description ?? null,
         reason: (row) => (row.statusLabel
             ? <PluginCardStatus label={row.statusLabel} tone={row.statusTone} />
             : null),
@@ -1064,7 +1139,6 @@ export function DiscoverListingsSection(props: Readonly<{
                             testIDPrefix="settings.plugins.marketplace.category"
                             accessibilityLabel={t('settingsPlugins.surfaces.categoriesLabel')}
                             segmentSizing="content"
-                            slidingThumb
                             targetSize="platform"
                         />
                     </ScrollView>
@@ -1208,12 +1282,10 @@ const sectionStylesheet = StyleSheet.create((theme) => ({
     rowControls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     source: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         maxWidth: 140,
     },
@@ -1226,54 +1298,48 @@ const sectionStylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'center',
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
         paddingHorizontal: PAGE_LIST_METRICS.pageTextInsetPx,
-        paddingTop: 4,
-        paddingBottom: 4,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s4,
     },
     statusText: {
         flex: 1,
-        gap: 2,
+        gap: theme.space.s2,
     },
     statusMessage: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     statusMessageError: {
         color: theme.colors.state.warning.foreground,
     },
     statusQualifier: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     chips: {
         width: '100%',
         alignSelf: 'center',
         paddingHorizontal: resolveItemGroupContentHorizontalInsetPx(),
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     loadMore: {
         width: '100%',
         alignSelf: 'center',
         alignItems: 'center',
-        paddingTop: 4,
-        paddingBottom: 16,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s16,
     },
     stateFrame: {
         width: '100%',
         alignSelf: 'center',
         paddingHorizontal: resolveItemGroupContentHorizontalInsetPx(),
-        paddingTop: 12,
-        paddingBottom: 8,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     registryNote: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -30,6 +30,9 @@ async function renderInstalled(params: Readonly<{
     onRunAction?: (action: 'enable' | 'disable', pluginId: string) => void;
     machineCoverageByPluginId?: Readonly<Record<string, string>>;
     projectionByPluginId?: Readonly<Record<string, Readonly<{ iconAgentId?: string | null; contributionKinds?: readonly string[] }>>>;
+    /** Leave what ships with Happier behind its "Show" line, as the page opens. Default: opened. */
+    includedClosed?: boolean;
+    machineAnswered?: boolean;
 }>) {
     const { InstalledPluginsSection } = await import('./PluginMarketplaceSections');
     const { ListPresentationProvider } = await import('@/components/ui/lists/listPresentation');
@@ -42,6 +45,7 @@ async function renderInstalled(params: Readonly<{
         searchText={params.searchText ?? ''}
         filtering={params.filtering ?? false}
         machineCoverageByPluginId={params.machineCoverageByPluginId}
+        {...(params.machineAnswered === undefined ? {} : { machineAnswered: params.machineAnswered })}
         projectionByPluginId={params.projectionByPluginId as never}
         onClearSearch={params.onClearSearch ?? (() => {})}
         onRetry={params.onRetry ?? (() => {})}
@@ -52,8 +56,14 @@ async function renderInstalled(params: Readonly<{
         onRunAction={(action, pluginId) => params.onRunAction?.(action as 'enable' | 'disable', pluginId)}
     /></ListPresentationProvider>);
     await measureMountedCollections(screen);
+    if (!params.includedClosed && screen.findByTestId(INCLUDED_ACTION) && !params.filtering) {
+        await screen.pressByTestIdAsync(INCLUDED_ACTION);
+        await measureMountedCollections(screen);
+    }
     return screen;
 }
+
+const INCLUDED_ACTION = 'settings.plugins.marketplace.installed:group:included:action';
 
 describe('Installed plugins collection', () => {
     afterEach(standardCleanup);
@@ -169,47 +179,145 @@ describe('Installed plugins collection', () => {
         const text = screen.getTextContent();
         // The section header names the source once; its cards do not repeat it.
         expect(text.split(t('settingsPlugins.rowSource.bundled'))).toHaveLength(2);
-        expect(text).toContain(t('settingsPlugins.rowStatus.enabled'));
+        // A healthy included plugin that cannot be switched off has no control, so nothing to label.
+        expect(text).not.toContain(t('settingsPlugins.rowStatus.enabled'));
         expect(text).toContain(t('settingsPlugins.rowStatus.disabled'));
         expect(text).toContain('On 3 machines');
         // The empty description declares the two-line slot, not invented copy.
-        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude:description')?.props.children).toBe('');
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude:description')).toBeNull();
         expect(screen.findByTestId('settings.plugins.marketplace.installed.mine:description')).not.toBeNull();
     });
 
-    it('keeps the card anatomy when none has a purpose yet, while healthy list rows stay quiet', async () => {
+    it('keeps an Account installation whose machine has not described it quiet, never loading forever', async () => {
+        const observed = installed('elsewhere', {
+            source: { kind: 'bundled', locator: '' }, install: { mode: 'observed', manifestVersion: '' },
+            accountInstallations: [{ declarationState: 'preparing' }] as never,
+        });
+        const screen = await renderInstalled({ collectionState: 'ready', presentation: 'grid', plugins: [observed] });
+        const { t } = await import('@/text');
+        const text = screen.getTextContent();
+        // In the Installed view, "Installed" on every card says nothing; it never reads as loading either.
+        expect(text).not.toContain(t('settingsPlugins.surfaces.installed'));
+        expect(text).not.toContain(t('common.loading'));
+    });
+
+    it('draws a card with no purpose without an empty description band, while healthy list rows stay quiet', async () => {
         const bundled = installed('quiet', { description: null, source: { kind: 'bundled', locator: 'quiet' } });
         const described = await renderInstalled({ collectionState: 'ready', plugins: [{ ...bundled, description: 'Does a thing' }] });
         const undescribed = await renderInstalled({ collectionState: 'ready', plugins: [bundled] });
         const height = (screen: Awaited<ReturnType<typeof renderInstalled>>) => StyleSheet.flatten(
             screen.findByTestId('settings.plugins.marketplace.installed.quiet:card')?.props.style,
         ).height;
-        expect(height(undescribed)).toBe(height(described));
-        expect(undescribed.findByTestId('settings.plugins.marketplace.installed.quiet:description')?.props.children).toBe('');
+        // No reserved two-line hole: the grid composes it shorter (a compact tile when nothing else is below).
+        expect(height(undescribed)).toBeLessThan(height(described));
+        expect(undescribed.findByTestId('settings.plugins.marketplace.installed.quiet:description')).toBeNull();
         const { t } = await import('@/text');
-        expect(undescribed.getTextContent()).toContain(t('settingsPlugins.rowStatus.enabled'));
+        expect(undescribed.getTextContent()).not.toContain(t('settingsPlugins.rowStatus.enabled'));
         const list = await renderInstalled({ collectionState: 'ready', presentation: 'list', plugins: [bundled] });
         expect(list.getTextContent()).not.toContain(t('settingsPlugins.rowStatus.enabled'));
     });
 
-    it('gives a card with no description the kind of thing the plugin adds as its second line', async () => {
+    it('shelves what ships with Happier by the kind of thing it adds, after what the user added', async () => {
         const bundled = (pluginId: string) => installed(pluginId, { description: null, source: { kind: 'bundled', locator: pluginId } });
         const screen = await renderInstalled({
             collectionState: 'ready',
             presentation: 'grid',
-            plugins: [bundled('auggie'), bundled('github'), bundled('quiet')],
+            plugins: [bundled('github'), installed('mine'), bundled('claude'), bundled('quiet'), bundled('auggie')],
             projectionByPluginId: {
                 auggie: { contributionKinds: ['agent'] },
+                claude: { contributionKinds: ['managedDependencies', 'agent'] },
                 github: { contributionKinds: ['scmHostingProviders'] },
                 quiet: { contributionKinds: [] },
             },
         });
         const { t } = await import('@/text');
+        const text = screen.getTextContent();
+        const at = (label: string) => text.indexOf(label);
+        const agents = t('settingsPlugins.surfaces.kinds.agent');
+        const codeHosting = t('settingsPlugins.surfaces.kinds.scmHostingProviders');
+        const other = t('settingsPlugins.surfaces.kinds.other');
+        // Added first, then the included line, then one shelf per kind in the kinds' order, then the rest.
+        const lastAt = (label: string) => text.lastIndexOf(label);
+        expect(at(t('settingsPlugins.surfaces.addedGroup'))).toBeGreaterThanOrEqual(0);
+        expect(at(t('settingsPlugins.rowSource.bundled'))).toBeGreaterThan(at(t('settingsPlugins.surfaces.addedGroup')));
+        expect(lastAt(agents)).toBeGreaterThan(at(t('settingsPlugins.rowSource.bundled')));
+        expect(lastAt(codeHosting)).toBeGreaterThan(lastAt(agents));
+        expect(at(other)).toBeGreaterThan(lastAt(codeHosting));
+        // The shelf names the kind; a card never repeats it as its purpose.
         const description = (pluginId: string) => screen.findByTestId(`settings.plugins.marketplace.installed.${pluginId}:description`);
-        expect(description('auggie')?.props.children).toBe(t('settingsPlugins.surfaces.kinds.agent'));
-        expect(description('github')?.props.children).toBe(t('settingsPlugins.surfaces.kinds.scmHostingProviders'));
-        // Nothing projected, nothing invented.
-        expect(description('quiet')?.props.children).toBe('');
+        expect(description('auggie')).toBeNull();
+        expect(description('github')).toBeNull();
+    });
+
+    it('opens on the plugins the user added, with what ships with Happier behind one quiet line', async () => {
+        const bundled = (pluginId: string) => installed(pluginId, { description: null, source: { kind: 'bundled', locator: pluginId } });
+        const screen = await renderInstalled({
+            collectionState: 'ready',
+            includedClosed: true,
+            plugins: [installed('mine'), bundled('claude'), bundled('auggie'), bundled('github')],
+            projectionByPluginId: {
+                auggie: { contributionKinds: ['agent'] }, claude: { contributionKinds: ['agent'] },
+                github: { contributionKinds: ['scmHostingProviders'] },
+            },
+        });
+        const { t } = await import('@/text');
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.mine')).not.toBeNull();
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude')).toBeNull();
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.github')).toBeNull();
+        const text = screen.getTextContent();
+        // The line names what it holds: the kinds, once.
+        expect(text).toContain(t('settingsPlugins.rowSource.bundled'));
+        expect(text.split(t('settingsPlugins.surfaces.kinds.scmHostingProviders'))).toHaveLength(2);
+
+        await screen.pressByTestIdAsync(INCLUDED_ACTION);
+        await measureMountedCollections(screen);
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude')).not.toBeNull();
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.github')).not.toBeNull();
+    });
+
+    it('invites a first plugin when none was added, and still keeps the included ones one press away', async () => {
+        const screen = await renderInstalled({
+            collectionState: 'ready',
+            includedClosed: true,
+            plugins: [installed('claude', { source: { kind: 'bundled', locator: 'claude' } })],
+        });
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.empty')).not.toBeNull();
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude')).toBeNull();
+        await screen.pressByTestIdAsync(INCLUDED_ACTION);
+        await measureMountedCollections(screen);
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.claude')).not.toBeNull();
+    });
+
+    it('never claims nothing was added while the machine is offline', async () => {
+        const screen = await renderInstalled({
+            collectionState: 'offline',
+            includedClosed: true,
+            plugins: [installed('claude', { source: { kind: 'bundled', locator: 'claude' } })],
+        });
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.empty')).toBeNull();
+    });
+
+    it('never claims nothing was added when the machine could not describe its plugins', async () => {
+        const screen = await renderInstalled({
+            collectionState: 'ready',
+            includedClosed: true,
+            machineAnswered: false,
+            plugins: [installed('claude', { source: { kind: 'bundled', locator: 'claude' } })],
+        });
+        expect(screen.findByTestId('settings.plugins.marketplace.installed.empty')).toBeNull();
+    });
+
+    it('leads each included shelf with the plugins that say what they are for, so tiles share rows', async () => {
+        const bundled = (pluginId: string, description: string | null) => installed(pluginId, { description, source: { kind: 'bundled', locator: pluginId } });
+        const screen = await renderInstalled({
+            collectionState: 'ready',
+            plugins: [bundled('alpha', null), bundled('beta', 'Does beta'), bundled('gamma', null), bundled('delta', 'Does delta')],
+            projectionByPluginId: Object.fromEntries(['alpha', 'beta', 'gamma', 'delta'].map((id) => [id, { contributionKinds: ['agent'] }])),
+        });
+        const cards = [...new Set(screen.root.findAll((node) => typeof node.props.testID === 'string'
+            && node.props.testID.endsWith(':card')).map((card) => card.props.testID as string))]
+            .map((id) => id.replace('settings.plugins.marketplace.installed.', '').replace(':card', ''));
+        expect(cards).toEqual(['beta', 'delta', 'alpha', 'gamma']);
     });
 
     it('shows the included plugins, not an empty page, when only those are installed', async () => {
@@ -217,7 +325,6 @@ describe('Installed plugins collection', () => {
             collectionState: 'ready',
             plugins: [installed('claude', { source: { kind: 'bundled', locator: 'claude' } })],
         });
-        expect(screen.findByTestId('settings.plugins.marketplace.installed.empty')).toBeNull();
         expect(screen.findByTestId('settings.plugins.marketplace.installed.claude')).not.toBeNull();
     });
 

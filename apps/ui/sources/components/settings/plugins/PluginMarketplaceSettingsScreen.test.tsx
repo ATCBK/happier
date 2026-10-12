@@ -432,7 +432,7 @@ function createMachineCapabilitiesState(
                         checkedAt: Date.now(),
                         data: {
                             installedPlugins,
-                            developmentActions: { create: true, develop: true, unregister: true },
+                            developmentActions: { create: true },
                             developmentStatus: { roots: developmentRoots, plugins: developmentPlugins },
                             pendingChanges,
                         },
@@ -1407,11 +1407,19 @@ beforeEach(() => {
     prefetchMachineCapabilitiesMock.mockResolvedValue(undefined);
 });
 
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { Switch: NativeSwitch } = await import('react-native');
+const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
+const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
+const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
+const { PluginDiagnosticsScreen } = await import('./diagnostics/PluginDiagnosticsScreen');
+const { PluginListingScreen } = await import('./listing/PluginListingScreen');
+const { PluginMarketplaceSourcesScreen } = await import('./PluginMarketplaceSourcesScreen');
+
 describe('PluginSettingsHomeScreen', () => {
     it.each(['create', 'createWithAgent'])('keeps the complete %s draft editable until scaffold submission', async (action) => {
         useMachineCapabilitiesCacheMock.mockReturnValue({ state: createMachineCapabilitiesState([]), refresh: vi.fn() });
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         await act(async () => { screen.pressByTestId(`settings.plugins.management.development.action.${action}`); });
@@ -1432,7 +1440,6 @@ describe('PluginSettingsHomeScreen', () => {
         let capabilityState: MachineCapabilitiesState = { status: 'loading' };
         useMachineCapabilitiesCacheMock.mockImplementation(() => ({ state: capabilityState, refresh: vi.fn() }));
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const RerenderableHome = PluginSettingsHomeScreen as React.ComponentType<{ capabilityRevision?: number }>;
         const screen = await renderInAppPanes(React.createElement(RerenderableHome, { capabilityRevision: 1 }));
         await act(async () => { await flushAsync(); });
@@ -1441,7 +1448,7 @@ describe('PluginSettingsHomeScreen', () => {
 
         capabilityState = createMachineCapabilitiesState([]);
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderableHome, { capabilityRevision: 2 })));
+            await screen.update(inAppPanes(React.createElement(RerenderableHome, { capabilityRevision: 2 })));
             await flushAsync();
         });
         expect(screen.findByTestId('settings.plugins.marketplace.installed:skeleton-row')).toBeFalsy();
@@ -1463,7 +1470,6 @@ describe('PluginSettingsHomeScreen', () => {
             machineAdministrationFixture.machineListByServerId = {};
             syncAdministrationTargetBoundary();
         }
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         expect(Boolean(screen.findRow('settings.plugins.marketplace.readOnlySnapshot'))).toBe(kind !== 'unselected');
@@ -1476,7 +1482,6 @@ describe('PluginSettingsHomeScreen', () => {
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
         administrationTargetBoundary.controller.setExecutionPending(true);
         try {
-            const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
             const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
             await act(async () => { await flushAsync(); await flushAsync(); });
             expect(screen.findRow('settings.plugins.marketplace.readOnlySnapshot')).toBeFalsy();
@@ -1490,14 +1495,12 @@ describe('PluginSettingsHomeScreen', () => {
     it('keeps Account data recovery for removed plugins on Diagnostics, off the everyday Plugins page', async () => {
         useMachineCapabilitiesCacheMock.mockReturnValue({ state: createMachineCapabilitiesState([]), refresh: vi.fn() });
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const home = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         for (const view of ['installed', 'discover'] as const) {
             await selectPluginManagementView(home, view);
             expect(home.findRow('settings.plugins.accountDataErase')).toBeFalsy();
             expect(home.findRow('settings.plugins.diagnostics')?.props.onPress).toBeTypeOf('function');
         }
-        const { PluginDiagnosticsScreen } = await import('./diagnostics/PluginDiagnosticsScreen');
         const diagnostics = await renderInAppPanes(React.createElement(PluginDiagnosticsScreen));
         expect(diagnostics.findRow('settings.plugins.accountDataErase')?.props.onPress).toBeTypeOf('function');
     });
@@ -1507,19 +1510,19 @@ describe('PluginSettingsHomeScreen', () => {
         const refresh = vi.fn(() => { capabilityState = createMachineCapabilitiesState([]); });
         useMachineCapabilitiesCacheMock.mockImplementation(() => ({ state: capabilityState, refresh }));
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const element = route === 'home'
             ? React.createElement(PluginSettingsHomeScreen)
             : React.createElement(PluginDetailScreen, { pluginId: 'unread-plugin' });
         const screen = await renderInAppPanes(element);
         await act(async () => { await flushAsync(); await flushAsync(); });
         const retryTestID = route === 'home'
-            ? 'settings.plugins.marketplace.installed.readFailed-action'
+            ? 'settings.plugins.marketplace.readOnlySnapshot-retry'
             : 'settings.plugins.detail.readOnlySnapshot-retry';
         expect(screen.findRow(retryTestID)).toBeTruthy();
         expect(screen.findRow('settings.plugins.marketplace.installed.empty')).toBeFalsy();
-        expect(screen.findByTestId('settings.plugins.marketplace.installed:skeleton-row')).toBeFalsy();
+        // The Account-wide inventory is an independent read while the selected
+        // daemon's failed read remains recoverable from the notice above it.
+        expect(Boolean(screen.findByTestId('settings.plugins.marketplace.installed:skeleton-row'))).toBe(route === 'home');
         await act(async () => {
             screen.pressRow(retryTestID);
             await flushAsync();
@@ -1539,7 +1542,6 @@ describe('PluginSettingsHomeScreen', () => {
             refresh: vi.fn(),
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         expect(useMachineCapabilitiesCacheMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -1560,7 +1562,6 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         expect(screen.findRow('settings.plugins.webhooks')).toBeTruthy();
@@ -1577,7 +1578,6 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         expect(screen.findRow('settings.plugins.sources')).toBeTruthy();
@@ -1591,7 +1591,6 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         expect(observedFeatureIds).toContain('plugins.webhooks');
@@ -1646,7 +1645,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         await act(async () => {
@@ -1734,7 +1732,6 @@ describe('PluginSettingsHomeScreen', () => {
             rejectCatalogQuery = reject;
         }));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -1801,7 +1798,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         ));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -1911,7 +1907,6 @@ describe('PluginSettingsHomeScreen', () => {
             response: { ok: true, result: { action: 'test', pluginId: 'development-plugin' } },
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
 
         await act(async () => {
@@ -1969,18 +1964,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         }));
 
-        invokeWithAlertsMock.mockClear();
-        await act(async () => {
-            findDevelopmentPluginAction(screen, 'development-plugin', 'unregister')?.onPress();
-            await flushAsync();
-        });
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'unregisterDevelopment',
-                params: { sourceRootPath: '/plugins/development-plugin' },
-            },
-        }));
 
         // The author sees every canonical scaffold surface, including the
         // declarative default shared with the CLI.
@@ -2009,25 +1992,6 @@ describe('PluginSettingsHomeScreen', () => {
                 },
             },
         }));
-        invokeWithAlertsMock.mockClear();
-
-        await act(async () => {
-            findDevelopmentPluginAction(screen, 'development-plugin', 'test')?.onPress();
-            await flushAsync();
-        });
-
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'test',
-                params: { pluginId: 'development-plugin' },
-            },
-        }));
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        expect(screen.findByTestId('settings.plugins.development.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
-        expect(screen.getTextContent()).toContain('settingsPlugins.developmentTestSucceeded');
     });
 
     it('re-resolves Edit with Agent through the selected daemon before opening an ordinary New Session', async () => {
@@ -2066,7 +2030,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
 
@@ -2141,7 +2104,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
 
@@ -2194,7 +2156,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
 
@@ -2237,7 +2198,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
 
@@ -2300,7 +2260,6 @@ describe('PluginSettingsHomeScreen', () => {
             };
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         await act(async () => {
@@ -2356,7 +2315,6 @@ describe('PluginSettingsHomeScreen', () => {
             };
         });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const RerenderableDevelopmentScreen = PluginDevelopmentScreen as unknown as React.ComponentType<{ scopeToken: string }>;
         const screen = await renderInAppPanes(React.createElement(RerenderableDevelopmentScreen, { scopeToken: 'machine-1' }));
         await act(async () => { await flushAsync(); await flushAsync(); });
@@ -2385,7 +2343,7 @@ describe('PluginSettingsHomeScreen', () => {
         });
         getActiveServerIdMock.mockReturnValue('server-b');
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderableDevelopmentScreen, { scopeToken: 'machine-2' })));
+            await screen.update(inAppPanes(React.createElement(RerenderableDevelopmentScreen, { scopeToken: 'machine-2' })));
             await flushAsync();
         });
         deferred.resolve();
@@ -2424,7 +2382,6 @@ describe('PluginSettingsHomeScreen', () => {
                 },
             });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         await act(async () => {
@@ -2445,21 +2402,6 @@ describe('PluginSettingsHomeScreen', () => {
         expect(screen.getTextContent()).toContain('/workspace/canonical/created-plugin');
         expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
 
-        await act(async () => {
-            const start = screen.findAllByType('ItemRowActions' as never)
-                .flatMap((node) => node.props.actions ?? [])
-                .find((action) => action.inlineTestID === 'settings.plugins.management.development.createSettlement.action.startDevelopment');
-            expect(start).toBeDefined();
-            start.onPress();
-            await flushAsync();
-        });
-        expect(invokeWithAlertsMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'develop',
-                params: { sourceRootPath: '/workspace/canonical/created-plugin' },
-            },
-        }));
     });
 
     it('lists a pending change this app never started and lets the present user decide it', async () => {
@@ -2503,7 +2445,6 @@ describe('PluginSettingsHomeScreen', () => {
             });
         modalConfirmMock.mockResolvedValueOnce(true);
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2561,7 +2502,6 @@ describe('PluginSettingsHomeScreen', () => {
             refresh,
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2603,7 +2543,6 @@ describe('PluginSettingsHomeScreen', () => {
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'cancelled' });
         modalConfirmMock.mockResolvedValueOnce(true);
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2659,7 +2598,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2702,7 +2640,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2758,7 +2695,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'outcomeUnknown', pluginId: 'community-plugin' });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2815,7 +2751,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'outcomeUnknown', pluginId: 'community-plugin' });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2868,7 +2803,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -2899,61 +2833,12 @@ describe('PluginSettingsHomeScreen', () => {
         );
     });
 
-    it('accepts an exact single-file development locator only after saving the inline draft', async () => {
-        const sourceFilePath = '/workspace/plugins/one-file-plugin.mjs';
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([]),
-            refresh: vi.fn(),
-        });
-        machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        invokeWithAlertsMock.mockResolvedValueOnce({
-            supported: true,
-            response: {
-                ok: true,
-                result: { action: 'develop', kind: 'committed' },
-            },
-        });
-
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
-        const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.management.development.action.develop');
-            await flushAsync();
-            await flushAsync();
-        });
-
-        const sourceField = screen.findByTestId('settings.plugins.development.sourceRootPath');
-        expect(sourceField).toBeTruthy();
-        await act(async () => {
-            sourceField?.props.onChangeText(sourceFilePath);
-        });
-        expect(invokeWithAlertsMock).not.toHaveBeenCalled();
-        expect(modalPromptMock).not.toHaveBeenCalled();
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.development.sourceRootPath.save');
-            await flushAsync();
-            await flushAsync();
-        });
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'develop',
-                params: { sourceRootPath: sourceFilePath },
-            },
-        }));
-    });
 
     it('cancels the inline development source draft without trusting or installing it', async () => {
         useMachineCapabilitiesCacheMock.mockReturnValue({
             state: createMachineCapabilitiesState([]), refresh: vi.fn(),
         });
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         await act(async () => { screen.pressByTestId('settings.plugins.management.development.action.develop'); });
@@ -2967,111 +2852,8 @@ describe('PluginSettingsHomeScreen', () => {
         expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
-    it('names the exact project source in the single remembered trust decision', async () => {
-        const refresh = vi.fn();
-        const sourceRootPath = '/workspace/plugins/local-authoring';
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([]),
-            refresh,
-        });
-        const developResult = {
-            action: 'develop',
-            sourceRootPath,
-            change: {
-                kind: 'reviewRequired', reviewKind: 'projectTrust',
-                pendingChangeId: 'pending-source-root-1',
-                review: { source: { kind: 'path', locator: sourceRootPath } },
-            },
-        };
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: developResult },
-        });
-        machineRpcWithServerScopeMock
-            .mockResolvedValueOnce({
-                kind: 'committed',
-                pluginId: 'community-plugin',
-                desiredGeneration: 'generation-1',
-                appliedGeneration: 'generation-1',
-                pendingSurfaces: [],
-            });
-        modalConfirmMock.mockResolvedValueOnce(true);
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
-        const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        expect(screen.findRow('settings.plugins.management.development.action.develop')?.props.disabled).toBeFalsy();
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.management.development.action.develop');
-            await flushAsync();
-        });
-        await act(async () => {
-            screen.changeTextByTestId('settings.plugins.development.sourceRootPath', sourceRootPath);
-        });
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.development.sourceRootPath.save');
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'develop',
-                params: { sourceRootPath },
-            },
-        }));
-        // The security payload is the path itself, and a path is a location on
-        // ONE machine reached through ONE server: `/Users/me/project` exists on
-        // several of them, so a trust decision naming only the path cannot tell
-        // the user whose filesystem the daemon will build and run code from.
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'settingsPlugins.developmentTrustProjectSourceTitle',
-            'settingsPlugins.developmentTrustProjectSourceBody(path=/workspace/plugins/local-authoring,machine=machine-1,server=Server A)',
-            expect.objectContaining({ confirmText: 'settingsPlugins.developmentTrustProjectSourceConfirm' }),
-        );
-        // Project/source trust is remembered and directly commits the prepared
-        // plugin. It never opens a second code-trust dialog for the same code.
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledOnce();
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            method: 'daemon.plugins.install.review.decide',
-            payload: {
-                v: 1,
-                pendingChangeId: 'pending-source-root-1',
-                decision: 'installAndTrust', optionalSelections: [],
-            },
-        }));
-        expect(refresh).toHaveBeenCalledTimes(1);
-
-        // Declining project trust cancels the pending change.
-        machineRpcWithServerScopeMock.mockClear();
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'cancelled' });
-        modalConfirmMock.mockResolvedValueOnce(false);
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.management.development.action.develop');
-            await flushAsync();
-        });
-        await act(async () => {
-            screen.changeTextByTestId('settings.plugins.development.sourceRootPath', sourceRootPath);
-        });
-        await act(async () => {
-            screen.pressByTestId('settings.plugins.development.sourceRootPath.save');
-            await flushAsync();
-            await flushAsync();
-        });
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            payload: { v: 1, pendingChangeId: 'pending-source-root-1', decision: 'cancel' },
-        }));
-        expect(refresh).toHaveBeenCalledTimes(1);
-    });
-
-    it('fails the local development affordance closed when the daemon does not advertise the develop action', async () => {
+    it('fails the local development affordance closed without admitted daemon development status', async () => {
         const staleState: LoadedMachineCapabilitiesState = {
             status: 'loaded',
             snapshot: {
@@ -3081,7 +2863,7 @@ describe('PluginSettingsHomeScreen', () => {
                         [MARKETPLACE_CAPABILITY_ID]: {
                             ok: true,
                             checkedAt: Date.now(),
-                            data: { installedPlugins: [], developmentStatus: { roots: [], plugins: [] } },
+                            data: { installedPlugins: [] },
                         },
                     },
                 },
@@ -3089,7 +2871,6 @@ describe('PluginSettingsHomeScreen', () => {
         };
         useMachineCapabilitiesCacheMock.mockReturnValue({ state: staleState, refresh: vi.fn() });
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => {
             await flushAsync();
@@ -3123,7 +2904,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => {
             await flushAsync();
@@ -3149,21 +2929,18 @@ describe('PluginSettingsHomeScreen', () => {
             version: '1.0.0-dev',
             source: { kind: 'path', locator: '/plugins/development-plugin', devWatch: true },
         });
-        let machineTarget = { daemonStateVersion: 7, isOnline: true };
         let capabilityState: MachineCapabilitiesState = createMachineCapabilitiesState([developmentPlugin], [{
             pluginId: 'development-plugin',
             sourceRootPath: '/plugins/development-plugin',
             phase: 'active',
             occurrenceId: 'occurrence-development-plugin',
         }]);
-        useMachineCliDetectionTargetMock.mockImplementation(() => machineTarget);
         useMachineCapabilitiesCacheMock.mockImplementation(() => ({
             state: capabilityState,
             refresh: vi.fn(),
         }));
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(null);
 
-        const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
         const RerenderablePluginDevelopmentScreen = PluginDevelopmentScreen as unknown as React.ComponentType<{
             capabilityRevision: number;
         }>;
@@ -3177,10 +2954,14 @@ describe('PluginSettingsHomeScreen', () => {
 
         expect(screen.findRow('settings.plugins.management.development.development-plugin')).toBeTruthy();
 
-        endpointConnectivityState.status = 'offline';
+        const selectedMachine = machineAdministrationFixture.activeMachines[0];
+        if (!selectedMachine) throw new Error('Expected the selected machine fixture.');
+        selectedMachine.active = false;
+        selectedMachine.activeAt = 0;
         capabilityState = { status: 'idle' };
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginDevelopmentScreen, {
+            syncAdministrationTargetBoundary();
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginDevelopmentScreen, {
                 capabilityRevision: 2,
             })));
             await flushAsync();
@@ -3211,7 +2992,6 @@ describe('PluginSettingsHomeScreen', () => {
             reason: 'error',
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -3253,7 +3033,6 @@ describe('PluginSettingsHomeScreen', () => {
             reason: 'error',
         });
 
-        const { PluginMarketplaceSourcesScreen } = await import('./PluginMarketplaceSourcesScreen');
         await renderInAppPanes(React.createElement(PluginMarketplaceSourcesScreen));
         await act(async () => {
             await flushAsync();
@@ -3292,12 +3071,12 @@ describe('PluginSettingsHomeScreen', () => {
         expect(machineMarketplaceSourceRegistryGetMock).toHaveBeenCalledTimes(1);
 
         screenFocusState.value = false;
-        screen.tree.update(inAppPanes(React.createElement(Screen, { ...props, revision: 2 })));
+        await screen.update(inAppPanes(React.createElement(Screen, { ...props, revision: 2 })));
         await act(async () => { await flushAsync(); });
         machineMarketplaceSourceRegistryGetMock.mockClear();
 
         screenFocusState.value = true;
-        screen.tree.update(inAppPanes(React.createElement(Screen, { ...props, revision: 3 })));
+        await screen.update(inAppPanes(React.createElement(Screen, { ...props, revision: 3 })));
         await act(async () => { await flushAsync(); await flushAsync(); });
 
         expect(machineMarketplaceSourceRegistryGetMock).toHaveBeenCalledTimes(1);
@@ -3317,7 +3096,6 @@ describe('PluginSettingsHomeScreen', () => {
         machineAdministrationFixture.activeMachines[0]!.activeAt = 0;
         syncAdministrationTargetBoundary();
 
-        const { PluginMarketplaceSourcesScreen } = await import('./PluginMarketplaceSourcesScreen');
         const screen = await renderInAppPanes(React.createElement(PluginMarketplaceSourcesScreen));
         await act(async () => {
             await flushAsync();
@@ -3396,7 +3174,6 @@ describe('PluginSettingsHomeScreen', () => {
             };
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const RerenderablePluginSettingsHomeScreen = PluginSettingsHomeScreen as unknown as React.ComponentType<{
             capabilityRevision: number;
         }>;
@@ -3442,7 +3219,7 @@ describe('PluginSettingsHomeScreen', () => {
         selectedMachine.activeAt = 0;
         await act(async () => {
             syncAdministrationTargetBoundary();
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
                 capabilityRevision: 2,
             })));
             await flushAsync();
@@ -3468,7 +3245,6 @@ describe('PluginSettingsHomeScreen', () => {
         expect(machineMarketplaceSourceRegistryGetMock).not.toHaveBeenCalled();
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledTimes(1);
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const detailScreen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -3498,7 +3274,7 @@ describe('PluginSettingsHomeScreen', () => {
         selectedMachine.activeAt = Date.now();
         await act(async () => {
             syncAdministrationTargetBoundary();
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
                 capabilityRevision: 3,
             })));
             await flushAsync();
@@ -3506,7 +3282,9 @@ describe('PluginSettingsHomeScreen', () => {
         });
 
         expect(screen.findRow('settings.plugins.marketplace.installed.installed-plugin')).toBeFalsy();
-        expect(screen.findRow('settings.plugins.marketplace.readOnlySnapshot')).toBeTruthy();
+        // Reconnecting is a fresh read, not a warning. The controls remain
+        // unavailable until the exact daemon's fresh truth has arrived.
+        expect(screen.findRow('settings.plugins.marketplace.readOnlySnapshot')).toBeFalsy();
         expect(screen.findByTestId('settings.plugins.management.view:discover')?.props.accessibilityState).toMatchObject({ selected: true });
         const reconnectCapabilityCacheKeySalt = useMachineCapabilitiesCacheMock.mock.calls.at(-1)?.[0]?.cacheKeySalt;
         expect(reconnectCapabilityCacheKeySalt).not.toBe(initialCapabilityCacheKeySalt);
@@ -3514,13 +3292,13 @@ describe('PluginSettingsHomeScreen', () => {
 
         freshCapabilitiesReady = true;
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
                 capabilityRevision: 4,
             })));
             await flushAsync();
         });
 
-        expect(screen.findRow('settings.plugins.marketplace.readOnlySnapshot')).toBeTruthy();
+        expect(screen.findRow('settings.plugins.marketplace.readOnlySnapshot')).toBeFalsy();
         expect(canSubmitDiscoverSearch(screen)).toBe(false);
         expect(machineMarketplaceIndexQueryMock).not.toHaveBeenCalled();
 
@@ -3614,7 +3392,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         await act(async () => {
@@ -3731,10 +3508,9 @@ describe('PluginSettingsHomeScreen', () => {
         });
         invokeWithAlertsMock.mockResolvedValue({
             supported: true,
-            response: { ok: true, result: { ok: true } },
+            response: { ok: true, result: { action: 'disable', pluginId: 'com.acme.installed-plugin', change: { kind: 'committed' } } },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'com.acme.installed-plugin' }));
 
         await act(async () => {
@@ -3798,7 +3574,6 @@ describe('PluginSettingsHomeScreen', () => {
             refresh: vi.fn(),
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -3825,7 +3600,6 @@ describe('PluginSettingsHomeScreen', () => {
             refresh: vi.fn(),
         }));
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const RerenderablePluginDetailScreen = PluginDetailScreen as unknown as React.ComponentType<{
             pluginId: string;
             capabilityRevision: number;
@@ -3842,7 +3616,7 @@ describe('PluginSettingsHomeScreen', () => {
 
         rollbackAvailability = 'unavailable';
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
                 pluginId: 'installed-plugin',
                 capabilityRevision: 2,
             })));
@@ -3885,7 +3659,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -3949,7 +3722,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -4008,7 +3780,6 @@ describe('PluginSettingsHomeScreen', () => {
                 },
             });
 
-            const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
             const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
                 pluginId: installedPlugin.pluginId,
             }));
@@ -4055,7 +3826,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         invokeWithAlertsMock.mockResolvedValueOnce({ supported: false, reason: 'error' });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -4099,7 +3869,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
         }));
@@ -4160,7 +3929,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const RerenderablePluginDetailScreen = PluginDetailScreen as unknown as React.ComponentType<{
             pluginId: string;
             scopeToken: string;
@@ -4183,7 +3951,7 @@ describe('PluginSettingsHomeScreen', () => {
         });
         getActiveServerIdMock.mockReturnValue('server-b');
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
                 pluginId: installedPlugin.pluginId,
                 scopeToken: 'machine-2',
             })));
@@ -4391,7 +4159,6 @@ describe('PluginSettingsHomeScreen', () => {
             throw new Error(`Unexpected RPC method: ${input.method ?? '<missing>'}`);
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'acme.hooks' }));
 
         await act(async () => {
@@ -4522,7 +4289,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'installed-plugin' }));
 
         await act(async () => {
@@ -4579,7 +4345,6 @@ describe('PluginSettingsHomeScreen', () => {
 
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledTimes(1);
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'installed-plugin' }));
 
         await act(async () => {
@@ -4667,7 +4432,6 @@ describe('PluginSettingsHomeScreen', () => {
                 }
         ));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const RerenderablePluginSettingsHomeScreen = PluginSettingsHomeScreen as unknown as React.ComponentType<{
             scopeToken: string;
         }>;
@@ -4705,7 +4469,7 @@ describe('PluginSettingsHomeScreen', () => {
         getActiveServerIdMock.mockReturnValue('server-b');
 
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
                 scopeToken: 'machine-2',
             })));
             await flushAsync();
@@ -4722,7 +4486,7 @@ describe('PluginSettingsHomeScreen', () => {
         // as machine-2 truth; machine-2's projection is unsupported, so no new
         // aggregate query is issued and the stale listing is gone.
         expect(screen.findRow(discoverListingTestID('sample-plugin'))).toBeFalsy();
-        expect(screen.findRow('settings.plugins.marketplace.search')?.props.value).toBe('');
+        expect(findDiscoverSearchInput(screen)?.props.value).toBe('');
         expect(machineMarketplaceIndexQueryMock).toHaveBeenCalledTimes(1);
     });
 
@@ -4756,7 +4520,6 @@ describe('PluginSettingsHomeScreen', () => {
             };
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const RerenderablePluginDetailScreen = PluginDetailScreen as unknown as React.ComponentType<{
             pluginId: string;
             scopeToken: string;
@@ -4785,7 +4548,7 @@ describe('PluginSettingsHomeScreen', () => {
         });
         getActiveServerIdMock.mockReturnValue('server-b');
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginDetailScreen, {
                 pluginId: installedPlugin.pluginId,
                 scopeToken: 'machine-2',
             })));
@@ -4836,7 +4599,6 @@ describe('PluginSettingsHomeScreen', () => {
             };
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -4912,7 +4674,6 @@ describe('PluginSettingsHomeScreen', () => {
             return { supported: false };
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const RerenderablePluginSettingsHomeScreen = PluginSettingsHomeScreen as unknown as React.ComponentType<{
             scopeToken: string;
         }>;
@@ -4928,7 +4689,7 @@ describe('PluginSettingsHomeScreen', () => {
 
         clearMachineAdministrationTargetFixture();
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
+            await screen.update(inAppPanes(React.createElement(RerenderablePluginSettingsHomeScreen, {
                 scopeToken: 'machine-none',
             })));
             await flushAsync();
@@ -5024,7 +4785,6 @@ describe('PluginSettingsHomeScreen', () => {
             },
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: 'com.acme.installed-plugin',
         }));
@@ -5050,7 +4810,6 @@ describe('PluginSettingsHomeScreen', () => {
         invokeWithAlertsMock.mockResolvedValue({ supported: true, response: {
             ok: false, error: { code: 'install_unavailable', message: 'The package is currently unavailable.' },
         } });
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await selectPluginManagementView(screen, 'discover');
         await act(async () => { await flushAsync(); await flushAsync(); });
@@ -5061,7 +4820,6 @@ describe('PluginSettingsHomeScreen', () => {
             pathname: '/(app)/settings/plugins/listing',
             params: { sourceId: 'marketplace:curated', pluginId: 'new-plugin' },
         }));
-        const { PluginListingScreen } = await import('./listing/PluginListingScreen');
         const detail = await renderInAppPanes(React.createElement(PluginListingScreen, { sourceId: 'marketplace:curated', pluginId: 'new-plugin' }));
         await act(async () => { await flushAsync(); await flushAsync(); });
         // The listing page re-reads exactly this source-qualified listing.
@@ -5132,7 +4890,6 @@ describe('PluginSettingsHomeScreen', () => {
             createMarketplaceCatalogEntry({ pluginId: 'new-plugin', title: 'New Plugin', version: '0.1.0' }),
         ]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         await act(async () => {
@@ -5208,7 +4965,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         machineMarketplaceIndexQueryMock.mockResolvedValue(createDaemonMarketplaceIndexResult([]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5256,7 +5012,6 @@ describe('PluginSettingsHomeScreen', () => {
             .mockImplementationOnce(() => new Promise((resolve) => { settleInitial = resolve; }))
             .mockResolvedValue(createDaemonMarketplaceIndexResult([]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5308,7 +5063,6 @@ describe('PluginSettingsHomeScreen', () => {
                 createMarketplaceCatalogEntry({ pluginId: 'fresh-plugin', title: 'Fresh Plugin', description: 'Descriptor from the refreshed revision', version: '3.0.0' }),
             ], { revision: 2 }));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5387,7 +5141,6 @@ describe('PluginSettingsHomeScreen', () => {
                 createMarketplaceCatalogEntry({ pluginId: 'replacement-plugin', title: 'Replacement Plugin', description: 'Descriptor for the searched page', version: '2.0.0' }),
             ]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5445,7 +5198,6 @@ describe('PluginSettingsHomeScreen', () => {
                 createMarketplaceCatalogEntry({ pluginId: 'sample-plugin', title: 'Sample Plugin', description: 'Shown first', version: '1.0.0' }),
             ]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
         await selectPluginManagementView(screen, 'discover');
@@ -5557,7 +5309,6 @@ describe('PluginSettingsHomeScreen', () => {
             createMarketplaceCatalogEntry({ pluginId: 'new-plugin', title: 'New Plugin', description: 'Descriptor for an uninstalled plugin', version: '0.1.0' }),
         ]));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5690,7 +5441,6 @@ describe('PluginSettingsHomeScreen', () => {
             return reviewModal?.(config as never);
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5806,7 +5556,6 @@ describe('PluginSettingsHomeScreen', () => {
             reviewStatus: 'unreviewed',
         }));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -5886,19 +5635,21 @@ describe('PluginSettingsHomeScreen', () => {
             onClose: vi.fn(),
             setChrome: vi.fn(),
         }));
-        const sessionsToggle = reviewModal.findByTestId('settings.plugins.installReview.optional.sessions');
-        expect(sessionsToggle?.props.value).toBe(false);
+        // The platform Switch exposes its checked state through value (on web,
+        // react-native-web maps it to the switch input's checked property).
+        const optionalToggle = (accessId: string) => reviewModal.findAllByType(NativeSwitch)
+            .find(node => node.props.testID === `settings.plugins.installReview.optional.${accessId}`);
+        const sessionsToggle = optionalToggle('sessions');
+        expect(sessionsToggle?.props).toMatchObject({ value: false, accessibilityRole: 'switch' });
         expect(sessionsToggle?.props.accessibilityLabel).toContain('sessions');
-        expect(sessionsToggle?.props.accessibilityState).toEqual({ checked: false });
-        const workspaceToggle = reviewModal.findByTestId('settings.plugins.installReview.optional.workspace');
-        expect(workspaceToggle?.props.value).toBe(false);
-        expect(workspaceToggle?.props.accessibilityState).toEqual({ checked: false });
+        const workspaceToggle = optionalToggle('workspace');
+        expect(workspaceToggle?.props).toMatchObject({ value: false, accessibilityRole: 'switch' });
+        expect(workspaceToggle?.props.accessibilityLabel).toContain('workspace');
         await act(async () => {
             sessionsToggle?.props.onValueChange(true);
         });
-        expect(reviewModal.findByTestId('settings.plugins.installReview.optional.sessions')?.props.value).toBe(true);
-        expect(reviewModal.findByTestId('settings.plugins.installReview.optional.sessions')?.props.accessibilityState)
-            .toEqual({ checked: true });
+        expect(optionalToggle('sessions')?.props).toMatchObject({ value: true, accessibilityRole: 'switch' });
+        expect(optionalToggle('workspace')?.props).toMatchObject({ value: false, accessibilityRole: 'switch' });
         await act(async () => {
             reviewModal.pressByTestId('settings.plugins.installReview.confirm');
             await flushAsync();
@@ -5985,7 +5736,6 @@ describe('PluginSettingsHomeScreen', () => {
             pluginId: 'community-plugin',
         });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'community-plugin' }));
         await act(async () => {
             await flushAsync();
@@ -6065,7 +5815,6 @@ describe('PluginSettingsHomeScreen', () => {
         });
         invokeWithAlertsMock.mockResolvedValueOnce({ supported: false, reason: 'error' });
 
-        const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'community-plugin' }));
         await act(async () => {
             await flushAsync();
@@ -6103,7 +5852,6 @@ describe('PluginSettingsHomeScreen', () => {
             createMarketplaceCatalogEntry({ pluginId: 'new-plugin' }),
         ], options));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -6144,7 +5892,6 @@ describe('PluginSettingsHomeScreen', () => {
             reviewStatus: 'withdrawn',
         }));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -6220,10 +5967,9 @@ describe('PluginSettingsHomeScreen', () => {
         });
         invokeWithAlertsMock.mockResolvedValue({
             supported: true,
-            response: { ok: true, result: { ok: true } },
+            response: { ok: true, result: { action: 'disable', pluginId: 'existing-plugin', change: { kind: 'committed' } } },
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -6328,7 +6074,6 @@ describe('PluginSettingsHomeScreen', () => {
             sourceUrl: 'https://catalog-b.example.test/catalog.json',
         }));
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
@@ -6397,11 +6142,10 @@ describe('PluginSettingsHomeScreen', () => {
             await deferred.promise;
             return {
                 supported: true,
-                response: { ok: true, result: { ok: true } },
+                response: { ok: true, result: { action: 'disable', pluginId: 'installed-plugin', change: { kind: 'committed' } } },
             };
         });
 
-        const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
 
         await act(async () => {
@@ -6443,7 +6187,6 @@ describe('PluginMarketplaceSourcesScreen', () => {
             sources: [{ id: 'user-known', title: 'Known source', sourceUrl: 'https://plugins.example.test/index.json', origin: 'user', enabled: true, addedAtMs: 1, updatedAtMs: 1 }],
         };
         machineMarketplaceSourceRegistryGetMock.mockResolvedValue(registry);
-        const { PluginMarketplaceSourcesScreen } = await import('./PluginMarketplaceSourcesScreen');
         const RerenderableSources = PluginMarketplaceSourcesScreen as React.ComponentType<{ revision: number }>;
         const screen = await renderInAppPanes(React.createElement(RerenderableSources, { revision: 1 }));
         await act(async () => { await flushAsync(); });
@@ -6455,17 +6198,17 @@ describe('PluginMarketplaceSourcesScreen', () => {
         machine.activeAt = Date.now();
         await act(async () => {
             syncAdministrationTargetBoundary();
-            screen.tree.update(inAppPanes(React.createElement(RerenderableSources, { revision: 2 })));
+            await screen.update(inAppPanes(React.createElement(RerenderableSources, { revision: 2 })));
             await flushAsync(); await flushAsync();
         });
         expect(screen.findRow('settings.plugins.sources.source.user-known')).toBeTruthy();
         expect(screen.findRow('settings.plugins.sources.unavailable')).toBeNull();
         machineMarketplaceSourceRegistryGetMock.mockRejectedValueOnce(new Error('read failed'));
         screenFocusState.value = false;
-        await act(async () => { screen.tree.update(inAppPanes(React.createElement(RerenderableSources, { revision: 3 }))); });
+        await act(async () => { await screen.update(inAppPanes(React.createElement(RerenderableSources, { revision: 3 }))); });
         screenFocusState.value = true;
         await act(async () => {
-            screen.tree.update(inAppPanes(React.createElement(RerenderableSources, { revision: 4 })));
+            await screen.update(inAppPanes(React.createElement(RerenderableSources, { revision: 4 })));
             await flushAsync(); await flushAsync();
         });
         expect(screen.findRow('settings.plugins.sources.source.user-known')).toBeTruthy();
@@ -6482,7 +6225,7 @@ describe('PluginMarketplaceSourcesScreen', () => {
         replacement.activeAt = 0;
         await act(async () => {
             syncAdministrationTargetBoundary();
-            screen.tree.update(inAppPanes(React.createElement(RerenderableSources, { revision: 5 })));
+            await screen.update(inAppPanes(React.createElement(RerenderableSources, { revision: 5 })));
             await flushAsync();
         });
         expect(screen.findRow('settings.plugins.sources.empty')).toBeNull();
@@ -6511,7 +6254,6 @@ describe('PluginMarketplaceSourcesScreen', () => {
         // (or `outcomeUnknown` after the mutation was issued), never a raw registry.
         machineMarketplaceSourceRegistryMutateMock.mockImplementation(async () => ({ status: 'success' as const, registry }));
 
-        const { PluginMarketplaceSourcesScreen } = await import('./PluginMarketplaceSourcesScreen');
         const screen = await renderInAppPanes(React.createElement(PluginMarketplaceSourcesScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
 

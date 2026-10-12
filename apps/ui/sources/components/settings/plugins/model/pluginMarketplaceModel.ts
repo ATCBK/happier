@@ -2,6 +2,13 @@ import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDae
 import type { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
 import { type CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol';
+import type {
+    InstalledPluginCapabilityDiagnosticV1,
+    InstalledPluginCapabilityDistributionV1,
+    InstalledPluginCapabilityEntryV1,
+    PluginDevelopmentStatusV1,
+} from '@happier-dev/protocol/capabilities';
+import { InstalledPluginCapabilityEntryV1Schema, PluginDevelopmentStatusV1Schema } from '@happier-dev/protocol/capabilities';
 import { t } from '@/text';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import {
@@ -23,6 +30,7 @@ import {
 import type { PluginMarketplaceCatalogEntry } from '../readPluginMarketplaceCatalog';
 import type { PluginAccountInstalledPluginsAdmission, PluginAccountInstalledPluginInstallation } from '@/sync/domains/plugins/availability/reader';
 import { resolvePluginLocalizedText } from '@/sync/domains/plugins/ui/i18n';
+import { BUNDLED_FIRST_PARTY_PLUGIN_PRESENTATION } from '@/agents/registry/generatedBundledPluginEntries';
 
 export const MARKETPLACE_CAPABILITY_ID = 'tool.plugins' as CapabilityId;
 
@@ -67,58 +75,10 @@ export function createPluginSettingsViews(
     ];
 }
 
-export type InstalledPluginDiagnostic = Readonly<{
-    code: string;
-    message: string;
-    details?: unknown;
-}>;
+export type InstalledPluginDiagnostic = InstalledPluginCapabilityDiagnosticV1;
+export type InstalledPluginDistribution = InstalledPluginCapabilityDistributionV1;
 
-export type InstalledPluginDistribution =
-    | Readonly<{ kind: 'npm'; registryOrigin: string; registryProfileId?: string; packageName: string }>
-    | Readonly<{ kind: 'localPath'; canonicalPath: string }>
-    | Readonly<{
-        kind: 'archive';
-        source: Readonly<{ kind: 'localFile'; canonicalPath: string }>
-            | Readonly<{ kind: 'remoteUrl'; canonicalUrl: string }>;
-        integrity: string;
-    }>;
-
-export type InstalledPluginEntry = Readonly<{
-    pluginId: string;
-    desiredGeneration?: string | null;
-    appliedGeneration?: string | null;
-    /** Verified NPM/archive acquisition SRI; local paths use generation custody. */
-    admittedIntegrity?: string | null;
-    title: string;
-    description: string | null;
-    version: string;
-    enabled: boolean;
-    rollbackAvailability?: 'available' | 'unavailable';
-    source: Readonly<{
-        kind: string;
-        locator: string;
-        devWatch?: boolean;
-        trustPolicy?: string;
-        installPolicy?: string;
-        resolvedPath?: string;
-    }>;
-    install: Readonly<{
-        mode: string;
-        manifestVersion: string;
-        installedPath?: string | null;
-        updatePolicy?: PluginUpdatePolicyV1;
-        trust?: Readonly<{
-            pluginId: string;
-            distribution: InstalledPluginDistribution;
-            state: 'trusted';
-            approvedAtMs: number;
-        }>;
-    }>;
-    compatibility: Readonly<{
-        status: string;
-        diagnostics: readonly InstalledPluginDiagnostic[];
-    }>;
-    diagnostics: readonly InstalledPluginDiagnostic[];
+export type InstalledPluginEntry = InstalledPluginCapabilityEntryV1 & Readonly<{
     /** Descriptive Account installation evidence; never a daemon lifecycle record. */
     accountInstallations?: readonly PluginAccountInstalledPluginInstallation[];
 }>;
@@ -135,11 +95,13 @@ export function projectAccountInstalledPlugins(
         if (administeredIds.has(plugin.pluginId) || plugin.installations.length === 0) continue;
         const first = plugin.installations[0]!;
         const declaration = plugin.installations.find((installation) => installation.declaration)?.declaration;
+        const presentation = declaration ?? BUNDLED_FIRST_PARTY_PLUGIN_PRESENTATION[plugin.pluginId];
         const versions = [...new Set(plugin.installations.map((installation) => installation.materialization.version))];
         observed.push(Object.freeze({
             pluginId: plugin.pluginId,
-            title: resolvePluginLocalizedText({ projection: null, pluginId: plugin.pluginId, value: declaration?.displayName }) || plugin.pluginId,
-            description: resolvePluginLocalizedText({ projection: null, pluginId: plugin.pluginId, value: declaration?.description }) || null,
+            title: resolvePluginLocalizedText({ projection: null, pluginId: plugin.pluginId, value: presentation?.displayName })
+                || plugin.pluginId,
+            description: resolvePluginLocalizedText({ projection: null, pluginId: plugin.pluginId, value: presentation?.description }) || null,
             version: versions.length === 1 ? versions[0]! : '',
             enabled: plugin.installations.some((installation) => installation.materialization.enabled),
             source: { kind: first.materialization.sourceClass === 'bundledFirstParty' ? 'bundled' : 'account', locator: '' },
@@ -193,13 +155,8 @@ export function projectInstalledPluginLifecycleCapabilities(
     });
 }
 
-export type DevelopmentPluginEntry = Readonly<{
+export type DevelopmentPluginEntry = PluginDevelopmentStatusV1['plugins'][number] & Readonly<{
     installed: InstalledPluginEntry;
-    sourceRootPath: string;
-    phase: 'observing' | 'preparing_dependencies' | 'compiling' | 'validating' | 'active' | 'retained_incumbent' | 'unavailable';
-    occurrenceId?: string;
-    uiArtifactDigest?: string;
-    diagnostic?: Readonly<{ code: string; message?: string }>;
     actions: Readonly<{
         test: boolean;
         pack: boolean;
@@ -418,22 +375,6 @@ export function readPendingPluginChangeDecisionId(decision: PendingPluginChangeD
         : decision.installationReview.pendingChangeId;
 }
 
-/**
- * The three outcomes `tool.plugins#develop` can hand back for a present user to
- * decide. `develop` has no caller-known plugin id — the daemon derives it from
- * the source root only after the root is trusted — so this reader keys on the
- * action and never on an expected identity.
- */
-export type PluginDevelopChange =
-    | PendingPluginChangeDecision
-    | Readonly<{ kind: 'committed' }>;
-
-export function readPluginDevelopChange(value: unknown): PluginDevelopChange | null {
-    if (!isRecord(value) || value.action !== 'develop' || !isRecord(value.change)) return null;
-    const decision = readPendingPluginChangeDecision(value.change);
-    if (decision) return decision;
-    return value.change.kind === 'committed' ? { kind: 'committed' } : null;
-}
 
 /**
  * One entry of the daemon's outstanding-decision enumeration.
@@ -593,42 +534,15 @@ export function isPluginDisableNoopResult(value: unknown, expectedPluginId: stri
         && value.entry.pluginId === expectedPluginId && value.entry.enabled === false;
 }
 
-type MarketplaceCapabilitySnapshot = Readonly<{
-    response: {
-        protocolVersion: 1;
-        results: Partial<Record<CapabilityId, Readonly<{
-            ok: true;
-            checkedAt: number;
-            data?: {
-                installedPlugins?: readonly InstalledPluginEntry[];
-                developmentActions?: Readonly<{ create: boolean; develop?: boolean; unregister?: boolean }>;
-                developmentStatus?: Readonly<{
-                    roots: readonly Readonly<{
-                        kind: 'home' | 'workspace' | 'explicit';
-                        rootPath: string;
-                        trusted: boolean;
-                        persisted: boolean;
-                    }>[];
-                    plugins: readonly Readonly<{
-                        pluginId?: string;
-                        sourceRootPath: string;
-                        phase: DevelopmentPluginEntry['phase'];
-                        occurrenceId?: string;
-                        uiArtifactDigest?: string;
-                        diagnostic?: Readonly<{ code: string; message?: string }>;
-                    }>[];
-                }>;
-                /**
-                 * Daemon-owned outstanding decisions, projected verbatim. A
-                 * machine whose snapshot predates the enumeration reports
-                 * nothing, so the section stays absent instead of claiming
-                 * there is nothing to decide.
-                 */
-                pendingChanges?: readonly unknown[];
-            } | null;
-        }>>>;
-    };
-}>;
+function readMarketplaceCapabilityData(
+    state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
+): Record<string, unknown> | null {
+    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
+        ? state.snapshot
+        : null;
+    const result = snapshot?.response.results[MARKETPLACE_CAPABILITY_ID];
+    return result?.ok && isRecord(result.data) ? result.data : null;
+}
 
 /**
  * The two operation ceilings derived from one current daemon capability fact.
@@ -653,7 +567,7 @@ export function resolvePluginDaemonOperationsAvailability(params: Readonly<{
         ? params.capabilityState.snapshot
         : null;
     const toolPlugins = snapshot
-        ? (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID]
+        ? snapshot.response.results[MARKETPLACE_CAPABILITY_ID]
         : null;
     const administration = params.hasExactExecutionTarget
         && params.daemonTransportOnline
@@ -668,37 +582,23 @@ export function resolvePluginDaemonOperationsAvailability(params: Readonly<{
 export function readInstalledPlugins(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
 ): readonly InstalledPluginEntry[] {
-    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
-        ? state.snapshot
-        : null;
-    if (!snapshot) return [];
-
-    const toolPlugins = (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID];
-    if (!toolPlugins?.ok || !toolPlugins.data || typeof toolPlugins.data !== 'object') return [];
-
-    const installedPlugins = toolPlugins.data.installedPlugins;
-    return Array.isArray(installedPlugins) ? installedPlugins : [];
+    const installedPlugins = readMarketplaceCapabilityData(state)?.installedPlugins;
+    if (!Array.isArray(installedPlugins)) return [];
+    return installedPlugins.flatMap((entry: unknown) => {
+        const parsed = InstalledPluginCapabilityEntryV1Schema.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+    });
 }
 
 export function readDevelopmentPlugins(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
     installedPlugins: readonly InstalledPluginEntry[],
 ): readonly DevelopmentPluginEntry[] {
-    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
-        ? state.snapshot
-        : null;
-    if (!snapshot) return [];
-    const toolPlugins = (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID];
-    const developmentStatus = toolPlugins?.ok && toolPlugins.data && typeof toolPlugins.data === 'object'
-        ? toolPlugins.data.developmentStatus
-        : null;
-    if (!developmentStatus || !Array.isArray(developmentStatus.plugins)) return [];
+    const parsed = PluginDevelopmentStatusV1Schema.safeParse(readMarketplaceCapabilityData(state)?.developmentStatus);
+    if (!parsed.success) return [];
+    const developmentStatus = parsed.data;
 
     const installedById = new Map(installedPlugins.map((entry) => [entry.pluginId, entry] as const));
-    const unregisterAvailable = toolPlugins?.ok === true
-        && toolPlugins.data !== null
-        && typeof toolPlugins.data === 'object'
-        && toolPlugins.data.developmentActions?.unregister === true;
     const explicitRoots = new Set(developmentStatus.roots
         .filter((root) => root.kind === 'explicit')
         .map((root) => root.rootPath));
@@ -711,7 +611,7 @@ export function readDevelopmentPlugins(
             actions: Object.freeze({
                 test: true,
                 pack: true,
-                unregister: unregisterAvailable && explicitRoots.has(source.sourceRootPath),
+                unregister: explicitRoots.has(source.sourceRootPath),
             }),
         }] : [];
     });
@@ -728,14 +628,7 @@ export function readDevelopmentPlugins(
 export function readPendingPluginChanges(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
 ): readonly PendingPluginChangeListing[] {
-    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
-        ? state.snapshot
-        : null;
-    if (!snapshot) return [];
-    const toolPlugins = (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID];
-    const pendingChanges = toolPlugins?.ok && toolPlugins.data && typeof toolPlugins.data === 'object'
-        ? toolPlugins.data.pendingChanges
-        : null;
+    const pendingChanges = readMarketplaceCapabilityData(state)?.pendingChanges;
     if (!Array.isArray(pendingChanges)) return [];
     return pendingChanges.flatMap((entry) => {
         const listing = readPendingPluginChangeListing(entry);
@@ -746,35 +639,19 @@ export function readPendingPluginChanges(
 export function readDevelopmentCreateAvailable(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
 ): boolean {
-    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
-        ? state.snapshot
-        : null;
-    if (!snapshot) return false;
-    const toolPlugins = (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID];
-    return toolPlugins?.ok === true
-        && toolPlugins.data !== null
-        && typeof toolPlugins.data === 'object'
-        && toolPlugins.data.developmentActions?.create === true;
+    const actions = readMarketplaceCapabilityData(state)?.developmentActions;
+    return isRecord(actions) && actions.create === true;
 }
 
 /**
  * Whether this machine's daemon can adopt a local folder as a development
- * source. It fails closed: a machine whose capability snapshot predates the
- * `develop` action advertises nothing, and the affordance stays disabled rather
- * than sending a method the daemon would reject.
+ * source. The daemon's admitted development status establishes the available
+ * lifecycle; invocation and approval are owned by the development Actions.
  */
 export function readDevelopmentSourceInstallAvailable(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
 ): boolean {
-    const snapshot = state.status === 'loaded' || state.status === 'loading' || state.status === 'error'
-        ? state.snapshot
-        : null;
-    if (!snapshot) return false;
-    const toolPlugins = (snapshot as MarketplaceCapabilitySnapshot).response.results[MARKETPLACE_CAPABILITY_ID];
-    return toolPlugins?.ok === true
-        && toolPlugins.data !== null
-        && typeof toolPlugins.data === 'object'
-        && toolPlugins.data.developmentActions?.develop === true;
+    return PluginDevelopmentStatusV1Schema.safeParse(readMarketplaceCapabilityData(state)?.developmentStatus).success;
 }
 
 /**

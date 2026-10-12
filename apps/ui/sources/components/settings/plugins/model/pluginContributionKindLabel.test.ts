@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { t } from '@/text';
-import { resolvePluginContributionKindLabel } from './pluginContributionKindLabel';
+import { resolvePluginKindShelf } from './pluginContributionKindLabel';
 
-describe('plugin contribution kind label', () => {
-    it('recognizes input types before later projected contribution kinds', () => {
-        expect(resolvePluginContributionKindLabel(['inputTypes', 'agent']))
-            .toBe(t('settingsPlugins.surfaces.kinds.inputTypes'));
+describe('plugin kind shelf', () => {
+    it('shelves a plugin by its most identifying kind, whatever order the machine projected them in', () => {
+        // Nearly every plugin signs in to something; that never outranks what the plugin is for.
+        expect(resolvePluginKindShelf(['connectedAccounts', 'machineProvisioners'])?.key).toBe('machines');
+        expect(resolvePluginKindShelf(['connectedAccounts', 'pluginUi', 'scmHostingProviders'])?.key).toBe('scmHostingProviders');
+        expect(resolvePluginKindShelf(['pluginUi', 'voiceProviders'])?.key).toBe('voice');
+        expect(resolvePluginKindShelf(['inputTypes', 'agent'])?.key).toBe('agent');
+        expect(resolvePluginKindShelf(['connectedAccounts'])?.key).toBe('connectedAccounts');
     });
 
-    it('skips plumbing contributions and leaves plumbing-only plugins unlabeled', () => {
-        expect(resolvePluginContributionKindLabel(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets', 'agent']))
-            .toBe(t('settingsPlugins.surfaces.kinds.agent'));
-        expect(resolvePluginContributionKindLabel(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets'])).toBeNull();
+    it('skips plumbing contributions and leaves plumbing-only plugins without a shelf', () => {
+        expect(resolvePluginKindShelf(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets', 'agent'])?.key)
+            .toBe('agent');
+        expect(resolvePluginKindShelf(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets', 'atmospherePictures'])).toBeNull();
     });
 });
