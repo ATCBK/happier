@@ -26,9 +26,11 @@ describe('projectMachineWorkSummary', () => {
     });
     it('counts an idle hosted Session while retention is idle, then removes it when its tracked process retires', async () => {
         let sessions: TrackedSession[] = [{ pid: 1, startedBy: 'daemon', happySessionId: 'private-session', requesterWorkAttributionV1: attribution }];
+        let agents: 'active' | 'settled' = 'settled';
+        let attention: 'active' | 'settled' = 'settled';
         const producer = createSessionLiveWorkProducer({ readSessions: () => sessions,
             // The live Session RPC is the boundary: a committed idle runtime is still hosted.
-            readActivity: async () => ({ session: 'settled', input: 'settled' }),
+            readActivity: async () => ({ session: 'settled', input: 'settled', agents, attention }),
         });
         const inventory = createManagedActivityInventory({ producers: [producer] });
         const project = async () => projectMachineWorkSummary({ inventory: await inventory.read(), target,
@@ -37,6 +39,15 @@ describe('projectMachineWorkSummary', () => {
         expect(await project()).toEqual({ kind: 'current', requesters: [
             { accountId: 'bob', displayName: 'Bob', sessions: 1, tasks: 0, terminals: 0 },
         ] });
+        for (const category of ['agents', 'attention'] as const) {
+            agents = category === 'agents' ? 'active' : 'settled';
+            attention = category === 'attention' ? 'active' : 'settled';
+            producer.notifyChanged();
+            expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: [category] });
+            expect(await project()).toEqual({ kind: 'current', requesters: [
+                { accountId: 'bob', displayName: 'Bob', sessions: 1, tasks: 0, terminals: 0 },
+            ] });
+        }
         sessions = [];
         producer.notifyChanged();
         expect(await project()).toEqual({ kind: 'current', requesters: [] });

@@ -8,6 +8,8 @@ const countColumn = {
     session: 'sessions', finite: 'tasks', terminal: 'terminals',
     execution_run: 'tasks', workflow_run: 'tasks',
     service: null, transfer: null, handoff: null, sync: null, setup: null, input: null,
+    // These are work facts for the same hosted Session, already counted above.
+    agents: null, attention: null,
 } as const satisfies Record<LiveWorkCategoryV1, 'sessions' | 'tasks' | 'terminals' | null>;
 
 /** Projects an already-authorized inventory; never reads work registries or private content. */
