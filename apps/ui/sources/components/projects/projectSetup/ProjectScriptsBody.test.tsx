@@ -733,8 +733,12 @@ describe('ProjectScriptsBody runs', () => {
       status: 'conflict',
       current: { basis: { kind: 'absent' }, document: null },
     };
-    // The found disclosure opens by default on the page.
+    // Found scripts wait in one quiet line; the disclosure opens on press and the page stays short.
     const screen = await render('page', 'scripts.found.header');
+    expect(screen.findByTestId('scripts.detected:0.add')).toBeNull();
+    await act(async () => {
+      await screen.pressByTestIdAsync('scripts.found.header');
+    });
     await vi.waitFor(() =>
       expect(screen.findByTestId('scripts.detected:0.add')).toBeTruthy(),
     );
@@ -1304,6 +1308,9 @@ describe('ProjectScriptsBody native previews and tools', () => {
     };
     const screen = await render('page', 'scripts.script:test');
     expect(textOf(screen, 'scripts.script:test.status')).toContain('yarn test');
+    await act(async () => {
+      await screen.pressByTestIdAsync('scripts.found.header');
+    });
     expect(
       screen.findByTestId('scripts.detected:0.command')?.props.children,
     ).toBe('yarn lint');

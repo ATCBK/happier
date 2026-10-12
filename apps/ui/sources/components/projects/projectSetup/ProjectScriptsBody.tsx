@@ -311,19 +311,21 @@ export function ProjectScriptsContent(
   }
   return (
     <>
-      <DeclaredScripts {...props} manifest={document.manifest} />
-      {partial}
-      <FoundMore
-        {...props}
-        manifest={document.manifest}
-        detection={detection}
-      />
-      <ServicesFound
-        testID={props.testID}
-        detection={detection}
-        manifest={document.manifest}
-        onOpenServices={props.onOpenServices}
-      />
+      {/* Found scripts and services continue the list; Workers and Agents (settings) follow them. */}
+      <DeclaredScripts {...props} manifest={document.manifest}>
+        {partial}
+        <FoundMore
+          {...props}
+          manifest={document.manifest}
+          detection={detection}
+        />
+        <ServicesFound
+          testID={props.testID}
+          detection={detection}
+          manifest={document.manifest}
+          onOpenServices={props.onOpenServices}
+        />
+      </DeclaredScripts>
     </>
   );
 }
@@ -340,6 +342,8 @@ function DeclaredScripts(
     testID: string;
     onEdit: ((seed: boolean, mode?: 'form' | 'raw') => void) | null;
     onOpenWorkers?: (() => void) | null;
+    /** Sections that continue the list (found scripts and services), before the settings sections. */
+    children?: React.ReactNode;
   }>,
 ) {
   const machine = useServerScopedMachine(
@@ -379,6 +383,17 @@ function DeclaredScripts(
       text: [environment.title, versions || environment.config].filter(Boolean).join(' · '),
       icon: <Icon name="wrench" size={14} color={theme.colors.text.secondary} /> }] : []),
   ], [environment.config, environment.title, managed, versions, theme.colors.text.secondary]);
+  const phone = useDeviceType() === 'phone';
+  const editButton = props.onEdit ? (
+    <RoundButton
+      size="small"
+      display="secondary"
+      title={t('projects.scripts.editProjectFile')}
+      testID={`${props.testID}.edit`}
+      leading={<Icon name="file-text" size={14} />}
+      onPress={() => props.onEdit?.(false)}
+    />
+  ) : undefined;
   return (
     <>
     {props.page ? (
@@ -387,20 +402,14 @@ function DeclaredScripts(
         showTitle={false}
         columnMaxWidthPx={columnMaxWidth}
         renderText={renderPageHeaderText}
-        description={hasSetup
+        // Phones carry the project's identity in the navigation header (lab PAGEp): the page opens on the
+        // file and environment line, with Edit project file under it instead of squeezing the purpose line.
+        description={phone ? undefined : hasSetup
           ? t('projects.scripts.purposeSetup', { project, machine: machineName })
           : t('projects.scripts.purpose', { project, machine: machineName })}
         meta={meta}
-        actions={props.onEdit ? (
-          <RoundButton
-            size="small"
-            display="secondary"
-            title={t('projects.scripts.editProjectFile')}
-            testID={`${props.testID}.edit`}
-            leading={<Icon name="file-text" size={14} />}
-            onPress={() => props.onEdit?.(false)}
-          />
-        ) : undefined}
+        actions={!phone ? editButton : undefined}
+        details={phone && editButton ? <View style={styles.phoneEdit}>{editButton}</View> : undefined}
         testID={`${props.testID}.header`}
       />
     ) : null}
@@ -455,6 +464,7 @@ function DeclaredScripts(
         ))
       )}
     </ItemGroup>
+    {props.children}
     {props.page && hasPortable && props.onOpenWorkers ? (
       <WorkersSummarySection
         testID={`${props.testID}.workers`}
@@ -801,7 +811,7 @@ function FoundMore(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const [expanded, setExpanded] = React.useState(true);
+  const [expanded, setExpanded] = React.useState(false);
   const found = props.detection.entries.filter(
     (entry) =>
       entry.usage === 'script' && !isDeclared(props.manifest, entry.source),
@@ -825,7 +835,7 @@ function FoundMore(
               />
             }
             title={(
-              <Text numberOfLines={1} style={[styles.inlineTitle, { color: theme.colors.text.secondary }]}>
+              <Text numberOfLines={2} style={[styles.inlineTitle, { color: theme.colors.text.secondary }]}>
                 <Text style={[styles.inlineTitle, styles.strong, { color: theme.colors.text.primary }]}>
                   {t('projects.scripts.foundMore', { count: found.length })}
                 </Text>
@@ -919,7 +929,7 @@ function ServicesFound(
           />
         }
         title={(
-          <Text numberOfLines={1} style={[styles.inlineTitle, { color: theme.colors.text.secondary }]}>
+          <Text numberOfLines={2} style={[styles.inlineTitle, { color: theme.colors.text.secondary }]}>
             <Text style={[styles.inlineTitle, styles.strong, { color: theme.colors.text.primary }]}>
               {t('projects.scripts.servicesFound', { count: services.length })}
             </Text>
@@ -1262,6 +1272,7 @@ function useSetupOpening(
 const styles = StyleSheet.create((theme) => ({
   phoneEditor: { flex: 1, minHeight: 0 },
   body: { gap: 12 },
+  phoneEdit: { alignSelf: 'flex-start', marginTop: 10, marginBottom: 8 },
   setupTail: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   setupBanner: { marginHorizontal: 16, marginBottom: 12 },
   inlineTitle: { ...Typography.default(), ...happierPageTextMetrics('rowTitle') },
