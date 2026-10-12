@@ -128,6 +128,7 @@ export const GEMINI_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],

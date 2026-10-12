@@ -84,6 +84,7 @@
         "title": "Gemini"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -162,6 +163,7 @@
       }
     ],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -171,6 +173,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
