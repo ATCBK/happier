@@ -56,6 +56,7 @@ export function useNewSessionScreenSimplePanelProps(params: Readonly<{
         | 'sessionPromptInputMaxHeight'
         | 'statusBadges'
         | 'composerTopContent'
+        | 'composerBottomContent'
         | 'statusTrailingActions'
     >;
     agent: Pick<

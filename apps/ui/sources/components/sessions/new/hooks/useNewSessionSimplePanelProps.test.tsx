@@ -158,14 +158,16 @@ describe('useNewSessionSimplePanelProps', () => {
         await hook.unmount();
     });
 
-    it('preserves route-owned composer notice and trailing actions', async () => {
+    it('preserves route-owned composer notice, footnote and trailing actions', async () => {
         const composerTopContent = React.createElement('ComposerNotice');
+        const composerBottomContent = React.createElement('ComposerFootnote');
         const statusTrailingActions = React.createElement('StatusActions');
         const hook = await renderHook((props: NewSessionSimplePanelProps) => useNewSessionSimplePanelProps(props), {
-            initialProps: createPanelProps({ composerTopContent, statusTrailingActions }),
+            initialProps: createPanelProps({ composerTopContent, composerBottomContent, statusTrailingActions }),
         });
 
         expect(hook.getCurrent().composerTopContent).toBe(composerTopContent);
+        expect(hook.getCurrent().composerBottomContent).toBe(composerBottomContent);
         expect(hook.getCurrent().statusTrailingActions).toBe(statusTrailingActions);
 
         await hook.unmount();
