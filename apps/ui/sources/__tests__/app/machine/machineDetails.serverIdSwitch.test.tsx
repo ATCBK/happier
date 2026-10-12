@@ -155,7 +155,7 @@ vi.mock('@/sync/ops/machines', () => ({
 }));
 
 // Load after the boundary harness is configured, outside the individual behavior test's timeout.
-const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 

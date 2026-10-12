@@ -114,7 +114,7 @@ vi.mock('@/theme', async (importOriginal) => {
 });
 
 // Transform the real route during collection, not inside an interaction's execution budget.
-const appearance = await import('@/app/(app)/settings/appearance');
+const appearance = await import('@/app/(app)/settings/appearance/widgets');
 
 afterEach(() => {
     standardCleanup();
@@ -128,7 +128,7 @@ afterEach(() => {
     });
 });
 
-describe('Appearance → Widgets (lab WK)', () => {
+describe('Appearance › Widgets and surfaces (lab WK)', () => {
     it('renders the real finish preview and changes global or inherited per-role choices through visible segments', async () => {
         const screen = await renderSettingsView(React.createElement(appearance.default), { flushOptions: { cycles: 0 } });
         expect(screen.findHostByTestId('settings-appearance-finish-preview-card')).not.toBeNull();

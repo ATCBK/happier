@@ -19,7 +19,9 @@ const boundary = vi.hoisted(() => ({
     securityRequests: [] as string[],
 }));
 
-installAccountSettingsRouteModuleMocks({ storageModule: (importOriginal) => importOriginal() });
+installAccountSettingsRouteModuleMocks({
+    storageModule: (importOriginal) => importOriginal(),
+});
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -106,7 +108,7 @@ describe('Settings → Account identity header', () => {
     });
 
     it('names the person through the canonical display name when there is no first name', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: null, lastName: null, username: 'lee' };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: null, username: 'lee' };
         boundary.encryptionMode = 'plain';
 
         const screen = await renderAccount();
@@ -117,11 +119,10 @@ describe('Settings → Account identity header', () => {
     });
 
     it('states end-to-end encryption from the Account encryption mode, not from a held key', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: 'Lee', username: 'lee' };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: 'Lee', username: 'lee' };
         boundary.encryptionMode = 'plain';
         const plain = await renderAccount();
-        await vi.waitFor(() => expect(plain.findByTestId('settings-account-email-password')?.props.subtitle)
-            .toContain('lee@example.test'));
+        await vi.waitFor(() => expect(plain.getTextContent()).toContain('lee@example.test'));
         expect(identityHeader(plain).facts).not.toContain('settingsAccount.endToEndEncrypted');
         expect(plain.findByTestId('settings-account-signin-recovery-key')).toBeNull();
         standardCleanup();
@@ -134,7 +135,7 @@ describe('Settings → Account identity header', () => {
     });
 
     it('shows the Account ID this device is signed in with and copies it', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: 'Lee' };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: 'Lee' };
         boundary.encryptionMode = 'plain';
         boundary.clipboard = [];
         const screen = await renderAccount();
@@ -147,7 +148,7 @@ describe('Settings → Account identity header', () => {
     });
 
     it('reserves the encryption fact and the recovery-key row while the Account facts are loading', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: 'Lee', username: null };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: 'Lee', username: null };
         boundary.holdSecurityRead = true;
         const screen = await renderAccount();
 
@@ -158,7 +159,7 @@ describe('Settings → Account identity header', () => {
     });
 
     it('states the encryption mode for a plaintext Account too, so the fact never appears or vanishes', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: 'Lee', username: null };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: 'Lee', username: null };
         boundary.encryptionMode = 'plain';
         const screen = await renderAccount();
 
@@ -167,7 +168,7 @@ describe('Settings → Account identity header', () => {
     });
 
     it('puts the encryption fact, with its lock, directly under the Account ID', async () => {
-        boundary.profile = { ...profileDefaults, id: 'prof_1', firstName: 'Lee', username: null };
+        boundary.profile = { ...profileDefaults, id: 'prof_1', name: 'Lee', username: null };
         boundary.encryptionMode = 'e2ee';
         const screen = await renderAccount();
 

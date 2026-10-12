@@ -131,7 +131,8 @@ vi.mock('@/sync/ops', () => ({
     machineRevokeFromAccount: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>(),
     createFrontDoorActionExecute: () => async (_actionId: unknown, input: unknown, context: unknown) =>
         mockState.sessionSpawnNewActionMock(input, context),
 }));
@@ -149,7 +150,8 @@ vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
     resetMachineProjectionReadsForTests: () => {},
 }));
 
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
+vi.mock('@/sync/ops/sessionExecutionRuns', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/ops/sessionExecutionRuns')>(),
     sessionExecutionRunStop: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -276,10 +278,29 @@ describe('MachineDetailScreen start a session', () => {
         mockState.settingsState = { ...settingsDefaults, sessionTerminalHost: 'herdr' };
         const { storage } = await import('@/sync/domains/state/storageStore');
         storage.getState().applySettings({ ...settingsDefaults, sessionTerminalHost: 'herdr' }, (storage.getState().settingsVersion ?? 0) + 1);
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
         expect(screen.findByTestId('machine-terminal-effective-host')?.props.subtitle).toBe('Herdr');
+    });
+
+    it('keeps the Windows launch override on the Terminal page of a Windows machine, and only there', async () => {
+        const record = createMachineRecord();
+        const windowsMetadata = { ...record.metadata, platform: 'win32' };
+        mockState.machinesState = { 'machine-1': { ...record, metadata: windowsMetadata } };
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: windowsMetadata })], true);
+        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const screen = await renderScreen(<AppPaneProvider><MachineSubPageScreen /></AppPaneProvider>);
+        expect(screen.findAll((node) => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle').length).toBeGreaterThan(0);
+
+        mockState.routeParamsRef.current = { id: 'machine-1' };
+        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+        const overview = await renderScreen(<AppPaneProvider><MachinePageScreen /></AppPaneProvider>);
+        expect(overview.findAll((node) => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle')).toHaveLength(0);
+        expect(overview.findByTestId('machine-page-row-terminal')).toBeTruthy();
     });
 
     it('shows the retained host choice even after an older UI removes its legacy tmux record', async () => {
@@ -288,7 +309,8 @@ describe('MachineDetailScreen start a session', () => {
         const { storage } = await import('@/sync/domains/state/storageStore');
         storage.getState().applySettings({ ...settingsDefaults, sessionTerminalHostByMachineId: { 'machine-1': 'herdr' }, sessionTmuxByMachineId: {} }, (storage.getState().settingsVersion ?? 0) + 1);
         expect(storage.getState().settings.sessionTerminalHostByMachineId['machine-1']).toBe('herdr');
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const { SegmentedChoiceItem } = await import('@/components/ui/lists/SegmentedChoiceItem');
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
@@ -299,7 +321,7 @@ describe('MachineDetailScreen start a session', () => {
         // The composer's path chip already lists this machine's recent paths once it is chosen
         // (`useNewSessionMachineRefreshState` → `getRecentPathsForMachine`), so the page only hands off.
         mockState.routeParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
         const { getStorage } = await import('@/sync/domains/state/storageStore');
         const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
@@ -307,6 +329,11 @@ describe('MachineDetailScreen start a session', () => {
         await prepareSessionDraftPersistenceStorage();
         const accountScope = { serverId: 'server-a', accountId: 'account-a' };
         await getStorage().getState().activateProfileScope(accountScope);
+        // The connection owner publishes the applied Home (and its runtime) once connected; the Account
+        // lifetime the composer hand-off captures exists only for that applied Home.
+        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverProfiles');
+        publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId: 'server-a' }, true);
 
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);

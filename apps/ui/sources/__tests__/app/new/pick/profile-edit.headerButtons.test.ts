@@ -131,7 +131,7 @@ describe('ProfileEditScreen (header buttons)', () => {
         const save = stackOptionsCapture.getResolved()?.headerRight?.()?.props.onPress;
         if (!save) throw new Error('Expected actual header save action');
         await act(async () => save());
-        expect(alertSpy).toHaveBeenCalledWith('common.error', 'profile_editor_revision_unavailable');
+        expect(alertSpy).toHaveBeenCalledWith('common.error', 'profile_revision_conflict');
         expect(routerMock.replace).not.toHaveBeenCalled();
         expect(navigationMock.goBack).not.toHaveBeenCalled();
 

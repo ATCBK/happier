@@ -89,7 +89,7 @@ describe('settings navigation architecture', () => {
         expect(routeNames).toContain('appearance/themes/import');
         expect(routeNames).toContain('appearance/themes/export');
 
-        // Collections own nested navigators (`machines/[id]` is `{ name: '[id]', navigator: 'machines' }`),
+        // Collections own nested navigators (`machines/[id]/index` is `{ name: '[id]/index', navigator: 'machines' }`),
         // so the registry's own route list, prefixed by navigator, is what every route file must appear in.
         const registeredRouteNames = new Set(listSettingsRouteNames());
         const missingRoutes = routeNames.filter((routeName) => !registeredRouteNames.has(routeName));

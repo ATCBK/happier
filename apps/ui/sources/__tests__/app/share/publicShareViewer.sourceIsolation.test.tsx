@@ -13,7 +13,7 @@ import type { SessionTranscriptSource } from '@/components/sessions/transcript/s
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Message } from '@happier-dev/session-core/messages';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
-import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
+import { initializeAuthRouteRuntimeForTests } from '@/dev/testkit/harness/authRouteRuntimeHarness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -30,7 +30,7 @@ vi.mock('expo-crypto', async () => {
     ]);
     return { ...randomBytes, ...uuid };
 });
-await initializeTerminalRouteRuntimeForTests();
+await initializeAuthRouteRuntimeForTests();
 
 // The installed Legend web build owns its div refs. jsdom supplies DOM behavior,
 // while this OS/layout boundary supplies the geometry a headless renderer lacks.

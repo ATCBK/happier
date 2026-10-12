@@ -5,12 +5,14 @@ import { arrangeMachineDetailsHomeForTests, initializeMachineDetailsRuntimeForTe
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { CHECKLIST_IDS } from '@happier-dev/protocol/checklists';
 
-const route = { params: { id: 'machine-1' } as Record<string, string> };
+// The machine's detected tools are the Terminal sub-page's to ask for (MPG-10).
+const route = { params: { id: 'machine-1', page: 'terminal' } as Record<string, string> };
 installTerminalRouteCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ params: () => route.params }).module,
 });
 const network = await initializeMachineDetailsRuntimeForTests();
-const MachineDetailScreen = (await import('@/app/(app)/machine/[id]')).default;
+const MachineDetailScreen = (await import('@/components/machines/page/MachineSubPageScreen')).MachineSubPageScreen;
+const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
 const { CAPABILITIES_REQUEST_MACHINE_DETAILS } = await import('@/capabilities/requests');
 
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | undefined;
@@ -18,7 +20,7 @@ afterEach(async () => {
     await standardCleanup();
     await home?.dispose();
     home = undefined;
-    route.params = { id: 'machine-1' };
+    route.params = { id: 'machine-1', page: 'terminal' };
     network.resetRequests();
 });
 
@@ -39,7 +41,7 @@ describe('MachineDetailScreen capabilities request', () => {
         await flushHookEffects({ cycles: 3, turns: 2 });
         expect(detailsRequests()).toHaveLength(1);
         expect(detailsRequests()[0]).toMatchObject({ serverUrl: home.home.serverUrl, targetId: 'machine-1', payload: CAPABILITIES_REQUEST_MACHINE_DETAILS });
-        expect(screen.findAllByProps({ testID: 'machine-detail-header' }).length).toBeGreaterThan(0);
+        expect(screen.findAllByProps({ testID: 'machine-sub-page-header-terminal' }).length).toBeGreaterThan(0);
         await screen.update(home.element(MachineDetailScreen));
         await flushHookEffects({ cycles: 3, turns: 2 });
         await screen.update(home.element(MachineDetailScreen));
@@ -53,12 +55,25 @@ describe('MachineDetailScreen capabilities request', () => {
             machines: [createMachineFixture({ activeAt: Date.now() })],
         });
         const target = await network.addHome('https://machine-capabilities-requested.example.test', 'machine-viewer');
-        route.params = { id: 'machine-1', serverId: target.id };
+        route.params = { id: 'machine-1', serverId: target.id, page: 'terminal' };
         network.respond(RPC_METHODS.CAPABILITIES_DETECT, { protocolVersion: 1, results: {} });
         const screen = await home.render(MachineDetailScreen);
         await flushHookEffects({ cycles: 6, turns: 3 });
         expect(detailsRequests().length).toBeGreaterThan(0);
         expect(detailsRequests().every(request => request.serverUrl === target.serverUrl && request.token === target.token)).toBe(true);
-        expect(screen.findAllByProps({ testID: 'machine-detail-header' }).length).toBeGreaterThan(0);
+        expect(screen.findAllByProps({ testID: 'machine-sub-page-header-terminal' }).length).toBeGreaterThan(0);
+    });
+
+    it('leaves detection to the Terminal page: the Overview asks the machine for none', async () => {
+        home = await arrangeMachineDetailsHomeForTests(network, {
+            serverUrl: 'https://machine-capabilities-overview.example.test',
+            machines: [createMachineFixture({ activeAt: Date.now() })],
+        });
+        route.params = { id: 'machine-1' };
+        network.respond(RPC_METHODS.CAPABILITIES_DETECT, { protocolVersion: 1, results: {} });
+        const screen = await home.render(MachinePageScreen);
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        expect(screen.findAllByProps({ testID: 'machine-page-row-terminal' }).length).toBeGreaterThan(0);
+        expect(detailsRequests()).toHaveLength(0);
     });
 });

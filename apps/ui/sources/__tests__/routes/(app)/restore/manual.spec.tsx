@@ -1,18 +1,12 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { AuthProvider } from '@/auth/context/AuthContext';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
+// Register platform boundaries before the testkit/runtime import graph can load auth storage.
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
-import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { initializeTerminalRouteRuntimeForTests } from '../terminal/terminalRouteTestHelpers';
 import { installRestoreRouteCommonModuleMocks } from './restoreRouteTestHelpers';
+import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
-import { adoptHomeProfile, resetServerProfilesRuntimeForTests } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
-import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { encodeBase64 } from '@/encryption/base64';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -28,7 +22,15 @@ installRestoreRouteCommonModuleMocks({
         router: { back: navigation.back, replace: navigation.replace, dismissTo: navigation.dismissTo },
     }).module,
 });
-await initializeTerminalRouteRuntimeForTests();
+const { renderScreen, standardCleanup } = await import('@/dev/testkit');
+const { initializeAuthRouteRuntimeForTests } = await import('@/dev/testkit/harness/authRouteRuntimeHarness');
+await initializeAuthRouteRuntimeForTests();
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { adoptHomeProfile, resetServerProfilesRuntimeForTests } = await import('@/sync/domains/server/serverProfiles');
+const { getActiveServerSnapshot, upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const Screen = (await import('@/app/(app)/restore/manual')).default;
 
 let localStorage: ReturnType<typeof installLocalStorageMock>;
@@ -91,6 +93,14 @@ describe('/restore/manual', () => {
         expect(screen.findByTestId('restore-manual-secret-input')?.props.autoCapitalize).toBe('none');
     });
 
+    it('is a one-step page: it shows no wizard step counter', async () => {
+        // Reached from Settings, token repair and the session view as well as the restore flow, so it
+        // has no "Step n of m" of its own to claim.
+        const screen = await renderManualRestoreScreen();
+        expect(screen.findByTestId('restore-manual-wizard')).toBeTruthy();
+        expect(screen.findByTestId('restore-manual-wizard-progress')).toBeNull();
+    });
+
     it('masks the Secret Key input by default and allows toggling visibility', async () => {
         const screen = await renderManualRestoreScreen();
         const input = screen.findByTestId('restore-manual-secret-input');
@@ -108,7 +118,7 @@ describe('/restore/manual', () => {
         setRuntimeFetch(async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/features') return Response.json(features);
-            if (path === '/v1/auth/ping') return Response.json({});
+            if (isServerFetchConnectivityProbeRequest(input)) return Response.json({});
             if (path === '/v1/auth') {
                 authRequests.push(init ?? {});
                 return Response.json({ token });
@@ -124,6 +134,14 @@ describe('/restore/manual', () => {
         const screen = await renderManualRestoreScreen();
         await act(async () => { screen.changeTextByTestId('restore-manual-secret-input', '  ' + secret + '  '); });
         await screen.pressByTestIdAsync('restore-manual-submit');
+        // The host press starts an async action without returning its promise. Wait for
+        // durable browser custody and completion, rather than treating the press as login.
+        await act(async () => {
+            await vi.waitFor(() => {
+                expect([...localStorage.store.values()].includes(JSON.stringify({ token, secret }))).toBe(true);
+                expect(navigation.dismissTo).toHaveBeenCalledWith('/');
+            });
+        });
         expect(authRequests).toHaveLength(1);
         expect(JSON.parse(String(authRequests[0].body))).toMatchObject({
             publicKey: expect.any(String), challenge: expect.any(String), signature: expect.any(String),

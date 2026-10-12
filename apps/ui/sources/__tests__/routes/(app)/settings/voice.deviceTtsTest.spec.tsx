@@ -140,7 +140,8 @@ describe('VoiceSettingsScreen (device TTS)', () => {
         expect(screen.findRowByTitle('settingsVoice.local.testTts')).toBeTruthy();
 
         await act(async () => {
-            await screen.pressRowByTitle('settingsVoice.local.testTts');
+            // Hearing a sample is an operation: the row's inline play button runs it (this suite's list rows are not expanded).
+            await screen.findRowByTitle('settingsVoice.local.testTts')?.props.rightElement.props.onPress();
         });
 
         expect(modalMockRef.current.spies.alert).not.toHaveBeenCalledWith('common.error', 'settingsVoice.local.testTtsMissingBaseUrl');
@@ -170,7 +171,8 @@ describe('VoiceSettingsScreen (device TTS)', () => {
         expect(screen.findRowByTitle('settingsVoice.local.testTts')).toBeTruthy();
 
         await act(async () => {
-            await screen.pressRowByTitle('settingsVoice.local.testTts');
+            // Hearing a sample is an operation: the row's inline play button runs it (this suite's list rows are not expanded).
+            await screen.findRowByTitle('settingsVoice.local.testTts')?.props.rightElement.props.onPress();
         });
 
         expect(modalMockRef.current.spies.alert).not.toHaveBeenCalledWith('common.error', 'settingsVoice.local.testTtsMissingBaseUrl');
@@ -199,7 +201,8 @@ describe('VoiceSettingsScreen (device TTS)', () => {
         expect(screen.findRowByTitle('settingsVoice.local.testTts')).toBeTruthy();
 
         await act(async () => {
-            await screen.pressRowByTitle('settingsVoice.local.testTts');
+            // Hearing a sample is an operation: the row's inline play button runs it (this suite's list rows are not expanded).
+            await screen.findRowByTitle('settingsVoice.local.testTts')?.props.rightElement.props.onPress();
         });
 
         expect(modalMockRef.current.spies.alert).toHaveBeenCalledWith('common.error', 'formatted error');

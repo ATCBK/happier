@@ -66,7 +66,7 @@ export function createAccountFeaturesResponse(
 }
 
 export function isFeaturesRequest(url: string): boolean {
-    return url.endsWith('/v1/features');
+    return url.endsWith('/v1/features') || url.endsWith('/v1/features/authenticated');
 }
 
 export function isUsernameRequest(url: string): boolean {

@@ -1123,7 +1123,7 @@ describe('/session/[id]/info', () => {
                         agentModeId: null,
                         configuration: null,
                         connectedServices: null,
-                        mcpSelection: null,
+                        capabilitySelection: null,
                         transcriptStorage: null,
                         terminal: null,
                         agentSessionStartupInstructionsMarkerV1: null,
@@ -1901,8 +1901,7 @@ describe('/session/[id]/info', () => {
                 id: 'qa-acp-stub',
                 name: 'qa-acp-stub',
                 title: 'QA ACP Stub Backend',
-                command: 'qa-acp-stub',
-                args: [],
+                launch: { kind: 'command' as const, command: 'qa-acp-stub', args: [] },
                 env: {},
                 auth: { support: 'unsupported' },
                 capabilities: {
@@ -2042,7 +2041,7 @@ describe('/session/[id]/info', () => {
 
         screen.pressByTestId('sessionInfo.viewMachine');
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/machine/machine-target?serverId=server-1');
+        expect(routerPushSpy).toHaveBeenCalledWith('/machines/machine-target?serverId=server-1');
     });
 
     it('opens a new session seeded from the current session configuration', async () => {

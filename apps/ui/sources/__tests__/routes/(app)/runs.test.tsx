@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonExecutionRunEntry } from '@happier-dev/protocol';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
     flushHookEffects,
@@ -191,6 +192,7 @@ describe('Runs screen', () => {
 
     afterEach(() => {
         standardCleanup();
+        clearMachineRequestReachabilityForTest();
     });
 
     async function renderRunsScreen() {
@@ -227,6 +229,12 @@ describe('Runs screen', () => {
 
         const headerRightScreen = await renderHeaderRight();
         expect(headerRightScreen.findByProps({ accessibilityLabel: 'runs.a11y.refresh' })).toBeTruthy();
+    });
+
+    it('does not poll run RPCs for a machine with a failed request despite live presence', async () => {
+        recordMachineRequestFailed({ serverId: 'srv_server-a', accountId: 'runs-account', machineId: 'machine-1' });
+        await renderRunsScreen();
+        expect(machineExecutionRunsListSpy).not.toHaveBeenCalled();
     });
 
     it('shows running runs by default and every run once the page filter is set to all', async () => {

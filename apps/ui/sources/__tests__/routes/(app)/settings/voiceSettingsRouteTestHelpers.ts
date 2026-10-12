@@ -90,14 +90,6 @@ export function installVoiceSettingsRouteModuleMocks(
         };
     });
 
-    vi.mock('@/components/ui/lists/ItemGroup', () => ({
-        ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-    }));
-
-    vi.mock('@/components/ui/lists/Item', () => ({
-        Item: (props: any) => React.createElement('Item', props),
-    }));
-
     vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
         DropdownMenu: (props: any) =>
             React.createElement(

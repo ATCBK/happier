@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
-import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
+import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -110,7 +110,7 @@ describe('Appearance settings — Visual Effects section', () => {
     });
 
     it('renders the effects-level selector and persists a new level', async () => {
-        const mod = await import('@/app/(app)/settings/appearance');
+        const mod = await import('@/app/(app)/settings/appearance/motion');
         const screen = await renderSettingsView(React.createElement(mod.default), {
             flushOptions: { cycles: 0 },
         });
@@ -125,7 +125,7 @@ describe('Appearance settings — Visual Effects section', () => {
     });
 
     it('renders the animated-numbers toggle and persists changes', async () => {
-        const mod = await import('@/app/(app)/settings/appearance');
+        const mod = await import('@/app/(app)/settings/appearance/motion');
         const screen = await renderSettingsView(React.createElement(mod.default), {
             flushOptions: { cycles: 0 },
         });
@@ -169,5 +169,51 @@ describe('Appearance settings — Visual Effects section', () => {
             switchNode.props.onValueChange(true);
         });
         expect(shared.settingsState.alwaysShowContextSize).toBe(true);
+    });
+});
+
+describe('Appearance: the four everyday decisions, then a page per rarely changed family', () => {
+    it('opens glass, moments, widgets and motion on their own pages, each row saying what is chosen now', async () => {
+        const { default: Appearance } = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(<Appearance />, { flushOptions: { cycles: 0 } });
+
+        // Motion's own rows are no longer on Appearance itself.
+        expect(screen.findAllByProps({ testIDPrefix: 'settings-appearance-visualEffectsLevel' })).toHaveLength(0);
+        expect(screen.findAllByProps({ title: 'widgetFrame.surfaceHome' })).toHaveLength(0);
+
+        for (const [testID, route] of [
+            ['settings-appearance-glass', '/settings/appearance/glass'],
+            ['settings-appearance-moments', '/settings/appearance/moments'],
+            ['settings-appearance-widgets', '/settings/appearance/widgets'],
+            ['settings-appearance-motion', '/settings/appearance/motion'],
+        ] as const) {
+            const row = screen.findByProps({ testID });
+            expect(String(row.props.detail ?? '').length, testID).toBeGreaterThan(0);
+            await screen.pressByTestIdAsync(testID);
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenLastCalledWith(route);
+        }
+    });
+
+    it('arranges Home on Home: Customize home opens Home in its Customize mode instead of a second editor', async () => {
+        const { subscribeHomeCustomizeRequest } = await import('@/components/hub/header/homeCustomizeRequest');
+        const { default: Appearance } = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(<Appearance />, { flushOptions: { cycles: 0 } });
+        const opened = vi.fn();
+        const unsubscribe = subscribeHomeCustomizeRequest(opened);
+        try {
+            await screen.pressByTestIdAsync('settings-appearance-customize-home');
+            expect(opened).toHaveBeenCalledOnce();
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenLastCalledWith('/home');
+        } finally {
+            unsubscribe();
+        }
+    });
+
+    it('sets the Machine summary with the machines, and reveals it there', async () => {
+        const { default: Appearance } = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(<Appearance />, { flushOptions: { cycles: 0 } });
+        await screen.pressByTestIdAsync('settings-appearance-machine-summary');
+        expect(sessionSettingsEntryState.routerPushSpy)
+            .toHaveBeenLastCalledWith('/settings/machines/defaults?setting=appearance.machineSummaryStyle');
     });
 });

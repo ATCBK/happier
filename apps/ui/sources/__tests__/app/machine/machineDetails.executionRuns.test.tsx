@@ -161,6 +161,12 @@ vi.mock('@/utils/system/userInteractionDiagnostics', () => ({
 
 const machineOnlineState = vi.hoisted(() => ({ value: true }));
 vi.mock('@/utils/sessions/machineUtils', () => ({ isMachineOnline: () => machineOnlineState.value }));
+// Ask an agent mounts the whole new-session composer; its own tests own it. This file is about the runs and the rows.
+vi.mock('@/components/machines/resources/ask/MachineResourcesAskBlock', () => ({ MachineResourcesAskBlock: () => null }));
+// The page asks the presence owner (the store plus the request clock), not `isMachineOnline`; follow the same switch.
+vi.mock('@/components/sessions/model/useMachinePresenceSummary', () => ({
+    useMachinePresenceSummary: () => ({ name: null, homeDir: null, reachability: machineOnlineState.value ? 'reachable' : 'unreachable' }),
+}));
 vi.mock('@/utils/sessions/sessionUtils', () => ({ formatOSPlatform: (platform?: string) => platform ?? '', formatPathRelativeToHome: () => '', getSessionName: () => '', getSessionSubtitle: () => '' }));
 vi.mock('@/utils/path/pathUtils', () => ({ resolveAbsolutePath: () => '' }));
 vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionConsole', () => ({ resolveWindowsRemoteSessionConsoleFromMachineMetadata: () => 'visible' }));
@@ -207,7 +213,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
     // The route's cold import includes the live workspace/pane graph. Load it once,
     // outside behavior-test timeouts, like the adjacent navigation screen harnesses.
     beforeAll(async () => {
-        await import('@/app/(app)/machine/[id]');
+        await import('@/components/machines/page/MachinePageScreen');
         await import('@/components/appShell/panes/AppPaneProvider');
     }, 240_000);
 
@@ -239,7 +245,8 @@ describe('MachineDetailScreen (execution runs section)', () => {
 
     beforeEach(() => {
         activeServerIdRef.current = 'server-a';
-        routeParamsRef.current = { id: 'machine-1' };
+        // Runs live on the machine's Project work page (lab `R`: the Overview keeps one row for it).
+        routeParamsRef.current = { id: 'machine-1', page: 'work' };
         machineExecutionRunsListSpy.mockClear();
         machineOnlineState.value = true;
         stopDaemonSpy.mockClear();
@@ -249,8 +256,20 @@ describe('MachineDetailScreen (execution runs section)', () => {
         modalSpies.confirm.mockClear();
     });
 
+    it('keeps runs off the Overview, which leads to them through its Project work row', async () => {
+        routeParamsRef.current = { id: 'machine-1' };
+        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+
+        const screen = await renderScreen(React.createElement(MachinePageScreen));
+        await flushHookEffects();
+
+        expect(screen.tree.root.findAll((node) => node.props?.testID === 'item-group:runs.title')).toHaveLength(0);
+        expect(machineExecutionRunsListSpy).not.toHaveBeenCalled();
+        expect(screen.findByTestId('machine-page-row-work')).toBeTruthy();
+    });
+
     it('loads daemon execution runs for online machines', async () => {
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -261,7 +280,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
 
     it('does not leave the runs section loading when the machine goes offline before they arrive', async () => {
         machineExecutionRunsListSpy.mockImplementationOnce(() => new Promise(() => {}));
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const element = React.createElement(MachineDetailScreen);
         const screen = await renderScreen(element);
         await flushHookEffects();
@@ -280,7 +299,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
     });
 
     it('wraps pull-to-refresh in refresh diagnostics', async () => {
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -299,10 +318,10 @@ describe('MachineDetailScreen (execution runs section)', () => {
     });
 
     it('uses the requested route server when loading execution runs', async () => {
-        routeParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
+        routeParamsRef.current = { id: 'machine-1', serverId: 'server-b', page: 'work' };
         activeServerIdRef.current = 'server-a';
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
 
@@ -314,7 +333,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
             ok: true,
             runs: [createExecutionRun({ runId: 'run-1' })],
         });
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -322,17 +341,24 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(screen.findByTestId('item-group:runs.title')).toBeTruthy();
     });
 
-    it('includes an Installables navigation item', async () => {
+    it('opens every former inline section from This machine, inside the door the page is in', async () => {
         routerPushSpy.mockClear();
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        routeParamsRef.current = { id: 'machine-1' };
+        const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
 
-        expect(screen.findByTestId('item:machine.tools.installablesTitle')).toBeTruthy();
-        await screen.pressByTestIdAsync('item:machine.tools.installablesTitle');
+        for (const page of ['work', 'sharing', 'agents', 'terminal', 'connection', 'installables', 'doctor', 'details']) {
+            expect(screen.findByTestId(`machine-page-row-${page}`)).toBeTruthy();
+        }
+        // Inline sections are gone from the Overview: each is reached through its row.
+        expect(screen.findByTestId('machine-detail-stop-daemon')).toBeNull();
+        expect(screen.findByTestId('machine-detail-remove')).toBeNull();
+        expect(screen.findByTestId('machine-terminal-effective-host')).toBeNull();
+        await screen.pressByTestIdAsync('machine-page-row-installables');
 
-        expect(routerPushSpy).toHaveBeenCalled();
+        expect(routerPushSpy).toHaveBeenCalledWith('/settings/machines/machine-1/installables?serverId=server-a');
     });
 
     it('shows only running runs by default and includes finished when toggled', async () => {
@@ -350,7 +376,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
             ],
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -368,7 +394,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
 
     it('offers the finished-run filter only when finished runs exist', async () => {
         machineExecutionRunsListSpy.mockResolvedValueOnce({ ok: true, runs: [] });
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const empty = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
         expect(empty.findByTestId('item:runs.showFinished')).toBeNull();
@@ -387,7 +413,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
             runs: [createExecutionRun({ runId: 'run-running' })],
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -402,7 +428,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
             runs: [createExecutionRun({ runId: 'run-1' })],
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
@@ -419,7 +445,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
             runs: [createExecutionRun({ runId: 'run-detached', happySessionId: null })],
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
         await flushHookEffects();
 
@@ -431,27 +457,5 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(screen.findByTestId('item:runs.sessionTitle')).toBeNull();
         expect(row.props.onPress).toBeUndefined();
         expect(screen.findByTestId('execution-run-stop:run-detached')).toBeNull();
-    });
-
-    it('uses the requested route server when stopping the daemon', async () => {
-        routeParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
-        activeServerIdRef.current = 'server-a';
-
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-        await flushHookEffects();
-
-        // Stopping is an inline operation button on the "Stop daemon" row.
-        await screen.pressByTestIdAsync('item-right:machine.stopDaemon');
-
-        const buttons = modalSpies.alert.mock.calls.at(-1)?.[2] as
-            | Array<{ text: string; onPress?: () => Promise<void> | void }>
-            | undefined;
-        await act(async () => {
-            await buttons?.[1]?.onPress?.();
-        });
-        await flushHookEffects();
-
-        expect(stopDaemonSpy).toHaveBeenCalledWith('machine-1', { serverId: 'server-b' });
     });
 });

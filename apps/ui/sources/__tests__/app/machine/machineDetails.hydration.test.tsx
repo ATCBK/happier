@@ -24,7 +24,7 @@ installTerminalRouteCommonModuleMocks({
 const network = await initializeMachineDetailsRuntimeForTests();
 const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
 afterAll(disposeActionExecutorLoader);
-const MachineDetailScreen = (await import('@/app/(app)/machine/[id]')).default;
+const MachineDetailScreen = (await import('@/components/machines/page/MachinePageScreen')).MachinePageScreen;
 
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | undefined;
 let deferred: ReturnType<typeof createDeferred<readonly Machine[]>> | undefined;
@@ -41,6 +41,35 @@ afterEach(async () => {
 });
 
 describe('MachineDetailScreen canonical Stop fallback', () => {
+    it('invokes eligible Voice run Stop through the actual scoped executor', async () => {
+        const machine = createMachineFixture({ id: 'voice-stop-machine', activeAt: Date.now() });
+        const session = createSessionFixture({ id: 'voice-stop-session', active: true,
+            metadata: { ...createSessionFixture().metadata!, machineId: machine.id } });
+        home = await arrangeMachineDetailsHomeForTests(network, {
+            serverUrl: 'https://machine-voice-stop.example.test', machines: [machine], sessions: [session],
+            settings: { experiments: true, featureToggles: { voice: true, 'execution.runs': true },
+                actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+                    approvalWaivedSurfaces: { 'execution.run.stop': ['voice'] } }) },
+        });
+        home.storage.setState({ sessions: { [session.id]: { ...session, serverId: home.home.id } } });
+        network.setRpcResponder(async request => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload,
+                `${request.targetId}:${request.method}`);
+            return await socketRpcCodec.encodeResponse({ mode: 'plain' }, { ok: true }, decoded.callId);
+        });
+        const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+        const { createVoiceToolHandlers } = await import('@/voice/tools/handlers');
+        const name = getActionSpec('execution.run.stop').bindings?.voiceClientToolName;
+        expect(name).toBeTruthy();
+        const handlers = createVoiceToolHandlers({ resolveSessionId: () => session.id });
+        const result = JSON.parse(await handlers[name!]!({ sessionId: session.id, runId: 'voice-run' },
+            { serverId: home.home.id }));
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        expect(network.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)
+            .map(request => ({ serverUrl: request.serverUrl, targetId: request.targetId })))
+            .toEqual([{ serverUrl: home.home.serverUrl, targetId: session.id }]);
+    });
+
     it.each(['abort', 'account-retirement'] as const)(
         'does not issue cold Session Stop after %s during the exact-Home snapshot read', async interruption => {
             const machine = createMachineFixture({ id: 'cold-stop-machine', activeAt: Date.now() });

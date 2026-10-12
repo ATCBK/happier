@@ -158,7 +158,7 @@ describe('Appearance settings item density', () => {
     });
 
     it('shows every loading indicator preview and stores the selected style on this device', async () => {
-        const mod = await import('@/app/(app)/settings/appearance');
+        const mod = await import('@/app/(app)/settings/appearance/motion');
         const screen = await renderSettingsView(React.createElement(mod.default));
         const row = screen.findRowByTitle('settingsAppearance.loadingIndicatorStyle');
         expect(row).not.toBeNull();
@@ -180,7 +180,7 @@ describe('Appearance settings item density', () => {
     });
 
     it('chooses the loading indicator speed and pause beside the style and stores them on this device', async () => {
-        const mod = await import('@/app/(app)/settings/appearance');
+        const mod = await import('@/app/(app)/settings/appearance/motion');
         const screen = await renderSettingsView(React.createElement(mod.default));
 
         const speed = screen.findByProps({ testIDPrefix: 'settings-appearance-loadingIndicatorSpeed' });
@@ -207,7 +207,7 @@ describe('Appearance settings item density', () => {
     ] as const)('says when the %s style ignores a timing choice instead of offering it', async (styleId, disabled) => {
         shared.settingsState.loadingIndicatorStyle = styleId;
         try {
-            const mod = await import('@/app/(app)/settings/appearance');
+            const mod = await import('@/app/(app)/settings/appearance/motion');
             const screen = await renderSettingsView(React.createElement(mod.default));
 
             const speed = screen.findByProps({ testIDPrefix: 'settings-appearance-loadingIndicatorSpeed' });

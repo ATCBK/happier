@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRouter } from 'expo-router';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -42,15 +43,23 @@ function VoiceSettingsIntentDetailsScreen(props: Readonly<{ intent: VoiceSetting
         case 'privacy': screen = <VoicePrivacySettingsScreen />; break;
         case 'advanced': screen = <VoiceAdvancedSettingsScreen />; break;
     }
-    return <DestinationInstanceHost tabId="voice-support" ref={{ kind: 'settings', params }}
-        pathname={`/settings/voice/${props.intent}`} focused visible navigation={navigation}>
-        {screen}
-    </DestinationInstanceHost>;
+    return (
+        <InjectedAuthProvider credentials={null}>
+            <DestinationInstanceHost tabId="voice-support" ref={{ kind: 'settings', params }}
+                pathname={`/settings/voice/${props.intent}`} focused visible navigation={navigation}>
+                {screen}
+            </DestinationInstanceHost>
+        </InjectedAuthProvider>
+    );
 }
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 type SettingsScreen = Awaited<ReturnType<typeof renderSettingsView>>;
+
+function findItemByTestId(screen: SettingsScreen, testID: string) {
+    return screen.findAll((node) => node.props.testID === testID && typeof node.props.title === 'string')[0] ?? null;
+}
 
 /**
  * Types into the real inline field and leaves it, exercising its draft and commit owner.
@@ -61,7 +70,8 @@ async function commitInlineField(
     text: string,
 ): Promise<void> {
     const field = () => {
-        const input = screen.findByTestId(fieldTestID);
+        const input = screen.findAll((node) => node.props.testID === fieldTestID
+            && typeof node.props.onChangeText === 'function' && typeof node.props.onBlur === 'function')[0];
         if (!input?.props.onChangeText || !input.props.onBlur) throw new Error('Missing the inline field input');
         return input.props;
     };
@@ -137,10 +147,6 @@ vi.mock('@/sync/store/hooks', async (importOriginal) => {
         useSettingsVersion: () => 0,
     };
 });
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ credentials: null }),
-}));
 
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
     canAgentResume: (agentId: string | null | undefined) => canAgentResumeSpy(agentId),
@@ -251,12 +257,26 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         const setting = VOICE_CONVERSATIONS_SETTINGS.settings[id];
         routeParamsRef.current = { setting: setting.anchor };
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
-        const prerequisite = screen.findByTestId('settings.voice.searchPrerequisite');
+        const prerequisite = findItemByTestId(screen, 'settings.voice.searchPrerequisite');
         expect(prerequisite?.props.disabled).toBe(true);
         expect(prerequisite?.props.subtitle).toBe(id === 'silenceMs'
             ? 'settingsVoice.pages.search.select(choice=settingsVoice.mode.local,control=settingsVoice.providerSectionTitle)'
             : 'settingsVoice.pages.search.chooseService');
         expect(screen.findByTestId(`setting-reveal.${setting.anchor}`)).toBeTruthy();
+        expect(setVoice).not.toHaveBeenCalled();
+    });
+
+    it('reveals Hands-free timing through its switch while Hands-free is off', async () => {
+        voiceState.providerId = 'local_conversation';
+        const setting = VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs;
+        routeParamsRef.current = { setting: setting.anchor };
+        const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
+        // The timing rows belong to Hands-free: while it is off they are not drawn, and a search lands on
+        // the one prerequisite row that says how to reach them.
+        expect(screen.findAll((node) => node.props?.fieldTestID === 'settings.voice.local.handsFree.silenceMs.field')).toHaveLength(0);
+        const prerequisite = findItemByTestId(screen, 'settings.voice.searchPrerequisite');
+        expect(prerequisite?.props.disabled).toBe(true);
+        expect(prerequisite?.props.subtitle).toBe('settingsVoice.pages.conversations.handsFreeTimingUnavailable');
         expect(setVoice).not.toHaveBeenCalled();
     });
 
@@ -268,8 +288,8 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         expect(setting).toBeTruthy();
         routeParamsRef.current = { setting: setting!.anchor };
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.subtitle).toContain('ElevenLabs');
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.disabled).toBe(true);
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.subtitle).toContain('ElevenLabs');
         expect(screen.findByTestId(`setting-reveal.${setting!.anchor}`)).toBeTruthy();
         expect(setVoice).not.toHaveBeenCalled();
     });
@@ -279,8 +299,8 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         voiceState.dictation.stt.provider = 'device';
         routeParamsRef.current = { setting: VOICE_DICTATION_SETTINGS.settings.sttAssetId.anchor };
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="dictation" />);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.subtitle).toContain('choice=settingsVoice.local.localNeuralStt.provider.title');
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.disabled).toBe(true);
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.subtitle).toContain('choice=settingsVoice.local.localNeuralStt.provider.title');
         expect(screen.findByTestId(`setting-reveal.${VOICE_DICTATION_SETTINGS.settings.sttAssetId.anchor}`)).toBeTruthy();
         expect(setVoice).not.toHaveBeenCalled();
     });
@@ -292,7 +312,7 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         expect(setting).toBeTruthy();
         routeParamsRef.current = { setting: setting!.anchor };
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.subtitle).toContain('control=settingsVoice.pages.conversations.payWithTitle');
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.subtitle).toContain('control=settingsVoice.pages.conversations.payWithTitle');
         expect(screen.findByTestId(`setting-reveal.${setting!.anchor}`)).toBeTruthy();
         expect(setVoice).not.toHaveBeenCalled();
     });
@@ -301,7 +321,7 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         voiceState.providerId = 'local_direct';
         routeParamsRef.current = { setting: VOICE_CONVERSATIONS_SETTINGS.settings.maxWarmRoots.anchor };
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
-        expect(screen.findByTestId('settings.voice.searchPrerequisite')?.props.subtitle).toContain('choice=settingsVoice.mode.local,control=settingsVoice.providerSectionTitle');
+        expect(findItemByTestId(screen, 'settings.voice.searchPrerequisite')?.props.subtitle).toContain('choice=settingsVoice.mode.local,control=settingsVoice.providerSectionTitle');
         expect(setVoice).not.toHaveBeenCalled();
     });
 
@@ -489,15 +509,21 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         // Privacy & data owning the copy is the contract worth asserting, and the
         // provider panels no longer contain a second renderer to guard against.
         const privacy = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="privacy" />);
-        const disclosure = privacy.findByTestId('settings.voice.provider.disclosure.happier.voice.elevenlabs%2Frealtime-elevenlabs');
-        const policy = privacy.findByTestId('settings.voice.privacyPolicy');
+        const disclosureId = 'settings.voice.provider.disclosure.happier.voice.elevenlabs%2Frealtime-elevenlabs';
+        const disclosureDetails = privacy.findAll((node) => typeof node.props.onExpandedChange === 'function'
+            && node.findAll((child) => child.props.testID === `${disclosureId}.details`).length > 0)[0];
+        expect(disclosureDetails).toBeTruthy();
+        await act(async () => disclosureDetails!.props.onExpandedChange(true));
+        const disclosure = findItemByTestId(privacy, `${disclosureId}.full`);
+        const policy = findItemByTestId(privacy, 'settings.voice.privacyPolicy');
         expect(disclosure).toBeTruthy();
         expect(policy).toBeTruthy();
         expect(String(disclosure?.props.subtitle)).toContain(
             'Audio and conversation content are sent from this device to ElevenLabs',
         );
 
-        const itemRows = privacy.tree.root.findAllByType('Item' as any);
+        const itemRows = privacy.findAll((node) => typeof node.props.title === 'string'
+            && typeof node.props.testID === 'string');
         expect(itemRows[itemRows.length - 1]?.props.testID).toBe('settings.voice.privacyPolicy');
         expect(itemRows.indexOf(disclosure!)).toBeLessThan(itemRows.indexOf(policy!));
     });
@@ -697,7 +723,7 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
 
         const screen = await renderSettingsView(<VoiceSettingsIntentDetailsScreen intent="conversations" />);
         // I speak reads the speech model's own language; Reply in is the reply preference.
-        expect(screen.findByTestId('settings.voice.language.iSpeak')?.props.detail).toBe('fr');
+        expect(findItemByTestId(screen, 'settings.voice.language.iSpeak')?.props.detail).toBe('fr');
         const replyIn = findDropdownByItemTriggerTitle(screen, 'settingsVoice.pages.conversations.replyInTitle');
         expect(replyIn?.props.selectedId).toBe('same');
 

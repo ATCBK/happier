@@ -107,7 +107,7 @@ vi.mock('@/theme', async (importOriginal) => {
 // Resolve the real route graph during collection; cold transforms are not the reveal contract.
 const { APPEARANCE_SETTINGS } = await import('@/components/settings/appearance/appearanceSettings');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
-const { default: AppearanceSearchScreen } = await import('@/app/(app)/settings/appearance');
+const { default: GlassAppearanceScreen } = await import('@/app/(app)/settings/appearance/glass');
 
 afterEach(() => {
     standardCleanup();
@@ -131,20 +131,20 @@ afterEach(() => {
 
 describe('Appearance settings theme preference', () => {
     it.each([
-        APPEARANCE_SETTINGS.settings.glassSidebarBlur,
-        APPEARANCE_SETTINGS.settings.glassSidebarOpacity,
-    ])('opens Custom glass controls and reveals the requested surface row from settings search: $anchor', async (setting) => {
+        APPEARANCE_SETTINGS.settings.glassSidebar,
+        APPEARANCE_SETTINGS.settings.glassElements,
+    ])('reveals the requested glass layer row on Glass and backdrop from settings search: $anchor', async (setting) => {
         const requested = setting.anchor;
         const screen = await renderAppearance(
-            <DestinationInstanceHost tabId="appearance-search" ref={{ kind: 'settings', params: { pageId: 'appearance', setting: requested } }} pathname="/settings/appearance" navigation={{ push: sessionSettingsEntryState.routerPushSpy, replace: vi.fn(), back: vi.fn() }} focused visible>
-                <AppearanceSearchScreen />
+            <DestinationInstanceHost tabId="appearance-search" ref={{ kind: 'settings', params: { pageId: 'appearance/glass', setting: requested } }} pathname="/settings/appearance/glass" navigation={{ push: sessionSettingsEntryState.routerPushSpy, replace: vi.fn(), back: vi.fn() }} focused visible>
+                <GlassAppearanceScreen />
             </DestinationInstanceHost>,
         );
 
-        expect(screen.findByTestId('appearance-customize')!.props.accessibilityState.expanded).toBe(true);
+        expect(screen.findByTestId('appearance-customize')).toBeNull();
         expect(screen.root.findAll((node) => typeof node.type === 'string' && node.props.nativeID === `setting-${requested}`)).toHaveLength(1);
         expect(screen.findAllHostsByTestId(`setting-reveal.${requested}`)).toHaveLength(1);
-        expect(screen.findAllHostsByTestId(`setting-reveal.${APPEARANCE_SETTINGS.settings.glassContentBlur.anchor}`)).toHaveLength(0);
+        expect(screen.findAllHostsByTestId(`setting-reveal.${APPEARANCE_SETTINGS.settings.glassChrome.anchor}`)).toHaveLength(0);
     });
 
     it('summarizes which theme each mode uses and how many themes exist, without an embedded preview', async () => {

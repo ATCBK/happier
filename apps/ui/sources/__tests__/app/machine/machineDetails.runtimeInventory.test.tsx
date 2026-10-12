@@ -121,13 +121,17 @@ vi.mock('@/sync/ops', () => ({
     machineExecutionRunsList: vi.fn(async () => ({ ok: true, runs: [] })),
     machineRevokeFromAccount: vi.fn(async () => ({ ok: true })),
 }));
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({ sessionExecutionRunStop: vi.fn(async () => ({ ok: true })) }));
+vi.mock('@/sync/ops/sessionExecutionRuns', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/ops/sessionExecutionRuns')>(),
+    sessionExecutionRunStop: vi.fn(async () => ({ ok: true })),
+}));
 
 describe('MachineDetailScreen runtime inventory', () => {
     beforeEach(() => {
         machineCollectBugReportDiagnosticsMock.mockReset();
         activeServerIdRef.current = 'server-a';
-        routerParamsRef.current = { id: 'machine-1' };
+        // The runtime inventory is the Doctor sub-page's (MPG-9).
+        routerParamsRef.current = { id: 'machine-1', page: 'doctor' };
         machineListByServerIdRef.current = {};
         setActiveServerAndSwitchMock.mockReset();
         setActiveServerAndSwitchMock.mockResolvedValue(true);
@@ -250,7 +254,7 @@ describe('MachineDetailScreen runtime inventory', () => {
     });
 
     it('shows the runtime inventory section with summary and warnings', async () => {
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
 
         await flushHookEffects({ cycles: 2, turns: 2 });
@@ -317,7 +321,7 @@ describe('MachineDetailScreen runtime inventory', () => {
             };
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
 
         await flushHookEffects({ cycles: 2, turns: 2 });
@@ -329,7 +333,7 @@ describe('MachineDetailScreen runtime inventory', () => {
     });
 
     it('does not prefetch the runtime inventory until the requested server becomes active', async () => {
-        routerParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
+        routerParamsRef.current = { id: 'machine-1', serverId: 'server-b', page: 'doctor' };
         writeCachedMachineDoctorSnapshot({
             serverId: 'server-b',
             machineId: 'machine-1',
@@ -367,7 +371,7 @@ describe('MachineDetailScreen runtime inventory', () => {
             return true;
         });
 
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
 
         await flushHookEffects({ cycles: 2, turns: 2 });
@@ -387,8 +391,19 @@ describe('MachineDetailScreen runtime inventory', () => {
         expect(screen.getTextContent()).toContain('machine.runtimeInventory');
     });
 
+    it('asks the machine for its doctor snapshot only on the Doctor page, never on the Overview', async () => {
+        routerParamsRef.current = { id: 'machine-1' };
+        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+        const screen = await renderScreen(React.createElement(MachinePageScreen));
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(screen.findByTestId('machine-page-row-doctor')).toBeTruthy();
+        expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
+        expect(screen.getTextContent()).not.toContain('machine.runtimeInventory');
+    });
+
     it('re-fetches the runtime inventory when pull-to-refresh runs', async () => {
-        const { default: MachineDetailScreen } = await import('@/app/(app)/machine/[id]');
+        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineDetailScreen));
 
         await flushHookEffects({ cycles: 2, turns: 2 });

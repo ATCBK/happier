@@ -51,6 +51,7 @@ installSessionSettingsEntryModuleMocks({
                 useProfile: () => ({
                     id: 'p',
                     timestamp: 0,
+                    name: null,
                     firstName: null,
                     lastName: null,
                     username: null,
@@ -99,7 +100,6 @@ vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
     return {
         ...actual,
-        getDisplayName: () => null,
     };
 });
 

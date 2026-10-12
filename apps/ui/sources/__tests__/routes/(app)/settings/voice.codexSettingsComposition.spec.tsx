@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import {
   voiceSettingsParse,
   type VoiceSettings,
@@ -134,6 +135,6 @@ describe('VoiceSettingsScreen Codex settings composition', () => {
     });
     // Mode, readiness, declarative Codex account settings, and language. The
     // public account field appears once; no empty legacy bundled group is added.
-    expect(screen.tree.findAllByType('ItemGroup' as never)).toHaveLength(4);
+    expect(screen.tree.findAllByType(ItemGroup)).toHaveLength(4);
   });
 });

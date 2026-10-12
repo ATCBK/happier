@@ -5,8 +5,6 @@ import {
     renderSettingsView,
     standardCleanup,
 } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storageStore';
-import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { createAccountFeaturesResponse, getRequestUrl, isFeaturesRequest, isUsernameRequest } from './account.testHelpers';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import {
@@ -14,12 +12,10 @@ import {
     getAccountSettingsRouteRouterMockRef,
     installAccountSettingsRouteModuleMocks,
 } from './accountSettingsRouteTestHelpers';
-import { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } from '@/components/settings/catalog/pageCatalog';
 import 'fake-indexeddb/auto';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,6 +25,10 @@ vi.mock('react-native-reanimated', async () => {
 });
 installAccountSettingsRouteModuleMocks({ storageModule: (importOriginal) => importOriginal() });
 installDisconnectedServerSocketBoundary();
+const { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } = await import('@/components/settings/catalog/pageCatalog');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
@@ -59,7 +59,9 @@ vi.mock('expo-camera', () => ({
 }));
 
 async function restoreAccount() {
-    account = await createSecretSettingsTestHarness();
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    account = await createSecretSettingsTestHarness({ features: createAccountFeaturesResponse(),
+        settings: settingsParse({ experiments: true, featureToggles: { 'social.friends': true } }) });
     restoreExecutor = await installRealActionExecutorModuleLoader();
     storage.setState({ isDataReady: true, profileScope: account.scope });
 }
@@ -88,9 +90,9 @@ describe('Settings → Account (username)', () => {
         standardCleanup();
     });
 
-    it('offers choosing a username from the identity header and saves it when friendsAllowUsername is enabled', async () => {
+    it('offers the username in the identity header\'s profile editor and saves it when friendsAllowUsername is enabled', async () => {
         await restoreAccount();
-        storage.getState().applyProfile({ ...profileDefaults, linkedProviders: [], username: null });
+        storage.getState().applyProfile({ ...profileDefaults, id: account!.scope.accountId, linkedProviders: [], username: null });
 
         let usernameOnHome: string | null = null;
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -117,17 +119,18 @@ describe('Settings → Account (username)', () => {
         await import('@/modal');
 
         const screen = await renderAccount();
-        await vi.waitFor(() => expect(screen.findRowByTitle('settingsAccount.chooseUsername')).not.toBeNull());
-        expect(screen.findRowByTitle('settingsAccount.chooseUsername')?.props.testID).toBe('settings-account-username');
+        const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        expect(await getServerFeaturesSnapshot({ serverId: account!.scope.serverId })).toMatchObject({ status: 'ready',
+            features: { features: { social: { friends: { enabled: true } } },
+                capabilities: { social: { friends: { allowUsername: true } } } } });
+        await vi.waitFor(() => expect(screen.findByTestId('settings-account-edit-profile')).not.toBeNull());
+        await screen.pressByTestIdAsync('settings-account-edit-profile');
 
-        await act(async () => {
-            await screen.pressRowByTitle('settingsAccount.chooseUsername');
-        });
-
+        await vi.waitFor(() => expect(screen.findByTestId('settings-account-username-field')).not.toBeNull());
         const input = screen.findByTestId('settings-account-username-field');
         expect(input).not.toBeNull();
         await act(async () => { input!.props.onChangeText('alice'); });
-        await screen.pressByTestIdAsync('settings-account-username-save');
+        await screen.pressByTestIdAsync('settings-account-profile-save');
         expect(modalMockRef.current.spies.prompt).not.toHaveBeenCalled();
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringContaining('/v1/account/username'),
@@ -141,6 +144,7 @@ describe('Settings → Account (username)', () => {
         await restoreAccount();
         storage.getState().applyProfile({
             ...profileDefaults,
+            id: account!.scope.accountId,
             linkedProviders: [],
             connectedServices: ['openai'],
             connectedServicesV2: [
@@ -189,6 +193,7 @@ describe('Settings → Account (username)', () => {
         await restoreAccount();
         storage.getState().applyProfile({
             ...profileDefaults,
+            id: account!.scope.accountId,
             linkedProviders: [],
             connectedServices: [],
             connectedServicesV2: [

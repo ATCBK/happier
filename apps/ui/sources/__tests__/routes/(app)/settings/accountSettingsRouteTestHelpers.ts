@@ -57,7 +57,7 @@ export function installAccountSettingsRouteModuleMocks(
             return await accountSettingsRouteModuleState.options.textModule();
         }
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key: string) => key });
+        return createTextModuleMock();
     });
 
     vi.mock('@/modal', async () => {

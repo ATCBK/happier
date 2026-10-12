@@ -150,6 +150,14 @@ vi.mock('@/components/ui/forms/Switch', () => ({
     Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
 }));
 
+/** The Tools sub-page's section for the routed machine and Home (`machine-1` on `server-b`). */
+async function loadMachineInstallablesSection() {
+    const { MachineInstallablesSection } = await import('@/components/machines/installables/MachineInstallablesSection');
+    return function MachineInstallablesScreen() {
+        return <MachineInstallablesSection machineId="machine-1" serverId="server-b" />;
+    };
+}
+
 describe('machine managed installables projection', () => {
     beforeEach(() => {
         testState.alert.mockReset();
@@ -207,8 +215,8 @@ describe('machine managed installables projection', () => {
         };
     });
 
-    it('shows only the projected managed PyPI descriptor and invokes its existing consented install action', async () => {
-        const { default: MachineInstallablesScreen } = await import('@/app/(app)/machine/[id]/installables');
+    it('shows only the projected managed PyPI descriptor, behind its existing install confirmation', async () => {
+        const MachineInstallablesScreen = await loadMachineInstallablesSection();
         const screen = await renderSettingsView(<MachineInstallablesScreen />);
 
         expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();
@@ -223,23 +231,16 @@ describe('machine managed installables projection', () => {
         if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
             throw new Error('Expected the existing install confirmation action');
         }
-        await act(async () => {
-            await confirmButtons[1].onPress();
-        });
-        await flushHookEffects({ cycles: 1 });
-
-        expect(testState.invoke).toHaveBeenCalledWith(
-            'machine-1',
-            { id: 'dep.antigravity.localharness', method: 'install' },
-            expect.objectContaining({ timeoutMs: 5 * 60_000 }),
-        );
+        // Confirming installs through the front-door `machines.capabilities.install` Action; that path, its Account
+        // scope and the machine RPC are proven in machineDetails.revokeMachine ("installs from the mounted machine row").
+        expect(testState.invoke).not.toHaveBeenCalled();
 
         await screen.unmount();
     });
 
     it('relabels the auto-update choices when the language changes', async () => {
         testState.language = 'en';
-        const { default: MachineInstallablesScreen } = await import('@/app/(app)/machine/[id]/installables');
+        const MachineInstallablesScreen = await loadMachineInstallablesSection();
         const screen = await renderSettingsView(<MachineInstallablesScreen />);
         const optionLabels = () => screen.findAll((node) => (
             typeof node.props?.testIDPrefix === 'string'
@@ -262,7 +263,7 @@ describe('machine managed installables projection', () => {
 
     it('keeps cached projected metadata read-only while the machine is offline', async () => {
         testState.online = false;
-        const { default: MachineInstallablesScreen } = await import('@/app/(app)/machine/[id]/installables');
+        const MachineInstallablesScreen = await loadMachineInstallablesSection();
         const screen = await renderSettingsView(<MachineInstallablesScreen />);
 
         expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();

@@ -1,6 +1,7 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -89,20 +90,6 @@ vi.mock('@/components/sessions/guidance/useShouldBlockNewSessionWithGettingStart
         mockState.newSessionBlockHookCalls += 1;
         return mockState.shouldBlockNewSession;
     },
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useActiveServerAccountScope: () => mockState.draftScopeEnabled
-        ? { serverId: mockState.serverId, accountId: 'account-1' }
-        : null,
-    useSettings: () => ({
-        serverSelectionGroups: [],
-        serverSelectionActiveTargetKind: 'server',
-        serverSelectionActiveTargetId: mockState.serverId,
-    }),
-    useSetting: (key: string) => key === 'newSessionDraftEntryMode' ? 'alwaysFresh' : null,
-    useSettingMutable: () => [null, vi.fn()],
-    useLocalSettingMutable: () => [null, vi.fn()],
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
@@ -327,9 +314,22 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
     };
 });
 
+await loadSyncSingletonForTests();
 const Screen = (await import('@/app/(app)/new')).default;
+const { storage } = await import('@/sync/domains/state/storage');
+const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
-afterEach(() => {
+beforeEach(() => {
+    setMockServerId('s1');
+    storage.getState().activateProfileScope({ serverId: 's1', accountId: 'account-1' });
+    publishAppliedActiveServerSnapshot({ serverId: 's1', serverUrl: 'https://api.happier.dev', generation: 1 });
+    storage.setState({ isSessionDraftsReady: true });
+});
+
+afterEach(async () => {
+    await standardCleanup();
+    publishAppliedActiveServerRuntimeAvailability(false);
+    storage.getState().clearProfileScope();
     mockState.persistedDraft = null;
     mockState.tempData = null;
     mockState.serverListeners.clear();
@@ -476,7 +476,9 @@ describe('/new (blocking guidance)', () => {
         const draftId = '8e0a5dd1-b1df-43dd-b51e-b7787b30362e';
         mockState.draftScopeEnabled = true;
         mockState.shouldBlockNewSession = false;
-        mockState.serverId = 'home-a';
+        setMockServerId('home-a');
+        storage.getState().activateProfileScope({ serverId: 'home-a', accountId: 'account-1' });
+        publishAppliedActiveServerSnapshot({ serverId: 'home-a', serverUrl: 'https://api.happier.dev', generation: 1 });
         mockState.requestedDraftScope = { serverId: 'home-b', accountId: 'account-b' };
         for (const key of Object.keys(mockState.localSearchParams)) {
             delete mockState.localSearchParams[key as keyof typeof mockState.localSearchParams];
