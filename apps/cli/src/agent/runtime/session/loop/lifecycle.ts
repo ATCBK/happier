@@ -929,14 +929,31 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     ?? (terminalRemoteModeLoop ? activeTerminalRemoteMode : 'remote');
   let lastKeepAliveSentAt = 0;
   let lastKeepAliveSignature: string | null = null;
-  const publishKeepAlive = (): void => {
+  let keepAliveTimer: ReturnType<typeof setTimeout> | null = null;
+  let keepAliveStopped = false;
+  const stopKeepAlive = (): void => {
+    keepAliveStopped = true;
+    if (keepAliveTimer !== null) clearTimeout(keepAliveTimer);
+    keepAliveTimer = null;
+  };
+  const publishKeepAlive = (renewalDue = false): void => {
+    if (keepAliveStopped) return;
     const now = Date.now();
     const mode = getKeepAliveMode() === 'terminal' ? 'local' : 'remote';
     const signature = `${params.session.sessionId}:${params.runtimeState.thinking ? 'thinking' : 'idle'}:${mode}`;
-    if (lastKeepAliveSignature === signature && now - lastKeepAliveSentAt < KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS) return;
+    if (!renewalDue && lastKeepAliveSignature === signature && now - lastKeepAliveSentAt < KEEP_ALIVE_DUPLICATE_SUPPRESSION_MS) return;
     params.session.keepAlive(params.runtimeState.thinking, mode);
     lastKeepAliveSignature = signature;
     lastKeepAliveSentAt = now;
+    if (keepAliveTimer !== null) clearTimeout(keepAliveTimer);
+    const cadenceMs = params.runtimeState.thinking
+      ? configuration.sessionKeepAliveThinkingMs
+      : configuration.sessionKeepAliveIdleMs;
+    keepAliveTimer = setTimeout(() => {
+      keepAliveTimer = null;
+      publishKeepAlive(true);
+    }, cadenceMs);
+    keepAliveTimer.unref?.();
   };
   const setThinkingState = (value: boolean): void => {
     if (params.runtimeState.thinking === value) return;
@@ -944,16 +961,6 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     publishKeepAlive();
   };
   publishKeepAlive();
-  const keepAliveTickIntervalMs = Math.min(configuration.sessionKeepAliveIdleMs, configuration.sessionKeepAliveThinkingMs);
-  const keepAliveInterval = setInterval(() => {
-    const cadenceMs = params.runtimeState.thinking
-      ? configuration.sessionKeepAliveThinkingMs
-      : configuration.sessionKeepAliveIdleMs;
-    if (Date.now() - lastKeepAliveSentAt >= cadenceMs) {
-      publishKeepAlive();
-    }
-  }, keepAliveTickIntervalMs);
-  keepAliveInterval.unref?.();
 
   const cleanupOnce = (): Promise<void> => {
     cleanupPromise ??= (async () => {
@@ -965,7 +972,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       sessionTurnLifecycle.retireAcceptedLifecyclePublication();
       await params.config.lifecycleHooks?.onBeforeDispose?.({ session: params.session, runtime: hookRuntimeForCallbacks });
       await cleanupBackendRunResourcesFn({
-        keepAliveInterval,
+        stopKeepAlive,
         reconnectionHandle: params.reconnectionHandle,
         stopMcpServer: () => params.happyMcpServerStop(),
         resetRuntime: () => disposeRuntimeOnce(runtimeDisposeReason),
@@ -1230,6 +1237,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             terminalHandoffFailureRequiresManualAction = false;
           }
           await terminalRemoteModeLoop.onModeChange(mode);
+          publishKeepAlive();
         },
       }).catch((error: unknown) => {
         terminalRemoteModeLoopError = error;

@@ -82,6 +82,7 @@ vi.mock('@/agent/catalog/snapshot', async (importOriginal) => {
 
 import { runHostSessionRuntime, type HostRuntimeReplacementLifecycle, type HostSessionRuntimeConfig, type HostSessionRuntimeRunOptions } from './runHostSessionRuntime';
 import type { CreateSessionMetadataOptions } from '@/agent/runtime/createSessionMetadata';
+import type { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import type { InitializeBackendRunSessionOptions } from '@/agent/runtime/initializeBackendRunSession';
 import type { Metadata } from '@/api/types';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
@@ -658,9 +659,9 @@ function createHarness() {
       killHandlersBySessionId.set(sessionId, handler);
       killHandler = handler;
     },
-    cleanupBackendRunResourcesFn: async ({ keepAliveInterval, unmountUi }: any) => {
+    cleanupBackendRunResourcesFn: async ({ stopKeepAlive, unmountUi }: Parameters<typeof cleanupBackendRunResources>[0]) => {
       cleanupCalls += 1;
-      clearInterval(keepAliveInterval);
+      stopKeepAlive();
       unmountUi?.();
     },
   };
@@ -9328,9 +9329,9 @@ describe('runHostSessionRuntime', () => {
         callOrder.push('beforeDispose');
       },
     };
-    harness.deps.cleanupBackendRunResourcesFn = async ({ keepAliveInterval, unmountUi }: any) => {
+    harness.deps.cleanupBackendRunResourcesFn = async ({ stopKeepAlive, unmountUi }: Parameters<typeof cleanupBackendRunResources>[0]) => {
       callOrder.push('cleanup');
-      clearInterval(keepAliveInterval);
+      stopKeepAlive();
       await unmountUi?.();
     };
 

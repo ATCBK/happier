@@ -16,6 +16,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { configuration } from '@/configuration';
 import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import type { Metadata } from '@/api/types';
 import type { ApiClient } from '@/api/api';
@@ -237,8 +238,8 @@ function createLifecycleParams(overrides?: Readonly<{
         }),
       })),
       registerKillSessionHandlerFn: vi.fn(),
-      cleanupBackendRunResourcesFn: vi.fn(async ({ keepAliveInterval }: { keepAliveInterval: NodeJS.Timeout }) => {
-        clearInterval(keepAliveInterval);
+      cleanupBackendRunResourcesFn: vi.fn(async ({ stopKeepAlive }: { stopKeepAlive: () => void }) => {
+        stopKeepAlive();
       }),
       startRemoteModeStaticControlFn: vi.fn(),
       renderFn: vi.fn(),
@@ -256,6 +257,73 @@ function createRevokedTranscriptFailure(privateTranscript: string): object {
 function loggerReceivedIdentity(value: unknown): boolean {
   return loggerDebugMock.mock.calls.some((call) => call.some((argument) => argument === value));
 }
+
+describe('runSessionLoopLifecycle presence renewal', () => {
+  it('parks idle until the configured renewal deadline and retires renewal on disposal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const initialTime = Date.now();
+    const params = createLifecycleParams({
+      runPermissionModePromptLoopFn: async (loopParams) => {
+        expect(params.session.keepAlive).toHaveBeenCalledWith(false, 'remote');
+        loopParams.keepAlive(); // A duplicate immediate publication must not move the lease deadline.
+        await vi.advanceTimersToNextTimerAsync();
+        expect(Date.now()).toBe(initialTime + configuration.sessionKeepAliveIdleMs);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(Date.now()).toBe(initialTime + 2 * configuration.sessionKeepAliveIdleMs);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
+        // A wall-clock correction must not suppress and permanently retire the next lease renewal.
+        vi.setSystemTime(Date.now() - 2 * configuration.sessionKeepAliveIdleMs);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(4);
+        vi.setSystemTime(Date.now() - configuration.sessionKeepAliveIdleMs + 1);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+      },
+    });
+    try {
+      await runSessionLoopLifecycle({
+        ...params, deps: { ...params.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources },
+      });
+      await vi.advanceTimersByTimeAsync(2 * configuration.sessionKeepAliveIdleMs);
+      expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes host thinking transitions immediately and renews at the resulting cadence', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const params = createLifecycleParams({
+      runPermissionModePromptLoopFn: async (loopParams) => {
+        await vi.advanceTimersByTimeAsync(1_000);
+        loopParams.setThinking(true);
+        expect(params.session.keepAlive).toHaveBeenLastCalledWith(true, 'remote');
+        const thinkingStartedAt = Date.now();
+        await vi.advanceTimersToNextTimerAsync();
+        expect(Date.now()).toBe(thinkingStartedAt + configuration.sessionKeepAliveThinkingMs);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
+        loopParams.setThinking(false);
+        expect(params.session.keepAlive).toHaveBeenLastCalledWith(false, 'remote');
+        const settledAt = Date.now();
+        await vi.advanceTimersToNextTimerAsync();
+        expect(Date.now()).toBe(settledAt + configuration.sessionKeepAliveIdleMs);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+      },
+    });
+    try {
+      await runSessionLoopLifecycle({
+        ...params, deps: { ...params.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources },
+      });
+      await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveThinkingMs);
+      expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('runSessionLoopLifecycle checkpoint controls', () => {
   it('materializes a strict initial-resume startup failure as an idle failed session turn', async () => {
@@ -879,9 +947,9 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
       order.push('end');
     });
     const cleanupBackendRunResourcesFn = vi.fn(async (
-      { keepAliveInterval }: { keepAliveInterval: NodeJS.Timeout },
+      { stopKeepAlive }: { stopKeepAlive: () => void },
     ) => {
-      clearInterval(keepAliveInterval);
+      stopKeepAlive();
       order.push('cleanup:start');
       await cleanupReleased;
       order.push('cleanup:end');
@@ -1188,8 +1256,8 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
         },
       };
     });
-    const cleanupBackendRunResourcesFn = vi.fn(async ({ keepAliveInterval }: { keepAliveInterval: NodeJS.Timeout }) => {
-      clearInterval(keepAliveInterval);
+    const cleanupBackendRunResourcesFn = vi.fn(async ({ stopKeepAlive }: { stopKeepAlive: () => void }) => {
+      stopKeepAlive();
     });
     const params: SessionLoopLifecycleParams = {
       ...baseParams,
@@ -1807,7 +1875,8 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
 
     await runSessionLoopLifecycle(params);
 
-    expect(baseParams.session.keepAlive).toHaveBeenCalledWith(false, 'local');
+    expect(baseParams.session.keepAlive).toHaveBeenNthCalledWith(1, false, 'local');
+    expect(baseParams.session.keepAlive).toHaveBeenLastCalledWith(false, 'remote');
   });
 
   it('uses an injected foreground daemon bridge for agent context transforms without a process-global handoff', async () => {
@@ -2652,8 +2721,8 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       runtimeEventHandler = handler;
       return () => undefined;
     });
-    const cleanupBackendRunResourcesFn = vi.fn(async ({ keepAliveInterval }: { keepAliveInterval: NodeJS.Timeout }) => {
-      clearInterval(keepAliveInterval);
+    const cleanupBackendRunResourcesFn = vi.fn(async ({ stopKeepAlive }: { stopKeepAlive: () => void }) => {
+      stopKeepAlive();
     });
     const params: SessionLoopLifecycleParams = {
       ...baseParams,
