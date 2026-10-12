@@ -3,7 +3,7 @@ import type {
   AgentPermissionIntent,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { buildKiloOpenCodePermissionEnv } from '../permissions/opencodePermissionPolicy.js';
+import { buildKiloOpenCodePermissionEnv } from '../permissions/kiloPermissionPolicy.js';
 
 export function buildKiloAcpEnv(params: Readonly<{
   launchEnvironment?: AgentLaunchEnvironment;

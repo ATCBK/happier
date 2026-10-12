@@ -19,7 +19,7 @@ describe('Kilo plugin manifest', () => {
           capability: 'process',
           scope: {
             executables: [{ kind: 'systemTool', id: 'kilo-cli' }],
-            envKeys: ['OPENCODE_PERMISSION'],
+            envKeys: ['KILO_PERMISSION'],
           },
         }],
         optional: [],

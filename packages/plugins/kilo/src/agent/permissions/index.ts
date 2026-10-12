@@ -1,2 +1,2 @@
-export * from './opencodePermissionPolicy.js';
+export * from './kiloPermissionPolicy.js';
 export * from './writeLikeKinds.js';

@@ -75,7 +75,7 @@ describe('Kilo activation', () => {
         kind: 'stdio',
         executable: { kind: 'systemTool', id: 'kilo-cli' },
         args: ['acp'],
-        env: { OPENCODE_PERMISSION: expect.any(String) },
+        env: { KILO_PERMISSION: expect.any(String) },
       },
       definition: expect.objectContaining({
         modelConfigOptionId: 'model',
@@ -89,7 +89,7 @@ describe('Kilo activation', () => {
     if (!options || options.transport.kind !== 'stdio') {
       throw new Error('Expected Kilo native stdio ACP options');
     }
-    expect(JSON.parse(options.transport.env?.OPENCODE_PERMISSION ?? '{}')).toMatchObject({
+    expect(JSON.parse(options.transport.env?.KILO_PERMISSION ?? '{}')).toMatchObject({
       '*': 'deny',
       read: 'allow',
       edit: 'deny',

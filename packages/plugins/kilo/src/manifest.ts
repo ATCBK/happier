@@ -3,7 +3,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { KILO_ACP_COMMAND } from './agent/acp/command.js';
-import { KILO_OPENCODE_PERMISSION_ENV } from './agent/permissions/opencodePermissionPolicy.js';
+import { KILO_PERMISSION_ENV } from './agent/permissions/kiloPermissionPolicy.js';
 import { createKiloAgentRuntime } from './agent/runtime/factory.js';
 import { KILO_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 
@@ -25,7 +25,7 @@ export const KILO_PLUGIN = definePlugin({
       reason: 'Run the declared Kilo CLI executable.',
       scope: {
         executables: [{ kind: 'systemTool', id: 'kilo-cli' }],
-        envKeys: [KILO_OPENCODE_PERMISSION_ENV],
+        envKeys: [KILO_PERMISSION_ENV],
       },
     }],
     optional: [],
@@ -62,6 +62,7 @@ export const KILO_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],

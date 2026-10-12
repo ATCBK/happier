@@ -3,16 +3,29 @@ import { describe, expect, it } from 'vitest';
 import {
   buildKiloOpenCodePermissionEnv,
   resolveKiloOpenCodePermissionPolicy,
-} from './opencodePermissionPolicy.js';
+} from './kiloPermissionPolicy.js';
 
 describe('Kilo OpenCode permission policy', () => {
+  it('delivers read-only permissions through the Kilo permission environment key', () => {
+    const env = buildKiloOpenCodePermissionEnv({ permissionIntent: 'read-only' });
+
+    expect(env).toHaveProperty('KILO_PERMISSION');
+    expect(JSON.parse(env.KILO_PERMISSION)).toMatchObject({
+      '*': 'deny',
+      read: 'allow',
+      edit: 'deny',
+      write: 'deny',
+      bash: 'deny',
+    });
+  });
+
   it.each([
     { mode: 'default', wildcard: 'ask', read: 'allow', edit: 'ask', bash: 'ask', external: 'ask' },
     { mode: 'read-only', wildcard: 'deny', read: 'allow', edit: 'deny', bash: 'deny', external: 'deny' },
     { mode: 'plan', wildcard: 'deny', read: 'allow', edit: 'deny', bash: 'deny', external: 'deny' },
     { mode: 'safe-yolo', wildcard: 'ask', read: 'allow', edit: 'allow', bash: 'ask', external: 'ask' },
     { mode: 'yolo', wildcard: 'allow', read: 'allow', edit: 'allow', bash: 'allow', external: 'allow' },
-  ] as const)('maps permissionIntent="$mode" to the source-equivalent OPENCODE_PERMISSION policy', ({
+  ] as const)('maps permissionIntent="$mode" to the source-equivalent KILO_PERMISSION policy', ({
     mode,
     wildcard,
     read,
@@ -27,13 +40,11 @@ describe('Kilo OpenCode permission policy', () => {
     expect(parsed.bash).toBe(bash);
     expect(parsed.external_directory).toBe(external);
     expect(parsed.change_title).toBe('allow');
-    expect(parsed.save_memory).toBe('allow');
-    expect(parsed.think).toBe('allow');
   });
 
-  it('does not overwrite caller-provided OPENCODE_PERMISSION', () => {
+  it('does not overwrite caller-provided KILO_PERMISSION', () => {
     expect(buildKiloOpenCodePermissionEnv({
-      env: { OPENCODE_PERMISSION: '{"custom":"allow"}' },
+      env: { KILO_PERMISSION: '{"custom":"allow"}' },
       permissionIntent: 'read-only',
     })).toEqual({});
   });

@@ -5,7 +5,7 @@ import type { AgentPermissionIntent } from '@happier-dev/plugin-sdk/agents/runti
 
 type OpenCodePermissionPolicy = ReturnType<typeof resolveAcpToolPermissionPolicy>;
 
-export const KILO_OPENCODE_PERMISSION_ENV = 'OPENCODE_PERMISSION';
+export const KILO_PERMISSION_ENV = 'KILO_PERMISSION';
 
 export function resolveKiloOpenCodePermissionPolicy(permissionIntent: AgentPermissionIntent | null): OpenCodePermissionPolicy {
   return resolveAcpToolPermissionPolicy(permissionIntent);
@@ -16,13 +16,13 @@ export function buildKiloOpenCodePermissionEnv(params: Readonly<{
   permissionIntent: AgentPermissionIntent | null;
 }>): Readonly<Record<string, string>> {
   if (
-    typeof params.env?.[KILO_OPENCODE_PERMISSION_ENV] === 'string'
-    && params.env[KILO_OPENCODE_PERMISSION_ENV].length > 0
+    typeof params.env?.[KILO_PERMISSION_ENV] === 'string'
+    && params.env[KILO_PERMISSION_ENV].length > 0
   ) {
     return {};
   }
   return {
-    [KILO_OPENCODE_PERMISSION_ENV]: JSON.stringify(
+    [KILO_PERMISSION_ENV]: JSON.stringify(
       resolveKiloOpenCodePermissionPolicy(params.permissionIntent),
     ),
   };
