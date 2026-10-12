@@ -8,6 +8,8 @@ import {
 } from '@/agents/backendCatalog/agentCatalogProjection';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
@@ -27,9 +29,9 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { Modal } from '@/modal';
-import { clearDaemonMemoryIndex } from '@/sync/domains/memory/clearDaemonMemoryIndex';
 import { getDaemonMemoryStatusStateTranslationKey } from '@/sync/domains/memory/getDaemonMemoryStatusStateTranslationKey';
 import { presentDaemonMemoryStatus } from '@/sync/domains/memory/presentDaemonMemoryStatus';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -103,13 +105,15 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
   // The Agent rows are read from the machine only while they are shown.
   const machineId = executionTarget?.machine.id ?? null;
   const serverId = executionTarget?.serverId ?? null;
+  const [projectionRefreshKey, setProjectionRefreshKey] = React.useState(0);
   const projection = useDaemonMergedProjectionInputs({
     machineId,
     serverId,
     enabled: indexing,
+    refreshKey: projectionRefreshKey,
   });
-  const projectionInputs =
-    projection.phase === 'ready' ? projection.inputs : null;
+  const projectionInputs = projection.inputs;
+  const { execute: executeAction, ready: actionReady, isCurrent, approval } = useMountedActionExecution(serverId);
   const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
   const agents = React.useMemo<
     ReadonlyArray<
@@ -135,10 +139,14 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
       });
       return { id, entry, title: entry.title };
     });
-    // An Agent chosen earlier (or by an Action) that this machine no longer reports stays listed, so it can be turned off.
-    const unknown = indexExternal.agents
-      .filter((id) => !ids.includes(id))
-      .map((id) => ({ id, entry: null, title: id }));
+    // An Agent chosen earlier (or by an Action) that this machine no longer reports stays listed, so it can be
+    // turned off. Only the machine's answer can say it is gone: until then the section shows its loading line,
+    // never a bare id that the real row would replace.
+    const unknown = projectionInputs
+      ? indexExternal.agents
+        .filter((id) => !ids.includes(id))
+        .map((id) => ({ id, entry: null, title: id }))
+      : [];
     return [...known, ...unknown];
   }, [
     backendEnabledByTargetKey,
@@ -162,28 +170,23 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
   const machineName = getMachineDisplayName(executionTarget?.machine) ?? '';
   const clearIndex = React.useCallback(async () => {
     const target = resolveWritableTarget();
-    if (!target) return;
-    const confirmed = await Modal.confirm(
-      t('conversationSearch.clearConfirmTitle', {
-        machine: getMachineDisplayName(target.machine),
-      }),
-      t('conversationSearch.clearConfirmBody'),
-      { confirmText: t('conversationSearch.clearAction'), destructive: true },
-    );
-    if (!confirmed) return;
+    if (!target || !actionReady || clearing) return;
     setClearing(true);
     try {
-      await clearDaemonMemoryIndex({
-        machineId: target.machine.id,
-        serverId: target.serverId,
-      });
+      const result = await executeAction('memory.clear_index', { machineId: target.machine.id });
+      if (!isCurrent()) return;
+      if (!result.ok) {
+        if (result.errorCode === 'approval_rejected' || result.errorCode === 'approval_canceled'
+          || result.errorCode === 'action_account_scope_changed') return;
+        throw new Error(result.error);
+      }
       await refreshStatus(target);
     } catch {
-      Modal.alert(t('common.error'), t('conversationSearch.clearFailed'));
+      if (isCurrent()) Modal.alert(t('common.error'), t('conversationSearch.clearFailed'));
     } finally {
       setClearing(false);
     }
-  }, [refreshStatus, resolveWritableTarget]);
+  }, [actionReady, clearing, executeAction, isCurrent, refreshStatus, resolveWritableTarget]);
 
   // The chip names the machine this page manages; it stays in every state because it is how the
   // user recovers from a missing or unreachable machine.
@@ -200,7 +203,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
     : access === 'noMachine'
       ? t('conversationSearch.chooseMachine')
       : access === 'pending'
-        ? t('common.loading')
+        ? undefined
         : access === 'unreachable'
           ? t('conversationSearch.unreachable')
           : t('conversationSearch.updateRequired');
@@ -212,6 +215,9 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
       <SettingsPageHeader
         description={t('conversationSearch.pagePurpose')}
         actions={machineChip}
+        // The machine is the page's scope and its recovery control: on phones it stays on the page
+        // instead of folding into the navigation overflow, where "choose a machine" has no visible chooser.
+        actionsPlacement="page"
       />
       <SettingSection
         section={SEARCH_SETTINGS.sectionRefs.modes}
@@ -226,6 +232,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
             setting={SEARCH_SETTINGS.settings.standardSearch}
             subtitle={standardSubtitle}
             subtitleLines={0}
+            // Until the machine answers, the row still says what it does and its switch holds its place, disabled.
             rightElement={
               ready ? (
                 <Switch
@@ -238,6 +245,8 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
                     });
                   }}
                 />
+              ) : access === 'pending' ? (
+                <Switch testID="search-settings-standard-pending" value={false} disabled />
               ) : access === 'unreachable' ? (
                 <RoundButton
                   testID="search-settings-retry"
@@ -335,15 +344,37 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
         <ItemGroup
           title={t('conversationSearch.agentsTitle')}
           description={t('conversationSearch.agentsDescription')}
+          // One mark, one name and one switch per row: an index-style list, so the section is compact.
+          density="compact"
         >
-          {agents.length === 0 ? (
+          {projection.phase === 'error' ? (
+            <SurfaceStateCard
+              testID="search-settings-agents-error"
+              kind="error"
+              size="line"
+              title={t('common.unavailable')}
+              action={{ label: t('common.retry'), testID: 'search-settings-agents-retry',
+                onPress: () => setProjectionRefreshKey((current) => current + 1) }}
+            />
+          ) : projection.phase === 'unsupported' ? (
+            <SurfaceStateCard
+              testID="search-settings-agents-unsupported"
+              kind="unavailable"
+              size="line"
+              title={t('conversationSearch.updateRequired')}
+            />
+          ) : projection.phase === 'idle' || projection.phase === 'loading' ? (
+            <SurfaceStateCard
+              testID="search-settings-agents-loading"
+              kind="loading"
+              size="line"
+              title={t('common.loading')}
+            />
+          ) : null}
+          {projection.phase === 'ready' && agents.length === 0 ? (
             <Item
               testID="search-settings-agents-empty"
-              title={
-                projection.phase === 'ready'
-                  ? t('conversationSearch.agentsNone')
-                  : t('common.loading')
-              }
+              title={t('conversationSearch.agentsNone')}
               showChevron={false}
             />
           ) : (
@@ -414,7 +445,14 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
               subtitleLines={0}
               showChevron={false}
             />
-            {/* Destructive, so it sits last and asks before it acts. */}
+            {approval.approvalId && serverId ? (
+              <ActionApprovalPendingNotice
+                testID="search-settings-clear-approval"
+                message={t('secrets.catalog.approvalPending')}
+                onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(serverId)}`)}
+              />
+            ) : null}
+            {/* Destructive, so it sits last; the Action owns approval. */}
             <SettingRow
               testID="search-settings-clear-index-item"
               setting={SEARCH_SETTINGS.settings.clearIndex}
@@ -434,7 +472,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
                       : undefined
                   }
                   loading={clearing}
-                  disabled={clearing}
+                  disabled={clearing || !actionReady}
                   onPress={clearIndex}
                 />
               }
