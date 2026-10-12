@@ -9,8 +9,6 @@ export const SESSION_COMPOSER_BANNER_KINDS = [
     'staleSessionRunner',
     'mcpSelectionRestartRequired',
     'authRecovery',
-    'pendingQueueResumeFailed',
-    'providerBinding',
     'externalTranscriptSnapshot',
     'localControl',
     'directControlTakeover',
