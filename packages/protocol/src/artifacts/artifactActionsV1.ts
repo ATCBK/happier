@@ -9,6 +9,7 @@ import { ARTIFACT_ACTION_IDS_V1 } from './artifactActionIdsV1.js';
 export { ARTIFACT_ACTION_IDS_V1 } from './artifactActionIdsV1.js';
 import { ArtifactRevisionV1Schema } from './artifactRevisionV1.js';
 import { ArtifactWorkspacePublicationSourceV1Schema } from './artifactWorkspaceFileV1.js';
+import { UiSurfaceCapabilityRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 export { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from './artifactRevisionV1.js';
 
 export const ArtifactActionIdV1Schema = lazyZodSchema(() => z.enum(ARTIFACT_ACTION_IDS_V1));
@@ -51,6 +52,7 @@ export const ArtifactExportInputV1Schema = subject.extend({
 }).strict();
 export const ArtifactPublishFromFileInputV1Schema = lazyZodSchema(() => ArtifactWorkspacePublicationSourceV1Schema.extend({
   title: z.string().optional(), mime: z.string().min(1).optional(), kind: z.string().min(1).optional(),
+  requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.optional(),
 }).strict());
 export const ArtifactRestoreInputV1Schema = subject.extend({
   bodyVersion: z.number().int().positive(), expectedRevision: ArtifactRevisionV1Schema,

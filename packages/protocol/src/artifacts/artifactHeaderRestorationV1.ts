@@ -7,6 +7,9 @@ import { LaunchProfileArtifactV1Schema, buildLaunchProfileArtifactHeaderV1 } fro
 import { RoleArtifactV1Schema, buildRoleArtifactHeaderV1 } from '../prompts/roles/roleArtifactV1.js';
 import { WorkBoardV1Schema } from '../boards/workBoardV1.js';
 import { buildWorkBoardArtifactHeaderV1 } from '../boards/workBoardArtifactV1.js';
+import { buildWidgetDefinitionArtifactHeaderV1, readWidgetDefinitionArtifactV1 } from '../widgets/widgetDefinitionArtifactV1.js';
+import { WidgetDefinitionV1Schema } from '../widgets/widgetDefinitionV1.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 type ArtifactSharedWriteContextV1 = Readonly<{ current: ArtifactSharingResourceV1; shared: boolean }>;
 
@@ -32,11 +35,13 @@ export function prepareArtifactHeaderForBodyV1(header: Readonly<Record<string, u
   // Workspace identity is supplied separately by the host to private revision metadata.
   const { source: _source, ...publicHeader } = header;
   header = publicHeader;
-  if (header.kind === 'workflow-definition.v1' || header.kind === 'work-board.v1') {
+  if (header.kind === 'workflow-definition.v1' || header.kind === 'work-board.v1' || header.kind === 'widget-definition.v1') {
     try {
       if (typeof body !== 'string') throw new Error('artifact_body_unavailable');
       if (header.kind === 'work-board.v1') header = { ...header, ...buildWorkBoardArtifactHeaderV1(WorkBoardV1Schema.parse(JSON.parse(body))) };
-      else {
+      else if (header.kind === 'widget-definition.v1') {
+        header = { ...header, ...buildWidgetDefinitionArtifactHeaderV1(WidgetDefinitionV1Schema.parse(JSON.parse(body))) };
+      } else {
         const parsed = WorkflowDefinitionArtifactBodyV1Schema.parse(JSON.parse(body));
         WorkflowDefinitionArtifactHeaderV1Schema.parse(header);
         header = { ...header, previewSteps: workflowDefinitionPreviewStepsV1(parsed.definition.blocks) };
@@ -66,7 +71,8 @@ export function prepareArtifactHeaderForRevisionV1(input: Readonly<{
   if (artifactKindRequiresTextBodyV1(kind) && typeof input.body !== 'string') {
     throw Object.assign(new Error('artifact_content_unavailable'), { code: 'content_unavailable' });
   }
-  if (kind !== 'workflow-definition.v1' && kind !== 'launch-profile.v1' && kind !== 'role.v1' && kind !== 'work-board.v1') {
+  if (kind !== 'workflow-definition.v1' && kind !== 'launch-profile.v1' && kind !== 'role.v1' && kind !== 'work-board.v1'
+    && kind !== 'widget-definition.v1') {
     return input.header;
   }
   try {
@@ -77,10 +83,13 @@ export function prepareArtifactHeaderForRevisionV1(input: Readonly<{
       return { ...retargetWorkflowDefinitionArtifactHeaderV1(input), previewSteps: workflowDefinitionPreviewStepsV1(parsed.definition.blocks) };
     }
     if (kind === 'launch-profile.v1') {
-      return { ...input.header, ...buildLaunchProfileArtifactHeaderV1(LaunchProfileArtifactV1Schema.parse(body)) };
+      return { ...input.header, ...buildLaunchProfileArtifactHeaderV1(createStoredReadSchema(LaunchProfileArtifactV1Schema).parse(body)) };
     }
     if (kind === 'role.v1') {
-      return { ...input.header, ...buildRoleArtifactHeaderV1(RoleArtifactV1Schema.parse(body)) };
+      return { ...input.header, ...buildRoleArtifactHeaderV1(createStoredReadSchema(RoleArtifactV1Schema).parse(body)) };
+    }
+    if (kind === 'widget-definition.v1') {
+      return { ...input.header, ...buildWidgetDefinitionArtifactHeaderV1(readWidgetDefinitionArtifactV1(input)) };
     }
     const board = WorkBoardV1Schema.parse(body);
     if (board.id !== input.artifactId) throw new Error('artifact_identity_mismatch');

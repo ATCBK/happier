@@ -1,6 +1,8 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
+import { UiSurfaceCapabilityRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
 export const ARTIFACT_HTML_BUNDLE_MIME_V1 = 'application/vnd.happier.html-bundle+json';
 
@@ -14,6 +16,8 @@ export const ArtifactHtmlBundleV1Schema = lazyZodSchema(() => z.object({
     mime: z.string().regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/u),
     contentBase64: z.string().refine(value => readCanonicalPaddedBase64DecodedLength(value) !== null, 'Invalid asset bytes'),
   }).strict()),
+  /** Saved copies keep their admitted policy independently of viewer settings. */
+  requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.optional(),
 }).strict().superRefine((bundle, context) => {
   if (!Object.hasOwn(bundle.files, bundle.entrypoint) || bundle.files[bundle.entrypoint].mime.toLowerCase() !== 'text/html') {
     context.addIssue({ code: 'custom', message: 'HTML entrypoint is unavailable' });
@@ -35,10 +39,13 @@ export function isArtifactHtmlHeaderV1(header: unknown): boolean {
   return header !== null && typeof header === 'object' && !Array.isArray(header) && Reflect.get(header, 'kind') === 'html';
 }
 
-export function artifactHtmlBundleFromBodyV1(body: string | Uint8Array, mime = 'text/html'): ArtifactHtmlBundleV1 {
+export function artifactHtmlBundleFromBodyV1(body: string | Uint8Array, mime = 'text/html',
+  purpose: 'input' | 'stored' = 'input'): ArtifactHtmlBundleV1 {
   const text = typeof body === 'string' ? body : new TextDecoder('utf-8', { fatal: true }).decode(body);
   const essence = mime.split(';', 1)[0].trim().toLowerCase();
-  if (essence === ARTIFACT_HTML_BUNDLE_MIME_V1) return ArtifactHtmlBundleV1Schema.parse(JSON.parse(text));
+  if (essence === ARTIFACT_HTML_BUNDLE_MIME_V1) return (purpose === 'stored'
+    ? createStoredReadSchema(ArtifactHtmlBundleV1Schema)
+    : ArtifactHtmlBundleV1Schema).parse(JSON.parse(text));
   if (essence !== 'text/html') throw new Error('Unsupported HTML Artifact MIME');
   return { v: 1, entrypoint: 'index.html', files: { 'index.html': {
     mime: 'text/html', contentBase64: encodeBase64(new TextEncoder().encode(text)),

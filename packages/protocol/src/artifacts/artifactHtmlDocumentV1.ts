@@ -4,13 +4,27 @@ import { parse as parseModule } from 'es-module-lexer/js';
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { ArtifactHtmlBundleV1Schema, type ArtifactHtmlBundleV1 } from './artifactHtmlV1.js';
 import type { PluginHostedWebBridgeBootstrapConfigV1 } from '../plugins/ui/hostedWebBridge.js';
+import { normalizeUiSurfaceCapabilityRequestV1, type UiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
 export const ARTIFACT_HTML_SANDBOX_V1 = 'allow-scripts';
 /** Native top-level documents need a response header; meta cannot sandbox. */
 export const ARTIFACT_HTML_RESPONSE_SANDBOX_CSP_V1 = `sandbox ${ARTIFACT_HTML_SANDBOX_V1}`;
 // data: connects only to opened bundle bytes. No HTTP, host-origin, worker or
 // nested-frame permission is needed to execute modules or read local resources.
-export const ARTIFACT_HTML_CONTENT_CSP_V1 = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:; connect-src data:; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+export function buildArtifactHtmlContentCspV1(requestedCapabilities?: unknown): string {
+  const policy = normalizeUiSurfaceCapabilityRequestV1(requestedCapabilities);
+  const destinations = policy?.network === 'open' ? ['https:'] : policy?.network === 'origins' ? policy.networkOrigins : [];
+  const remote = destinations.length > 0 ? ' ' + destinations.join(' ') : '';
+  return `default-src 'none'; script-src 'unsafe-inline' data:${remote}; style-src 'unsafe-inline' data:${remote}; img-src data:${remote}; font-src data:${remote}; media-src data:${remote}; connect-src data:${remote}; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
+}
+export const ARTIFACT_HTML_CONTENT_CSP_V1 = buildArtifactHtmlContentCspV1();
+/** srcdoc inherits this ceiling and adds its own stored, narrower guest policy. */
+export const ARTIFACT_HTML_SHELL_CSP_V1 = buildArtifactHtmlContentCspV1({ network: 'open' })
+  .replace("script-src 'unsafe-inline' data:", "script-src 'self' 'unsafe-inline' blob: data:")
+  .replace("connect-src data:", "connect-src 'self' data:")
+  .replace('img-src data:', 'img-src blob: data:')
+  .replace('media-src data:', 'media-src blob: data:')
+  .replace("object-src 'none'", 'object-src blob:');
 
 const BUNDLE_ORIGIN = 'https://happier-bundle.invalid';
 const JAVASCRIPT_MIMES = new Set(['text/javascript', 'application/javascript', 'application/ecmascript', 'text/ecmascript']);
@@ -23,29 +37,62 @@ function scriptJson(value: unknown): string {
 
 /** CSP does not refuse about:srcdoc. Admit DOM writes synchronously instead. */
 function installFrameAdmission(): void {
-  // Capture browser constructors before authored code can replace globals and
-  // change the node checks used by the synchronous insertion guards.
+  // Capture native DOM operations before authored code can replace globals or
+  // detach a node's JavaScript prototype without changing its browser brand.
   const NativeNode = Node;
   const NativeElement = Element;
   const NativeTemplate = HTMLTemplateElement;
   const NativeParser = DOMParser;
   const NativeException = DOMException;
+  const NativeTypeError = TypeError;
+  const string = String;
+  const domString = (value: unknown): string => {
+    if (typeof value === 'symbol') throw new NativeTypeError('Cannot convert a Symbol value to a string');
+    return string(value);
+  };
   const apply = Reflect.apply;
+  const hasInstance = Function.prototype[Symbol.hasInstance];
+  const readType = Object.getOwnPropertyDescriptor(NativeNode.prototype, 'nodeType')!.get!;
+  const isNode = (value: unknown): value is Node => {
+    try { apply(readType, value, []); return true; }
+    catch (error) {
+      if (apply(hasInstance, NativeTypeError, [error])) return false;
+      throw error;
+    }
+  };
   const readChildren = Object.getOwnPropertyDescriptor(NativeNode.prototype, 'childNodes')!.get!;
   const readName = Object.getOwnPropertyDescriptor(NativeElement.prototype, 'localName')!.get!;
   const readTemplate = Object.getOwnPropertyDescriptor(NativeTemplate.prototype, 'content')!.get!;
+  const readLength = Object.getOwnPropertyDescriptor(NodeList.prototype, 'length')!.get!;
+  const readItem = NodeList.prototype.item;
   const forbidden = new Set(['iframe', 'frame', 'frameset', 'object', 'embed']);
   const isForbidden = forbidden.has.bind(forbidden);
   const refuse = (): never => { throw new NativeException('Nested browsing contexts are unavailable', 'SecurityError'); };
   const assertNode = (node: Node): void => {
-    if (node instanceof NativeElement && isForbidden(apply(readName, node, []))) refuse();
+    const isElement = apply(readType, node, []) === 1;
+    const name = isElement ? apply(readName, node, []) : null;
+    if (isElement && isForbidden(name)) refuse();
     const children: NodeListOf<ChildNode> = apply(readChildren, node, []);
-    for (const child of children) assertNode(child);
-    if (node instanceof NativeTemplate) assertNode(apply(readTemplate, node, []));
+    for (let index = 0; index < apply(readLength, children, []); index++) {
+      const child = apply(readItem, children, [index]);
+      if (child !== null) assertNode(child);
+    }
+    if (name === 'template') {
+      let content: DocumentFragment;
+      try { content = apply(readTemplate, node, []); }
+      catch (error) {
+        // A non-HTML element named template has no native template content.
+        if (apply(hasInstance, NativeTypeError, [error])) return;
+        throw error;
+      }
+      assertNode(content);
+    }
   };
   const parse = NativeParser.prototype.parseFromString;
-  const assertHtml = (value: unknown): void => {
-    assertNode(apply(parse, new NativeParser(), [String(value), 'text/html']));
+  const assertHtml = (value: unknown): string => {
+    const html = domString(value);
+    assertNode(apply(parse, new NativeParser(), [html, 'text/html']));
+    return html;
   };
   // Lock the captured admission methods before authored code can obtain the
   // native variants. This is guest-local DOM policy, not a host bridge.
@@ -62,14 +109,20 @@ function installFrameAdmission(): void {
     });
   };
   const assertInputs = (args: unknown[]): void => {
-    for (const value of args) if (value instanceof NativeNode) assertNode(value);
+    for (let index = 0; index < args.length; index++) {
+      const value = args[index];
+      if (isNode(value)) assertNode(value);
+    }
   };
   for (const [name, index] of [['createElement', 0], ['createElementNS', 1]] as const) {
     patch(Document.prototype, name, args => {
-      if (isForbidden(String(args[index]).split(':').at(-1)!.toLowerCase())) refuse();
+      if (args.length <= index) return;
+      const name = domString(args[index]);
+      if (isForbidden(name.split(':').at(-1)!.toLowerCase())) refuse();
+      args[index] = name;
     });
   }
-  for (const name of ['appendChild', 'insertBefore', 'replaceChild']) patch(Node.prototype, name, args => assertInputs(args.slice(0, 1)));
+  for (const name of ['appendChild', 'insertBefore', 'replaceChild']) patch(Node.prototype, name, args => assertInputs([args[0]]));
   patch(Range.prototype, 'insertNode', assertInputs);
   for (const owner of [Element.prototype, Document.prototype, DocumentFragment.prototype]) {
     for (const name of ['append', 'prepend', 'replaceChildren']) patch(owner, name, assertInputs);
@@ -77,28 +130,32 @@ function installFrameAdmission(): void {
   for (const owner of [Element.prototype, CharacterData.prototype, DocumentType.prototype]) {
     for (const name of ['before', 'after', 'replaceWith']) patch(owner, name, assertInputs);
   }
-  patch(Element.prototype, 'insertAdjacentElement', args => assertInputs(args.slice(1)));
+  patch(Element.prototype, 'insertAdjacentElement', args => assertInputs([args[1]]));
   for (const [owner, name] of [[Element.prototype, 'innerHTML'], [Element.prototype, 'outerHTML'], [ShadowRoot.prototype, 'innerHTML']] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(owner, name);
     if (!descriptor?.set) continue;
     const set = descriptor.set;
     Object.defineProperty(owner, name, {
       ...descriptor, configurable: false,
-      set(this: unknown, value: unknown) { assertHtml(value); apply(set, this, [value]); },
+      set(this: unknown, value: unknown) { apply(set, this, [assertHtml(value === null ? '' : value)]); },
     });
   }
-  patch(Element.prototype, 'insertAdjacentHTML', args => assertHtml(args[1]));
+  patch(Element.prototype, 'insertAdjacentHTML', args => { if (args.length > 1) args[1] = assertHtml(args[1]); });
   for (const owner of [Element.prototype, ShadowRoot.prototype]) {
-    for (const name of ['setHTML', 'setHTMLUnsafe']) patch(owner, name, args => assertHtml(args[0]));
+    for (const name of ['setHTML', 'setHTMLUnsafe']) patch(owner, name, args => { if (args.length > 0) args[0] = assertHtml(args[0]); });
   }
   // Declarative closed shadow roots disappear from childNodes after parsing.
   // Check their inert template markup before that native transformation.
-  for (const name of ['parseHTML', 'parseHTMLUnsafe']) patch(Document, name, args => assertHtml(args[0]));
+  for (const name of ['parseHTML', 'parseHTMLUnsafe']) patch(Document, name, args => { if (args.length > 0) args[0] = assertHtml(args[0]); });
   // Fragments/documents remain usable; actual insertion is checked above.
   // Parser-stream writes need the accumulated prefix to catch split tags.
   let written = '';
   for (const name of ['write', 'writeln']) patch(Document.prototype, name, args => {
-    const next = written + args.map(String).join('');
+    let next = written;
+    for (let index = 0; index < args.length; index++) {
+      args[index] = domString(args[index]);
+      next += args[index];
+    }
     assertHtml(next);
     written = next;
   });
@@ -137,9 +194,15 @@ function installBundleResources(urls: Readonly<Record<string, string>>, entrypoi
  */
 export function buildArtifactHtmlDocumentV1(bundleInput: ArtifactHtmlBundleV1, options: Readonly<{
   bootstrapConfig?: PluginHostedWebBridgeBootstrapConfigV1;
+  /** Host-owned browser client, executed under the same CSP before author code. */
+  guestBootstrapScript?: string;
   externalHttpLinks?: boolean;
+  requestedCapabilities?: UiSurfaceCapabilityRequestV1;
+  networkOff?: boolean;
 }> = {}): string {
   const bundle = ArtifactHtmlBundleV1Schema.parse(bundleInput);
+  const contentCsp = buildArtifactHtmlContentCspV1(options.networkOff === true ? { network: 'none' }
+    : options.requestedCapabilities ?? bundle.requestedCapabilities);
   const text = (path: string): string => new TextDecoder('utf-8', { fatal: true }).decode(decodeBase64(bundle.files[path].contentBase64));
   const virtualUrl = (path: string): string => new URL(path, BUNDLE_ORIGIN + '/').href;
   const resolvePath = (reference: string, from: string): string | null => {
@@ -278,14 +341,15 @@ export function buildArtifactHtmlDocumentV1(bundleInput: ArtifactHtmlBundleV1, o
   }
   const html = parsed.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'html')!;
   const head = html.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'head')!;
-  const prefix = parseHtml(`<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_HTML_CONTENT_CSP_V1}"><script></script><script type="importmap"></script>`);
+  const prefix = parseHtml(`<meta http-equiv="Content-Security-Policy" content="${contentCsp}"><script></script><script type="importmap"></script>`);
   const prefixHtml = prefix.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'html')!;
   const prefixHead = prefixHtml.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'head')!;
   const bootstrap = prefixHead.childNodes[1] as Element;
   const urlMap = Object.fromEntries([...urls].map(([path, url]) => [virtualUrl(path), url]));
   const config = options.bootstrapConfig === undefined ? '' : `Object.defineProperty(globalThis,"__HAPPIER_UI_FRAME_BOOTSTRAP_V1__",{value:Object.freeze(${scriptJson(options.bootstrapConfig)}),writable:false,configurable:false});`;
   const links = options.externalHttpLinks === true ? 'Object.defineProperty(globalThis,"__HAPPIER_UI_FRAME_EXTERNAL_LINKS_V1__",{value:true,writable:false,configurable:false});' : '';
-  setContent(bootstrap, `${config}${links}(${installFrameAdmission.toString()})();(${installBundleResources.toString()})(${scriptJson(urlMap)},${scriptJson(virtualUrl(bundle.entrypoint))});`);
+  const guest = options.guestBootstrapScript?.replace(/<\/script/giu, '<\\/script') ?? '';
+  setContent(bootstrap, `${config}${links}(${installFrameAdmission.toString()})();(${installBundleResources.toString()})(${scriptJson(urlMap)},${scriptJson(virtualUrl(bundle.entrypoint))});${guest}`);
   setContent(prefixHead.childNodes[2] as Element, scriptJson({ imports: urlMap }));
   for (const node of [...prefixHead.childNodes].reverse()) {
     defaultTreeAdapter.detachNode(node);

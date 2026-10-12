@@ -12,10 +12,14 @@ import { roleArtifactSharingAdapterV1 } from '../prompts/roles/roleArtifactShari
 import { launchProfileArtifactSharingAdapterV1 } from '../launchProfiles/launchProfileArtifactV1.js';
 import { readWorkBoardArtifactV1 } from '../boards/workBoardArtifactV1.js';
 import { getWidgetSharedInputIssuesV1 } from '../widgets/widgetSharedInputAdmissionV1.js';
+import { WIDGET_DEFINITION_ARTIFACT_KIND_V1 } from '../widgets/widgetDefinitionArtifactV1.js';
+import { WidgetDefinitionV1StoredSchema } from '../widgets/widgetDefinitionV1.js';
 import { PromptDocArtifactHeaderV1Schema, PromptDocBodyV1Schema } from '../prompts/library/promptDocV2.js';
 import { MemoryDocArtifactHeaderV1StoredSchema, MemoryDocBodyV1StoredSchema } from '../prompts/library/memoryDocV1.js';
 import { PromptBundleBodyV1Schema, PromptBundleSchemaIdV1Schema,
   validatePromptBundleBodyV1AgainstSchemaId } from '../prompts/library/promptBundleSchemas.js';
+
+export { readArtifactPublicNetworkPolicyV1 } from './artifactPublicNetworkPolicyV1.js';
 
 export type ArtifactSharingResourceV1 = Readonly<{
   artifactId: string;
@@ -61,7 +65,7 @@ export type ArtifactSharingKindAdapterV1 = Readonly<{
 /** Recipient intent and content admission only. Grants and content opening belong to the store. */
 export type ArtifactUseTargetV1 = Readonly<{
   artifactId: string;
-  kind: 'open' | 'prompt_doc' | 'prompt_bundle' | 'memory' | 'workflow' | 'role' | 'launch_profile' | 'board';
+  kind: 'open' | 'prompt_doc' | 'prompt_bundle' | 'memory' | 'workflow' | 'role' | 'launch_profile' | 'board' | 'approval';
   canShare: boolean;
   browserListed: boolean;
   publicLinkAllowed: boolean;
@@ -163,6 +167,18 @@ export const widgetSurfaceArtifactSharingAdapterV1 = {
   },
 } as const satisfies ArtifactSharingKindAdapterV1;
 
+export const widgetDefinitionArtifactSharingAdapterV1 = {
+  kind: WIDGET_DEFINITION_ARTIFACT_KIND_V1,
+  canShare(resource: ArtifactSharingResourceV1) {
+    try {
+      const stored = readBody(resource);
+      const parsed = WidgetDefinitionV1StoredSchema.safeParse(stored);
+      return resource.header.v === 1 && parsed.success && parsed.data.id === resource.artifactId
+        && getWidgetSharedInputIssuesV1({ id: parsed.data.id, definition: { kind: 'inline', definition: stored } }).length === 0;
+    } catch { return false; }
+  },
+} as const satisfies ArtifactSharingKindAdapterV1;
+
 const documentPolicy = { browserListed: true, publicLinkAllowed: true, peopleSharingAllowed: true } as const;
 const privatePolicy = { browserListed: false, publicLinkAllowed: false, peopleSharingAllowed: false } as const;
 
@@ -178,8 +194,9 @@ const kindPolicies: readonly Readonly<ArtifactKindPolicyV1 & {
     { adapter: memoryDocArtifactSharingAdapterV1, useKind: 'memory' as const },
     { adapter: promptBundleArtifactSharingAdapterV1, useKind: 'prompt_bundle' as const },
     { adapter: workBoardArtifactSharingAdapterV1, useKind: 'board' as const },
+    { adapter: widgetDefinitionArtifactSharingAdapterV1, useKind: 'open' as const },
   ].map(policy => ({ ...documentPolicy, ...policy, kind: policy.adapter.kind, requiresTextBody: true })),
-  ...Object.values(APPROVAL_ARTIFACT_KINDS_V1).map(kind => ({ ...privatePolicy, kind, useKind: 'open' as const, requiresTextBody: true })),
+  ...Object.values(APPROVAL_ARTIFACT_KINDS_V1).map(kind => ({ ...privatePolicy, kind, useKind: 'approval' as const, requiresTextBody: true })),
   { ...documentPolicy, kind: WIDGET_SURFACE_ARTIFACT_KIND_V1, adapter: widgetSurfaceArtifactSharingAdapterV1, useKind: 'open', requiresTextBody: false,
     browserListed: false, publicLinkAllowed: false },
   { ...privatePolicy, kind: HOME_HUB_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: false },
@@ -200,7 +217,8 @@ export function artifactKindRequiresTextBodyV1(kind: unknown): boolean {
 /** Only these existing content adapters own shared widget-input admission. */
 export function artifactKindHasSharedWidgetInputsV1(kind: unknown): boolean {
   const adapter = kindPolicies.find(policy => policy.kind === kind)?.adapter;
-  return adapter === workBoardArtifactSharingAdapterV1 || adapter === widgetSurfaceArtifactSharingAdapterV1;
+  return adapter === workBoardArtifactSharingAdapterV1 || adapter === widgetSurfaceArtifactSharingAdapterV1
+    || adapter === widgetDefinitionArtifactSharingAdapterV1;
 }
 
 export function getArtifactUseTargetV1(resource: ArtifactSharingResourceV1): ArtifactUseTargetV1 {

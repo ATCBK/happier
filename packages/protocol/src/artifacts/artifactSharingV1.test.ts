@@ -4,7 +4,10 @@ import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1 } fr
 import { buildWorkBoardArtifactHeaderV1 } from '../boards/workBoardArtifactV1.js';
 import { createWorkBoardV1 } from '../boards/workBoardV1.js';
 import { WidgetInstanceV1Schema } from '../widgets/widgetInstanceV1.js';
+import { WidgetDefinitionV1Schema } from '../widgets/widgetDefinitionV1.js';
 import { ArtifactDocumentV1Schema, projectArtifactHeaderV1 } from './artifactActionsV1.js';
+import { ArtifactHtmlBundleV1Schema, ARTIFACT_HTML_BUNDLE_MIME_V1 } from './artifactHtmlV1.js';
+import { withArtifactExcerptV1 } from './artifactExcerptV1.js';
 
 import {
   filterArtifactSharingResourcesByKindV1,
@@ -12,6 +15,7 @@ import {
   getArtifactUseTargetV1,
   artifactKindRequiresTextBodyV1,
   readArtifactSharedAudienceV1,
+  readArtifactPublicNetworkPolicyV1,
 } from './artifactSharingV1.js';
 
 const artifact = {
@@ -22,6 +26,76 @@ const artifact = {
   },
 };
 describe('Document sharing kind owner', () => {
+  it('reports the saved HTML or definition policy and never opens egress from arbitrary header metadata', () => {
+    const bundle = ArtifactHtmlBundleV1Schema.parse({ v: 1, entrypoint: 'index.html', requestedCapabilities: { networkOrigins: ['https://assets.example.test'] },
+      files: { 'index.html': { mime: 'text/html', contentBase64: 'PGgxPkhlbGxvPC9oMT4=' } } });
+    const resource = { artifactId: 'visual', header: { kind: 'html', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 }, body: JSON.stringify(bundle) };
+    expect(readArtifactPublicNetworkPolicyV1(resource)).toEqual({ network: 'origins', networkOrigins: ['https://assets.example.test'] });
+    expect(readArtifactPublicNetworkPolicyV1({ ...resource, body: null })).toBeNull();
+    expect(readArtifactPublicNetworkPolicyV1({ ...resource, body: { blobId: 'd147390f-1ccf-4aa4-b842-7d77fbb057c0',
+      mime: ARTIFACT_HTML_BUNDLE_MIME_V1, sizeBytes: 1, sha256: 'a'.repeat(64) } })).toBeNull();
+    expect(readArtifactPublicNetworkPolicyV1({ ...resource, body: null, htmlBundle: bundle })).toEqual({ network: 'origins', networkOrigins: ['https://assets.example.test'] });
+    expect(readArtifactPublicNetworkPolicyV1({ ...resource, body: '{bad', header: { ...resource.header, requestedCapabilities: { network: 'open' } } }))
+      .toEqual({ network: 'none', networkOrigins: [] });
+    const definition = { v: 1, id: 'visual', name: 'Saved HTML', sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      body: { kind: 'html', source: bundle, requestedCapabilities: { network: 'open' } },
+      inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } } };
+    const saved = { ...resource, header: { kind: 'widget-definition.v1', v: 1 }, body: JSON.stringify(definition) };
+    expect(readArtifactPublicNetworkPolicyV1(saved)).toEqual({ network: 'open', networkOrigins: [] });
+    expect(readArtifactPublicNetworkPolicyV1({ ...saved, body: JSON.stringify({ ...definition, networkOverride: { network: 'none' } }) }))
+      .toEqual({ network: 'none', networkOrigins: [] });
+  });
+  it.each(['installed', 'html-resource'] as const)('reports no public egress for an unavailable %s widget despite its stored override', kind => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'visual', name: 'Unavailable widget',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, networkOverride: { network: 'open' },
+      body: kind === 'installed' ? { kind: 'installed', surface: { pluginId: 'com.acme.widget', localId: 'live' } }
+        : { kind: 'html', source: { v: 1, entrypoint: 'index.html', files: {
+          'index.html': { mime: 'text/html', contentBase64: 'PGgxPkhlbGxvPC9oMT4=' },
+        } }, requestedCapabilities: { network: 'open', resources: [{ pluginId: 'com.acme.widget', localId: 'metrics' }] } },
+      inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } } });
+    expect(readArtifactPublicNetworkPolicyV1({ artifactId: 'visual', header: { kind: 'widget-definition.v1', v: 1 }, body: JSON.stringify(definition) }))
+      .toEqual({ network: 'none', networkOrigins: [] });
+  });
+  it('admits validated widget definitions and refuses malformed or substituted saved visuals', () => {
+    const definition = { v: 1, id: 'visual', name: 'Saved chart',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Saved content' } } },
+      inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
+      provenance: { source: { kind: 'authored' } } };
+    const resource = { artifactId: 'visual', header: { kind: 'widget-definition.v1', v: 1 }, body: JSON.stringify(definition) };
+    expect(artifactKindRequiresTextBodyV1('widget-definition.v1')).toBe(true);
+    expect(getArtifactUseTargetV1(resource)).toMatchObject({ canShare: true, publicLinkAllowed: true });
+    const stored = { ...definition, futureDisplayField: 1,
+      provenance: { ...definition.provenance, futureDisplayField: 1 },
+      body: { ...definition.body, futureDisplayField: 1, document: { ...definition.body.document,
+        root: { ...definition.body.document.root, futureDisplayField: 1 } } } };
+    expect(getArtifactUseTargetV1({ ...resource, body: JSON.stringify(stored) }))
+      .toMatchObject({ canShare: true, publicLinkAllowed: true });
+    const privateSelection = { service: { pluginId: 'com.acme.test', localId: 'cloud', futureDisplayField: 1 }, accountId: 'private' };
+    for (const raw of [{ ...stored, futureInput: privateSelection },
+      { ...stored, body: { ...stored.body, futureInput: privateSelection } }]) {
+      expect(getArtifactUseTargetV1({ ...resource, body: JSON.stringify(raw) }))
+        .toMatchObject({ canShare: false, publicLinkAllowed: false });
+    }
+    expect(WidgetDefinitionV1Schema.safeParse(stored).success).toBe(false);
+    for (const body of ['{bad', JSON.stringify({ ...definition, id: 'another' }),
+      JSON.stringify({ ...definition, body: { kind: 'declarative', document: {} } })]) {
+      expect(getArtifactUseTargetV1({ ...resource, body })).toMatchObject({ canShare: false, publicLinkAllowed: false });
+    }
+  });
+  it('restores the saved widget revision summary from its body instead of the current definition', () => {
+    const definition = { v: 1, id: 'visual', name: 'Before',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Old content' } } },
+      inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
+      provenance: { source: { kind: 'authored' } } };
+    const header = prepareArtifactHeaderForRevisionV1({ artifactId: 'visual',
+      header: { kind: 'widget-definition.v1', v: 1, title: 'Current', summary: { name: 'Current' } },
+      body: JSON.stringify({ ...definition, futureDisplayField: 1, provenance: { ...definition.provenance, futureDisplayField: 1 } }),
+      shared: true, expectedRevision: { headerVersion: 3, bodyVersion: 3 },
+      nextRevision: { headerVersion: 4, bodyVersion: 4 } });
+    expect(header).toMatchObject({ title: 'Before', summary: { name: 'Before', bodyKind: 'declarative' } });
+  });
   it('normalizes absent and future authenticated audience facts without inferring privacy or leaking native body fields', () => {
     const native = { artifactId: 'board', ownerAccountId: 'owner', access: 'owner', header: { kind: 'work-board.v1' },
       headerVersion: 1, bodyVersion: 2, seq: 1, createdAt: 1, updatedAt: 1 };
@@ -75,11 +149,22 @@ describe('Document sharing kind owner', () => {
     expect(target('usage_notice.v1')).toMatchObject({ browserListed: false, publicLinkAllowed: false, canShare: false });
     expect(artifactKindRequiresTextBodyV1('usage_notice.v1')).toBe(true);
     for (const kind of ['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1']) {
-      expect(target(kind)).toMatchObject({ browserListed: false, publicLinkAllowed: false, canShare: false });
+      expect(target(kind)).toMatchObject({ kind: 'approval', browserListed: false, publicLinkAllowed: false, canShare: false });
     }
     for (const kind of [undefined, 'text', 'published.v1']) {
       expect(target(kind)).toMatchObject({ kind: 'open', browserListed: true, publicLinkAllowed: true, canShare: true });
     }
+  });
+  it('keeps replay custody out of approval header excerpts on create, update and restore', () => {
+    const body = JSON.stringify({ executionOriginV1: { externalActionExecutionAuthorization: { v: 1 } } });
+    for (const kind of ['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1']) {
+      const header = { kind, title: 'Review request', excerpt: body };
+      const projected = withArtifactExcerptV1(header, body);
+      expect(projected).toEqual({ kind, title: 'Review request' });
+      expect(header.excerpt).toBe(body);
+    }
+    expect(withArtifactExcerptV1({ title: 'Document', excerpt: 'old' }, 'Current text'))
+      .toEqual({ title: 'Document', excerpt: 'Current text' });
   });
   it('validates stored dashboard content and private inputs while retaining private-definition placeholders', () => {
     const surface = { serverId: 'home', accountId: 'owner', owner: { kind: 'project', projectId: 'project' } } as const;
@@ -144,10 +229,14 @@ describe('Document sharing kind owner', () => {
     const resource = { artifactId: buildWidgetSurfaceArtifactIdV1(surface), header: buildWidgetSurfaceArtifactHeaderV1(layout),
       body: JSON.stringify(layout) };
     expect(getArtifactUseTargetV1(resource).canShare).toBe(false);
+    const saved = { artifactId: 'metric', header: { kind: 'widget-definition.v1', v: 1 }, body: JSON.stringify(definition) };
+    expect(getArtifactUseTargetV1(saved)).toMatchObject({ canShare: false, publicLinkAllowed: false });
     const { input: _literal, ...viewerData } = data;
     const safe = { ...instance, definition: { kind: 'inline', definition: { ...definition, body: { kind: 'declarative', document: { version: 1,
       root: { ...definition.body.document.root, data: viewerData } } } } } };
     expect(getArtifactUseTargetV1({ ...resource, body: JSON.stringify({ v: 1, surface, items: [{ kind: 'widget', instance: safe }] }) }).canShare).toBe(true);
+    expect(getArtifactUseTargetV1({ ...saved, body: JSON.stringify(safe.definition.definition) }))
+      .toMatchObject({ canShare: true, publicLinkAllowed: true });
   });
   it('restores unknown stored Workflow body fields through the canonical header projection', () => {
     const header = { kind: 'workflow-definition.v1', definitionId: 'definition-1',

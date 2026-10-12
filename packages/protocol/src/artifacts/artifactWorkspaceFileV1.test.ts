@@ -23,4 +23,19 @@ describe('workspace HTML publication', () => {
       expect(ArtifactPublishFromFileInputV1Schema.safeParse({ path: 'site', entrypoint }).success).toBe(false);
     }
   });
+
+  it.each([true, false])('stores the approved network choice in published HTML bytes (folder=%s)', folder => {
+    const requestedCapabilities = { networkOrigins: ['https://cdn.example.com'] };
+    const input = ArtifactPublishFromFileInputV1Schema.parse({ path: folder ? 'site' : 'index.html', requestedCapabilities });
+    const original = folder ? new TextEncoder().encode(JSON.stringify(bundle)) : new TextEncoder().encode('<h1>Hello</h1>');
+    const content = prepareArtifactWorkspaceFileV1({ caller: { sessionId: 'session', machineId: 'machine' },
+      file: { bytes: original, name: folder ? 'site' : 'index.html', path: input.path, sha: 'a'.repeat(64), ...(folder ? { bundle } : {}) }, input });
+    expect(content.bundle).toMatchObject({ requestedCapabilities });
+    expect(content.binary).toBeDefined();
+    const stored = JSON.parse(new TextDecoder().decode(content.binary!.bytes));
+    expect(stored).toEqual(content.bundle);
+    expect(content.header).toMatchObject({ mime: ARTIFACT_HTML_BUNDLE_MIME_V1, sizeBytes: content.binary!.bytes.length });
+    expect(content.source.sha).toBe('a'.repeat(64));
+    expect(bundle).not.toHaveProperty('requestedCapabilities');
+  });
 });

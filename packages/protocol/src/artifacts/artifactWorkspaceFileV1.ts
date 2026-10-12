@@ -3,6 +3,7 @@ import { ArtifactWorkspaceSourceV1Schema } from './artifactBinaryV1.js';
 import { z } from 'zod';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ArtifactHtmlBundleV1Schema } from './artifactHtmlV1.js';
+import { UiSurfaceCapabilityRequestV1Schema, type UiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
 /** Acquisition intent is Action input only; stored HTML always carries a by-value bundle. */
 export const ArtifactWorkspacePublicationSourceV1Schema = lazyZodSchema(() => z.object({
@@ -14,7 +15,7 @@ export const ArtifactWorkspacePublicationSourceV1Schema = lazyZodSchema(() => z.
 export function prepareArtifactWorkspaceFileV1(params: Readonly<{
   caller: Readonly<{ sessionId: string; machineId: string; runId?: string }>;
   file: Readonly<{ bytes: Uint8Array; name: string; path: string; sha: string; bundle?: ArtifactHtmlBundleV1 }>;
-  input: Readonly<{ title?: string; mime?: string; kind?: string }>;
+  input: Readonly<{ title?: string; mime?: string; kind?: string; requestedCapabilities?: UiSurfaceCapabilityRequestV1 }>;
 }>) {
   const { file, input, caller } = params;
   const declaredMime = input.mime?.split(';', 1)[0].trim().toLowerCase();
@@ -45,6 +46,14 @@ export function prepareArtifactWorkspaceFileV1(params: Readonly<{
   if (!bundle && kind === 'html') {
     try { bundle = artifactHtmlBundleFromBodyV1(file.bytes, mime); }
     catch { /* Ordinary file publication retains its existing unavailable-preview result. */ }
+  }
+  if (input.requestedCapabilities !== undefined) {
+    if (!bundle || kind !== 'html') throw Object.assign(new Error('artifact_source_forbidden'), { code: 'artifact_source_forbidden' });
+    bundle = ArtifactHtmlBundleV1Schema.parse({ ...bundle,
+      requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.parse(input.requestedCapabilities) });
+    const bytes = new TextEncoder().encode(JSON.stringify(bundle));
+    return { header: { ...header, mime: ARTIFACT_HTML_BUNDLE_MIME_V1, sizeBytes: bytes.length }, source,
+      binary: { bytes, mime: ARTIFACT_HTML_BUNDLE_MIME_V1 }, bundle };
   }
   return body === undefined ? { header, source, binary: { bytes: file.bytes, mime }, bundle } : { header, source, body, bundle };
 }

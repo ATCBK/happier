@@ -1,4 +1,5 @@
 import type { ArtifactBodyV1 } from './artifactBinaryV1.js';
+import { isApprovalArtifactKindV1 } from '../approvals/approvalArtifactKindV1.js';
 
 /** ART-A2's card preview contract; the encrypted header carries this projection, not a search index. */
 export const ARTIFACT_EXCERPT_MAX_CHARS_V1 = 600;
@@ -18,6 +19,8 @@ export function withArtifactExcerptV1(
   header: Readonly<Record<string, unknown>>, body: ArtifactBodyV1 | null,
 ): Readonly<Record<string, unknown>> {
   const { excerpt: _previous, ...metadata } = header;
+  // Approval bodies retain private replay authority, never ordinary document previews.
+  if (isApprovalArtifactKindV1(header.kind)) return metadata;
   const excerpt = deriveArtifactExcerptV1(body);
   return excerpt === undefined ? metadata : { ...metadata, excerpt };
 }
