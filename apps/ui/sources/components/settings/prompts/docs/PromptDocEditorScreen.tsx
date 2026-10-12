@@ -44,7 +44,7 @@ type EditorDocument = Readonly<{ artifact: PromptLibraryStoredArtifact; title: s
 
 const styles = StyleSheet.create((theme) => ({
   conflict: {
-    marginBottom: 8,
+    marginBottom: theme.space.s8,
   },
   editorContainer: {
     borderRadius: 10,

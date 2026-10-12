@@ -55,17 +55,17 @@ type PluginInstallationReviewDialogProps = CustomModalInjectedProps & Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
         flexGrow: 1,
-        paddingHorizontal: 20,
-        paddingTop: 16,
-        paddingBottom: 20,
-        gap: 16,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s16,
+        paddingBottom: theme.space.s20,
+        gap: theme.space.s16,
     },
     reviewBody: {
         ...Typography.default(),
         color: theme.colors.text.primary,
     },
     section: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     sectionTitle: {
         ...Typography.default('semiBold'),
@@ -80,15 +80,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     optionalList: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     optionalRow: {
         minHeight: 56,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -96,7 +96,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     optionalCopy: {
         flex: 1,
-        gap: 2,
+        gap: theme.space.s2,
     },
     optionalTitle: {
         ...Typography.default('semiBold'),
@@ -114,13 +114,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
     action: {
         minHeight: 44,
         flexShrink: 1,
         justifyContent: 'center',
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         borderRadius: 12,
     },
     cancelAction: {

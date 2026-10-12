@@ -163,7 +163,7 @@ const styles = StyleSheet.create((theme) => ({
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
   },
   // The row description's own step: the same metrics a banner's description uses.
   line: {

@@ -39,10 +39,10 @@ export const McpServerRowSummary = React.memo(function McpServerRowSummary(props
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     itemSubtitleContainer: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     itemSubtitle: {
         ...Typography.default('regular'),
@@ -56,9 +56,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     secondary: {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

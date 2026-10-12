@@ -150,9 +150,7 @@ export const SessionResumeSettingsView = React.memo(function SessionResumeSettin
 
 const styles = StyleSheet.create((theme) => ({
     fieldNotice: {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.state.warning.foreground,
     },
 }));

@@ -23,18 +23,18 @@ type ServerReachabilityRemediationCardProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        marginBottom: 12,
-        padding: 12,
+        marginBottom: theme.space.s12,
+        padding: theme.space.s12,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.inset,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        gap: 10,
+        gap: theme.space.s10,
     },
     headerRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     iconWrap: {
         width: 28,
@@ -44,21 +44,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     textColumn: {
         flex: 1,
-        gap: 4,
+        gap: theme.space.s4,
     },
     title: {
         ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
     },
     body: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        lineHeight: 19,
     },
     actionsRow: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     actionWrap: {
         flex: 1,

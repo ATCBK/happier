@@ -180,16 +180,16 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
   },
   barFrame: {
-    marginHorizontal: 12,
+    marginHorizontal: theme.space.s12,
     borderRadius: FLOATING_OVERLAY_METRICS.radiusPx,
     ...shadowLevelStyle(theme.colors.shadowLevels[2]),
   },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s10,
     borderRadius: FLOATING_OVERLAY_METRICS.radiusPx,
     overflow: 'hidden',
     ...resolveThemeSurfaceBorderStyle({
@@ -205,7 +205,7 @@ const styles = StyleSheet.create((theme) => ({
   barValueRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 4,
+    gap: theme.space.s4,
   },
   barValue: {
     ...Typography.default('bold'),

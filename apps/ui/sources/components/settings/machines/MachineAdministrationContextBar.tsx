@@ -45,15 +45,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        gap: 10,
+        gap: theme.space.s10,
         width: '100%',
         alignSelf: 'center',
         paddingHorizontal: PAGE_LIST_METRICS.pageTextInsetPx,
         paddingTop: 14,
     },
     label: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

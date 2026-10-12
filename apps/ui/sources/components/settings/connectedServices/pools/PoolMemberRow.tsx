@@ -206,12 +206,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     leading: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     right: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
+        gap: theme.space.s16,
         flexShrink: 1,
         minWidth: 0,
     },
@@ -224,7 +224,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     controls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         flexShrink: 0,
     },
     muted: {
@@ -233,20 +233,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     note: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
         marginTop: 3,
     },
     noteText: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.state.warning.foreground,
         flexShrink: 1,
     },
     quiet: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

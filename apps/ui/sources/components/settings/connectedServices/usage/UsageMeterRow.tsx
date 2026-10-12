@@ -204,7 +204,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: USAGE_METER_METRICS.gapPx,
     },
     stacked: {
-        gap: 5,
+        gap: theme.space.s4,
     },
     stackedLine: {
         flexDirection: 'row',
@@ -225,10 +225,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'left',
     },
     label: {
-        ...Typography.default(),
         width: USAGE_METER_METRICS.labelWidthPx,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     inlineLabel: {
@@ -240,12 +238,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: USAGE_METER_METRICS.minBarWidthPx,
     },
     value: {
-        ...Typography.default('medium'),
         minWidth: USAGE_METER_METRICS.valueWidthPx,
         flexShrink: 0,
         textAlign: 'right',
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'medium'),
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
     },
@@ -260,8 +256,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
     valueUnknown: {
-        ...Typography.default(),
-        fontSize: 11.5,
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
     },
     valueWarning: {
@@ -271,11 +266,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
     },
     reset: {
-        ...Typography.default(),
         width: USAGE_METER_METRICS.resetWidthPx,
         textAlign: 'right',
-        fontSize: 11.5,
-        lineHeight: 16,
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
     },

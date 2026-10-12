@@ -91,9 +91,9 @@ const styles = StyleSheet.create((theme) => ({
     // As tall as what it holds: cards in a row do not stretch to the tallest (lab C2).
     card: {
         minWidth: 0,
-        gap: 10,
-        paddingTop: 13,
-        paddingBottom: 12,
+        gap: theme.space.s10,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s12,
         paddingHorizontal: 14,
         borderRadius: 14,
         borderWidth: StyleSheet.hairlineWidth,
@@ -107,30 +107,26 @@ const styles = StyleSheet.create((theme) => ({
     top: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     topText: {
         flex: 1,
         minWidth: 0,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 13.5,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         minHeight: 20,
-        paddingTop: 10,
+        paddingTop: theme.space.s10,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.subtle,
     },
@@ -142,6 +138,6 @@ const styles = StyleSheet.create((theme) => ({
     agents: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
 }));

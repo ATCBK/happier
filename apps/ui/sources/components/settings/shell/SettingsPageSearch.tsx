@@ -50,7 +50,7 @@ const styles = StyleSheet.create((theme) => ({
     field: {
         backgroundColor: 'transparent',
         borderBottomWidth: 0,
-        paddingTop: theme.margins.md,
+        paddingTop: theme.space.s12,
         paddingBottom: 0,
     },
 }));

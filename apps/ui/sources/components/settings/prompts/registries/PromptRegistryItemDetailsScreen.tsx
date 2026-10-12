@@ -67,7 +67,7 @@ const styles = StyleSheet.create((theme) => ({
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
     flexWrap: 'wrap',
   },
 }));

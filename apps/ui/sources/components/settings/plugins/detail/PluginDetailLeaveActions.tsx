@@ -72,23 +72,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     // Pushes the irreversible erase to the far edge when the row fits, apart from the recoverable ones.
     spacer: {
         flexGrow: 1,
     },
     quietAction: {
-        ...Typography.default('medium'),
-        fontSize: 13,
+        ...Typography.variant('body', 'medium'),
         color: theme.colors.text.secondary,
     },
     footnote: {
-        ...Typography.default('regular'),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        marginTop: 10,
-        marginHorizontal: 2,
+        marginTop: theme.space.s10,
+        marginHorizontal: theme.space.s2,
     },
 }));

@@ -10,10 +10,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
   },
   badge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: theme.space.s8,
     paddingVertical: 3,
     borderRadius: 999,
     backgroundColor: theme.colors.surface.inset,

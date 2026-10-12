@@ -54,7 +54,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         maxWidth: 220,
     },
     containerStart: {
@@ -64,11 +64,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'flex-end',
     },
     containerCompact: {
-        gap: 4,
+        gap: theme.space.s4,
         maxWidth: 260,
     },
     badgeCompact: {
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         paddingVertical: 1,
     },
 }));

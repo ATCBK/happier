@@ -248,9 +248,7 @@ export const SettingsHistorySection = React.memo(function SettingsHistorySection
 
 const styles = StyleSheet.create((theme) => ({
     explanation: {
-        ...Typography.default('regular'),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
 }));

@@ -207,12 +207,12 @@ const UseOnePressable = React.memo(function UseOnePressable(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     lines: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     line: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     dot: {
         width: 6,
@@ -220,10 +220,8 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 3,
     },
     text: {
-        ...Typography.default(),
         flexShrink: 1,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     warning: {
@@ -236,7 +234,7 @@ const styles = StyleSheet.create((theme) => ({
     resets: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
+        gap: theme.space.s6,
         minHeight: 22,
     },
     grow: {
@@ -245,12 +243,10 @@ const styles = StyleSheet.create((theme) => ({
     link: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
     linkLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.primary,
     },
 }));

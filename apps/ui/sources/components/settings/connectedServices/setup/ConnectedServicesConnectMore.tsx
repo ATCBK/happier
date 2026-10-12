@@ -302,20 +302,18 @@ const styles = StyleSheet.create((theme) => ({
     },
     firstRunMarks: {
         flexDirection: 'row',
-        gap: 10,
+        gap: theme.space.s10,
     },
     marks: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     grow: {
         flex: 1,
     },
     moreTitle: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     pressed: {

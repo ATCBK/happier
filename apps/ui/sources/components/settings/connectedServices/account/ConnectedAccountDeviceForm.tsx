@@ -180,16 +180,16 @@ export const ConnectedAccountDeviceForm = React.memo(function ConnectedAccountDe
 const stylesheet = StyleSheet.create((theme) => ({
     codeSeparator: { color: theme.colors.text.secondary, fontWeight: '400' },
     page: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     codeBox: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
         gap: 18,
-        paddingHorizontal: 20,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s16,
         borderRadius: 14,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -201,7 +201,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     codeBoxPhone: {
         flexDirection: 'column',
         width: '100%',
-        gap: 12,
+        gap: theme.space.s12,
     },
     openPhone: { width: '100%' },
     waitDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.accent.blue },
@@ -215,37 +215,31 @@ const stylesheet = StyleSheet.create((theme) => ({
     wait: {
         flex: 1,
         minWidth: 0,
-        gap: 10,
+        gap: theme.space.s10,
     },
     waiting: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     waitingText: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     expiredText: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
     grow: {
         flex: 1,
     },
     expiry: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
     },
     recovery: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));

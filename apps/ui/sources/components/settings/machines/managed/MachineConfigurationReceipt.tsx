@@ -268,12 +268,12 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...meta,
     color: theme.colors.text.tertiary,
-    marginBottom: 8,
+    marginBottom: theme.space.s8,
   },
   identity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: theme.space.s12,
   },
   mark: {
     width: 28,
@@ -286,7 +286,7 @@ const styles = StyleSheet.create((theme) => ({
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: theme.space.s4,
   },
   name: {
     ...Typography.default('semiBold'),
@@ -307,7 +307,7 @@ const styles = StyleSheet.create((theme) => ({
   factValue: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexShrink: 1,
     justifyContent: 'flex-end',
   },
@@ -319,12 +319,12 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   cost: {
-    gap: 6,
+    gap: theme.space.s6,
   },
   bigRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 6,
+    gap: theme.space.s6,
     flexWrap: 'wrap',
   },
   big: {
@@ -346,7 +346,7 @@ const styles = StyleSheet.create((theme) => ({
   source: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 6,
+    gap: theme.space.s6,
   },
   sourceText: {
     ...Typography.default(),
@@ -355,7 +355,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
   },
   meter: {
-    gap: 4,
+    gap: theme.space.s4,
   },
   meterLabels: {
     flexDirection: 'row',
@@ -377,11 +377,11 @@ const styles = StyleSheet.create((theme) => ({
     ...meta,
     color: theme.colors.text.tertiary,
     textAlign: 'center',
-    marginTop: 10,
+    marginTop: theme.space.s10,
   },
   secondary: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: theme.space.s10,
   },
 }));

@@ -498,12 +498,12 @@ function ConnectedServicesDefaultAuthPickerModalContent(
 
 const stylesheet = StyleSheet.create((theme) => ({
     suggestion: {
-        marginTop: 8,
-        marginHorizontal: 12,
-        padding: 12,
+        marginTop: theme.space.s8,
+        marginHorizontal: theme.space.s12,
+        padding: theme.space.s12,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.elevated,
-        gap: 10,
+        gap: theme.space.s10,
     },
     suggestionText: {
         fontSize: 13,
@@ -513,11 +513,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     suggestionActions: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
     suggestionSecondaryButton: {
-        paddingVertical: 8,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 8,
     },
     suggestionSecondaryLabel: {
@@ -525,8 +525,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     suggestionPrimaryButton: {
-        paddingVertical: 8,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.accent.blue,
     },

@@ -57,7 +57,7 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 4,
+        gap: theme.space.s4,
         minWidth: 0,
     },
     lock: {

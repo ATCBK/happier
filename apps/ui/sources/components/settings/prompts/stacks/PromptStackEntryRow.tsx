@@ -121,7 +121,7 @@ const styles = StyleSheet.create((theme) => ({
     controls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     quiet: {
         color: theme.colors.text.tertiary,

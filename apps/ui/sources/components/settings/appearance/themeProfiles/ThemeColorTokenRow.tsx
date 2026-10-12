@@ -85,12 +85,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     controls: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 12,
+        gap: theme.space.s12,
     },
     feedbackText: {
         color: theme.colors.state.warning.foreground,
         paddingHorizontal: 18,
-        paddingBottom: 8,
+        paddingBottom: theme.space.s8,
         fontSize: 12,
     },
 }));

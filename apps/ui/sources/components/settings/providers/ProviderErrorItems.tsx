@@ -140,7 +140,7 @@ const lineStyles = StyleSheet.create((theme) => ({
     line: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 24,
     },
     title: {

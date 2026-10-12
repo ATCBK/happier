@@ -44,7 +44,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     statusDot: {
@@ -59,9 +59,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.state.danger.foreground,
     },
     status: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
