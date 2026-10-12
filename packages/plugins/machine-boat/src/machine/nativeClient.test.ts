@@ -78,6 +78,22 @@ describe('Boat native HTTP boundary', () => {
     expect(await client.reconcileDestroy(operation)).toEqual({ kind: 'confirmed' });
   });
 
+  it('stops and resumes the same sandbox without a plugin-owned daemon relaunch', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json({ ok: true, type: 'sandbox.stopping', status: 'archiving', sandbox: { id: 'bx_23456789', state: 'archiving' } }, 202))
+      .mockResolvedValueOnce(json({ ok: true, type: 'sandbox.info', sandbox: { id: 'bx_23456789', state: 'archived' } }))
+      .mockResolvedValueOnce(json({ ok: true, type: 'sandbox.resuming', status: 'provisioning', sandbox: { id: 'bx_23456789', state: 'provisioning' } }, 202))
+      .mockResolvedValueOnce(json({ ok: true, type: 'sandbox.info', sandbox: { id: 'bx_23456789', state: 'ready' } }));
+    const client = createBoatNativeClient({ fetch });
+    expect(await client.power({ sandboxId: 'bx_23456789' }, 'stop')).toEqual({ kind: 'confirmed' });
+    expect(await client.power({ sandboxId: 'bx_23456789' }, 'resume')).toEqual({ kind: 'confirmed' });
+    expect(JSON.parse(String(fetch.mock.calls[2][1]?.body))).toEqual({ ttlSeconds: null });
+    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      '/api/v1/sandboxes/bx_23456789/stop', '/api/v1/sandboxes/bx_23456789',
+      '/api/v1/sandboxes/bx_23456789/resume', '/api/v1/sandboxes/bx_23456789',
+    ]);
+  });
+
   it('surfaces rate and entitlement refusals without an internal retry loop', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ ok: false, type: 'sandbox.error', status: 429, code: 'limit_reached', message: 'limit', error: { code: 'limit_reached', message: 'limit', status: 429 }, requestId: 'req_3' }, 429));
     await expect(createBoatNativeClient({ fetch }).inspect({ sandboxId: 'bx_23456789' })).rejects.toMatchObject({ code: 'native_limit_reached', retryable: false });
