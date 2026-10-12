@@ -3,6 +3,32 @@ import { SessionSpawnNewResultV1Schema } from './sessionSpawnNewResultV1.js';
 import { createProviderErrorV1 } from '../../providers/errors.js';
 
 describe('Session creation fork files', () => {
+  it('returns strict persisted attested birth facts with committed Session creation', () => {
+    const result = {
+      type: 'success', disposition: 'rejoined', sessionId: 'session-1',
+      executionTarget: { serverId: 'server-1', machineId: 'machine-2' },
+      organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' },
+      attestedContext: { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<original@example.test>' },
+    };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      attestedContext: { ...result.attestedContext, sessionId: 'forged-session' },
+    }).success).toBe(false);
+  });
+
+  it('keeps committed creation successful while source-key preparation waits', () => {
+    const result = {
+      type: 'success', disposition: 'created', sessionId: 'session-1',
+      executionTarget: { serverId: 'server-1', machineId: 'machine-2' },
+      organizationPlacement: { folderId: null, tagIds: [] },
+      initialInput: { status: 'accepted', localId: 'initial-input' },
+      sourceKeyPreparation: { kind: 'waiting', reason: 'source_key_unavailable' },
+    };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      sourceKeyPreparation: { kind: 'waiting', reason: 'source_key_unavailable', sourceDataKey: 'private' },
+    }).success).toBe(false);
+  });
   it('reports an empty cross-machine fork without accepting unbounded reasons', () => {
     const result = {
       type: 'success', disposition: 'created', sessionId: 'session-1',

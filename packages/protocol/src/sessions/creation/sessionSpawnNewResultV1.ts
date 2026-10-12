@@ -12,6 +12,8 @@ import {
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
+import { SessionFollowSourceKeyPreparationResultV1Schema } from '../follow/sessionFollowSourceKeyPreparationV1.js';
+import { SessionAttestedContextV1Schema } from './sessionAttestedContextV1.js';
 import {
   SessionCreationOpaqueIdV1Schema,
   SessionExecutionTargetV1Schema,
@@ -93,7 +95,8 @@ export type SessionSpawnNewErrorCodeV1 = z.infer<typeof SessionSpawnNewErrorCode
 /**
  * Public Session creation settlement. Once a Session id exists, optional
  * initial-input admission stays nested so callers cannot mistake a rejected
- * input for a failed Session create.
+ * input for a failed Session create. Reporting-edge key preparation is likewise
+ * separate from creation and remains explicit inside the committed result.
  */
 export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
   z.object({
@@ -103,7 +106,10 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     executionTarget: SessionExecutionTargetV1Schema,
     organizationPlacement: SessionOrganizationPlacementV1Schema,
     initialInput: SessionSpawnNewInitialInputDispositionV1Schema,
+    /** Persisted birth facts, including when a creation key rejoins an existing Session. */
+    attestedContext: SessionAttestedContextV1Schema.optional(),
     filesNotCopied: SessionForkFilesNotCopiedV1Schema.optional(),
+    sourceKeyPreparation: SessionFollowSourceKeyPreparationResultV1Schema.optional(),
   }).strict(),
   z.object({
     type: z.literal('pending'),
