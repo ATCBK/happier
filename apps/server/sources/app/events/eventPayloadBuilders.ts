@@ -1,4 +1,4 @@
-import { ExternalSessionStorageStateV1Schema, type SessionViewerProjectionV1 } from "@happier-dev/protocol";
+import { ExternalSessionStorageStateV1Schema, projectAccountNameToLegacyFieldsV1, type SessionViewerProjectionV1 } from "@happier-dev/protocol";
 import { AccountProfile } from "@/types";
 import { getPublicUrl } from "@/storage/blob/files";
 import { type UpdatePayload, type EphemeralPayload, type EphemeralEvent } from "./eventPayloadTypes";
@@ -532,6 +532,7 @@ export function buildUpdateAccountUpdate(userId: string, profile: Partial<Accoun
             t: 'update-account',
             id: userId,
             ...profile,
+            ...(profile.name !== undefined ? projectAccountNameToLegacyFieldsV1(profile.name) : {}),
             avatar: profile.avatar ? { ...profile.avatar, url: getPublicUrl(profile.avatar.path) } : undefined
         },
         createdAt: Date.now()
