@@ -1,6 +1,7 @@
 import type { MachineGuardPolicyV1 } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import type { MachineGuardStateV1 } from '@happier-dev/protocol/machines/guard/guardStateV1';
 import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import type { OwnerRowV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { readSessionMemoryCeilingOverride } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import type { TrackedSession } from '../../types';
 import type { HappierProcessRoot } from '../../processes/ownership/types';
@@ -60,7 +61,12 @@ type Runner = {
   high: number; oom: number; dirty: boolean; highHandled: boolean;
   notified: Set<number>; pending: PendingEdge[]; appliedBytes?: number | null; ceilingBytes: number | null;
   error?: Error;
+  observedSince: number; throttles: Array<{ at: number; count: number }>;
+  usage?: Readonly<{ usedBytes: number; observedAtMs: number }>;
 };
+
+// The Processes detail promises the kernel's throttle count over the last five minutes.
+const THROTTLE_WINDOW_MS = 5 * 60_000;
 
 function readCounters(value: string): Readonly<{ high: number; oom: number }> {
   const counter = (key: string) => {
@@ -160,7 +166,7 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
     const counters = readCounters(await native.readFile(posix.join(scope.path, 'memory.events'), 'utf8'));
     signal?.throwIfAborted(); if (stopped) throw new Error('Session ceiling owner stopped');
     const runner: Runner = { target, scope, high: counters.high, oom: counters.oom, dirty: true, highHandled: false,
-      notified: new Set(), pending: [], ceilingBytes: bytes, watcher: { close() {} } };
+      notified: new Set(), pending: [], ceilingBytes: bytes, watcher: { close() {} }, observedSince: now(), throttles: [] };
     runner.watcher = native.watch(posix.join(scope.path, 'memory.events'), () => { runner.dirty = true; changed(); },
       error => { runner.error = error; changed(); });
     runners.set(key(target), runner); return runner;
@@ -253,6 +259,19 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
   };
   return {
     enabled,
+    readObservation(root: HappierProcessRoot): OwnerRowV1['ceiling'] {
+      const runner = [...runners.values()].find(item => root.live && root.owner.kind === 'session'
+        && item.target.root.owner.kind === 'session' && root.owner.sessionId === item.target.root.owner.sessionId
+        && root.pid === item.target.root.pid && equalProcessStart(root.start, item.target.root.start)
+        && root.containment?.kind === 'linux_unit' && item.target.root.containment?.kind === 'linux_unit'
+        && root.containment.prefix === item.target.root.containment.prefix);
+      if (!runner || runner.error || runner.ceilingBytes === null || runner.appliedBytes !== runner.ceilingBytes
+        || resolveSessionMemoryCeilingBytes(runner.target.metadata, input.readPolicy()) !== runner.ceilingBytes) return undefined;
+      const cutoff = now() - THROTTLE_WINDOW_MS;
+      return { limitBytes: runner.ceilingBytes, ...runner.usage,
+        ...(runner.observedSince <= cutoff ? { throttleCount5m: runner.throttles.filter(edge => edge.at > cutoff)
+          .reduce((sum, edge) => sum + edge.count, 0) } : {}) };
+    },
     async observeRunnerExit(tracked: TrackedSession): Promise<Readonly<{ status: 'recorded' | 'already_recorded' | 'not_observed' | 'unavailable' }>> {
       if (input.capability.status === 'unavailable' && input.capability.reason === 'not_linux') return { status: 'not_observed' };
       const unit = tracked.linuxLaunchUnit;
@@ -290,7 +309,7 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
       return { status: already ? 'already_recorded' : 'recorded' };
     },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    refreshOnTick() { if (!stopped) { tick = true; changed(); } },
+    refreshOnTick() { if (!stopped) { tick = true; for (const runner of runners.values()) runner.dirty = true; changed(); } },
     async readPlan(request: Readonly<{ policy: MachineGuardPolicyV1; now: number; signal: AbortSignal; readSignal?: AbortSignal }>): Promise<Readonly<{ nextAt?: number; run?: () => Promise<void> }>> {
       if (!enabled(request.policy)) return {};
       const { signal, policy } = request;
@@ -309,6 +328,10 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
         const counters = readCounters(await native.readFile(posix.join(runner.scope.path, 'memory.events'), 'utf8'));
         readSignal.throwIfAborted(); if (stopped) return {};
         runner.dirty = false;
+        const at = now();
+        runner.throttles = runner.throttles.filter(edge => edge.at > at - THROTTLE_WINDOW_MS);
+        if (counters.high < runner.high) { runner.observedSince = at; runner.throttles = []; }
+        else if (counters.high > runner.high) runner.throttles.push({ at, count: counters.high - runner.high });
         if (counters.high > runner.high && !runner.highHandled && runner.ceilingBytes !== null) {
           runner.highHandled = true; runner.pending.push({ kind: 'high', bytes: runner.ceilingBytes });
         }
@@ -352,13 +375,15 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
         if (!runner.pending.length) runners.delete(identity);
       }
       if (tick) {
-        for (const runner of runners.values()) if (live.has(key(runner.target)) && runner.ceilingBytes !== null
-          && !runner.notified.has(runner.ceilingBytes)) {
+        for (const runner of runners.values()) if (live.has(key(runner.target)) && runner.ceilingBytes !== null) {
+          // Failed current observations withdraw usage; the applied native limit remains known.
+          runner.usage = undefined;
           const raw = await native.readFile(posix.join(runner.scope.path, 'memory.current'), 'utf8');
           readSignal.throwIfAborted(); if (stopped) return {};
           const used = /^[0-9]+$/.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
           if (!Number.isSafeInteger(used) || used < 0) throw new Error('Session memory usage unavailable');
-          if (used / runner.ceilingBytes * 100 >= policy.sessionMemoryCeiling.warnAtPercent) {
+          runner.usage = { usedBytes: used, observedAtMs: now() };
+          if (!runner.notified.has(runner.ceilingBytes) && used / runner.ceilingBytes * 100 >= policy.sessionMemoryCeiling.warnAtPercent) {
             if (!runner.pending.some(edge => edge.kind === 'near' && edge.bytes === runner.ceilingBytes)) runner.pending.push({ kind: 'near', bytes: runner.ceilingBytes });
           }
         }

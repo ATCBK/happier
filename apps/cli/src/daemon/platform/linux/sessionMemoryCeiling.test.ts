@@ -16,13 +16,20 @@ import { listHappierProcessRoots } from '../../processes/roots/listHappierProces
 import { buildCgroupProcessLaunchSpec } from './buildCgroupSelfMigratingHappyCliLaunchSpec';
 import { createHappierLinuxScopeName } from './systemdUserResourceGovernor';
 import { createSessionMemoryCeiling, type SessionMemoryCeilingTarget } from './sessionMemoryCeiling';
+import { createProcessOwnershipRuntime } from '../../processes/ownership/processOwnershipRuntime';
+import { createLeftBehindPass } from '../../processes/leftBehind/leftBehindPass';
+import { createMachineProcessesView } from '../../processes/view/createMachineProcessesView';
+import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { createMachineVitalsSampler } from '../../vitals/createMachineVitalsSampler';
+import { createMachineVitalsReader } from '../../vitals/createMachineVitalsReader';
+import { createMinuteHistoryStore } from '../../vitals/history/minuteHistoryStore';
 
 const releases: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const release of releases.splice(0).reverse()) await release(); });
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'happier-session-ceiling-'));
   releases.push(() => rm(dir, { recursive: true, force: true }));
-  const now = Date.UTC(2026, 9, 11);
+  let now = Date.UTC(2026, 9, 11);
   const actions: unknown[] = [];
   const log = await createActivityLog({ activeServerDir: dir, nowMs: () => now,
     resourceSummary: { reportAutomaticAction: action => { actions.push(action); } } });
@@ -36,6 +43,7 @@ async function fixture() {
   let active = false;
   let events = 'high 0\noom_kill 0\n';
   let usage = 0;
+  let usageReadFails = false;
   let scopeGone = false;
   const watchers = new Map<string, () => void>();
   const properties: Array<{ unit: string; bytes: number | null }> = [];
@@ -70,6 +78,7 @@ async function fixture() {
         const held = heldPlanningRead; heldPlanningRead = undefined; held.entered(); await held.wait;
       }
       if (scopeGone && path.endsWith('memory.events')) throw Object.assign(new Error('Scope collected'), { code: 'ENOENT' });
+      if (usageReadFails && path.endsWith('memory.current')) throw new Error('Scope usage unreadable');
       return path.endsWith('memory.events') ? events : path.endsWith('memory.current') ? String(usage) : 'max';
     },
     writeFile: async (path: string, value: string) => { writes.push({ path, value }); },
@@ -118,6 +127,7 @@ async function fixture() {
   const run = async () => { for (;;) { const next = await plan(); if (!next.run) return; await next.run(); } };
   const edge = (high: number, oom = 0) => { events = `high ${high}\noom_kill ${oom}\n`; for (const listener of watchers.values()) listener(); };
   return { owner, plan, run, edge, log, actions, properties, writes, stops, stopRecorded, notices, notifications, watchers, get policy() { return policy; }, unit, dir,
+    advance: (ms: number) => { now += ms; },
     clearPolicy: () => { policy = MachineGuardPolicyV1Schema.parse({ ...policy, sessionMemoryCeiling: { ...policy.sessionMemoryCeiling, bytes: null } }); },
     setPolicyBytes: (bytes: number) => { policy = MachineGuardPolicyV1Schema.parse({ ...policy, sessionMemoryCeiling: { ...policy.sessionMemoryCeiling, bytes } }); },
     holdNotification: () => {
@@ -152,10 +162,57 @@ async function fixture() {
     reads: () => reads,
     stopSucceeds: (value: boolean) => { stopSucceeds = value; },
     usage: (value: number) => { usage = value; }, active: (value: boolean) => { active = value; },
+    usageReadFails: (value: boolean) => { usageReadFails = value; },
     target: (value: SessionMemoryCeilingTarget) => { target = value; }, readTarget: () => target };
 }
 
 describe('per-Session soft memory ceiling owner', () => {
+  it('withdraws unreadable current usage while preserving the applied limit and recovers on the next native observation', async () => {
+    const f = await fixture(); const root = f.readTarget().root;
+    await f.run(); f.usage(300); f.owner.refreshOnTick(); await f.run();
+    expect(f.owner.readObservation(root)).toMatchObject({ usedBytes: 300 });
+    f.usageReadFails(true); f.owner.refreshOnTick();
+    await expect(f.run()).rejects.toThrow('Scope usage unreadable');
+    expect(f.owner.readObservation(root)).toEqual({ limitBytes: 1000 });
+    f.usageReadFails(false); f.usage(400); f.owner.refreshOnTick(); await f.run();
+    expect(f.owner.readObservation(root)).toMatchObject({ usedBytes: 400 });
+  });
+  it('publishes only applied, generation-matched native usage and a complete five-minute throttle observation', async () => {
+    const f = await fixture();
+    const target = f.readTarget();
+    expect(f.owner.readObservation(target.root)).toBeUndefined();
+    await f.run();
+    expect(f.owner.readObservation(target.root)).toEqual({ limitBytes: 1000 });
+    f.active(true); f.usage(950); f.owner.refreshOnTick(); await f.run();
+    expect(f.owner.readObservation(target.root)).toMatchObject({ limitBytes: 1000, usedBytes: 950 });
+    expect(f.owner.readObservation(target.root)).not.toHaveProperty('throttleCount5m');
+    f.advance(60_000); f.edge(3); await f.run();
+    f.advance(240_000); f.usage(970); f.owner.refreshOnTick(); await f.run();
+    expect(f.owner.readObservation(target.root)).toMatchObject({ usedBytes: 970, throttleCount5m: 3 });
+    // Native process-table I/O is replaced; identity, ownership, view, and the strict wire consumer are real.
+    const runtime = createProcessOwnershipRuntime({ selfPid: target.root.pid, platform: 'linux', daemonScopeKey: '0123456789ab',
+      listRoots: () => [f.readTarget().root], censusDependencies: { platform: 'darwin', selfPid: target.root.pid,
+        helperExecutablePath: '/fixture/native-census', execFile: async () => ({ stdout: JSON.stringify({ v: 1,
+          capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+            { pid: target.root.pid, ppid: 1, start: target.root.start, principal: { kind: 'uid', value: '1' }, name: 'runner', memory: { bytes: 40, kind: 'rss' }, cpuTimeUs: 0 },
+            { pid: 70, ppid: 1, start: { startTimeMs: 70 }, principal: null, name: 'unreadable', memory: null, cpuTimeUs: null },
+          ] }) }) } });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime }); releases.push(() => pass.dispose());
+    const sampler = createMachineVitalsSampler({ readers: createMachineVitalsReader(), historyStore: await createMinuteHistoryStore({ directory: join(f.dir, 'vitals') }) });
+    releases.push(() => sampler.stop());
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, platform: 'linux', selfPid: target.root.pid,
+      bootTimeMs: 1000, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'owner' }),
+      machineVitals: sampler,
+      readCeiling: root => f.owner.readObservation(root) }); releases.push(() => view.dispose());
+    const answer = MachineProcessesAnswerV1Schema.parse(await view.list({ machineId: 'machine' }, { accountId: 'owner', custodianAccountId: 'owner' }));
+    expect(answer.owners[0].ceiling).toMatchObject({ usedBytes: 970, limitBytes: 1000, throttleCount5m: 3 });
+    expect(answer.unverifiableCount).toBe(1);
+    expect(f.owner.readObservation({ ...target.root, start: { startTimeMs: 21 } })).toBeUndefined();
+    f.advance(60_000); f.owner.refreshOnTick(); await f.run();
+    expect(f.owner.readObservation(target.root)).toMatchObject({ throttleCount5m: 0 });
+    f.clearPolicy(); await f.run();
+    expect(f.owner.readObservation(target.root)).toBeUndefined();
+  });
   it.skipIf(process.platform === 'win32')('joins the native exit write without waiting for surviving scope descendants', async () => {
     const f = await fixture(); f.clearPolicy(); f.pendingExit();
     const launcher = spawn('/bin/sh', ['-c', 'exec sleep 30'], { stdio: 'ignore' });
