@@ -14,6 +14,9 @@ describe('value references', () => {
   it('refuses a missing template variable instead of leaving a usable partial credential', () => {
     const ref = ValueRefV1Schema.parse({ t: 'template', template: 'Bearer {missing}', vars: {} });
     expect(resolveValueRefPlaintextV1(ref, () => 'unrelated')).toBeNull();
+    expect(resolveValueRefPlaintextV1(ValueRefV1Schema.parse({ t: 'template', template: '{constructor}', vars: {} }), () => null)).toBeNull();
+    const unused = ValueRefV1Schema.parse({ t: 'template', template: 'public', vars: { key: { t: 'savedSecret', secretId: 'unused' } } });
+    expect(resolveValueRefPlaintextV1(unused, () => null)).toBe('public');
   });
 
   it('retains predecessor literals and secret references and leaves attested facts to the runtime', () => {
