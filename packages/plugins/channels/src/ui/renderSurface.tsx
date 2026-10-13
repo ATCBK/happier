@@ -102,6 +102,7 @@ import {
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
+  type ConversationThreadRouterBindingTargetV1,
   type ConversationConnectionCreateInputV1,
   type ConversationConnectionPrepareResultV1,
   type ConversationConnectionEndpointRequiredResultV1,
@@ -1263,6 +1264,7 @@ function bindingAudienceLabel(audience: BindingEndpointAudience, t: Translate): 
 }
 
 function bindingTargetKindLabel(kind: BindingTargetKind, t: Translate): string {
+  if (kind === 'threadRouter') return t('plugins.channels.surface.bindingTargetThreadRouter', 'New sessions per thread');
   return kind === 'session'
     ? t('plugins.channels.surface.bindingTargetSession', 'Session')
     : t('plugins.channels.surface.bindingTargetAutomation', 'Automation');
@@ -1349,6 +1351,8 @@ function bindingMachineSummary(connection: ChannelsConnection | undefined, t: Tr
 }
 
 function bindingTargetSummary(binding: ChannelsBinding, t: Translate): string {
+  // A router's summary is its kind marker, never a name the reader should see.
+  if (binding.target.kind === 'threadRouter') return bindingTargetKindLabel(binding.target.kind, t);
   return `${bindingTargetKindLabel(binding.target.kind, t)}: ${binding.target.summary}`;
 }
 
@@ -2001,6 +2005,9 @@ function bindingApprovalSummary(binding: ChannelsBinding, t: Translate): string 
 
 /** Where this conversation's messages go and what comes back, in one line. */
 function conversationNote(binding: ChannelsBinding, t: Translate): string {
+  if (binding.target.kind === 'threadRouter') {
+    return t('plugins.channels.page.noteRouter', 'Each new thread from an allowed sender starts its own session, following the first route that matches. Replies go back in that thread.');
+  }
   if (binding.target.kind === 'automation') {
     return binding.deliveryMode === 'finalResult'
       ? t('plugins.channels.page.noteAutomationResult', 'Messages from this conversation start a run of the automation; its final result comes back here.')
@@ -2087,6 +2094,253 @@ function ConversationTargetSection(props: Readonly<{
   );
 }
 
+type RouterDetailState =
+  | Readonly<{ kind: 'loading' }>
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{ kind: 'ready'; target: ConversationThreadRouterBindingTargetV1 }>;
+
+/** The router's exact private detail, read once through the incumbent read Action. */
+function useRouterDetail(bindingId: string, revision: number): RouterDetailState {
+  const hostApi = usePluginHostApi();
+  const readAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead);
+  const canRead = hostApi.version().methods.includes('executeAction');
+  const [state, setState] = React.useState<RouterDetailState>(canRead ? { kind: 'loading' } : { kind: 'unavailable' });
+  const execute = readAction.execute;
+  React.useEffect(() => {
+    if (!canRead) return;
+    let cancelled = false;
+    void execute({ bindingId }).then((settled) => {
+      if (cancelled) return;
+      const detail = settled.status === 'success'
+        ? ConversationBindingReadResultV1Schema.safeParse(settled.result)
+        : undefined;
+      if (detail?.success && detail.data.kind === 'ready' && detail.data.binding.target.kind === 'threadRouter') {
+        setState({ kind: 'ready', target: detail.data.binding.target });
+        return;
+      }
+      setState({ kind: 'unavailable' });
+    }).catch(() => {
+      if (!cancelled) setState({ kind: 'unavailable' });
+    });
+    return () => { cancelled = true; };
+    // The summary revision is the reread trigger after an edit elsewhere.
+  }, [bindingId, canRead, execute, revision]);
+  return state;
+}
+
+/**
+ * A router conversation (plan §3.1–3.2): how new threads are routed, the
+ * threads it has started, and starting a new conversation with a sender group.
+ */
+function RouterThreadsSection(props: Readonly<{
+  binding: ChannelsBinding;
+  threadChildren: readonly BindingPresentation[];
+  mutationLocked: boolean;
+  onOpenThread: (bindingId: string) => void;
+  t: Translate;
+}>): React.ReactElement {
+  const { binding, t } = props;
+  const detail = useRouterDetail(binding.bindingId, binding.revision);
+  const [starting, setStarting] = React.useState(false);
+  return (
+    <Stack gap="large">
+      <ItemGroup
+        testID="channels-page-router-routes"
+        title={t('plugins.channels.page.routerRoutes', 'How new threads start')}
+        description={t('plugins.channels.page.routerRoutesDescription', 'The first route that matches a new thread decides which session starts. Mail no route matches is dropped.')}
+      >
+        {detail.kind === 'ready' ? (
+          detail.target.routes.length === 0 ? (
+            <Item
+              title={t('plugins.channels.page.routerNoRoutes', 'No routes yet')}
+              subtitle={t('plugins.channels.page.routerNoRoutesDescription', 'Every new thread is dropped until you add a route. Edit this conversation to add one.')}
+              detailTone="warning"
+            />
+          ) : detail.target.routes.map((route, index) => (
+            <Item
+              key={route.id}
+              title={`${index + 1}. ${routerRouteConditionLabel(route.when, t)}`}
+              subtitle={routerRecipeSummary(route.recipe, t)}
+            />
+          ))
+        ) : (
+          <Item
+            title={detail.kind === 'loading'
+              ? t('plugins.channels.page.routerRoutesLoading', 'Reading routes…')
+              : t('plugins.channels.page.routerRoutesUnavailable', 'Routes are shown when your selected machine is reachable')}
+          />
+        )}
+      </ItemGroup>
+
+      <ItemGroup
+        testID="channels-page-router-threads"
+        title={t('plugins.channels.page.routerThreads', 'Threads')}
+        description={t('plugins.channels.page.routerThreadsDescription', 'Each thread has its own session and only hears from the person who started it.')}
+        action={(
+          <Button
+            testID={`channels-router-start-${binding.bindingId}`}
+            variant="plain"
+            title={t('plugins.channels.page.routerStart', 'Start a conversation')}
+            disabled={props.mutationLocked || starting || detail.kind !== 'ready' || !binding.enabled}
+            onPress={() => setStarting(true)}
+          />
+        )}
+      >
+        {props.threadChildren.length === 0 ? (
+          <Item
+            title={t('plugins.channels.page.routerNoThreads', 'No threads yet')}
+            subtitle={t('plugins.channels.page.routerNoThreadsDescription', 'A thread appears here when an allowed sender writes in, or when you start one.')}
+          />
+        ) : props.threadChildren.map((child) => (
+          <Item
+            key={child.binding.bindingId}
+            testID={`channels-router-thread-${child.binding.bindingId}`}
+            title={bindingEndpointLabel(child.binding, t)}
+            subtitle={child.binding.enabled
+              ? t('plugins.channels.page.routerThreadActive', 'Own session')
+              : t('plugins.channels.column.paused', 'Paused')}
+            onPress={() => props.onOpenThread(child.binding.bindingId)}
+          />
+        ))}
+      </ItemGroup>
+
+      {starting && detail.kind === 'ready' ? (
+        <ConversationStartForm
+          routerBindingId={binding.bindingId}
+          groups={detail.target.principalGroups}
+          onClose={() => setStarting(false)}
+          t={t}
+        />
+      ) : null}
+    </Stack>
+  );
+}
+
+/**
+ * Starting a conversation (plan §3.2) through the incumbent
+ * `conversation/start-v1` Action: the audience is one of the router's groups,
+ * and replies come back to the chosen session.
+ */
+function ConversationStartForm(props: Readonly<{
+  routerBindingId: string;
+  groups: ConversationThreadRouterBindingTargetV1['principalGroups'];
+  onClose: () => void;
+  t: Translate;
+}>): React.ReactElement {
+  const { t } = props;
+  const startAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart);
+  const sessionsAction = useExecutePluginAction('session.list');
+  const [groupId, setGroupId] = React.useState(props.groups[0]?.id ?? '');
+  const [subject, setSubject] = React.useState('');
+  const [message, setMessage] = React.useState('');
+  const [sessions, setSessions] = React.useState<readonly BindingCreateSessionCandidate[] | undefined>();
+  const [sessionId, setSessionId] = React.useState<string | undefined>();
+  const [outcome, setOutcome] = React.useState<'sent' | 'failed' | 'unknown' | undefined>();
+  const executeSessions = sessionsAction.execute;
+  React.useEffect(() => {
+    let cancelled = false;
+    void executeSessions({ limit: 100, includeLastMessagePreview: false }).then((settled) => {
+      if (cancelled) return;
+      const page = settled.status === 'success' ? parseBindingCreateSessionPage(settled.result) : undefined;
+      setSessions(page?.candidates ?? []);
+      setSessionId((current) => current ?? page?.candidates[0]?.id);
+    }).catch(() => {
+      if (!cancelled) setSessions([]);
+    });
+    return () => { cancelled = true; };
+  }, [executeSessions]);
+  const pending = startAction.execution.status === 'pending';
+  const ready = groupId !== '' && subject.trim() !== '' && message.trim() !== '' && sessionId !== undefined;
+  const audience = props.groups.find((group) => group.id === groupId);
+  return (
+    <ItemGroup
+      testID="channels-router-start-form"
+      title={t('plugins.channels.page.routerStart', 'Start a conversation')}
+      description={t('plugins.channels.page.routerStartDescription', 'Sends a new message to everyone in a group. Their replies come back to the session you choose.')}
+    >
+      <Stack gap="medium">
+        <Form.Select
+          label={t('plugins.channels.page.routerStartAudience', 'To')}
+          options={props.groups.map((group) => ({
+            value: group.id,
+            label: t('plugins.channels.page.routerStartAudienceOption', '{group} ({count} people)', {
+              group: group.id,
+              count: group.principalIds.length,
+            }),
+          }))}
+          value={groupId}
+          disabled={pending}
+          onChange={(value) => {
+            const selected = readActionInputOptionValue(value);
+            if (typeof selected === 'string') setGroupId(selected);
+          }}
+        />
+        {audience === undefined ? null : (
+          <Text tone="secondary" value={audience.principalIds.join(', ')} />
+        )}
+        <Form.TextField
+          label={t('plugins.channels.page.routerStartSubject', 'Subject')}
+          value={subject}
+          disabled={pending}
+          onChange={setSubject}
+        />
+        <Form.TextField
+          label={t('plugins.channels.page.routerStartMessage', 'Message')}
+          value={message}
+          multiline
+          disabled={pending}
+          onChange={setMessage}
+        />
+        <Form.Select
+          label={t('plugins.channels.page.routerStartSession', 'Replies go to')}
+          options={(sessions ?? []).map((session) => ({ value: session.id, label: session.label }))}
+          value={sessionId ?? ''}
+          disabled={pending || sessions === undefined || sessions.length === 0}
+          onChange={(value) => {
+            const selected = readActionInputOptionValue(value);
+            if (typeof selected === 'string') setSessionId(selected);
+          }}
+        />
+        {outcome === 'sent' ? (
+          <Banner tone="neutral" title={t('plugins.channels.page.routerStartSent', 'Sent. The thread appears here once the provider confirms it.')} />
+        ) : outcome === 'failed' ? (
+          <Banner tone="danger" title={t('plugins.channels.page.routerStartFailed', 'The message was not sent. Nothing was delivered; you can try again.')} />
+        ) : outcome === 'unknown' ? (
+          <Banner tone="warning" title={t('plugins.channels.page.routerStartUnknown', 'It is not yet known whether the message was sent. Check the bot’s delivery attention before sending again.')} />
+        ) : null}
+        <Row gap="small">
+          <Button
+            testID="channels-router-start-send"
+            variant="primary"
+            title={t('plugins.channels.page.routerStartSend', 'Send')}
+            busy={pending}
+            disabled={!ready || pending || outcome === 'sent'}
+            onPress={() => {
+              if (!ready || sessionId === undefined) return;
+              setOutcome(undefined);
+              void startAction.execute({
+                routerBindingId: props.routerBindingId,
+                audienceGroupId: groupId,
+                subject: subject.trim(),
+                content: { text: message },
+                sessionId,
+              }).then((settled) => {
+                setOutcome(settled.status === 'success' ? 'sent' : settled.status === 'outcomeUnknown' ? 'unknown' : 'failed');
+              }).catch(() => setOutcome('failed'));
+            }}
+          />
+          <Button
+            variant="plain"
+            title={outcome === 'sent' ? t('plugins.channels.page.done', 'Done') : t('plugins.channels.surface.cancel', 'Cancel')}
+            disabled={pending}
+            onPress={props.onClose}
+          />
+        </Row>
+      </Stack>
+    </ItemGroup>
+  );
+}
+
 /**
  * One linked conversation (lab C1): identity, what it talks to, the one cause
  * that needs the reader, where its messages go, its settings as a summary with
@@ -2096,6 +2350,8 @@ function ConversationTargetSection(props: Readonly<{
  */
 function ConversationDetail(props: Readonly<{
   presentation: BindingPresentation;
+  /** Thread bindings this router created; empty for every other target. */
+  threadChildren?: readonly BindingPresentation[];
   execution: PluginActionExecution;
   deleteOperation?: BindingDeleteOperation;
   activeBindingId: string | undefined;
@@ -2179,7 +2435,15 @@ function ConversationDetail(props: Readonly<{
         ]}
       />
 
-      <ConversationTargetSection
+      {binding.target.kind === 'threadRouter' ? (
+        <RouterThreadsSection
+          binding={binding}
+          threadChildren={props.threadChildren ?? []}
+          mutationLocked={mutationLocked || deleting}
+          onOpenThread={navigation.openConversation}
+          t={t}
+        />
+      ) : <ConversationTargetSection
         binding={binding}
         mutationLocked={mutationLocked || deleting}
         {...(props.onEdit === undefined || deleting || editing ? {} : {
@@ -2187,7 +2451,7 @@ function ConversationDetail(props: Readonly<{
         })}
         {...(navigation.openSession === undefined ? {} : { openSession: navigation.openSession })}
         t={t}
-      />
+      />}
 
       {deleting ? (
         <Banner
@@ -2298,9 +2562,11 @@ function ConversationDetail(props: Readonly<{
           <Item
             title={t('plugins.channels.page.unlink', 'Unlink')}
             tone="danger"
-            subtitle={binding.target.kind === 'automation'
-              ? t('plugins.channels.page.unlinkAutomationDescription', 'The automation stops hearing from this conversation. The bot stays connected.')
-              : t('plugins.channels.page.unlinkSessionDescription', 'The session stops hearing from this conversation. The bot stays connected.')}
+            subtitle={binding.target.kind === 'threadRouter'
+              ? t('plugins.channels.page.unlinkRouterDescription', 'New threads stop starting sessions. Sessions already started keep their own threads. The bot stays connected.')
+              : binding.target.kind === 'automation'
+                ? t('plugins.channels.page.unlinkAutomationDescription', 'The automation stops hearing from this conversation. The bot stays connected.')
+                : t('plugins.channels.page.unlinkSessionDescription', 'The session stops hearing from this conversation. The bot stays connected.')}
             accessoryOutsidePressable
             accessory={deleteConfirmation.open ? undefined : (
               <Button
@@ -2779,7 +3045,9 @@ type BindingEditorAutomationTarget = Readonly<{
   automationId: string;
   policy: Readonly<{ resultDelivery: 'finalResult' | 'none' }>;
 }>;
-type BindingEditorTarget = BindingEditorSessionTarget | BindingEditorAutomationTarget;
+/** The router arm is edited whole: its groups and ordered routes are one precedence contract. */
+type BindingEditorThreadRouterTarget = ConversationThreadRouterBindingTargetV1;
+type BindingEditorTarget = BindingEditorSessionTarget | BindingEditorAutomationTarget | BindingEditorThreadRouterTarget;
 type BindingEditorDraft = Readonly<{
   target: BindingEditorTarget;
   targetChanged: boolean;
@@ -2813,6 +3081,7 @@ function bindingEditorTargetFromBinding(binding: ConversationBindingV1): Binding
       },
     };
   }
+  if (binding.target.kind === 'threadRouter') return binding.target;
   return {
     kind: 'automation',
     automationId: binding.target.automationId,
@@ -2871,6 +3140,11 @@ function bindingEditWidensAuthority(previous: BindingEditorDraft, next: BindingE
     return previous.target.policy.resultDelivery === 'none'
       && next.target.policy.resultDelivery === 'finalResult';
   }
+  // Route order is precedence and every route carries its own Session policy,
+  // so this surface cannot rank a router edit as a pure narrowing.
+  if (previous.target.kind === 'threadRouter' && next.target.kind === 'threadRouter') {
+    return JSON.stringify(previous.target) !== JSON.stringify(next.target);
+  }
   return false;
 }
 
@@ -2903,21 +3177,30 @@ function BindingEditConfirmationSummary(props: Readonly<{
               label: t('plugins.channels.surface.bindingCreatePermissionCeiling', 'Permission ceiling'),
               value: bindingPermissionIntentLabel(draft.target.policy.permissionCeiling, t),
             },
-          ] : [
+          ] : draft.target.kind === 'automation' ? [
             {
               label: t('plugins.channels.surface.bindingEditResultDelivery', 'Result delivery'),
               value: bindingDeliveryModeLabel(draft.target.policy.resultDelivery, t),
             },
+          ] : [
+            ...draft.target.principalGroups.map((group) => ({
+              label: t('plugins.channels.surface.routerGroupSummaryLabel', 'Group {group}', { group: group.id }),
+              value: group.principalIds.join(', '),
+            })),
+            ...draft.target.routes.map((route, index) => ({
+              label: t('plugins.channels.surface.routerRouteSummaryLabel', 'Route {position}', { position: index + 1 }),
+              value: routerRouteSummary(route, t),
+            })),
           ]),
-          {
+          ...(draft.target.kind === 'session' ? [{
             label: t('plugins.channels.surface.bindingCreateApprovals', 'Approvals'),
             value: bindingApprovalAudienceLabel(draft.target, t),
-          },
+          }] : []),
           {
             label: t('plugins.channels.surface.bindingCreateInputMode', 'Incoming messages'),
             value: bindingInputModeLabel(draft.inputMode, t),
           },
-          { label: t('plugins.channels.surface.bindingEditDebounce', 'Inbound debounce (ms)'), value: draft.inboundDebounceMs },
+          { label: t('plugins.channels.surface.bindingEditDebounce', 'Message grouping delay'), value: draft.inboundDebounceMs },
           {
             label: t('plugins.channels.surface.bindingCreateLinkPreview', 'Link previews'),
             value: bindingCreateLinkPreviewPolicyLabel(draft.linkPreviewPolicy, t),
@@ -3244,6 +3527,337 @@ function BindingSessionTargetPolicyControls(props: Readonly<{
   );
 }
 
+type ThreadRouterRoute = BindingEditorThreadRouterTarget['routes'][number];
+
+function readRecipeString(recipe: Readonly<Record<string, unknown>>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = recipe[key];
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  return undefined;
+}
+
+/** A route's recipe as the reader names it: its agent, its folder, and whether it is confined. */
+function routerRecipeSummary(recipe: unknown, t: Translate): string {
+  if (recipe === null || typeof recipe !== 'object' || Array.isArray(recipe)) {
+    return t('plugins.channels.surface.routerRecipeCustom', 'Custom session recipe');
+  }
+  const record = recipe as Readonly<Record<string, unknown>>;
+  const agent = readRecipeString(record, ['agentId', 'agent', 'backendId']);
+  const directory = readRecipeString(record, ['directory', 'path', 'workingDirectory', 'cwd']);
+  const folder = directory?.split(/[\\/]/).filter((part) => part !== '').pop();
+  const allowedTools = Array.isArray(record.allowedTools)
+    ? record.allowedTools.filter((tool): tool is string => typeof tool === 'string')
+    : [];
+  const parts = [
+    agent,
+    folder,
+    record.unlistedTools === 'deny'
+      ? t('plugins.channels.surface.routerRecipeOnlyListedTools', 'only {count} listed tools', { count: allowedTools.length })
+      : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length === 0
+    ? t('plugins.channels.surface.routerRecipeCustom', 'Custom session recipe')
+    : parts.join(' · ');
+}
+
+function routerRouteConditionLabel(when: ThreadRouterRoute['when'], t: Translate): string {
+  const from = when.group === 'any'
+    ? t('plugins.channels.surface.routerFromAnyone', 'Anyone allowed')
+    : t('plugins.channels.surface.routerFromGroup', 'People in {group}', { group: when.group });
+  if (when.forwarded === 'any') return from;
+  return when.forwarded
+    ? t('plugins.channels.surface.routerForwardedOnly', '{from}, forwarded mail', { from })
+    : t('plugins.channels.surface.routerNotForwarded', '{from}, not forwarded', { from });
+}
+
+function routerRouteSummary(route: ThreadRouterRoute, t: Translate): string {
+  return `${routerRouteConditionLabel(route.when, t)} → ${routerRecipeSummary(route.recipe, t)}`;
+}
+
+function nextRouterRouteId(routes: readonly ThreadRouterRoute[]): string {
+  const taken = new Set(routes.map((route) => route.id));
+  let index = routes.length + 1;
+  while (taken.has(`route-${index}`)) index += 1;
+  return `route-${index}`;
+}
+
+const ROUTER_ROUTE_DEFAULT_POLICY: ThreadRouterRoute['policy'] = Object.freeze({
+  deliveryMode: 'repliesOnly',
+  permissionCeiling: 'read-only',
+  approvals: Object.freeze({ kind: 'off' as const }),
+  newSession: Object.freeze({ kind: 'off' as const }),
+});
+
+/**
+ * The router editor (plan §3.1): sender groups are the router's only sender
+ * authority, and routes are an ordered precedence list whose first match
+ * decides the recipe and Session policy of a new thread. Membership can only
+ * be chosen from senders this binding already admits (re-resolving the
+ * audience adds people), so a save never names an unresolved principal.
+ */
+function ThreadRouterControls(props: Readonly<{
+  target: BindingEditorThreadRouterTarget;
+  admittedPrincipalIds: readonly string[];
+  disabled: boolean;
+  signal: AbortSignal;
+  onChange: (transform: (target: BindingEditorThreadRouterTarget) => BindingEditorThreadRouterTarget) => void;
+  onRecipeUnavailable: () => void;
+  t: Translate;
+}>): React.ReactElement {
+  const { target, t } = props;
+  const [newGroupName, setNewGroupName] = React.useState('');
+  const recipeRequestRef = React.useRef<number | 'new' | undefined>(undefined);
+  const recipeSelection = useBindingNewSessionRecipeSelection({
+    signal: props.signal,
+    isLocked: () => props.disabled,
+    onUnavailable: props.onRecipeUnavailable,
+    onSelected: (recipe) => {
+      const request = recipeRequestRef.current;
+      recipeRequestRef.current = undefined;
+      props.onChange((current) => {
+        if (request === 'new') {
+          const firstGroup = current.principalGroups[0]?.id ?? 'any';
+          return {
+            ...current,
+            routes: [...current.routes, {
+              id: nextRouterRouteId(current.routes),
+              when: { group: firstGroup, forwarded: 'any' },
+              recipe: recipe as ThreadRouterRoute['recipe'],
+              policy: ROUTER_ROUTE_DEFAULT_POLICY,
+            }],
+          };
+        }
+        if (request === undefined || current.routes[request] === undefined) return current;
+        return {
+          ...current,
+          routes: current.routes.map((route, index) => index === request
+            ? { ...route, recipe: recipe as ThreadRouterRoute['recipe'] }
+            : route),
+        };
+      });
+    },
+  });
+  const memberCandidates = [...new Set([
+    ...props.admittedPrincipalIds,
+    ...target.principalGroups.flatMap((group) => group.principalIds),
+  ])];
+  const updateRoute = (index: number, transform: (route: ThreadRouterRoute) => ThreadRouterRoute) => {
+    props.onChange((current) => ({
+      ...current,
+      routes: current.routes.map((route, routeIndex) => routeIndex === index ? transform(route) : route),
+    }));
+  };
+  const moveRoute = (index: number, offset: -1 | 1) => {
+    props.onChange((current) => {
+      const destination = index + offset;
+      if (destination < 0 || destination >= current.routes.length) return current;
+      const routes = [...current.routes];
+      const [moved] = routes.splice(index, 1);
+      if (moved === undefined) return current;
+      routes.splice(destination, 0, moved);
+      return { ...current, routes };
+    });
+  };
+  const groupOptions = [
+    { value: 'any', label: t('plugins.channels.surface.routerFromAnyone', 'Anyone allowed') },
+    ...target.principalGroups.map((group) => ({ value: group.id, label: group.id })),
+  ];
+  const trimmedGroupName = newGroupName.trim();
+  const groupNameTaken = target.principalGroups.some((group) => group.id === trimmedGroupName);
+
+  return (
+    <Stack gap="large">
+      <Stack gap="small">
+        <Heading level={3} value={t('plugins.channels.surface.routerGroupsTitle', 'Sender groups')} />
+        <Text
+          tone="secondary"
+          value={t(
+            'plugins.channels.surface.routerGroupsDescription',
+            'Only people in a group can start a thread. Routes and new conversations address a group by name.',
+          )}
+        />
+        {target.principalGroups.map((group) => {
+          const usedByRoute = target.routes.some((route) => route.when.group === group.id);
+          return (
+            <Stack key={group.id} gap="small" testID={`channels-router-group-${group.id}`}>
+              <Row gap="small" align="center">
+                <Text value={group.id} />
+                <Button
+                  testID={`channels-router-group-remove-${group.id}`}
+                  variant="plain"
+                  title={t('plugins.channels.surface.routerGroupRemove', 'Remove group')}
+                  accessibilityLabel={t('plugins.channels.surface.routerGroupRemoveNamed', 'Remove group {group}', { group: group.id })}
+                  disabled={props.disabled || usedByRoute || target.principalGroups.length === 1}
+                  onPress={() => props.onChange((current) => ({
+                    ...current,
+                    principalGroups: current.principalGroups.filter((candidate) => candidate.id !== group.id),
+                  }))}
+                />
+              </Row>
+              {memberCandidates.map((principalId) => (
+                <Form.Toggle
+                  key={principalId}
+                  label={principalId}
+                  value={group.principalIds.includes(principalId)}
+                  disabled={props.disabled}
+                  onChange={(member) => props.onChange((current) => ({
+                    ...current,
+                    principalGroups: current.principalGroups.map((candidate) => candidate.id !== group.id
+                      ? candidate
+                      : {
+                        ...candidate,
+                        principalIds: member
+                          ? [...candidate.principalIds.filter((id) => id !== principalId), principalId]
+                          : candidate.principalIds.filter((id) => id !== principalId),
+                      }),
+                  }))}
+                />
+              ))}
+            </Stack>
+          );
+        })}
+        <Row gap="small" align="center">
+          <Form.TextField
+            label={t('plugins.channels.surface.routerGroupName', 'New group name')}
+            value={newGroupName}
+            autoCapitalize="none"
+            disabled={props.disabled}
+            onChange={setNewGroupName}
+          />
+          <Button
+            testID="channels-router-group-add"
+            variant="secondary"
+            title={t('plugins.channels.surface.routerGroupAdd', 'Add group')}
+            disabled={props.disabled || trimmedGroupName === '' || trimmedGroupName === 'any' || groupNameTaken}
+            onPress={() => {
+              props.onChange((current) => ({
+                ...current,
+                principalGroups: [...current.principalGroups, { id: trimmedGroupName, principalIds: [] }],
+              }));
+              setNewGroupName('');
+            }}
+          />
+        </Row>
+      </Stack>
+
+      <Stack gap="small">
+        <Heading level={3} value={t('plugins.channels.surface.routerRoutesTitle', 'Routes')} />
+        <Text
+          tone="secondary"
+          value={t(
+            'plugins.channels.surface.routerRoutesDescription',
+            'A new thread starts a session from the first route that matches it. Mail no route matches is dropped.',
+          )}
+        />
+        {target.routes.map((route, index) => (
+          <Stack key={route.id} gap="small" testID={`channels-router-route-${route.id}`}>
+            <Row gap="small" align="center">
+              <Heading
+                level={4}
+                value={t('plugins.channels.surface.routerRouteSummaryLabel', 'Route {position}', { position: index + 1 })}
+              />
+              <Button
+                variant="plain"
+                title={t('plugins.channels.surface.routerRouteMoveUp', 'Move up')}
+                accessibilityLabel={t('plugins.channels.surface.routerRouteMoveUpNamed', 'Move route {position} up', { position: index + 1 })}
+                disabled={props.disabled || index === 0}
+                onPress={() => moveRoute(index, -1)}
+              />
+              <Button
+                variant="plain"
+                title={t('plugins.channels.surface.routerRouteMoveDown', 'Move down')}
+                accessibilityLabel={t('plugins.channels.surface.routerRouteMoveDownNamed', 'Move route {position} down', { position: index + 1 })}
+                disabled={props.disabled || index === target.routes.length - 1}
+                onPress={() => moveRoute(index, 1)}
+              />
+              <Button
+                variant="plain"
+                title={t('plugins.channels.surface.routerRouteRemove', 'Remove')}
+                accessibilityLabel={t('plugins.channels.surface.routerRouteRemoveNamed', 'Remove route {position}', { position: index + 1 })}
+                disabled={props.disabled}
+                onPress={() => props.onChange((current) => ({
+                  ...current,
+                  routes: current.routes.filter((candidate) => candidate.id !== route.id),
+                }))}
+              />
+            </Row>
+            <Form.Select
+              label={t('plugins.channels.surface.routerRouteFrom', 'From')}
+              options={groupOptions}
+              value={route.when.group}
+              disabled={props.disabled}
+              onChange={(value) => {
+                const group = readActionInputOptionValue(value);
+                if (typeof group !== 'string') return;
+                updateRoute(index, (current) => ({ ...current, when: { ...current.when, group } }));
+              }}
+            />
+            <Form.Select
+              label={t('plugins.channels.surface.routerRouteForwarded', 'Forwarded mail')}
+              options={[
+                { value: 'any', label: t('plugins.channels.surface.routerForwardedAny', 'Either') },
+                { value: 'true', label: t('plugins.channels.surface.routerForwardedTrue', 'Only forwarded') },
+                { value: 'false', label: t('plugins.channels.surface.routerForwardedFalse', 'Not forwarded') },
+              ]}
+              value={route.when.forwarded === 'any' ? 'any' : String(route.when.forwarded)}
+              disabled={props.disabled}
+              onChange={(value) => {
+                const forwarded = value === 'true' ? true : value === 'false' ? false : 'any';
+                updateRoute(index, (current) => ({ ...current, when: { ...current.when, forwarded } }));
+              }}
+            />
+            <Item
+              title={t('plugins.channels.surface.routerRouteRecipe', 'Starts')}
+              subtitle={routerRecipeSummary(route.recipe, t)}
+              accessoryOutsidePressable
+              accessory={(
+                <Button
+                  variant="secondary"
+                  title={t('plugins.channels.surface.routerRouteRecipeChoose', 'Choose recipe')}
+                  busy={recipeSelection.pending && recipeRequestRef.current === index}
+                  disabled={props.disabled || !recipeSelection.available || recipeSelection.pending}
+                  onPress={() => {
+                    recipeRequestRef.current = index;
+                    recipeSelection.select();
+                  }}
+                />
+              )}
+            />
+            <BindingSessionTargetPolicyControls
+              target={{ kind: 'session', sessionId: route.id, policy: route.policy }}
+              admittedPrincipalIds={route.when.group === 'any'
+                ? memberCandidates
+                : target.principalGroups.find((group) => group.id === route.when.group)?.principalIds ?? []}
+              retainedApprovalPrincipalIds={undefined}
+              disabled={props.disabled}
+              configureNewSessionAvailable={false}
+              onChange={(transform) => updateRoute(index, (current) => {
+                const next = transform({ kind: 'session', sessionId: current.id, policy: current.policy });
+                return next.kind === 'session' ? { ...current, policy: next.policy as ThreadRouterRoute['policy'] } : current;
+              })}
+              onRetainApprovalPrincipalIds={() => undefined}
+              onConfigureNewSession={() => undefined}
+              t={t}
+            />
+          </Stack>
+        ))}
+        <Button
+          testID="channels-router-route-add"
+          variant="secondary"
+          title={t('plugins.channels.surface.routerRouteAdd', 'Add route')}
+          busy={recipeSelection.pending && recipeRequestRef.current === 'new'}
+          disabled={props.disabled || !recipeSelection.available || recipeSelection.pending}
+          onPress={() => {
+            recipeRequestRef.current = 'new';
+            recipeSelection.select();
+          }}
+        />
+      </Stack>
+    </Stack>
+  );
+}
+
 /** The one draft projection of an exact retained binding, online or offline. */
 function bindingEditorDraftFromBinding(binding: ConversationBindingV1): BindingEditorDraft {
   const retainedApprovalPrincipalIds = binding.target.kind === 'session'
@@ -3275,6 +3889,12 @@ function bindingEditorDraftFromDetail(
 }
 
 function bindingEditorTargetLabel(target: BindingEditorTarget, t: Translate): string {
+  if (target.kind === 'threadRouter') {
+    return t('plugins.channels.surface.routerTargetSummary', '{routes} routes, {groups} sender groups', {
+      routes: target.routes.length,
+      groups: target.principalGroups.length,
+    });
+  }
   return target.kind === 'session'
     ? `${bindingTargetKindLabel(target.kind, t)}: ${target.sessionId}`
     : `${bindingTargetKindLabel(target.kind, t)}: ${target.automationId}`;
@@ -5478,7 +6098,7 @@ function BindingPolicyControls(props: Readonly<{
           tone="danger"
           value={props.t(
             'plugins.channels.surface.bindingEditDebounceInvalid',
-            'Enter a whole number from 0 to 5000.',
+            'Enter a whole number of milliseconds.',
           )}
         />
       )}
@@ -6256,7 +6876,7 @@ function BindingEditJourney(props: Readonly<{
             disabled={actionLocked || !providerControlsAvailable || finalizingDelete}
             onPress={openEndpointReselection}
           />
-          <Button
+          {draft.target.kind === 'threadRouter' ? null : <Button
             title={props.t('plugins.channels.surface.bindingEditTarget', 'Change target')}
             variant="secondary"
             disabled={actionLocked || !providerControlsAvailable || finalizingDelete}
@@ -6265,7 +6885,7 @@ function BindingEditJourney(props: Readonly<{
               setStage('target');
               void loadSessions();
             }}
-          />
+          />}
           <BindingPolicyControls
             fields={draft}
             disabled={actionLocked || finalizingDelete}
@@ -6294,6 +6914,20 @@ function BindingEditJourney(props: Readonly<{
                   : { ...current, retainedApprovalPrincipalIds: principalIds });
               }}
               onConfigureNewSession={selectNewSessionRecipe}
+              t={props.t}
+            />
+          ) : draft.target.kind === 'threadRouter' ? (
+            <ThreadRouterControls
+              target={draft.target}
+              admittedPrincipalIds={draft.allowedPrincipalIds}
+              disabled={actionLocked || finalizingDelete}
+              signal={props.signal}
+              onChange={(transform) => setDraft((current) => current?.target.kind !== 'threadRouter' ? current : {
+                ...current,
+                targetChanged: true,
+                target: transform(current.target),
+              })}
+              onRecipeUnavailable={() => setFeedback('newSessionUnavailable')}
               t={props.t}
             />
           ) : (
@@ -6793,6 +7427,9 @@ function BindingsContent(props: BindingsContentProps): React.ReactElement {
       return (
         <ConversationDetail
           presentation={selectedPresentation}
+          threadChildren={props.presentations.filter((presentation) => (
+            presentation.binding.parentBindingId === selectedPresentation.binding.bindingId
+          ))}
           execution={execution}
           {...(props.deleteOperation === undefined ? {} : { deleteOperation: props.deleteOperation, onDelete })}
           activeBindingId={activeBindingId}
@@ -7574,6 +8211,19 @@ function AccountLocalBindingPolicyEditor(props: Readonly<{
           }}
           onConfigureNewSession={newSessionRecipeSelection.select}
           t={props.t}
+        />
+      ) : draft.target.kind === 'threadRouter' ? (
+        <Banner
+          testID="channels-account-local-binding-router-target-unavailable"
+          tone="secondary"
+          title={props.t(
+            'plugins.channels.surface.bindingEditRouterTargetOfflineTitle',
+            'Route changes need your selected machine',
+          )}
+          description={props.t(
+            'plugins.channels.surface.bindingEditRouterTargetOfflineDescription',
+            'Sender groups must be checked with the integration before they are saved, so routes stay read-only until the selected machine is reachable.',
+          )}
         />
       ) : (
         <Banner

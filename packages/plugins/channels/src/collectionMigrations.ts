@@ -116,6 +116,14 @@ export function migrateChannelStateV2ToV3(
   return value;
 }
 
+function migrateChannelDeliveriesV2ToV3(
+  value: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const payload = value.payload;
+  if (!isChannelStateJsonRecord(payload) || typeof payload.content !== 'string') return value;
+  return { ...value, payload: { ...payload, content: { text: payload.content } } };
+}
+
 export const CHANNEL_COLLECTION_MIGRATIONS = {
   [CHANNEL_STATE_COLLECTION_ID]: [{
     id: 'channel-state-v1-to-v2',
@@ -135,11 +143,25 @@ export const CHANNEL_COLLECTION_MIGRATIONS = {
     // Reuse its migration; preserve materialized transport authority verbatim.
     // Candidate validation refuses source-custody origins instead of inventing authority.
     migrate: migrateChannelStateV2ToV3,
+  }, {
+    id: 'channel-state-v4-to-v5',
+    fromSchemaVersion: 4,
+    toSchemaVersion: 5,
+    // Router targets, attachment descriptors and optional poll/binding facts
+    // expand the retained state schema; existing logical rows need no rewrite.
+    migrate: (value) => value,
   }],
   [CHANNEL_DELIVERIES_COLLECTION_ID]: [{
     id: 'channel-deliveries-v1-to-v2',
     fromSchemaVersion: 1,
     toSchemaVersion: 2,
     migrate: (value) => value,
+  }, {
+    id: 'channel-deliveries-v2-to-v3',
+    fromSchemaVersion: 2,
+    toSchemaVersion: 3,
+    // Retained text becomes the canonical content object. Compacted nulls,
+    // structured content, custody identity and provider evidence stay intact.
+    migrate: migrateChannelDeliveriesV2ToV3,
   }],
 } satisfies Readonly<Record<string, readonly PluginAccountCollectionMigration[]>>;

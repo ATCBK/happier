@@ -52,7 +52,7 @@ describe('Channels browser source boundaries', () => {
   });
 
   it('bundles the actual mounted surface including its dynamic dependency edges', async () => {
-    await bundleBrowserEntry('src/ui/renderSurface.tsx');
+    await bundleBrowserEntry('@happier-dev/plugins-channels/happier-plugin-ui/channels-app-native');
   });
 
   it('does not hide the daemon manifest behind a self-package export', async () => {

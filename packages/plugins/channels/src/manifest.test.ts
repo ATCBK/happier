@@ -153,22 +153,6 @@ describe('Channels core manifest', () => {
     }
   });
 
-  it('consumes the canonical Composer control-state Resource contract through public SDK UI', () => {
-    const resources = PLUGIN_MANIFEST.contributes?.resources ?? [];
-
-    for (const id of [
-      'session-conversations-state-v1',
-      'session-conversations-attention-state-v1',
-    ]) {
-      expect(resources.find((resource) => resource.id === id)).toMatchObject({
-        scope: 'session',
-        contentType: COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1,
-        maxBytes: MAX_COMPOSER_CONTROL_STATE_RESOURCE_BYTES_V1,
-      });
-    }
-    expect(ComposerControlStateV1Schema.safeParse({ visible: true, count: 1 }).success).toBe(true);
-  });
-
   it('consumes the canonical transcript-activity Resource contract through public SDK resources', () => {
     const declaredResource = PLUGIN_MANIFEST.contributes?.resources?.find(
       (resource) => resource.id === 'outward-delivery-activities-v1',
@@ -402,8 +386,8 @@ describe('Channels core manifest', () => {
     ]);
     expect(collections?.find(({ id }) => id === CHANNEL_STATE_COLLECTION_ID)).toMatchObject({
       id: CHANNEL_STATE_COLLECTION_ID,
-      schemaVersion: 4,
-      readableSchemaVersions: [1, 2, 3],
+      schemaVersion: 5,
+      readableSchemaVersions: [1, 2, 3, 4],
       migrations: [{
         id: 'channel-state-v1-to-v2',
         fromSchemaVersion: 1,
@@ -416,6 +400,10 @@ describe('Channels core manifest', () => {
         id: 'channel-state-v3-to-v4',
         fromSchemaVersion: 3,
         toSchemaVersion: 4,
+      }, {
+        id: 'channel-state-v4-to-v5',
+        fromSchemaVersion: 4,
+        toSchemaVersion: 5,
       }],
       rowIdField: CHANNEL_STATE_FIELD.id,
       serverReadable: [
@@ -468,8 +456,8 @@ describe('Channels core manifest', () => {
     });
     expect(collections?.find(({ id }) => id === CHANNEL_DELIVERIES_COLLECTION_ID)).toMatchObject({
       id: CHANNEL_DELIVERIES_COLLECTION_ID,
-      schemaVersion: 2,
-      readableSchemaVersions: [1],
+      schemaVersion: 3,
+      readableSchemaVersions: [1, 2],
       rowIdField: CHANNEL_DELIVERIES_FIELD.id,
       serverReadable: [
         CHANNEL_DELIVERIES_FIELD.recordKind,
@@ -1908,10 +1896,13 @@ describe('Channels Session-facing surfaces (CU-03)', () => {
       expect(resources.find((resource) => resource.id === id)).toMatchObject({
         id,
         scope: 'session',
-        contentType: 'application/vnd.happier.composer-control-state+json;v=1',
+        contentType: COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1,
+        maxBytes: MAX_COMPOSER_CONTROL_STATE_RESOURCE_BYTES_V1,
         hostAccess: ['account-storage'],
       });
     }
+    expect(COMPOSER_CONTROL_STATE_CONTENT_TYPE_V1).toBe('application/vnd.happier.composer-control-state+json;v=1');
+    expect(ComposerControlStateV1Schema.safeParse({ visible: true, count: 1 }).success).toBe(true);
   });
 
   it('localizes every Session-facing string it contributes', () => {

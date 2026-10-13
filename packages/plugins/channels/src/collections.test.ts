@@ -27,7 +27,6 @@ import {
   ConversationProviderContributionSelectionJsonSchema,
   isCanonicalChannelStateRecordIdentity,
 } from './collections.js';
-import { MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS } from './connectionPollFailureBounds.js';
 import { collectionMigrations, PLUGIN_MANIFEST } from './manifest.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 
@@ -135,6 +134,86 @@ describe('Channels collection declarations', () => {
     expect(migrated).toEqual(current);
     expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), migrated)).toBe(true);
     expect(retained).toMatchObject({ payload: { providerContributionSelection: { immutableGenerationId: 'retired-generation' } } });
+  });
+
+  it('migrates retained v4 connection and binding rows unchanged into the expanded state contract', async () => {
+    // Logical JSON rows accepted by the retained channel-state v4 contract
+    // WcyeFW11n9ycj-viSm2YvRbT2qpNbK8pyXA5nr0l1dQ on agent-qa-channels.
+    const connection = createCurrentConversationConnectionFixture({
+      connectionId: 'connection-1',
+      authority: {
+        providerPluginId: 'happier.channel.telegram',
+        providerContributionSelection: { contributionId: 'telegram' },
+        providerSetupInput: {}, credentialRef: null,
+        transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: {
+          pluginId: 'happier.channel.telegram', machineId: 'machine-1', materializationId: 'retained-materialization',
+        } },
+        providerConnectionKey: 'provider-connection', providerConfig: {}, routingIdentityKey: 'a'.repeat(43),
+        integrationPrincipal: { id: 'principal-1' }, authorityEpoch: 1,
+      },
+    });
+    const binding = {
+      id: 'binding-1', v: 1, 'record-kind': 'binding',
+      'connection-id': 'connection-1', 'binding-id': 'binding-1', 'created-at': 1, 'updated-at': 1,
+      payload: {
+        endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1' },
+        target: { kind: 'session', sessionId: 'session-1', policy: {
+          deliveryMode: 'repliesOnly', permissionCeiling: 'read-only',
+          approvals: { kind: 'off' }, newSession: { kind: 'off' },
+        } },
+        allowedPrincipalIds: ['principal-1'], allowBotSenders: false,
+        inputMode: 'allAllowedMessages', inboundDebounceMs: 0,
+        linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1,
+        enabled: true, deletionState: 'none',
+      },
+    };
+    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find((edge) => edge.fromSchemaVersion === 4);
+    expect(migration).toMatchObject({ toSchemaVersion: 5 });
+    const target = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+    for (const source of [connection, binding]) {
+      const retained = JSON.parse(JSON.stringify(source)) as Readonly<Record<string, JsonValue>>;
+      const before = JSON.stringify(retained);
+      const migrated = await migration?.migrate(retained);
+      expect(migrated).toEqual(retained);
+      expect(isValidPluginJsonSchemaValue(target, migrated)).toBe(true);
+      expect(JSON.stringify(retained)).toBe(before);
+    }
+  });
+
+  it.each([
+    { content: 'Retained delivery text', targetContent: { text: 'Retained delivery text' }, state: 'ready', terminal: false, providerMessageIds: [], contentFingerprint: null },
+    { content: null, targetContent: null, state: 'delivered', terminal: true, providerMessageIds: ['message-1'], contentFingerprint: 'b'.repeat(43) },
+    { content: { text: 'Structured delivery', html: '<p>Structured delivery</p>' }, targetContent: { text: 'Structured delivery', html: '<p>Structured delivery</p>' }, state: 'ready', terminal: false, providerMessageIds: [], contentFingerprint: null },
+  ])('migrates v2 delivery custody without losing content or replay evidence: $state / $content', async (fixture) => {
+    // V2 string/null vectors follow the persisted contract
+    // --o6-Evg_8okqTaObgW5BZJiQfPwUMVBNEhft6YF5xE; the structured case
+    // ensures a current logical value is never double-wrapped on replay.
+    const retained: Readonly<Record<string, JsonValue>> = JSON.parse(JSON.stringify({
+      id: 'a'.repeat(43), 'record-kind': 'outward-delivery', v: 1,
+      'connection-id': 'connection-1', 'binding-id': 'binding-1',
+      terminal: fixture.terminal, attention: false, 'created-at': 100, 'updated-at': 100,
+      payload: {
+        source: { kind: 'sessionProjection', sessionId: 'session-1', semanticItemId: 'semantic-1' },
+        routeAuthority: { connectionAuthorityEpoch: 4, bindingRevision: 1, bindingAuthorityEpoch: 7 },
+        endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1' },
+        content: fixture.content, contentFingerprint: fixture.contentFingerprint,
+        deliveryKey: 'channels:delivery:v1:session-1:semantic-1', replyContext: null,
+        mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress', state: fixture.state,
+        attemptCount: 0, attemptId: null, startedAt: null,
+        providerMessageIds: fixture.providerMessageIds, failedChunk: null, archiveRecovery: null,
+      },
+    }));
+    const before = JSON.stringify(retained);
+    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-deliveries']?.find((edge) => edge.fromSchemaVersion === 2);
+    expect(migration).toMatchObject({ toSchemaVersion: 3 });
+    expect(CHANNEL_DELIVERIES_COLLECTION.schemaVersion).toBe(3);
+    expect(CHANNEL_DELIVERIES_COLLECTION.readableSchemaVersions).toEqual([1, 2]);
+    const migrated = await migration?.migrate(retained);
+    expect(migrated).toEqual({ ...retained, payload: {
+      ...(retained.payload as Readonly<Record<string, JsonValue>>), content: fixture.targetContent,
+    } });
+    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_DELIVERIES_COLLECTION.schema), migrated)).toBe(true);
+    expect(JSON.stringify(retained)).toBe(before);
   });
 
   it('declares no Account-mode identity tags in either static Collection contract', () => {
@@ -295,7 +374,7 @@ describe('Channels collection declarations', () => {
     ]);
   });
 
-  it('declares the V4 transport-origin contract and its ordered retained-row migrations', () => {
+  it('declares the V5 expanded state contract and its ordered retained-row migrations', () => {
     const censusPayload = findChannelStateRecordPayload(
       CHANNEL_STATE_RECORD_KIND.ingressCensus,
     );
@@ -320,8 +399,8 @@ describe('Channels collection declarations', () => {
       },
     } as const;
 
-    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(4);
-    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3]);
+    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(5);
+    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3, 4]);
     expect(JSON.parse(JSON.stringify(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS)))
       .toEqual(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS);
     expect(staticDeclaration?.migrations).toEqual([{
@@ -336,6 +415,10 @@ describe('Channels collection declarations', () => {
       id: 'channel-state-v3-to-v4',
       fromSchemaVersion: 3,
       toSchemaVersion: 4,
+    }, {
+      id: 'channel-state-v4-to-v5',
+      fromSchemaVersion: 4,
+      toSchemaVersion: 5,
     }]);
     expect(staticDeclaration).not.toHaveProperty('migrations.0.migrate');
     expect(censusPayload?.required).toContain('conflict');
@@ -519,7 +602,7 @@ describe('Channels collection declarations', () => {
     expect(frozenSlot?.properties?.acceptedPossibleLoss).toEqual({ type: 'boolean' });
   });
 
-  it('persists the one strict bounded poll-failure union on connection rows', () => {
+  it('persists the one strict poll-failure union on connection rows', () => {
     const connectionPayload = findChannelStateRecordPayload(CHANNEL_STATE_RECORD_KIND.connection);
     const pollFailure = connectionPayload?.properties?.pollFailure;
     const branches = pollFailure?.anyOf
@@ -539,7 +622,7 @@ describe('Channels collection declarations', () => {
         attemptCount: {
           type: 'integer',
           minimum: 1,
-          maximum: MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS - 1,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
         retryNotBeforeMs: { type: 'integer', minimum: 0, maximum: 9_007_199_254_740_991 },
         required: ['phase', 'attemptCount', 'retryNotBeforeMs', 'evidence'],
@@ -550,7 +633,7 @@ describe('Channels collection declarations', () => {
         attemptCount: {
           type: 'integer',
           minimum: 1,
-          maximum: MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
         retryNotBeforeMs: { type: 'null' },
         required: ['phase', 'attemptCount', 'retryNotBeforeMs', 'evidence'],

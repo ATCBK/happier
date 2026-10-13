@@ -215,12 +215,25 @@ describe('readConversationConnectionUpdateRow frozen provider selection', () => 
     })).toThrow(expect.objectContaining({ code: 'channels_connection_update_corrupt' }));
   });
 
-  it('rejects a poll failure outside the collection union', () => {
+  it('reads a retryable poll failure beyond five attempts through the canonical collection reader', () => {
+    const pollFailure = {
+      phase: 'retryDue',
+      attemptCount: 6,
+      retryNotBeforeMs: 1_000,
+      evidence: { kind: 'provider', reason: 'network' },
+    } as const;
+    expect(readConversationConnectionUpdateRow({
+      row: connectionRow(frozenOldStop(), { pollFailure }),
+      connectionId: CONNECTION_ID,
+    }).lifecycle.pollFailure).toEqual(pollFailure);
+  });
+
+  it('rejects a poll failure with an unsafe numeric attempt count', () => {
     expect(() => readConversationConnectionUpdateRow({
       row: connectionRow(frozenOldStop(), {
         pollFailure: {
           phase: 'retryDue',
-          attemptCount: 5,
+          attemptCount: Number.MAX_SAFE_INTEGER + 1,
           retryNotBeforeMs: 1_000,
           evidence: { kind: 'provider', reason: 'network' },
         },

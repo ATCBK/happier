@@ -884,7 +884,11 @@ export function buildChannelsConversationIndex(input: Readonly<{
     botAttention?: Readonly<{ label: string }>;
     rows: ChannelsConversationIndexRow[];
   }>();
+  // A router's thread bindings are listed on the router's own page; the index
+  // keeps one row per conversation the owner linked, however many threads it starts.
+  const bindingIds = new Set(input.bindings.map((binding) => binding.bindingId));
   for (const binding of input.bindings) {
+    if (binding.parentBindingId !== undefined && bindingIds.has(binding.parentBindingId)) continue;
     const connection = connectionById.get(binding.connectionId);
     const perBot = connection !== undefined && (botsByProvider.get(connection.providerPluginId)?.size ?? 0) > 1;
     const key = connection === undefined

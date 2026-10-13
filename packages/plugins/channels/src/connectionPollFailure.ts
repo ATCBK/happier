@@ -6,9 +6,6 @@ import {
 import type { ConversationConnectionPollFailureV1 } from './connectionLifecycle.js';
 import {
   isConversationPollFailureAttemptCount,
-  isConversationPollRetryAttemptCount,
-  type ConversationPollFailureAttemptCountV1,
-  type ConversationPollRetryAttemptCountV1,
 } from './connectionPollFailureBounds.js';
 
 type JsonRecord = Readonly<Record<string, unknown>>;
@@ -25,13 +22,13 @@ type ConversationConnectionPollFailureAttentionEvidenceV1 =
 export type ConversationConnectionPollFailureAttentionV1 =
   | Readonly<{
     phase: 'retryDue';
-    attemptCount: ConversationPollRetryAttemptCountV1;
+    attemptCount: number;
     retryNotBeforeMs: number;
     evidence: ConversationConnectionPollFailureAttentionEvidenceV1;
   }>
   | Readonly<{
     phase: 'blocked';
-    attemptCount: ConversationPollFailureAttemptCountV1;
+    attemptCount: number;
     retryNotBeforeMs: null;
     evidence: ConversationConnectionPollFailureAttentionEvidenceV1;
   }>;
@@ -106,7 +103,7 @@ export function readConversationConnectionPollFailureAttention(
   const attemptCount = own(value, 'attemptCount');
   const retryNotBeforeMs = own(value, 'retryNotBeforeMs');
   if (phase === 'retryDue'
-    && isConversationPollRetryAttemptCount(attemptCount)
+    && isConversationPollFailureAttemptCount(attemptCount)
     && isNonNegativeSafeInteger(retryNotBeforeMs)) {
     return {
       phase,

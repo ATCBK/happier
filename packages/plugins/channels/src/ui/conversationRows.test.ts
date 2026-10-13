@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildChannelsConversationIndex,
   channelsStatusNeedsYou,
   connectionStatus,
   readChannelsPageLocation,
@@ -74,4 +75,16 @@ describe('connectionStatus', () => {
     expect(channelsStatusNeedsYou('secondary')).toBe(false);
     expect(channelsStatusNeedsYou('neutral')).toBe(false);
   });
+});
+
+it('lists a router once in the conversation index and leaves its threads to the router page', () => {
+  const router = parseBinding({ bindingId: 'router-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'wilson@batiplus.ch' },
+    target: { kind: 'threadRouter', summary: 'threadRouter' }, inputMode: 'allAllowedMessages', deliveryMode: 'none', approval: { kind: 'notApplicable' }, enabled: true, deletionState: 'none' });
+  const thread = parseBinding({ bindingId: 'thread-1', parentBindingId: 'router-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'shared', label: 'Devis' },
+    target: { kind: 'session', summary: 'session-1' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' });
+  const orphan = parseBinding({ bindingId: 'thread-2', parentBindingId: 'router-gone', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'shared', label: 'Orphan' },
+    target: { kind: 'session', summary: 'session-2' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' });
+  if (router === undefined || thread === undefined || orphan === undefined) throw new Error('fixture rows must parse');
+  const groups = buildChannelsConversationIndex({ bindings: [router, thread, orphan], connections: [], providerName: (id) => id, t });
+  expect(groups.flatMap((group) => group.rows.map((row) => row.binding.bindingId)).sort()).toEqual(['router-1', 'thread-2']);
 });

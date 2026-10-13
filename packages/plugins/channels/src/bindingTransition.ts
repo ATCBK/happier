@@ -1,4 +1,4 @@
-import { areConversationEndpointIdentitiesEqual, conversationThreadRouterAllowedPrincipalIdsV1 } from '@happier-dev/channels-protocol/v1';
+import { areConversationEndpointIdentitiesEqual, conversationThreadRouterAllowedPrincipalIdsV1, isChannelSessionSpawnRecipeAuthorableV1 } from '@happier-dev/channels-protocol/v1';
 import type {
   ConversationBindingInputModeV1,
   ConversationBindingTargetV1,
@@ -57,7 +57,8 @@ export type ConversationBindingTransitionResultV1 =
       | 'parentBindingImmutable'
       | 'routerGroupNotFound'
       | 'routerDuplicateId'
-      | 'routerAudienceEmpty';
+      | 'routerAudienceEmpty'
+      | 'recipeAttestationForbidden';
   }>;
 
 const MAX_SAFE_INTEGER = 9_007_199_254_740_991;
@@ -232,6 +233,13 @@ export function transitionConversationBinding(input: Readonly<{
   const requested = input.requested.target.kind === 'threadRouter'
     ? { ...input.requested, allowedPrincipalIds: conversationThreadRouterAllowedPrincipalIdsV1(input.requested.target) }
     : input.requested;
+  const authorableNewSession = (policy: ConversationSessionBindingTargetV1['policy']) =>
+    policy.newSession.kind === 'off' || isChannelSessionSpawnRecipeAuthorableV1(policy.newSession.recipe);
+  if ((requested.target.kind === 'session' && !authorableNewSession(requested.target.policy))
+    || (requested.target.kind === 'threadRouter' && requested.target.routes.some(route =>
+      !isChannelSessionSpawnRecipeAuthorableV1(route.recipe) || !authorableNewSession(route.policy)))) {
+    return { kind: 'rejected', code: 'recipeAttestationForbidden' };
+  }
   if (current.parentBindingId !== requested.parentBindingId) return { kind: 'rejected', code: 'parentBindingImmutable' };
   if (requested.target.kind === 'threadRouter') {
     const groups = new Set(requested.target.principalGroups.map((group) => group.id));

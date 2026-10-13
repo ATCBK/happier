@@ -58,7 +58,6 @@ import {
 } from './deliveryCustody.js';
 import { createConversationNewSessionCreationKey } from './commands.js';
 import { CONVERSATION_NON_ADMISSION_REASONS } from './commandPolicy.js';
-import { MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS } from './connectionPollFailureBounds.js';
 
 import {
   CHANNEL_COLLECTION_MIGRATIONS,
@@ -504,7 +503,7 @@ export const ConversationConnectionPollFailureJsonSchema = nullable({
         attemptCount: {
           type: 'integer',
           minimum: 1,
-          maximum: MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS - 1,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
         retryNotBeforeMs: NON_NEGATIVE_SAFE_INTEGER_SCHEMA,
         evidence: POLL_FAILURE_EVIDENCE_SCHEMA,
@@ -519,7 +518,7 @@ export const ConversationConnectionPollFailureJsonSchema = nullable({
         attemptCount: {
           type: 'integer',
           minimum: 1,
-          maximum: MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
         retryNotBeforeMs: NULL_SCHEMA,
         evidence: POLL_FAILURE_EVIDENCE_SCHEMA,
@@ -547,6 +546,11 @@ const CONNECTION_PAYLOAD_SCHEMA = {
     // private connection snapshot is written. These facts are re-read by the
     // single custody/pairing paths; list/read never project either one.
     outboundTextLimit: ConversationOutboundTextLimitV1JsonSchema,
+    recommendedMaximumObservationAgeMs: {
+      type: 'integer',
+      minimum: MIN_CONVERSATION_OBSERVATION_AGE_MS,
+      maximum: MAX_CONVERSATION_OBSERVATION_AGE_MS,
+    },
     // The provider-authenticated shared-endpoint delivery truth. Optional
     // because a provider that declares no restriction asserts every mode is
     // deliverable; the binding policy owner reads that absence the same way.
@@ -667,6 +671,7 @@ const BINDING_PAYLOAD_SCHEMA = {
   type: 'object',
   properties: {
     parentBindingId: ConversationBindingIdV1JsonSchema,
+    inboundBirthMessageId: boundedString(MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES),
     endpoint: RESOLVED_ENDPOINT_SCHEMA,
     target: ConversationBindingTargetV1JsonSchema,
     allowedPrincipalIds: ConversationAllowedPrincipalIdsV1JsonSchema,
@@ -1124,6 +1129,8 @@ const INGRESS_CENSUS_PAYLOAD_SCHEMA = {
     // Existing retained censuses predate Event candidates. Omission reads as
     // no candidate; current writers always persist the explicit nullable arm.
     eventCandidate: nullable(ConversationIngressAutomationEventCandidateV1JsonSchema),
+    // Poll shaping context stays with the sole replay census after compaction.
+    endpointWasRetainedAtPoll: BOOLEAN_SCHEMA,
     matchedBindings: {
       type: 'array',
       minItems: 0,
@@ -1434,14 +1441,14 @@ const STATE_RECORDS: readonly StateRecordDefinition[] = [
 
 
 /**
- * One strict V4 Account Collection contract for all Channels configuration,
+ * One strict V5 Account Collection contract for all Channels configuration,
  * ingress, checkpoint, projection-frontier, and rotation state. Every row
  * family remains explicit; no later core phase gets an opaque escape hatch.
  */
 export const CHANNEL_STATE_COLLECTION = defineAccountCollection({
   id: CHANNEL_STATE_COLLECTION_ID,
-  schemaVersion: 4,
-  readableSchemaVersions: [1, 2, 3],
+  schemaVersion: 5,
+  readableSchemaVersions: [1, 2, 3, 4],
   schema: {
     type: 'object',
     properties: {
@@ -2070,8 +2077,8 @@ const DELIVERY_ROW_STATE_CONSISTENCY_SCHEMA: PluginJsonSchema = {
  */
 export const CHANNEL_DELIVERIES_COLLECTION = defineAccountCollection({
   id: CHANNEL_DELIVERIES_COLLECTION_ID,
-  schemaVersion: 2,
-  readableSchemaVersions: [1],
+  schemaVersion: 3,
+  readableSchemaVersions: [1, 2],
   schema: {
     type: 'object',
     properties: {
@@ -2147,8 +2154,8 @@ export const CHANNEL_DELIVERIES_COLLECTION = defineAccountCollection({
   ],
   uiQueries: [],
   relations: [],
-  // Dependency-owned endpoint/revision schema changes do not rewrite custody.
-  // The shared candidate executor still validates every retained target row.
+  // The canonical migration wraps retained text content without changing
+  // custody; the shared candidate executor validates every target row.
   migrations: CHANNEL_COLLECTION_MIGRATIONS[CHANNEL_DELIVERIES_COLLECTION_ID],
   migrationArtifact: {
     artifactId: CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID,

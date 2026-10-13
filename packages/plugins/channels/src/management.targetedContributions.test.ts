@@ -8,7 +8,7 @@ import {
 } from '@happier-dev/plugin-sdk';
 import type { ActionsService } from '@happier-dev/plugin-sdk/actions';
 import type { PluginTargetedContributionSelectionV1 } from '@happier-dev/plugin-sdk/contributions';
-import { ConversationEndpointResolveInputV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ConversationEndpointResolveInputV1Schema, ConversationProviderSetupResultV1Schema } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -3320,6 +3320,95 @@ describe('retestConversationConnectionForInvocation', () => {
     authorityEpoch: 4,
   } as const satisfies ConversationConnectionFixtureAuthority;
 
+  function retestSetupExecution() {
+    return {
+      executionOrigin: retestPersistedAuthority.transportOrigin,
+      result: ConversationProviderSetupResultV1Schema.parse({
+        v: 1, credentialRef: selectedCredentialRef,
+        providerConnectionKey: 'example:connection', providerConfigVersion: 1,
+        providerConfig: { opaque: true }, integrationPrincipal: { id: 'example-bot' },
+        supportedTransports: ['socket'], recommendedTransport: 'socket',
+        overlapSafety: 'safe', replayContinuity: 'none',
+        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+        recommendedMaximumObservationAgeMs: 30 * 86_400_000,
+      }),
+    };
+  }
+
+  it('refreshes native delivery capability and provider freshness on an old retained connection without replacing user policy', async () => {
+    const collection = createMutableConnectionStateCollection();
+    const connectionId = 'legacy-native-limit';
+    const initial = createCurrentConversationConnectionFixture({
+      connectionId, authority: retestPersistedAuthority,
+      transport: { kind: 'socket' }, maximumObservationAgeMs: 60_000,
+      providerReadiness: null,
+    });
+    const { outboundTextLimit: _obsoleteLimit, ...legacyPayload } = initial.payload;
+    collection.rows.set(connectionId, {
+      rowId: connectionId, revision: 4, value: { ...initial, payload: legacyPayload },
+    });
+    const context = invocationContext({
+      stateCollection: collection,
+      targetedContributions: targetedContributionsFixture({
+        contributorImmutableGenerationId: providerSelection.contributor.sourceCustody.immutableGenerationId,
+        operations: { setup: setupAction, connectionTest: connectionTestAction },
+      }),
+      actions: {
+        async executeAdmittedTargetedOperationWithExecutionOrigin(operation: unknown) {
+          if (operation === setupAction) return retestSetupExecution();
+          return {
+            executionOrigin: retestPersistedAuthority.transportOrigin,
+            result: {
+              kind: 'ready', providerConnectionKey: 'example:connection',
+              integrationPrincipal: { id: 'example-bot' },
+            },
+          };
+        },
+      } as unknown as ActionsService,
+    });
+    await expect(retestConversationConnectionForInvocation({
+      connectionId, expectedRevision: 4, authorityEpoch: 4,
+    }, context)).resolves.toMatchObject({ kind: 'ready' });
+    expect(collection.rows.get(connectionId)?.value.payload).toMatchObject({
+      outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+      recommendedMaximumObservationAgeMs: 30 * 86_400_000,
+      maximumObservationAgeMs: 60_000, authorityEpoch: 4,
+      providerConfig: { opaque: true },
+    });
+    await expect(retestConversationConnectionForInvocation({
+      connectionId, expectedRevision: 5, authorityEpoch: 4,
+    }, context)).resolves.toMatchObject({ kind: 'ready', revision: 5 });
+    expect(collection.rows.get(connectionId)?.revision).toBe(5);
+  });
+
+  it('removes superseded optional capabilities when the current provider declares no native limit or freshness recommendation', async () => {
+    const collection = createMutableConnectionStateCollection();
+    const connectionId = 'formerly-bounded';
+    const initial = createCurrentConversationConnectionFixture({ connectionId, authority: retestPersistedAuthority,
+      providerReadiness: null, transport: { kind: 'socket' } });
+    collection.rows.set(connectionId, { rowId: connectionId, revision: 1,
+      value: { ...initial, payload: { ...initial.payload, recommendedMaximumObservationAgeMs: 86_400_000 } } });
+    const setup = retestSetupExecution();
+    const { outboundTextLimit: _oldLimit, recommendedMaximumObservationAgeMs: _oldRecommendation, ...unbounded } = setup.result;
+    const context = invocationContext({ stateCollection: collection,
+      targetedContributions: targetedContributionsFixture({
+        contributorImmutableGenerationId: providerSelection.contributor.sourceCustody.immutableGenerationId,
+        operations: { setup: setupAction, connectionTest: connectionTestAction },
+      }),
+      actions: { async executeAdmittedTargetedOperationWithExecutionOrigin(operation: unknown) {
+        return { executionOrigin: setup.executionOrigin, result: operation === setupAction ? unbounded : {
+          kind: 'ready', providerConnectionKey: unbounded.providerConnectionKey, integrationPrincipal: unbounded.integrationPrincipal,
+        } };
+      } } as unknown as ActionsService,
+    });
+    await expect(retestConversationConnectionForInvocation({ connectionId, expectedRevision: 1, authorityEpoch: 4 }, context))
+      .resolves.toMatchObject({ kind: 'ready', revision: 2 });
+    const payload = collection.rows.get(connectionId)?.value.payload;
+    expect(payload).not.toHaveProperty('outboundTextLimit');
+    expect(payload).not.toHaveProperty('recommendedMaximumObservationAgeMs');
+    expect(payload).toMatchObject({ maximumObservationAgeMs: initial.payload.maximumObservationAgeMs, authorityEpoch: 4 });
+  });
+
   /** One attention-carrying saved connection plus the Account boundary it lives in. */
   function retestFixture(input?: Readonly<{
     providerReadiness?: unknown;
@@ -3410,10 +3499,15 @@ describe('retestConversationConnectionForInvocation', () => {
       actionInput: unknown,
       options: unknown,
     ) => {
+      if (action === setupAction) {
+        expect(actionInput).toEqual(retestPersistedAuthority.providerSetupInput);
+        expect(options).toMatchObject({ expectedExecutionOrigin: retestPersistedAuthority.transportOrigin,
+          expectedSelectedConnectedAccountRef: selectedCredentialRef });
+        return retestSetupExecution();
+      }
       expect(action).toBe(connectionTest);
-      // Exactly the retained connection facts. A retest that re-ran setup, or
-      // rebuilt the request from caller input, would be a second connection
-      // writer rather than a re-observation of the saved one.
+      // The probe and setup refresh both consume saved facts, never caller
+      // replacements for connection identity or configuration.
       expect(actionInput).toEqual({
         v: 1,
         connectionId: fixture.connectionId,
@@ -3454,7 +3548,6 @@ describe('retestConversationConnectionForInvocation', () => {
       revision: 5,
       authorityEpoch: 4,
     });
-    expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledOnce();
     // The one canonical readiness field is settled; the retest owns no second
     // health record of its own.
     expect(fixture.readRow().value.payload.providerReadiness).toBeNull();
@@ -3608,7 +3701,7 @@ describe('retestConversationConnectionForInvocation', () => {
       ],
     });
     const connectionTest = admittedProviderOperation({ role: 'connectionTest' });
-    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async () => ({
+    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (action: unknown) => action === setupAction ? retestSetupExecution() : ({
       result: {
         kind: 'ready',
         integrationPrincipal: { id: 'example-bot' },
@@ -3660,7 +3753,7 @@ describe('retestConversationConnectionForInvocation', () => {
       ],
     });
     const connectionTest = admittedProviderOperation({ role: 'connectionTest' });
-    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async () => ({
+    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (action: unknown) => action === setupAction ? retestSetupExecution() : ({
       result: {
         kind: 'ready',
         integrationPrincipal: { id: 'example-bot' },
@@ -3691,19 +3784,26 @@ describe('retestConversationConnectionForInvocation', () => {
     expect(fixture.readRow().value.payload.providerReadiness).toBeNull();
   });
 
-  it('refuses a probe whose credential now resolves to a different immutable integration principal', async () => {
+  it.each(['connectionTest', 'setup'])('refuses a %s whose credential now resolves to a different immutable integration principal', async (mismatchedRole) => {
     const fixture = retestFixture();
     const connectionTest = admittedProviderOperation({ role: 'connectionTest' });
-    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async () => ({
-      // The saved provider connection key still matches, but the credential
-      // behind it now answers for a different immutable integration principal.
-      result: {
-        kind: 'ready',
-        integrationPrincipal: { id: 'someone-elses-bot' },
-        providerConnectionKey: 'example:connection',
-      },
-      executionOrigin: retestPersistedAuthority.transportOrigin,
-    }));
+    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (action: unknown) => {
+      if (action === setupAction) {
+        const setup = retestSetupExecution();
+        return { ...setup, result: { ...setup.result,
+          integrationPrincipal: { id: 'someone-elses-bot' } } };
+      }
+      return {
+        // The saved key still matches, but this credential's immutable
+        // principal may have changed in either authenticated observation.
+        result: {
+          kind: 'ready',
+          integrationPrincipal: { id: mismatchedRole === 'connectionTest' ? 'someone-elses-bot' : 'example-bot' },
+          providerConnectionKey: 'example:connection',
+        },
+        executionOrigin: retestPersistedAuthority.transportOrigin,
+      };
+    });
     const context = invocationContext({
       actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as unknown as ActionsService,
       targetedContributions: targetedContributionsFixture({

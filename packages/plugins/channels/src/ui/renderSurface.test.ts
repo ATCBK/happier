@@ -8,6 +8,7 @@ import {
   CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1,
+  ConversationBindingReadResultV1Schema,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
 } from '@happier-dev/channels-protocol/v1';
 import {
@@ -5348,6 +5349,141 @@ describe('Channels mounted binding editor', () => {
       expect(opener).toBeDefined();
       expect(document.activeElement).toBe(opener);
       expect(focusTarget).toHaveBeenCalledTimes(2);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+});
+
+describe('Channels thread router conversation', () => {
+  const routerBinding = {
+    v: 1,
+    id: 'router-1',
+    connectionId: 'connection-1',
+    endpoint: { kind: 'direct' as const, audience: 'direct' as const, id: 'wilson@batiplus.ch', label: 'wilson@batiplus.ch' },
+    target: {
+      kind: 'threadRouter' as const,
+      principalGroups: [
+        { id: 'sales', principalIds: ['anna@batiplus.ch', 'marc@batiplus.ch'] },
+        { id: 'brief', principalIds: ['leeroy@batiplus.ch'] },
+      ],
+      routes: [
+        {
+          id: 'route-intake',
+          when: { group: 'sales', forwarded: true as const },
+          recipe: { agentId: 'claude', directory: '/srv/wilson/intake', unlistedTools: 'deny', allowedTools: ['mcp__wilson-intake__*'] },
+          policy: {
+            deliveryMode: 'repliesOnly' as const,
+            permissionCeiling: 'read-only',
+            approvals: { kind: 'off' as const },
+            newSession: { kind: 'off' as const },
+          },
+        },
+        {
+          id: 'route-conversation',
+          when: { group: 'any', forwarded: 'any' as const },
+          recipe: { agentId: 'claude', directory: '/srv/wilson/conversation' },
+          policy: {
+            deliveryMode: 'repliesOnly' as const,
+            permissionCeiling: 'read-only',
+            approvals: { kind: 'off' as const },
+            newSession: { kind: 'off' as const },
+          },
+        },
+      ],
+    },
+    allowedPrincipalIds: ['anna@batiplus.ch', 'marc@batiplus.ch', 'leeroy@batiplus.ch'],
+    allowBotSenders: false,
+    inputMode: 'allAllowedMessages' as const,
+    inboundDebounceMs: 0,
+    linkPreviewPolicy: 'providerDefault' as const,
+    senderFeedback: 'off' as const,
+    authorityEpoch: 1,
+    enabled: true,
+    deletionState: 'none' as const,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const routerBindingsResource = jsonResource({
+    bindings: [{
+      bindingId: 'router-1',
+      revision: 1,
+      connectionId: 'connection-1',
+      endpoint: { audience: 'direct', label: 'wilson@batiplus.ch' },
+      target: { kind: 'threadRouter', summary: 'threadRouter' },
+      inputMode: 'allAllowedMessages',
+      deliveryMode: 'none',
+      approval: { kind: 'notApplicable' },
+      enabled: true,
+      deletionState: 'none',
+    }, {
+      bindingId: 'thread-1',
+      parentBindingId: 'router-1',
+      revision: 1,
+      connectionId: 'connection-1',
+      endpoint: { audience: 'shared', label: 'Devis chantier Lausanne' },
+      target: { kind: 'session', summary: 'session-thread-1' },
+      inputMode: 'allAllowedMessages',
+      deliveryMode: 'repliesOnly',
+      approval: { kind: 'off' },
+      enabled: true,
+      deletionState: 'none',
+    }],
+  }, 'b');
+
+  it('shows the routes and started threads, and saves a reordered route list through the guarded update', async () => {
+    const readReply = ConversationBindingReadResultV1Schema.parse({
+      kind: 'ready', revision: 1, binding: routerBinding,
+    });
+    const updateInputs: unknown[] = [];
+    let readCount = 0;
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) {
+        expect(input).toEqual({ bindingId: 'router-1' });
+        readCount += 1;
+        return { ...readReply, revision: readCount > 2 ? 2 : 1 };
+      }
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
+        updateInputs.push(input);
+        return { kind: 'updated', bindingId: 'router-1', revision: 2, authorityEpoch: 1 };
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router', mountNonce: 'fixture-router' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: 'router-1',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(() => routerBindingsResource),
+      },
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
+      });
+      await expect(fixture.getByText('claude · intake · only 1 listed tools')).resolves.toBeDefined();
+      await expect(fixture.getByText('Devis chantier Lausanne')).resolves.toBeDefined();
+      await expect(fixture.queryByText('threadRouter')).resolves.toBeUndefined();
+
+      await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
+      await expect(fixture.findByRole('heading', { name: 'Routes' })).resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('button', { name: 'Move route 2 up' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
+
+      await vi.waitFor(() => {
+        expect(updateInputs).toHaveLength(1);
+      });
+      const update = updateInputs[0] as Readonly<{ target?: typeof routerBinding.target }>;
+      expect(update.target?.kind).toBe('threadRouter');
+      expect(update.target?.routes.map((route) => route.id)).toEqual(['route-conversation', 'route-intake']);
+      expect(update.target?.principalGroups).toEqual(routerBinding.target.principalGroups);
     } finally {
       await fixture.dispose();
     }

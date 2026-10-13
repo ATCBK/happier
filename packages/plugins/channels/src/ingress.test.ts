@@ -25,8 +25,11 @@ import type {
 import {
   ConversationProviderObservationIngestInputV1JsonSchema,
   ConversationProviderObservationIngestInputV1Schema,
+  ConversationBindingUpdateInputV1Schema,
   MAX_CONVERSATION_APPROVAL_REQUEST_ID_UTF8_BYTES,
   MAX_CONVERSATION_OBSERVATION_CLOCK_SKEW_MS,
+  SessionPullRequestLinksV1Schema,
+  resolveSessionPullRequestLinksV1,
 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -55,14 +58,15 @@ import {
   confirmConversationCheckpointedPollStopForInvocation,
   retryConversationConnectionPollForInvocation,
   updateConversationConnectionForInvocation,
+  createConversationThreadBindingForInvocation,
+  updateConversationBindingForInvocation,
 } from './management.js';
 import {
   CHANNEL_DELIVERIES_COLLECTION,
   CHANNEL_STATE_COLLECTION,
 } from './collections.js';
-import { isChannelStateJsonRecord, readConversationConnectionUpdateRow } from './accountLocalBindingPolicy.js';
+import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConversationBindingUpdateRow } from './accountLocalBindingPolicy.js';
 import { startConversationConnectionTransfer } from './connectionLifecycle.js';
-import { MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS } from './connectionPollFailureBounds.js';
 import { pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
 import { createConversationPairingManager } from './pairing.js';
 
@@ -1325,6 +1329,7 @@ describe('thread router admission', () => {
   it('routes real Telegram forum-topic observations from the existing poll provider', async () => {
     let pollNumber = 0;
     const bornSessions = new Set<string>();
+    const heldThreadPollBindings: unknown[] = [];
     const harness = createIngressHarness({ availableSessionIds: ['session-2'],
       execute: (actionId, input) => {
         if (actionId === 'session.spawn_new') {
@@ -1338,7 +1343,9 @@ describe('thread router admission', () => {
         }
         return threadSpawnBoundary(actionId, input);
       },
-      pollExecution: async (input, signal) => pollTelegramObservations(input, {
+      pollExecution: async (input, signal) => {
+        if (pollNumber > 1) heldThreadPollBindings.push(record(input).bindings);
+        return pollTelegramObservations(input, {
         plugin: { id: telegramProviderPluginId, version: '0.0.0' },
         contribution: { id: 'telegram/poll-updates', qualifiedId: 'happier.channel.telegram/actions/telegram/poll-updates' },
         surface: 'plugin', invokedAtMs: Date.now(),
@@ -1365,7 +1372,8 @@ describe('thread router admission', () => {
               body: new TextEncoder().encode(JSON.stringify({ ok: true, result })) };
           } },
         } as unknown as PluginInvocationContext['services'],
-      }),
+      });
+      },
     });
     routerFixture(harness.rows);
     const router = harness.rows.get('binding-1');
@@ -1380,6 +1388,10 @@ describe('thread router admission', () => {
     for (let index = 0; index < 4; index += 1) await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
     expect(bornSessions.size).toBe(1);
     expect(harness.send.mock.calls.map(([request]) => sentUserTextRequest(request).text)).toEqual(['topic message 1', 'topic message 2']);
+    expect(heldThreadPollBindings).toMatchObject([0, 1].map(() => [{
+      endpoint: { kind: 'thread', audience: 'shared', id: '100:7', parentId: '100' },
+      excludedMessageIds: ['5'],
+    }]));
     const children = [...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === 'binding-1');
     expect(children).toHaveLength(1);
     expect(children[0]?.value.payload).toMatchObject({ endpoint: { kind: 'thread', id: '100:7', parentId: '100' },
@@ -1668,14 +1680,30 @@ describe('Conversation provider observation ingress', () => {
       { sessionId: 'session-1', localId: 'local-M1', projectedReplySeq: null },
       { sessionId: 'session-1', localId: 'local-M2', projectedReplySeq: null },
     ]));
+    const account = harness.context.services.storage.account;
+    if (!account) throw new Error('Expected admitted Account storage');
+    const stateCollection = account.collection(CHANNEL_STATE_COLLECTION);
+    const replyRelations = await readConversationSessionInputReplyRelations({ stateCollection,
+      bindingId: 'binding-1', connectionId: 'connection-1', sessionId: 'session-1', consumedLocalIds: ['local-M1'],
+      signal: harness.context.signal });
+    expect(replyRelations).toHaveLength(1);
+    await markConversationSessionInputRepliesProjected({ stateCollection, relations: replyRelations,
+      seq: 2, signal: harness.context.signal });
+    const projected = harness.rows.get(replyRelations[0]!.row.rowId);
+    if (!projected) throw new Error('Expected projected reply relation');
+    const validator = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+    expect(isValidPluginJsonSchemaValue(validator, projected.value)).toBe(true);
     await runConversationIngressRetentionForInvocation({ now: Date.now() }, harness.context);
     expect(relations()).toHaveLength(2);
     await runConversationIngressRetentionForInvocation({ now: Date.now() + 31 * 86_400_000 }, harness.context);
     expect(relations()).toHaveLength(2);
   });
-  it('cancels the bound turn once for /stop, bypasses debounce, and rejoins after reload', async () => {
+  it.each([
+    { label: 'native success', result: { ok: true } },
+    { label: 'acknowledged CLI request', result: { requested: true } },
+  ] as const)('cancels the bound turn once for /stop, bypasses debounce, and rejoins after reload ($label)', async ({ result }) => {
     const harness = createIngressHarness({
-      execute: () => ({ ok: true }),
+      execute: () => result,
     });
     const binding = channelBinding();
     harness.rows.set(binding.id, stateRow({
@@ -1763,8 +1791,13 @@ describe('Conversation provider observation ingress', () => {
     }
   });
 
-  it('settles a no-active-turn refusal through control custody without admitting /stop as input', async () => {
-    const harness = createIngressHarness({ execute: () => ({ ok: false, errorCode: 'no_active_turn' }) });
+  it.each([
+    { label: 'no active turn', result: { ok: false, errorCode: 'no_active_turn' } },
+    { label: 'empty result', result: {} },
+    { label: 'malformed acknowledgement', result: { requested: 'true' } },
+    { label: 'explicit refusal beside acknowledgement', result: { ok: false, requested: true } },
+  ] as const)('settles a /stop refusal through control custody without admitting it as input ($label)', async ({ result }) => {
+    const harness = createIngressHarness({ execute: () => result });
     const command = observation({ messageRevision: 'stop:idle', messageText: '/stop' });
     await ingestConversationProviderObservationForInvocation(command, harness.context);
     await ingestConversationProviderObservationForInvocation(command, harness.context);
@@ -3840,6 +3873,38 @@ describe('Conversation provider observation ingress', () => {
     });
   });
 
+  it('refuses retained author attestation before a trusted /new spawn', async () => {
+    const harness = createIngressHarness({ availableSessionIds: ['session-1', 'session-2'], execute: actionId => {
+      if (actionId === 'session.spawn_new') return { type: 'success', disposition: 'created', sessionId: 'session-2',
+        executionTarget: { serverId: 'server-1', machineId: 'machine-1' }, organizationPlacement: { folderId: null, tagIds: [] },
+        initialInput: { status: 'notRequested' } };
+      if (actionId === 'session.transcript.get') return { ok: true, projection: 'externalShareableV1', sessionId: 'session-2',
+        items: [], scannedThroughSeq: 0, hasMore: false };
+      throw new Error(`Unexpected Action ${actionId}`);
+    } });
+    setBindingNewSessionEnabled(harness.rows);
+    const row = harness.rows.get('binding-1')!;
+    const payload = record(row.value.payload);
+    const target = record(payload.target);
+    const policy = record(target.policy);
+    const newSession = record(policy.newSession);
+    const forgedTarget = { ...target, policy: { ...policy,
+      newSession: { ...newSession, recipe: { ...record(newSession.recipe), attestedContext: {
+        externalPrincipalId: 'forged', sourceMessageId: '<forged>',
+      } } },
+    } };
+    await expect(updateConversationBindingForInvocation(ConversationBindingUpdateInputV1Schema.parse({
+      bindingId: row.rowId, expectedRevision: row.revision, target: forgedTarget,
+    }), harness.context)).rejects.toMatchObject({ code: 'channels_binding_update_corrupt' });
+    expect(harness.rows.get(row.rowId)).toEqual(row);
+    // Retained opaque data is never sanitized into trusted caller authority.
+    harness.rows.set(row.rowId, stateRow({ ...row.value, payload: { ...payload, target: forgedTarget } }, row.revision));
+    await ingestConversationProviderObservationForInvocation(observation({ messageRevision: '1', messageText: '/new' }), harness.context);
+    expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(0);
+    expect([...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation')?.value.payload)
+      .toMatchObject({ disposition: 'rejected', lifecycle: { phase: 'terminal' } });
+  });
+
   it.each([
     { triggerKind: 'prComment' as const, repositoryWriteAccess: true, isIntegrationSelf: false, admitted: true },
     { triggerKind: 'ciFailed' as const, repositoryWriteAccess: true, isIntegrationSelf: true, admitted: true },
@@ -4225,6 +4290,49 @@ describe('Conversation provider observation ingress', () => {
         state: 'ready',
       },
     });
+  });
+
+  it.each([
+    { name: 'routed sender', hasAttestedContext: true, principalIds: ['telegram:user:42'], attested: true },
+    { name: 'single-member start', hasAttestedContext: false, principalIds: ['telegram:user:42'], attested: false },
+    { name: 'shared-audience start', hasAttestedContext: false, principalIds: ['telegram:user:42', 'telegram:user:43'], attested: false },
+  ])('rotates $name with host-derived birth facts and rejoins command replay', async ({ hasAttestedContext, principalIds, attested }) => {
+    const births: JsonValue[] = [];
+    const harness = createIngressHarness({ connection: socketChannelConnection(), availableSessionIds: ['session-1', 'session-2'],
+      sessionSummary: id => ({ id, hasAttestedContext, state: 'idle', runtimeAvailability: { status: 'available' },
+        storagePolicy: 'optional', encryptionMode: 'plain', updatedAtMs: 1 }),
+      execute: (actionId, input) => {
+        if (actionId === 'session.spawn_new') {
+          births.push(input);
+          return { type: 'success', disposition: 'created', sessionId: 'session-2',
+            executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+            organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
+        }
+        if (actionId === 'session.transcript.get') return { ok: true, projection: 'externalShareableV1', sessionId: record(input).sessionId,
+          items: [], scannedThroughSeq: 0, hasMore: false };
+        return threadSpawnBoundary(actionId, input);
+      },
+    });
+    routerFixture(harness.rows);
+    const endpoint = fullTextIngress(topicObservation('new-birth')).endpoint;
+    const created = await createConversationThreadBindingForInvocation({ routerBindingId: 'binding-1', expectedRouterRevision: 1,
+      expectedConnectionRevision: 1, endpoint, sessionId: 'session-1', allowedPrincipalIds: principalIds,
+      policy: { ...channelBinding().payload.target.policy, newSession: { kind: 'enabled', recipe: {
+        executionTarget: { serverId: 'server-1', machineId: 'machine-1' }, directory: { kind: 'path', path: '/workspace/channels' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      } } },
+    }, harness.context);
+    if (created.kind !== 'created') throw new Error('Expected a child binding');
+    const command = topicObservation('new-birth', 'telegram:user:42', '/new investigate');
+    await ingestConversationProviderObservationForInvocation(command, harness.context);
+    await ingestConversationProviderObservationForInvocation(command, harness.context);
+    expect(births).toHaveLength(1);
+    if (attested) expect(births[0]).toMatchObject({ attestedContext: {
+      externalPrincipalId: 'telegram:user:42', sourceMessageId: 'telegram:message:5',
+    } });
+    else expect(births[0]).not.toHaveProperty('attestedContext');
+    expect(harness.send.mock.calls.map(([request]) => sentUserTextRequest(request).text)).toEqual(['investigate']);
+    expect(record(harness.rows.get(created.binding.id)!.value.payload).target).toMatchObject({ sessionId: 'session-2' });
   });
 
   it('restores an archived Session rejoined by /new before admitting its initial prompt', async () => {
@@ -7106,20 +7214,43 @@ describe('Conversation checkpointed-poll ingress', () => {
     const endpoint = { kind: 'githubPullRequest', audience: 'shared', id: 'pr-1', parentId: '77',
       pullRequest: { repository: 'acme/widgets', number: 1 }, pullRequestState: { state: 'open', observedAt: 10 } };
     let observedState = 'open';
+    const privateSession = { state: 'unread', standing: true };
     const harness = createIngressHarness({
       pollExecution: (input) => {
         expect(record(input).bindings).toMatchObject([{ endpoint: { id: endpoint.id, pullRequest: endpoint.pullRequest } }]);
         return { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'pr-state' },
           pullRequestEndpoints: [{ ...endpoint, pullRequestState: { state: observedState, observedAt: observedState === 'open' ? 20 : 30 } }] };
       },
-      execute: async (id) => id === 'session.attention.set' ? { updated: true } : { updated: true },
+      // The public host Action API is external to this plugin. Its boundary
+      // records private outcomes and returns the actual read/standing shapes.
+      execute: async (id, input) => {
+        const request = record(input);
+        expect(request.sessionId).toBe('session-1');
+        if (id === 'session.read_state.set') {
+          expect(request.state).toBe('read');
+          privateSession.state = 'read';
+          return { state: 'read', lastViewedSessionSeq: 1, didChange: true };
+        }
+        if (id === 'session.attention.set') {
+          expect(request.standing).toBe(false);
+          privateSession.standing = false;
+          return { standing: { sessionId: 'session-1', standing: false, updatedAt: 30 } };
+        }
+        throw new Error('Unexpected PR settlement Action');
+      },
     });
     const original = harness.rows.get('binding-1')!;
     const payload = record(original.value.payload);
     harness.rows.set('binding-1', stateRow({ ...original.value, payload: { ...payload, enabled: false, endpoint,
       target: { ...record(payload.target), pullRequestLink: endpoint.pullRequest } } }));
+    const readPublishedLinks = () => resolveSessionPullRequestLinksV1([
+      readConversationBindingUpdateRow({ row: harness.rows.get('binding-1')!, bindingId: 'binding-1' }).binding,
+    ]).map(projection => SessionPullRequestLinksV1Schema.parse(projection));
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
+    expect(privateSession).toEqual({ state: 'unread', standing: true });
+    expect(readPublishedLinks()).toEqual([{ sessionId: 'session-1', pullRequestLinks: [{ provider: 'github',
+      repository: 'acme/widgets', number: 1, url: 'https://github.com/acme/widgets/pull/1', state: 'open', observedAt: 20 }] }]);
     observedState = state;
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute.mock.calls).toEqual([
@@ -7127,6 +7258,9 @@ describe('Conversation checkpointed-poll ingress', () => {
       ['session.attention.set', { sessionId: 'session-1', standing: false }, { signal: harness.context.signal }],
     ]);
     expect(record(record(harness.rows.get('binding-1')!.value.payload).endpoint).pullRequestState).toEqual({ state, observedAt: 30 });
+    expect(privateSession).toEqual({ state: 'read', standing: false });
+    expect(readPublishedLinks()).toEqual([{ sessionId: 'session-1', pullRequestLinks: [{ provider: 'github',
+      repository: 'acme/widgets', number: 1, url: 'https://github.com/acme/widgets/pull/1', state, observedAt: 30 }] }]);
     // The next poll sees the persisted endpoint; it must not re-settle the Session.
     harness.execute.mockClear();
     harness.executeAdmittedTargetedOperationWithExecutionOrigin.mockImplementationOnce(async () => ({
@@ -7136,6 +7270,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     }));
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
+    expect(readPublishedLinks()[0].pullRequestLinks[0]).toMatchObject({ state, observedAt: 40 });
   });
 
   it('retains unknown PRs and ignores foreign or stale PR observations', async () => {
@@ -7154,6 +7289,10 @@ describe('Conversation checkpointed-poll ingress', () => {
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
     expect(record(record(harness.rows.get('binding-1')!.value.payload).endpoint).pullRequestState).toEqual({ state: 'unknown', observedAt: 20 });
+    const binding = readConversationBindingUpdateRow({ row: harness.rows.get('binding-1')!, bindingId: 'binding-1' }).binding;
+    expect(resolveSessionPullRequestLinksV1([binding]).map(projection => SessionPullRequestLinksV1Schema.parse(projection)))
+      .toEqual([{ sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 1,
+        url: 'https://github.com/acme/widgets/pull/1', state: 'unknown', observedAt: 20 }] }]);
   });
 
   it('keeps a Session standing while another retained PR is open, then settles after the last PR closes', async () => {
@@ -7422,9 +7561,10 @@ describe('Conversation checkpointed-poll ingress', () => {
     ))).toBe(false);
   });
 
-  it('durably blocks a permanent provider poll failure and does not invoke that provider again', async () => {
+  it.each(['credentialInvalid', 'invalidConfiguration'] as const)(
+    'durably blocks a permanent provider poll failure (%s) and does not invoke that provider again', async (reason) => {
     const harness = createIngressHarness({
-      pollResult: { kind: 'notReady', reason: 'credentialInvalid' },
+      pollResult: { kind: 'notReady', reason },
     });
 
     await expect(runConversationCheckpointedPollForInvocation({
@@ -7436,7 +7576,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       phase: 'blocked',
       attemptCount: 1,
       retryNotBeforeMs: null,
-      evidence: { kind: 'provider', reason: 'credentialInvalid' },
+      evidence: { kind: 'provider', reason },
     });
     await expect(runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
@@ -7445,7 +7585,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledTimes(1);
   });
 
-  it('self-heals a Telegram 409 restart overlap through the bounded retry budget', async () => {
+  it('self-heals a Telegram 409 restart overlap through shared retry backoff', async () => {
     let releaseOldPoll!: (response: Readonly<{
       status: number;
       finalUrl: string;
@@ -7561,9 +7701,8 @@ describe('Conversation checkpointed-poll ingress', () => {
     await expect(oldPoll).resolves.toEqual({ kind: 'ineligible' });
     expect(record(record(rows.get('connection-1')?.value).payload).pendingOldTransportStop).toBeNull();
     // The replacement poll overlaps the old daemon's exclusive getUpdates
-    // slot. The exclusive-consumer conflict consumes the incumbent bounded
-    // retry budget with the shared backoff instead of latching the
-    // connection into a blocked manual-retry state.
+    // slot. The exclusive-consumer conflict follows the shared backoff
+    // instead of latching the connection into a blocked manual-retry state.
     await expect(runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
       waitMs: 0,
@@ -7597,50 +7736,46 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
   });
 
-  it('persists bounded retry due states before blocking the terminal retryable provider failure', async () => {
+  it('recovers after more than five transient poll failures with growing backoff', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
+      let failuresRemaining = 7;
       const harness = createIngressHarness({
-        pollResult: { kind: 'notReady', reason: 'network', retryAfterMs: 2_000 },
+        getPollResult: () => failuresRemaining-- > 0
+          ? { kind: 'notReady', reason: 'network' }
+          : { kind: 'checkpointOnly', checkpointAfterBatch: { v: 1, offset: '0' } },
       });
 
-      for (let attemptCount = 1; attemptCount <= MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS; attemptCount += 1) {
+      for (let attemptCount = 1; attemptCount <= 7; attemptCount += 1) {
+        const retryDelayMs = 1_000 * 2 ** (attemptCount - 1);
         await expect(runConversationCheckpointedPollForInvocation({
           connectionId: 'connection-1',
           waitMs: 0,
-        }, harness.context)).resolves.toEqual(
-          attemptCount === MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS
-            ? { kind: 'blocked' }
-            : { kind: 'retry', retryAfterMs: 2_000 },
-        );
+        }, harness.context)).resolves.toEqual({ kind: 'retry' });
         const pollFailure = record(record(harness.rows.get('connection-1')?.value).payload).pollFailure;
-        if (attemptCount === MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS) {
-          expect(pollFailure).toEqual({
-            phase: 'blocked',
-            attemptCount,
-            retryNotBeforeMs: null,
-            evidence: { kind: 'provider', reason: 'network' },
-          });
-        } else {
-          expect(pollFailure).toEqual({
-            phase: 'retryDue',
-            attemptCount,
-            retryNotBeforeMs: Date.now() + 2_000,
-            evidence: { kind: 'provider', reason: 'network' },
-          });
-          vi.setSystemTime(Date.now() + 2_000);
-        }
+        expect(pollFailure).toEqual({
+          phase: 'retryDue',
+          attemptCount,
+          retryNotBeforeMs: Date.now() + retryDelayMs,
+          evidence: { kind: 'provider', reason: 'network' },
+        });
+        await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 },
+          harness.context)).resolves.toEqual({ kind: 'ineligible' });
+        vi.setSystemTime(Date.now() + retryDelayMs);
       }
-
-      expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin)
-        .toHaveBeenCalledTimes(MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS);
+      await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 },
+        harness.context)).resolves.toMatchObject({ kind: 'committed', connectionId: 'connection-1' });
+      expect(record(record(harness.rows.get('connection-1')?.value).payload).pollFailure).toBeNull();
+      expect(currentCheckpoint(harness.rows)?.value).toMatchObject({
+        payload: { opaqueToken: { v: 1, offset: '0' }, lastOccurrenceId: null },
+      });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('uses a bounded attempt-aware retry delay when a retryable provider result has no hint', async () => {
+  it('uses a growing attempt-aware retry delay when a retryable provider result has no hint', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
@@ -7708,7 +7843,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     }
   });
 
-  it('gives a provider-hinted conflict the bounded retry budget before blocking it', async () => {
+  it('preserves provider Retry-After beyond five transient conflict failures', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
@@ -7716,40 +7851,22 @@ describe('Conversation checkpointed-poll ingress', () => {
         pollResult: { kind: 'notReady', reason: 'providerConflict', retryAfterMs: 1_000 },
       });
 
-      // A provider-hinted conflict (Telegram's exclusive getUpdates slot held
-      // by an overlapping poll across a daemon restart) consumes the same
-      // bounded attempt budget without widening the public reason vocabulary.
-      for (let attemptCount = 1; attemptCount <= MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS; attemptCount += 1) {
+      // Telegram's exclusive getUpdates slot may remain held across a restart.
+      for (let attemptCount = 1; attemptCount <= 7; attemptCount += 1) {
         const retryDelayMs = 1_000;
         await expect(runConversationCheckpointedPollForInvocation({
           connectionId: 'connection-1',
           waitMs: 0,
-        }, harness.context)).resolves.toEqual(
-          attemptCount === MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS
-            ? { kind: 'blocked' }
-            : { kind: 'retry', retryAfterMs: retryDelayMs },
-        );
+        }, harness.context)).resolves.toEqual({ kind: 'retry', retryAfterMs: retryDelayMs });
         const pollFailure = record(record(harness.rows.get('connection-1')?.value).payload).pollFailure;
-        if (attemptCount === MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS) {
-          expect(pollFailure).toEqual({
-            phase: 'blocked',
-            attemptCount,
-            retryNotBeforeMs: null,
-            evidence: { kind: 'provider', reason: 'providerConflict' },
-          });
-        } else {
-          expect(pollFailure).toEqual({
+        expect(pollFailure).toEqual({
             phase: 'retryDue',
             attemptCount,
             retryNotBeforeMs: Date.now() + retryDelayMs,
             evidence: { kind: 'provider', reason: 'providerConflict' },
           });
-          vi.setSystemTime(Date.now() + retryDelayMs);
-        }
+        vi.setSystemTime(Date.now() + retryDelayMs);
       }
-
-      expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin)
-        .toHaveBeenCalledTimes(MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS);
     } finally {
       vi.useRealTimers();
     }
@@ -8425,7 +8542,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
 
     // The exclusive-consumer conflict is the provider's restart-overlap arm:
-    // it enters the shared bounded retry budget at attempt one and only the
+    // it enters shared retry backoff at attempt one and only the
     // provider hint (when Telegram actually supplies one) can override the
     // shared backoff delay.
     await expect(runConversationCheckpointedPollForInvocation({

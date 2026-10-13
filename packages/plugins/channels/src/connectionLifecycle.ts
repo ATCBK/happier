@@ -25,10 +25,6 @@ export type ConversationConnectionTransportOriginV1 = Extract<
 >;
 
 import type { PersistedConversationProviderContributionSelection } from './collections.js';
-import type {
-  ConversationPollFailureAttemptCountV1,
-  ConversationPollRetryAttemptCountV1,
-} from './connectionPollFailureBounds.js';
 
 type SelfStampedPluginCaller = Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
 type MaterializedSelfStampedPluginCaller = SelfStampedPluginCaller & Readonly<{
@@ -105,13 +101,13 @@ export type ConversationConnectionPollFailureEvidenceV1 =
 export type ConversationConnectionPollFailureV1 =
   | Readonly<{
     phase: 'retryDue';
-    attemptCount: ConversationPollRetryAttemptCountV1;
+    attemptCount: number;
     retryNotBeforeMs: number;
     evidence: ConversationConnectionPollFailureEvidenceV1;
   }>
   | Readonly<{
     phase: 'blocked';
-    attemptCount: ConversationPollFailureAttemptCountV1;
+    attemptCount: number;
     retryNotBeforeMs: null;
     evidence: ConversationConnectionPollFailureEvidenceV1;
   }>;

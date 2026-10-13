@@ -8,7 +8,6 @@ import type { ConversationProviderFailureReasonV1 } from '@happier-dev/channels-
 import { ConversationConnectionPollFailureJsonSchema } from './collections.js';
 import {
   isConversationPollFailureAttemptCount,
-  isConversationPollRetryAttemptCount,
 } from './connectionPollFailureBounds.js';
 import type {
   ConversationConnectionPollFailureEvidenceV1,
@@ -70,7 +69,7 @@ function decodeValidatedConversationConnectionPollFailure(
   if (
     phase === 'retryDue'
     && typeof retryNotBeforeMs === 'number'
-    && isConversationPollRetryAttemptCount(attemptCount)
+    && isConversationPollFailureAttemptCount(attemptCount)
   ) {
     return {
       phase,

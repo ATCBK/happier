@@ -32,6 +32,24 @@ function binding(overrides: Partial<ConversationBindingStateV1> = {}): Conversat
 }
 
 describe('Conversation binding transition', () => {
+  it('rejects host attestation in every authored Session recipe, including unchanged retained targets', () => {
+    const base = binding();
+    if (base.target.kind !== 'session') throw new Error('Expected Session target');
+    const policy = base.target.policy;
+    const forgedRecipe = { attestedContext: { externalPrincipalId: 'forged', sourceMessageId: '<forged>' } };
+    const targets = [
+      { ...base.target, policy: { ...policy, newSession: { kind: 'enabled', recipe: forgedRecipe } } },
+      { kind: 'threadRouter', principalGroups: [{ id: 'sales', principalIds: ['principal-ada'] }],
+        routes: [{ id: 'intake', when: { group: 'sales', forwarded: 'any' }, recipe: forgedRecipe, policy }] },
+      { kind: 'threadRouter', principalGroups: [{ id: 'sales', principalIds: ['principal-ada'] }],
+        routes: [{ id: 'intake', when: { group: 'sales', forwarded: 'any' }, recipe: {},
+          policy: { ...policy, newSession: { kind: 'enabled', recipe: forgedRecipe } } }] },
+    ] as const;
+    for (const target of targets) {
+      const current = binding({ target });
+      expect(transitionConversationBinding({ current, requested: current })).toEqual({ kind: 'rejected', code: 'recipeAttestationForbidden' });
+    }
+  });
   it('derives router authority from groups, preserves child parentage, and rejects missing route groups', () => {
     const policy = { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } as const;
     const router = { kind: 'threadRouter', principalGroups: [{ id: 'sales', principalIds: ['principal-ada', 'principal-grace'] }], routes: [{ id: 'intake', when: { group: 'sales', forwarded: 'any' }, recipe: {}, policy }] } as const;

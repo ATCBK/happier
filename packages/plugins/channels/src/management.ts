@@ -178,6 +178,7 @@ import {
   hasConversationCheckpointedPullBaseline,
   prepareConversationCheckpointTransferFence,
   prepareConversationIngressObligationForConnectionDeletion,
+  isConversationSenderConfiguredForEndpoint,
 } from './ingress.js';
 import {
   resolveConversationOutwardDeliveryCustodyInAccountCollection,
@@ -2025,6 +2026,19 @@ async function findExistingConnection(input: Readonly<{
   });
 }
 
+function providerDeclaredConnectionCapabilities(setup: ConversationProviderSetupResultV1) {
+  return {
+    ...(setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: setup.outboundTextLimit }),
+    ...(setup.recommendedMaximumObservationAgeMs === undefined
+      ? {} : { recommendedMaximumObservationAgeMs: setup.recommendedMaximumObservationAgeMs }),
+  };
+}
+
+function withProviderDeclaredConnectionCapabilities(payload: JsonRecord, setup: ConversationProviderSetupResultV1): JsonRecord {
+  const { outboundTextLimit: _oldLimit, recommendedMaximumObservationAgeMs: _oldFreshness, ...retained } = payload;
+  return { ...retained, ...providerDeclaredConnectionCapabilities(setup) };
+}
+
 function connectionRows(input: Readonly<{
   connectionId: string;
   reservationRowId: string;
@@ -2072,7 +2086,7 @@ function connectionRows(input: Readonly<{
       transport,
       overlapSafety: input.setup.overlapSafety,
       replayContinuity: input.setup.replayContinuity,
-      ...(input.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: input.setup.outboundTextLimit }),
+      ...providerDeclaredConnectionCapabilities(input.setup),
       // The provider-authenticated shared-endpoint delivery truth. It is a
       // Channels fact rather than opaque provider configuration because the
       // binding policy owner and the surface that offers that policy both
@@ -2292,6 +2306,7 @@ async function runProviderSetup(input: Readonly<{
   provider: CurrentProvider;
   providerSetupInput: JsonValue;
   credentialRef: ConversationConnectionPrepareInputV1['credentialRef'];
+  expectedExecutionOrigin?: ConnectionTransportOrigin;
 }>): Promise<ProviderConnectionSetup> {
   assertNotAborted(input.context.signal);
   const setupExecution = await input.context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
@@ -2303,6 +2318,7 @@ async function runProviderSetup(input: Readonly<{
       // the stripped provider input. A carrier-bound targeted Action may only
       // reconstruct that same reference before the provider parser runs.
       expectedSelectedConnectedAccountRef: input.credentialRef,
+      ...(input.expectedExecutionOrigin === undefined ? {} : { expectedExecutionOrigin: input.expectedExecutionOrigin }),
     },
   );
   const outcome = parseProviderSetupOutcome(setupExecution.result);
@@ -2495,10 +2511,7 @@ export async function prepareConversationConnectionForInvocation(
     ...transportSelection,
     overlapSafety: prepared.setup.overlapSafety,
     replayContinuity: prepared.setup.replayContinuity,
-    ...(prepared.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: prepared.setup.outboundTextLimit }),
-    ...(prepared.setup.recommendedMaximumObservationAgeMs === undefined
-      ? {}
-      : { recommendedMaximumObservationAgeMs: prepared.setup.recommendedMaximumObservationAgeMs }),
+    ...providerDeclaredConnectionCapabilities(prepared.setup),
     ...(prepared.setup.sharedEndpointInputModes === undefined
       ? {}
       : { sharedEndpointInputModes: prepared.setup.sharedEndpointInputModes }),
@@ -2728,7 +2741,8 @@ export async function retryConversationConnectionPollForInvocation(
  * still-failing probe is reported with the shared provider-failure vocabulary
  * and writes nothing, and a ready probe settles the one canonical
  * `providerReadiness` field through the same lifecycle owner the provider
- * transport reports through.
+ * transport reports through. A successful probe re-observes provider-declared
+ * capabilities through the existing safe setup owner at that same origin.
  */
 export async function retestConversationConnectionForInvocation(
   input: JsonValue,
@@ -2836,6 +2850,28 @@ export async function retestConversationConnectionForInvocation(
       'Provider connection test disagreed about immutable connection identity.',
     );
   }
+  // Connection-test readiness alone carries no outbound limit or freshness
+  // recommendation. Re-observe those through the same safe setup-result owner
+  // used by create/transfer, pinned to this saved transport and credential.
+  // No identity, configuration, transport, or user-selected freshness is replaced.
+  await rereadConversationConnectionRetestAuthority({ collection, request, context, providerBefore: providerWitness });
+  const prepared = await runProviderSetup({
+    context,
+    provider: providerFromSelectedContribution(provider),
+    providerSetupInput: current.providerSetupInput,
+    credentialRef: testRequest.credentialRef,
+    expectedExecutionOrigin: current.transportOrigin,
+  });
+  if (prepared.kind === 'requiresRemediation') {
+    throw pluginError('channels_connection_setup_requires_remediation', 'Provider setup requires remediation before connection retest.');
+  }
+  if (!arePluginMachineExecutionOriginsEqual(prepared.transportOrigin, current.transportOrigin)) {
+    throw conversationConnectionRetestConflict();
+  }
+  if (prepared.setup.providerConnectionKey !== retainedIdentity.providerConnectionKey
+    || prepared.setup.integrationPrincipal.id !== retainedIdentity.integrationPrincipalId) {
+    throw pluginError('channels_connection_test_identity_mismatch', 'Provider setup disagreed about immutable connection identity during retest.');
+  }
   // Identity alone is not readiness. A platform can narrow what an unchanged
   // integration is allowed to deliver — re-enabling a Telegram bot's BotFather
   // group privacy stops ordinary supergroup messages outright — and a saved
@@ -2886,13 +2922,18 @@ export async function retestConversationConnectionForInvocation(
       diagnostic: readinessFact.diagnostic,
     };
   }
+  const refreshedCurrent = {
+    ...reread.current,
+    payload: withProviderDeclaredConnectionCapabilities(reread.current.payload, prepared.setup),
+  };
   const revision = transition.kind === 'rejoined'
+    && pluginJsonValuesEqual(refreshedCurrent.payload, reread.current.payload)
     ? reread.row.revision
     : await persistConversationConnectionLifecycle({
       collection,
       row: reread.row,
-      current: reread.current,
-      lifecycle: transition.connection,
+      current: refreshedCurrent,
+      lifecycle: transition.kind === 'rejoined' ? reread.current.lifecycle : transition.connection,
       operation: 'channels_connection_retest',
     }, context);
   return {
@@ -2949,6 +2990,9 @@ async function rereadConversationConnectionRetestAuthority(input: Readonly<{
   }) || !areAdmittedTargetedOperationIdentitiesEqual(
     input.providerBefore.contribution.operations.connectionTest,
     providerAfter.contribution.operations.connectionTest,
+  ) || !areAdmittedTargetedOperationIdentitiesEqual(
+    input.providerBefore.contribution.operations.setup,
+    providerAfter.contribution.operations.setup,
   )) {
     throw conversationConnectionRetestConflict();
   }
@@ -3607,6 +3651,12 @@ export async function reportConversationTransportFactForInvocation(
       transportOrigin: current.transportOrigin,
     })) {
       return { kind: 'staleAuthority' };
+    }
+    if (report.senderEligibility !== undefined) {
+      if (report.authorityEpoch !== current.lifecycle.authorityEpoch) return { kind: 'staleAuthority' };
+      if (!current.lifecycle.enabled || current.lifecycle.deletionState !== 'none'
+        || !await isConversationSenderConfiguredForEndpoint({ context, connectionId: report.connectionId,
+          ...report.senderEligibility })) return { kind: 'notEligible' };
     }
     const transition = recordConversationConnectionProviderReadiness({
       current: current.lifecycle,
@@ -4366,6 +4416,8 @@ export async function createConversationThreadBindingForInvocation(input: Readon
   sessionId: string;
   allowedPrincipalIds: readonly string[];
   policy: ConversationSessionBindingTargetV1['policy'];
+  /** Private Session-owner birth evidence, never an authorable binding field. */
+  inboundBirthMessageId?: string;
 }>, context: PluginInvocationContext): Promise<ConversationThreadBindingCreateResult> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const routerRow = await collection.get(input.routerBindingId, { signal: context.signal });
@@ -4419,6 +4471,12 @@ export async function createConversationThreadBindingForInvocation(input: Readon
     senderFeedback: router.senderFeedback,
     inputMode: 'allAllowedMessages', enabled: true,
   });
+  let candidateRow = candidate.row;
+  if (input.inboundBirthMessageId !== undefined) {
+    const payload = candidate.row.payload;
+    if (!isJsonRecord(payload)) throw pluginError('channels_thread_binding_payload_invalid', 'The thread binding payload is unavailable.');
+    candidateRow = { ...candidate.row, payload: { ...payload, inboundBirthMessageId: input.inboundBirthMessageId } };
+  }
   assertNewConversationBindingCanPersist(candidate.binding);
   assertConversationBindingInputModeIsDeliverable({
     audience: candidate.binding.endpoint.audience,
@@ -4435,7 +4493,7 @@ export async function createConversationThreadBindingForInvocation(input: Readon
     const result = await collection.batch([
       { kind: 'assert', rowId: router.connectionId, expectedRevision: input.expectedConnectionRevision },
       { kind: 'assert', rowId: router.id, expectedRevision: input.expectedRouterRevision },
-      { kind: 'put', value: candidate.row, expectedRevision: expectedRevisions.get(bindingId)! },
+      { kind: 'put', value: candidateRow, expectedRevision: expectedRevisions.get(bindingId)! },
       ...(frontier === null ? [] : [{ kind: 'put' as const, value: frontier, expectedRevision: expectedRevisions.get(frontierId)! }]),
     ], { signal: context.signal });
     assertNotAborted(context.signal);
@@ -5494,6 +5552,7 @@ function transferConnectionValue(input: Readonly<{
   const {
     pairingDeepLinkTemplate: _oldPairingDeepLinkTemplate,
     outboundTextLimit: _oldOutboundTextLimit,
+    recommendedMaximumObservationAgeMs: _oldRecommendedFreshness,
     // The replacement provider re-authenticates its own shared-endpoint
     // delivery truth. Retaining the predecessor's would leave the surface and
     // the binding writer deciding from a capability nothing proved.
@@ -5524,7 +5583,7 @@ function transferConnectionValue(input: Readonly<{
         },
       overlapSafety: input.prepared.setup.overlapSafety,
       replayContinuity: input.prepared.setup.replayContinuity,
-      ...(input.prepared.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: input.prepared.setup.outboundTextLimit }),
+      ...providerDeclaredConnectionCapabilities(input.prepared.setup),
       ...(input.prepared.setup.sharedEndpointInputModes === undefined
         ? {}
         : { sharedEndpointInputModes: [...input.prepared.setup.sharedEndpointInputModes] }),

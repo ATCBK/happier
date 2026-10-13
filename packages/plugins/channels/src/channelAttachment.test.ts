@@ -1,15 +1,15 @@
-import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { definePlugin, PluginError, type PluginServices } from '@happier-dev/plugin-sdk';
-import { ConversationProvidersContributionProtocolV1, assertConversationChannelsCoreCallerV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationObservationV1Schema, ConversationProvidersContributionProtocolV1, assertConversationChannelsCoreCallerV1 } from '@happier-dev/channels-protocol/v1';
 import { createConversationProviderSetupResultV1Fixture, assertConversationProviderContributionV1 } from '@happier-dev/channels-protocol/testing/v1';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
-import { activate } from './activate.js';
-import { PLUGIN_MANIFEST } from './manifest.js';
-import { CHANNEL_FILE_ATTACHMENT_RUNTIME, prepareChannelFileSessionInput } from './channelAttachmentRuntime.js';
+import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
+import { ChannelFileValueV1Schema, channelFileSessionAttachments } from './channelAttachment.js';
+import { prepareChannelFileSessionInput } from './channelAttachmentRuntime.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 import { channelsTargetedContributionServices } from './testkit/operationOnlyTargetedContributionsFixture.js';
 
@@ -30,7 +30,7 @@ function textPdf(text: string): Uint8Array {
   return new TextEncoder().encode(pdf);
 }
 
-async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType: string; machineId?: string; authorityEpoch?: number; fetchErrorCode?: string }>) {
+async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType: string; machineId?: string; authorityEpoch?: number; fetchErrorCode?: string; omitAttachmentRegistration?: boolean }>) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-channel-file-'));
   const sourcePath = join(directory, 'provider-file');
   const materializedPath = join(directory, 'session-file');
@@ -73,22 +73,36 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
     integrationPrincipal: { id: 'fixture:integration' }, authorityEpoch: 1,
     transportOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef },
   } });
-  const targetDefinition = definePlugin({
+  let target: PluginTestkit | undefined;
+  const driverDefinition = definePlugin({
     id: 'happier.channels', version: '0.0.0',
-    contributionPoints: { providers: ConversationProvidersContributionProtocolV1.point() },
+    hostAccess: PLUGIN_MANIFEST.hostAccess,
     actions: { resolve: { title: 'Resolve files', scopes: ['session'], surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'],
       inputSchema: { type: 'object' }, resultSchema: { type: 'object' }, run: async (_request, context) => {
-        const resolve = CHANNEL_FILE_ATTACHMENT_RUNTIME.resolveForDispatch;
-        const value = {
-          connectionId: 'connection-1', connectionAuthorityEpoch: input.authorityEpoch ?? 1,
-          messageId: 'message-1', descriptor: { attachmentId: 'part-1', name: 'lead', mediaType: input.mediaType }, contentProvenance: 'forwarded',
-        } as const;
+        const resolve = target?.registration('composerAttachments', 'channel-file')?.resolveForDispatch;
+        if (!resolve) throw new PluginError({ code: 'fixture_attachment_resolver_missing', message: 'The registered channel-file resolver is missing.' });
+        const observation = ConversationObservationV1Schema.parse({
+          v: 1, occurrenceId: 'file-observation', occurredAt: 1, transport: { kind: 'poll' },
+          endpoint: { kind: 'direct', audience: 'direct', id: 'mailbox' },
+          actor: { principalId: 'sender', kind: 'human', isIntegrationSelf: false },
+          message: { id: 'message-1', providerTimestamp: 1, text: 'Original inline mail', addressingEvidence: 'none',
+            attachments: [{ attachmentId: 'part-1', name: 'lead', mediaType: input.mediaType, byteLength: input.bytes.byteLength }],
+            contentProvenance: 'forwarded' },
+        });
+        const attachments = channelFileSessionAttachments({
+          connectionId: connection.id, connectionAuthorityEpoch: input.authorityEpoch ?? connection.payload.authorityEpoch, observation,
+        });
+        const request = {
+          sessionId: 'session-1', localId: 'input-1', attachments: attachments.map(attachment => ({
+            instanceId: 'file-1', key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
+          })),
+        };
         const prepared = await prepareChannelFileSessionInput({
-          text: 'Original inline mail',
-          attachments: [{ attachmentLocalId: 'channel-file', value: { key: 'file-1', value, presentation: { label: 'lead' } } }],
+          text: observation.message.text, attachments,
         }, context);
         dispatchStarted = true;
-        const result = await resolve({ sessionId: 'session-1', localId: 'input-1', attachments: [{ instanceId: 'file-1', key: 'file-1', value }] }, context);
+        const result = await resolve(request, context);
         return { ...result, inputText: prepared.text };
       } } },
   });
@@ -105,26 +119,42 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
       },
     }) },
   } as unknown as Pick<PluginServices, 'storage' | 'sessions'>;
-  const target = await createPluginTestkit({ manifest: targetDefinition.manifest, module: targetDefinition, services,
-    targetedContributionContributors: [provider] });
   try {
+    target = await createPluginTestkit({ manifest: {
+    ...PLUGIN_MANIFEST,
+    contributes: { ...PLUGIN_MANIFEST.contributes, actions: [
+      ...(PLUGIN_MANIFEST.contributes?.actions ?? []), ...(driverDefinition.manifest.contributes?.actions ?? []),
+    ] },
+  }, module: { activate: async api => {
+    // The host boundary can omit one registration for the wiring negative control.
+    const disposeCore = await CHANNELS_PLUGIN.activate({ ...api, composerAttachments: { ...api.composerAttachments, register: (id, runtime) => {
+      if (!input.omitAttachmentRegistration || id !== 'channel-file') api.composerAttachments.register(id, runtime);
+    } } });
+    const disposeDriver = await driverDefinition.activate(api);
+    return async () => {
+      if (typeof disposeDriver === 'function') await disposeDriver();
+      if (typeof disposeCore === 'function') await disposeCore();
+    };
+  } }, services,
+    targetedContributionContributors: [provider] });
     const result = await target.invokeAction('resolve', {}, { surface: 'plugin', sessionId: 'session-1', services: channelsTargetedContributionServices(target) });
-    return { result, fileBytes: await readFile(materializedPath).catch(() => null) };
+    return { result, fileBytes: await readFile(materializedPath).catch(() => null), activationError: null };
+  } catch (error) {
+    if (!input.omitAttachmentRegistration) throw error;
+    return { result: null, fileBytes: await readFile(materializedPath).catch(() => null), activationError: error };
   } finally {
-    await target.dispose();
+    await target?.dispose();
     await provider.dispose();
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 describe('Channels file attachment', () => {
-  it('registers lazy resolution through the declared attachment lifecycle', async () => {
-    const core = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
-    try {
-      expect(core.registration('composerAttachments', 'channel-file')?.resolveForDispatch).toBeTypeOf('function');
-    } finally {
-      await core.dispose();
-    }
+  it('cannot materialize a file when the host omits its real activation registration', async () => {
+    const { activationError, fileBytes } = await resolveFixtureFile({ bytes: new Uint8Array([0, 255]), mediaType: 'image/png', omitAttachmentRegistration: true });
+    expect(activationError).toBeInstanceOf(Error);
+    expect(activationError).toMatchObject({ message: expect.stringContaining('composerAttachments/channel-file') });
+    expect(fileBytes).toBeNull();
   });
 
   it('delivers text as a file and as explicitly untrusted forwarded context beyond 16 KiB', async () => {

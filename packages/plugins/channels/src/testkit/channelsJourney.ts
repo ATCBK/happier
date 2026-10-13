@@ -1,0 +1,114 @@
+import { definePlugin, type JsonValue, type PluginServices } from '@happier-dev/plugin-sdk';
+import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
+import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { ConversationProviderObservationIngestInputV1Schema } from '@happier-dev/channels-protocol/v1';
+import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST } from '../manifest.js';
+import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../collections.js';
+import { runConversationCheckpointedPollForInvocation, runConversationIngressRetentionForInvocation,
+  type ConversationCheckpointedPollRunResult } from '../ingress.js';
+import { runConversationOutwardDeliveryCycle } from '../outwardDeliverySupervisor.js';
+import { channelsTargetedContributionServices } from './operationOnlyTargetedContributionsFixture.js';
+import { MemoryCollection } from './memoryCollection.js';
+
+/**
+ * Public-SDK composition of the actual Channels activation and cycle owners.
+ * Account persistence is the existing Collection boundary. Sessions and host
+ * Actions are supplied by the consuming host test: this fixture never models
+ * admission, transcript projection, spawn or turn control itself.
+ */
+export async function createChannelsJourneyFixture(input: Readonly<{
+  provider: PluginTestkit;
+  connection: Record<string, unknown>;
+  binding: Record<string, unknown>;
+  sessions: PluginServices['sessions'];
+  actions: PluginServices['actions'];
+  resolveCurrentPluginMaterializationRef?: Parameters<typeof createPluginTestkit>[0]['resolveCurrentPluginMaterializationRef'];
+  omitAttachmentRegistration?: boolean;
+}>) {
+  const state = new MemoryCollection();
+  const deliveries = new MemoryCollection();
+  await state.put(input.connection, { expectedRevision: 'absent' });
+  await state.put(input.binding, { expectedRevision: 'absent' });
+  const storage = { account: { collection: (definition: { id: string }) => {
+    if (definition.id === CHANNEL_STATE_COLLECTION.id) return state;
+    if (definition.id === CHANNEL_DELIVERIES_COLLECTION.id) return deliveries;
+    throw new Error(`Unexpected Channels collection ${definition.id}`);
+  } } } as unknown as PluginServices['storage'];
+  let kit: PluginTestkit;
+  let attempt = 0;
+  const pollResults: ConversationCheckpointedPollRunResult[] = [];
+  const driver = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+    'journey/poll': { title: 'Run the production ingress cycle', surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'],
+      inputSchema: { type: 'object' }, resultSchema: { type: 'null' },
+      async run(_request, context) {
+        pollResults.push(await runConversationCheckpointedPollForInvocation({ connectionId: String(input.connection.id), waitMs: 0 }, context));
+        return null;
+      } },
+    'journey/outward': { title: 'Run the production outward cycle', surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'],
+      inputSchema: { type: 'object' }, resultSchema: { type: 'null' },
+      async run(_request, context) {
+        await runConversationOutwardDeliveryCycle({ context: context as BackgroundServiceContext,
+          createAttemptId: () => `journey-attempt-${++attempt}` });
+        return null;
+      } },
+    'journey/retention': { title: 'Run the production ingress retention cycle', surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'],
+      inputSchema: { type: 'object' }, resultSchema: { type: 'null' },
+      async run(_request, context) {
+        await runConversationIngressRetentionForInvocation({}, context);
+        return null;
+      } },
+    'journey/ingest': { title: 'Invoke the activated ingress registration', surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage', 'bound-session'], inputSchema: ConversationProviderObservationIngestInputV1Schema,
+      resultSchema: { type: 'null' }, async run(request, context) {
+        const handler = kit.registration('actions', 'provider/observation-ingest-v1');
+        if (!handler) throw new Error('The activated provider ingress handler is absent');
+        const entry = kit.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF).contributions[0];
+        if (!entry) throw new Error('The activated provider contribution is absent');
+        const connection = input.connection as { payload: { transportOrigin: { materializationRef: {
+          pluginId: string; machineId: string; materializationId: string;
+        } } } };
+        // The test host stamps a caller from the actual provider occurrence,
+        // source custody and materialization. No provider-supplied ingress
+        // field can assert these facts, matching the production host boundary.
+        await handler(request, { ...context, caller: { kind: 'plugin', pluginId: entry.contributor.pluginId,
+          contribution: { id: 'poll', qualifiedId: `${entry.contributor.pluginId}/actions/poll` },
+          occurrenceId: entry.contributor.occurrenceId, sourceCustody: entry.contributor.sourceCustody,
+          materialization: connection.payload.transportOrigin.materializationRef } });
+        return null;
+      } },
+  } });
+  kit = await createPluginTestkit({
+    manifest: { ...PLUGIN_MANIFEST, contributes: { ...PLUGIN_MANIFEST.contributes, actions: [
+      ...(PLUGIN_MANIFEST.contributes?.actions ?? []), ...(driver.manifest.contributes?.actions ?? []),
+    ] } },
+    module: { async activate(api) {
+      const disposeChannels = await CHANNELS_PLUGIN.activate(input.omitAttachmentRegistration ? {
+        ...api, composerAttachments: { ...api.composerAttachments, register(id, runtime) {
+          if (id !== 'channel-file') api.composerAttachments.register(id, runtime);
+        } },
+      } : api);
+      const disposeDriver = await driver.activate(api);
+      return async () => {
+        if (typeof disposeDriver === 'function') await disposeDriver();
+        if (typeof disposeChannels === 'function') await disposeChannels();
+      };
+    } },
+    targetedContributionContributors: [input.provider],
+    ...(input.resolveCurrentPluginMaterializationRef ? { resolveCurrentPluginMaterializationRef: input.resolveCurrentPluginMaterializationRef } : {}),
+    services: { storage, sessions: input.sessions, actions: input.actions,
+      logger: { debug() {}, info() {}, warn() {}, error() {}, diagnostic() {} } },
+  });
+  async function invoke(action: string, value: JsonValue) {
+    return await kit.invokeAction(action, value, { surface: action.startsWith('journey/') ? 'plugin' : 'cli',
+      services: channelsTargetedContributionServices(kit) });
+  }
+  return { kit, state, deliveries, invoke,
+    poll: async () => { await invoke('journey/poll', {}); return pollResults.at(-1); },
+    pollResults, outward: () => invoke('journey/outward', {}),
+    retention: () => invoke('journey/retention', {}),
+    ingest: (value: JsonValue) => invoke('journey/ingest', value),
+    dispose: () => kit.dispose() };
+}
