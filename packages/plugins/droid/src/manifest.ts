@@ -49,11 +49,12 @@ export const DROID_PLUGIN = definePlugin({
         auth: { support: 'login_terminal', environmentVariables: ['FACTORY_API_KEY'], missingCredentialState: 'unknown', loginLaunches: [{ kind: 'primary', args: [], initialInput: '/login' }] },
       },
       primary: 'sessions',
-      catalog: { vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
+      catalog: { acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds], vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
       // The host keeps Session V1 canonical and exposes the separately
       // versioned detached Run context through the same declarative ACP core.
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          nativeRoots: { user: [['.factory', 'skills'], ['.agents', 'skills'], ['.agent', 'skills']], project: [['.factory', 'skills'], ['.agents', 'skills'], ['.agent', 'skills']] } },
         sessions: {
           open: ['create', 'resume'],
           delivery: ['newTurn', 'followUp'],

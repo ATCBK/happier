@@ -1,6 +1,7 @@
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: 'droid',
+  acpRegistryIds: ['factory-droid'] as const,
   core: {
     id: 'droid',
     cliSubcommand: 'droid',
