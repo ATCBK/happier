@@ -20,6 +20,7 @@ import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract'
 import { SessionIdentityAdditionsV1Schema, type SessionIdentityAdditions } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionAttestedContextV1Schema, type SessionAttestedContextV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { SessionPromptStackV1Schema, type SessionPromptStackV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import {
     applyAcpConfigOptionIntentSessionMetadata,
@@ -247,6 +248,8 @@ export function buildCommittedLaunchMetadata(input: Readonly<{
         ...(options.sessionCreationCorrespondence ? { sessionCreationCorrespondenceV1: options.sessionCreationCorrespondence } : {}),
         ...(options.placementOrigin ? { placementOrigin: options.placementOrigin } : {}),
         ...(options.runtimeDescriptorV1 ? { runtimeDescriptorV1: options.runtimeDescriptorV1 } : {}),
+        ...(options.connectedServices ? { connectedServices: ConnectedServiceBindingsV2IngressSchema.parse(options.connectedServices) } : {}),
+        ...(options.connectedServicesUpdatedAt !== undefined ? { connectedServicesUpdatedAt: options.connectedServicesUpdatedAt } : {}),
         ...(input.materializationIdentity ? { connectedServiceMaterializationIdentityV1: input.materializationIdentity } : {}),
         ...(options.initialSessionRolesV1 ? { work: { sessionRolesV1: SessionRolesV1Schema.parse(options.initialSessionRolesV1) } } : {}),
     };

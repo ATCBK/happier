@@ -72,6 +72,18 @@ function diagnostic(
     });
 }
 
+/** The native identity admission rule is shared with runtime replacement. */
+export function readAgentSessionProviderIdentityConflict(input: Readonly<{
+    expectedProviderSessionId?: string;
+    providerSessionId: string | null;
+    event: Extract<AgentSessionRuntimeEvent, { kind: 'provider-session-id' }>;
+}>): AgentSessionTurnInvariantDiagnostic | null {
+    return (input.expectedProviderSessionId && input.event.providerSessionId !== input.expectedProviderSessionId)
+        || (input.providerSessionId && input.event.providerSessionId !== input.providerSessionId)
+        ? diagnostic('agent_runtime_provider_session_conflict', input.event)
+        : null;
+}
+
 function isTerminalEvent(event: AgentSessionRuntimeEvent): event is Extract<AgentSessionRuntimeEvent, {
     kind: 'turn-complete' | 'turn-failed' | 'turn-cancelled';
 }> {
@@ -179,11 +191,11 @@ export function createAgentSessionTurnInvariant(params: Readonly<{
             }
 
             if (event.kind === 'provider-session-id') {
-                const expected = params.expectedProviderSessionId;
-                if ((expected && event.providerSessionId !== expected)
-                    || (providerSessionId && event.providerSessionId !== providerSessionId)) {
-                    return reject('agent_runtime_provider_session_conflict', event);
-                }
+                const conflict = readAgentSessionProviderIdentityConflict({
+                    expectedProviderSessionId: params.expectedProviderSessionId,
+                    providerSessionId, event,
+                });
+                if (conflict) return { status: 'rejected', diagnostic: conflict };
                 // Dedupe on the matched PAIR, exactly as the metadata
                 // subscriber downstream does. Same id AND same log path is a
                 // genuine redundant republish; same id with a NEW path is the

@@ -6,6 +6,8 @@ import {
     requestExecutionRunConnectedServicesMaterialization,
     recoverExecutionRunConnectedServicesRejectedStart,
     requestExecutionRunConnectedServiceRuntimeAuthRefresh,
+    recoverExecutionRunConnectedServiceRuntimeFailure,
+    completeExecutionRunConnectedServiceRuntimeTurn,
 } from '@/daemon/controlClient';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import {
@@ -19,6 +21,7 @@ import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/conne
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 import { createExecutionRunCodedError } from '../errors';
 import type { RuntimeAuthRefreshViaDaemon } from '@/plugins/runtime/context/runtimeAuthRefresh';
+import type { CreateCliExecutionRunBackendParams } from '@/agent/runtime/registry/engineRegistryTypes';
 
 /**
  * Generic (provider-agnostic) connected-services env resolution for execution-run backends.
@@ -70,6 +73,8 @@ type MaterializationDeps = Readonly<{
     runnerPid: number;
     recoverRejectedStart?: typeof recoverExecutionRunConnectedServicesRejectedStart;
     refreshRuntimeAuth?: typeof requestExecutionRunConnectedServiceRuntimeAuthRefresh;
+    recoverRuntimeFailure?: typeof recoverExecutionRunConnectedServiceRuntimeFailure;
+    completeRuntimeTurn?: typeof completeExecutionRunConnectedServiceRuntimeTurn;
 }>;
 
 export type ResolvedExecutionRunConnectedServicesEnv = Readonly<{
@@ -80,6 +85,9 @@ export type ResolvedExecutionRunConnectedServicesEnv = Readonly<{
     cleanup: () => Promise<void>;
     recoverRejectedStart: (classification: ConnectedServiceRuntimeFailureClassification) => Promise<boolean>;
     refreshRuntimeAuth: RuntimeAuthRefreshViaDaemon;
+    recoverRuntimeFailure: (input: Parameters<NonNullable<CreateCliExecutionRunBackendParams['prepareRuntimeFailureRecovery']>>[0]) => ReturnType<typeof recoverExecutionRunConnectedServiceRuntimeFailure>;
+    rematerializeForRecovery: (nativeResumeId: string) => Promise<ResolvedExecutionRunConnectedServicesEnv>;
+    completeRuntimeTurn: () => Promise<void>;
 }>;
 
 export type ResolvedExecutionRunConnectedServicesSelection = Readonly<{
@@ -128,6 +136,8 @@ function defaultDeps(): MaterializationDeps {
         runnerPid: process.pid,
         recoverRejectedStart: async (request) => await recoverExecutionRunConnectedServicesRejectedStart(request),
         refreshRuntimeAuth: requestExecutionRunConnectedServiceRuntimeAuthRefresh,
+        recoverRuntimeFailure: recoverExecutionRunConnectedServiceRuntimeFailure,
+        completeRuntimeTurn: completeExecutionRunConnectedServiceRuntimeTurn,
     };
 }
 
@@ -258,6 +268,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
     cwd: string;
     modelId?: string;
     deps?: MaterializationDeps;
+    recovery?: Readonly<{ activationId: string; nativeResumeId: string }>;
 }>): Promise<ResolvedExecutionRunConnectedServicesEnv | null> {
     const backendId = params.backendId.trim();
     const supportsCatalogConnectedServices =
@@ -305,6 +316,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         connectedServices: selection.bindings,
         cwd: params.cwd,
         ...(params.modelId ? { modelId: params.modelId } : {}),
+        ...(params.recovery ? { recovery: params.recovery } : {}),
     });
 
     if (!response || response.ok !== true || !('result' in response) || !response.result) {
@@ -363,6 +375,31 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         connectedServicesBindings: response.result.connectedServicesBindings,
         registration: response.result.registration,
         cleanup,
+        async completeRuntimeTurn() {
+            if (cleanupPromise) return;
+            await deps.completeRuntimeTurn?.({ runId: params.runId, runnerPid: deps.runnerPid, activationId: response.result.activationId });
+        },
+        async recoverRuntimeFailure({ diagnostic, providerSessionId, interruptedOriginId, signal }) {
+            if (cleanupPromise || !deps.recoverRuntimeFailure) return { status: 'failed', reason: 'connected_service_run_materialization_unavailable' };
+            return await deps.recoverRuntimeFailure({
+                runId: params.runId,
+                runnerPid: deps.runnerPid,
+                activationId: response.result.activationId,
+                nativeResumeId: providerSessionId,
+                interruptedOriginId,
+                diagnostic,
+            }, { signal });
+        },
+        async rematerializeForRecovery(nativeResumeId) {
+            const replaced = await resolveExecutionRunConnectedServicesEnv({
+                ...params,
+                // Retain the admitted selection; Account defaults cannot retarget recovery.
+                resolvedSelection: selection,
+                recovery: { activationId: response.result.activationId, nativeResumeId },
+            });
+            if (!replaced) throw new ExecutionRunConnectedServicesError('Connected Account Run recovery lost its admitted selection');
+            return replaced;
+        },
         async refreshRuntimeAuth(request, options) {
             if (cleanupPromise || !deps.refreshRuntimeAuth) {
                 return { status: 'unavailable', reason: 'connected_service_run_materialization_unavailable' };

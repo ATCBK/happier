@@ -19,6 +19,7 @@ import { pickPermissionOutcome } from './permissions/permissionMapping';
 import type { AcpClientConnectionHandlers } from './connection/types';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import type { LegacyAcpToolRuntime } from './toolCalls/legacy/runtime';
+import { buildAcpToolNameResolverInput } from './toolCalls/toolNameResolverInput';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import {
   extractPermissionInputWithFallback,
@@ -35,6 +36,7 @@ type ExtendedRequestPermissionRequest = RequestPermissionRequest & {
     id?: string;
     kind?: string;
     toolName?: string;
+    title?: string;
     rawInput?: Record<string, unknown>;
     input?: Record<string, unknown>;
     arguments?: Record<string, unknown>;
@@ -114,6 +116,7 @@ export function createAcpClientHandlers(params: Readonly<{
         extendedParams as PermissionRequestLike,
         fallbackInput,
       );
+      const inferenceInput = buildAcpToolNameResolverInput(input, toolCall?.title);
       toolNameHint = refinePermissionToolNameWithInput(toolNameHint, input);
       let toolName = resolvePermissionToolName({
         toolNameHint,
@@ -126,14 +129,14 @@ export function createAcpClientHandlers(params: Readonly<{
         return { outcome: { outcome: 'selected', optionId: cachedOptionId } };
       }
 
-      toolName = params.transport.determineToolName?.(toolName, toolCallId, input, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
+      toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
 
       if (toolName !== (toolCall?.kind || toolCall?.toolName || extendedParams.kind || 'Unknown tool')) {
         logger.debug(`[AcpBackend] Detected tool name: ${toolName} from toolCallId: ${toolCallId}`);
       }
 
       if (knownCall && shouldReplaceCachedPermissionToolName(knownCall.toolName, toolName)) {
-        toolName = params.transport.determineToolName?.(toolName, toolCallId, input, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
+        toolName = params.transport.determineToolName?.(toolName, toolCallId, inferenceInput, tracksForeground ? params.getToolNameContext() : { recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }) ?? toolName;
       }
       if (tracksForeground) {
         params.toolCalls.observePermission({ toolCallId, toolName, input });

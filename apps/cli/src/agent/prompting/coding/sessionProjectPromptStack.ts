@@ -5,18 +5,21 @@ import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/reso
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { ProjectSourcesReadOutputV1Schema } from '@happier-dev/protocol/projects/sources/projectSourceV1';
+import { migrateProjectPromptStackSkillRules, type ProjectStackSkillMigrationResult } from '@/workspaces/projectAccountRows';
 
 export type { SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
 
-export async function resolveSessionProjectPromptStack(input: SessionProjectPromptStackInput): Promise<readonly PromptStackEntryV1[]> {
+export async function resolveSessionProjectPromptStack(input: SessionProjectPromptStackInput): Promise<Readonly<{
+  entries: readonly PromptStackEntryV1[]; projectKey: string | null; skillMigration: ProjectStackSkillMigrationResult;
+}>> {
   input.signal?.throwIfAborted();
   const pending = (reason: 'project_association_unavailable' | 'project_source_unavailable'): never => {
     throw Object.assign(new Error(reason), { code: 'preparation_pending', status: 'preparation_pending', reason });
   };
-  const serverId = input.serverId ?? configuration.activeServerId;
-  const serverHttpBaseUrl = resolveServerHttpBaseUrl();
+  const serverId = input.serverId ?? input.credentials.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
+  const serverHttpBaseUrl = input.operationContext?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const resolved = await resolveSessionProjectKey(input);
-  if (resolved.kind === 'none') return [];
+  if (resolved.kind === 'none') return { entries: [], projectKey: null, skillMigration: { status: 'ready' } };
   if (resolved.kind === 'pending') return pending(resolved.reason);
   const workspaceRef = resolved.workspaceRef;
   let shared: readonly PromptStackEntryV1[] = [];
@@ -30,6 +33,7 @@ export async function resolveSessionProjectPromptStack(input: SessionProjectProm
         return artifact ? { artifactId: artifact.id, header: artifact.header } : null;
       }, {
         credentials: input.credentials, serverId, signal: options?.signal ?? input.signal,
+        operationContext: input.operationContext,
       }),
     });
     const source = ProjectSourcesReadOutputV1Schema.safeParse(await sourceOwner.projectSourcesRead!({ serverId, sourceId: workspaceRef.source.sourceId }, { signal: input.signal }));
@@ -38,5 +42,9 @@ export async function resolveSessionProjectPromptStack(input: SessionProjectProm
     shared = (source.data.source.attachments ?? []).flatMap(attachment => attachment.purpose === 'context' ? [attachment.entry] : []);
   }
   input.signal?.throwIfAborted();
-  return (workspaceRef.source ? shared : resolved.promptStack).map(entry => ({ ...entry, ref: { ...entry.ref, serverId: entry.ref.serverId ?? serverId } }));
+  const entries = (workspaceRef.source ? shared : resolved.promptStack).map(entry => ({ ...entry,
+    ref: { ...entry.ref, serverId: entry.ref.serverId ?? serverId } }));
+  const skillMigration = await migrateProjectPromptStackSkillRules({ credentials: input.credentials, serverId, serverHttpBaseUrl,
+    projectKey: resolved.projectKey, entries, signal: input.signal, operationContext: input.operationContext });
+  return { entries, projectKey: resolved.projectKey, skillMigration };
 }

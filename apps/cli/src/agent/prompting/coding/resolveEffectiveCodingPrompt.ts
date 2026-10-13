@@ -5,7 +5,7 @@ import { buildPromptPlanV1, renderPromptPlanV1 } from '@happier-dev/protocol/pro
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderSessionRoleBlockV1 } from '@happier-dev/protocol/prompts/roles/renderSessionRoleBlockV1';
 import { resolveEffectiveCodingPromptBehaviorV1 } from '@happier-dev/protocol/prompts/effectiveCodingPromptBehaviorV1';
-import type { CodingPromptBehaviorV1, PromptBlockV1, PromptPlanV1, SessionRolePromptContextV1, AgentSessionStartupInstructionsV1 } from '@happier-dev/protocol';
+import type { AgentToolsDelivery, CodingPromptBehaviorV1, PromptBlockV1, PromptPlanV1, SessionRolePromptContextV1, AgentSessionStartupInstructionsV1 } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
@@ -58,7 +58,7 @@ export type ResolveEffectiveCodingPromptArgs = Omit<CliPromptStackSystemAppendIn
   memoryRecallGuidanceEnabled?: boolean;
   agentId?: string | null | undefined;
   disableTodos?: boolean;
-  toolDelivery?: 'native_mcp' | 'native_extension' | 'shell_bridge' | 'unsupported';
+  toolDelivery: AgentToolsDelivery;
   toolDeliverySessionId?: string | null;
   toolDeliveryDirectory?: string | null;
   memoryMachineId?: string | null;
@@ -270,7 +270,7 @@ export async function resolveEffectiveCodingPromptPlan(
   const settings = args.settings && typeof args.settings === 'object' && !Array.isArray(args.settings)
     ? args.settings
     : {};
-  const toolDelivery = args.toolDelivery ?? 'native_mcp';
+  const toolDelivery = args.toolDelivery;
   // Account default, then the selected Launch Profile's sparse override —
   // resolved exactly once here, for the whole prompt. Both the base plan and
   // the tool-delivery appendix are composed from this one fact, so a profile

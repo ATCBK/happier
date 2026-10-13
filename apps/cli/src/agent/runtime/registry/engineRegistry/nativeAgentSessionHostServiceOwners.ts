@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
-import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 
 import { AgentToolExecuteAfterHookPayloadSchema, AgentToolExecuteBeforeHookPayloadSchema } from '@happier-dev/protocol/plugins/hooks';
 import { isFeatureId } from '@happier-dev/protocol/features/catalog';
@@ -17,10 +15,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
-import {
-    resolvePluginMcpServersForExecutionScope,
-    resolvePluginMcpServersForSession,
-} from '@/mcp/servers/resolvePluginMcpServersForSession';
+import type { ResolvedSessionMcpServer } from '@/mcp/runtimeTypes';
 import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import type {
     McpSessionResolutionInput,
@@ -48,9 +43,6 @@ import {
 } from './nativeAgentAccountUsage';
 
 type AgentTerminalHostService = NonNullable<AgentSessionHostServices['terminalHost']>;
-import {
-    createNativeAgentCurrentSessionUiServices,
-} from './nativeAgentSessionInteractions';
 import {
     materializePluginRuntimeAuthority,
     snapshotActivatedPluginRuntimeAuthority,
@@ -199,6 +191,7 @@ export function createNativeAgentExecutionRunHostServices(params: Readonly<{
     happyHomeDir?: string;
     nativeHome?: AgentExecutionRunHostServicesV1['nativeHome'];
     refreshRuntimeAuthViaDaemon?: RuntimeAuthRefreshViaDaemon;
+    readResolvedMcpServers?: () => readonly ResolvedSessionMcpServer[];
 }>): AgentExecutionRunHostServicesV1 & Disposable {
     const assertActive = (): void => {
         params.signal.throwIfAborted();
@@ -341,20 +334,13 @@ export function createNativeAgentExecutionRunHostServices(params: Readonly<{
             async resolveServers(options: Parameters<AgentSessionHostServices['mcp']['resolveServers']>[0]) {
                 assertActive();
                 options?.signal?.throwIfAborted();
-                const accountSettingsSnapshot = params.resolveAccountSettingsSnapshot
-                    ? await params.resolveAccountSettingsSnapshot({ mcpServerCatalog: true, signal: params.signal }) : null;
+                if (params.resolveAccountSettingsSnapshot) {
+                    const snapshot = await params.resolveAccountSettingsSnapshot({ mcpServerCatalog: true, signal: params.signal });
+                    if (!snapshot) throw new McpServerCatalogUnavailableError('scope-retired');
+                }
                 assertActive();
                 options?.signal?.throwIfAborted();
-                const servers = resolvePluginMcpServersForExecutionScope({
-                    scope,
-                    accountSettings: accountSettingsSnapshot?.settings ?? params.accountSettings,
-                    accountSettingsSnapshot,
-                    machineId: params.machineId,
-                    agentId: params.agentId,
-                    agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.agentId, params.runtimeRegistry?.contributes)),
-                    directory: params.directory,
-                    selection: params.capabilitySelection?.mcp ?? null,
-                });
+                const servers = params.readResolvedMcpServers?.() ?? [];
                 return Object.freeze(servers.map((server) => Object.freeze({
                     id: server.id,
                     name: server.name,
@@ -394,6 +380,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         accountSettings?: AccountSettings | null;
         resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
         accountSettingsAuthority?: 'account' | 'session';
+        readResolvedMcpServers?: () => readonly ResolvedSessionMcpServer[];
         permissionHandler: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
     }>;
     sessionId: string;
@@ -477,7 +464,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         input: McpSessionResolutionInput,
     ) => {
         params.signal.throwIfAborted();
-        if (input.sessionId.trim() !== params.sessionId) return Object.freeze([]);
+        if (input.sessionId?.trim() !== params.sessionId) return Object.freeze([]);
         if (params.hostSession.accountSettingsAuthority === 'session') return Object.freeze([]);
         const accountSettingsSnapshot = params.hostSession.resolveAccountSettingsSnapshot
             ? await params.hostSession.resolveAccountSettingsSnapshot({ mcpServerCatalog: true, signal: params.signal })
@@ -486,57 +473,10 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         if (!accountSettingsSnapshot && params.hostSession.accountSettingsAuthority === 'account') {
             throw new McpServerCatalogUnavailableError('scope-retired');
         }
-        return resolvePluginMcpServersForSession({
-            input,
-            accountSettings: accountSettingsSnapshot?.settings ?? params.hostSession.accountSettings ?? null,
-            machineId: params.hostSession.machineId,
-            accountSettingsSnapshot,
-            directory: params.directory,
-            agentId: params.identity.agentId,
-            agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.identity.agentId, params.runtimeRegistry?.contributes)),
-            sessionMetadata: params.hostSession.session.getMetadataSnapshot(),
-        });
+        return params.hostSession.readResolvedMcpServers?.() ?? Object.freeze([]);
     };
-    const target = params.runtimeRegistry?.contributes.activationTargets.find((candidate) => (
-        candidate.pluginId === params.identity.pluginId
-    ));
-    const pluginVersion = params.identity.pluginVersion ?? target?.manifest.version;
-    const sourceCustody = params.identity.sourceCustody
-        ?? params.runtimeRegistry?.readPluginSourceCustody?.(params.identity.pluginId)
-        ?? null;
-    const pluginMcp = pluginVersion && (target?.manifest.contributes.mcp.servers.length ?? 0) > 0
-        ? (() => {
-            const currentSession = createNativeAgentCurrentSessionUiServices({
-                permissionHandler: params.hostSession.permissionHandler,
-                pluginId: params.identity.pluginId,
-                contributionId: params.agent.identity?.localId ?? params.identity.agentId,
-                runtimeId,
-                sessionId: params.sessionId,
-                occurrenceId: params.identity.occurrenceId,
-                ...(sourceCustody ? { sourceCustody } : {}),
-                isCurrent: params.identity.isCurrent ?? (() => !params.signal.aborted),
-                signal: params.signal,
-            });
-            return params.runtimeRegistry?.createPluginMcpSessionResolver?.({
-                pluginId: params.identity.pluginId,
-                pluginVersion,
-                signal: params.signal,
-                addDisposable,
-                resolveHostSession: async (input) => {
-                    if (params.signal.aborted || input.sessionId.trim() !== params.sessionId) return null;
-                    return Object.freeze({
-                        bindingId: runtimeId,
-                        sessionId: params.sessionId,
-                        directory: params.directory,
-                        servers: await resolveBaseMcpServers(input),
-                        currentSession,
-                    });
-                },
-            }) ?? null;
-        })()
-        : null;
     const mcp: PluginMcpSessionResolver = Object.freeze({
-        resolveForSession: pluginMcp?.resolveForSession ?? (async (input) => resolveBaseMcpServers(input)),
+        resolveForSession: resolveBaseMcpServers,
     });
     const toolExecution = createNativeAgentToolExecutionOwner({
         runtimeRegistry: params.runtimeRegistry,

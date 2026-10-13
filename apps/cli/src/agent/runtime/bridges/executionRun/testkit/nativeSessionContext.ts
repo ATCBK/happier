@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { PluginAgentContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/v2';
 import type { AgentRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { composeNativeAgentSessionRuntimeContext, createNativeAgentSessionHostServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import type { AgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import type { ResolvedAgentContribution } from '@/plugins/projection/registry/types';
@@ -19,6 +20,8 @@ export function createVoiceSessionRuntimeThroughNativeFactory(params: Readonly<{
     runtime: AgentRuntime;
     capabilities: AgentSessionCapabilities;
     modelId: string;
+    /** Real Session composition; tests supply its Socket/HTTP boundaries separately. */
+    session?: ApiSessionClient;
 }>) {
     return createLazyExecutionRunHostRuntime({ resolveRuntime: async () => {
         const agent: ResolvedAgentContribution = {
@@ -46,7 +49,7 @@ export function createVoiceSessionRuntimeThroughNativeFactory(params: Readonly<{
             start: { intent: 'voice_agent', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
             sessionInteractionHost: {
                 machineId: 'voice-fixture-machine', permissionHandler,
-                session: {
+                session: params.session ?? {
                     sessionId: 'session-parent', getMetadataSnapshot: () => ({ path: '/repo', machineId: 'voice-fixture-machine' }),
                     updateMetadata: vi.fn(), updateAgentState: vi.fn(), enqueueAgentMessageCommitted: vi.fn(),
                 },

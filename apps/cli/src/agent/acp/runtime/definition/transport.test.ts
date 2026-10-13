@@ -5,6 +5,34 @@ import { buildAcpToolNameResolverInput } from '@/agent/acp/toolCalls';
 import { createAcpTransportHandlerFromDefinition } from './transport';
 
 describe('ACP definition transport tool-name inference', () => {
+  it('keeps a known MCP identity ahead of native tool-name heuristics', () => {
+    const transport = createAcpTransportHandlerFromDefinition({
+      backendId: 'acme.provider',
+      mcpServerKeys: new Set(['docs', 'docs__team']),
+      toolNameInference: {
+        patterns: [{ name: 'read', patterns: ['read_file'], inputFields: ['path'] }],
+      },
+    });
+    expect(transport.determineToolName?.('mcp__docs__team__read_file', 'opaque', { path: 'a' }, {
+      recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 1,
+    })).toBe('mcp__docs__team__read_file');
+  });
+
+  it('keeps host-owned MCP session grants revocable by selecting only native allow_once', () => {
+    const transport = createAcpTransportHandlerFromDefinition({
+      backendId: 'acme.provider', mcpServerKeys: new Set(['docs']),
+      mcpToolPolicyServerKeys: new Set(['docs']), permissionOptionSelection: { approved: 'allow_always' },
+    });
+    const options = [
+      { optionId: 'persistent', kind: 'allow_always', name: 'Always' },
+      { optionId: 'single', kind: 'allow_once', name: 'Once' },
+    ];
+    const context = { toolCallId: 'call', toolName: 'mcp__docs__read_file', input: {} };
+    expect(transport.pickPermissionOptionId?.(options, 'approved_for_session', context)).toBe('single');
+    expect(transport.pickPermissionOptionId?.([options[0]!], 'approved_for_session', context)).toBeNull();
+    expect(transport.pickPermissionOptionId?.(options, 'approved', { ...context, toolName: 'read' })).toBe('persistent');
+  });
+
   it('prefers a provider title hint over a generic input-field identity', () => {
     const transport = createAcpTransportHandlerFromDefinition({
       backendId: 'acme.provider',

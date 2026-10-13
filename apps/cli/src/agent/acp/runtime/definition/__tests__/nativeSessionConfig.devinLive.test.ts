@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEVIN_ACP_RUNTIME_DECLARATION } from '../../../../../../../../packages/plugins/devin/src/agent/acp/runtimeDeclaration';
-import { prepareNativeSessionMcpConfig } from '../nativeSessionMcpConfig';
+import { prepareNativeSessionConfig } from '../nativeSessionConfig';
 
 /**
  * Live gate for the one fact the fixture ACP agent cannot prove: that the real
@@ -15,7 +15,7 @@ import { prepareNativeSessionMcpConfig } from '../nativeSessionMcpConfig';
  * unauthenticated probe is enough — no vendor credentials are required.
  *
  * Opt in with the same provider flag the e2e provider lanes use:
- *   HAPPIER_E2E_PROVIDER_DEVIN=1 vitest run …/nativeSessionMcpConfig.devinLive
+ *   HAPPIER_E2E_PROVIDER_DEVIN=1 vitest run …/nativeSessionConfig.devinLive
  */
 const LIVE = process.env.HAPPIER_E2E_PROVIDER_DEVIN === '1';
 const DEVIN_BIN = process.env.HAPPIER_E2E_PROVIDER_DEVIN_BIN ?? 'devin';
@@ -93,7 +93,7 @@ describe.skipIf(!LIVE)('Devin native Session MCP config (live CLI)', () => {
     expect(baseline.mcpConfigPath).toBe(join(userConfigRoot, 'devin', 'mcp_config.json'));
     expect(baseline.loadSession).toBe(true);
 
-    const delivery = await prepareNativeSessionMcpConfig({
+    const delivery = await prepareNativeSessionConfig({
       declaration: DEVIN_ACP_RUNTIME_DECLARATION.definition.mcp.nativeSessionConfig,
       cwd: home,
       env: { HOME: home, XDG_CONFIG_HOME: userConfigRoot },

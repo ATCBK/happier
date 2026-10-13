@@ -123,7 +123,7 @@ describe('session prompt-plan re-delivery', () => {
   it('retains content-free facts at the real normal dispatch without claiming an unavailable native prefix', async () => {
     const retainedEvents: unknown[] = [];
     const duplicate = 'PRIVATE instruction /private/repo 🦉';
-    const plan = await resolveEffectiveCodingPromptPlan({ settings: {}, profileId: null, baseOverride: null,
+    const plan = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp', settings: {}, profileId: null, baseOverride: null,
       memoryRecallGuidanceEnabled: false, sessionTitleToolAvailable: false,
       promptAssetBlocks: [{ id: 'private-source-one', scope: 'user_prompt', text: duplicate },
         { id: 'private-source-two', scope: 'user_prompt', text: duplicate }] });

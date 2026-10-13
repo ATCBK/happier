@@ -421,6 +421,21 @@ describe('createSessionMetadata', () => {
         expect(metadata).not.toHaveProperty('skillSelectionRestartRequiredV1');
     });
 
+    it('preserves brokered connected-service selection through committed birth and runner attach', () => {
+        const connectedServices = { v: 2 as const, bindingsByServiceId: {
+            'happier.agent.claude/claude-subscription': {
+                source: 'team_resource' as const, resourceId: 'claude-ai1', deliveryMode: 'brokered' as const,
+            },
+        } };
+        const current = buildCommittedLaunchMetadata({ directory: '/project', options: {
+            directory: '/project', connectedServices, connectedServicesUpdatedAt: 123,
+        } });
+        expect(current).toMatchObject({ connectedServices, connectedServicesUpdatedAt: 123 });
+        const next = createMetadata({ flavor: 'claude', machineId: 'machine-1' }).metadata;
+        expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 124 }))
+            .toMatchObject({ connectedServices, connectedServicesUpdatedAt: 123 });
+    });
+
     it('seeds connected service bindings from the daemon-provided environment override', () => {
         const previous = process.env[HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY];
         process.env[HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY] = JSON.stringify({

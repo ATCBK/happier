@@ -1,5 +1,6 @@
 import type { StoredCredentials } from '@/persistence';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 import {
   resolveValueRefPlaintext,
 } from '@/settings/valueRefs/resolveValueRefPlaintext';
@@ -14,7 +15,7 @@ import type { ResolvedConfiguredAcpBackend } from './resolveBackend';
 export function materializeConfiguredAcpEnvironment(params: Readonly<{
   backend: ResolvedConfiguredAcpBackend;
   accountSettings: Readonly<Record<string, unknown>>;
-  credentials: StoredCredentials;
+  credentials?: StoredCredentials;
   processEnv?: NodeJS.ProcessEnv;
   savedSecretResources?: readonly SavedSecretCatalogResourceInputV1[];
 }>): Record<string, string> {
@@ -27,10 +28,12 @@ export function materializeConfiguredAcpEnvironment(params: Readonly<{
 
   const env: Record<string, string> = {};
   for (const [envKey, valueRef] of Object.entries(params.backend.env)) {
-    if (valueRef.t === 'savedSecret' && parseSavedSecretRefV1(valueRef.secretId)?.kind !== 'shared_resource') {
-      throw new SavedSecretResolutionError({
-        status: 'repair_required', reference: valueRef.secretId, consumer: 'acp', field: `env:${envKey}`,
-      });
+    for (const secretId of listValueRefSecretIdsV1(valueRef)) {
+      if (parseSavedSecretRefV1(secretId).kind !== 'shared_resource') {
+        throw new SavedSecretResolutionError({
+          status: 'repair_required', reference: secretId, consumer: 'acp', field: `env:${envKey}`,
+        });
+      }
     }
     const resolved = resolveValueRefPlaintext({
       valueRef,
@@ -41,11 +44,10 @@ export function materializeConfiguredAcpEnvironment(params: Readonly<{
       resolved.status !== 'ready'
       && resolved.status !== 'literal_unavailable'
       && resolved.status !== 'session_attested_unavailable'
-      && valueRef.t === 'savedSecret'
     ) {
       throw new SavedSecretResolutionError({
         status: resolved.status,
-        reference: valueRef.secretId,
+        reference: resolved.reference,
         consumer: 'acp',
         field: `env:${envKey}`,
       });

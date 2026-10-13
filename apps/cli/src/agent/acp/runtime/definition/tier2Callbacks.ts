@@ -1,6 +1,5 @@
 import type {
   SessionPermissionFollowUpPromptIntentV1,
-  SessionPermissionPersistAllowRuleV1,
 } from '@happier-dev/agents';
 
 import type { AcpPermissionHandler } from '@/agent/acp/permissions/acpPermissionHandler';
@@ -273,23 +272,6 @@ function normalizePermissionFollowUpPrompt(
   };
 }
 
-function normalizePermissionPersistAllowRule(
-  value: unknown,
-): SessionPermissionPersistAllowRuleV1 | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const scope = value.scope;
-  if (scope !== 'session' && scope !== 'workspace' && scope !== 'account') {
-    return undefined;
-  }
-  const toolName = value.toolName;
-  return {
-    scope,
-    ...(typeof toolName === 'string' ? { toolName } : {}),
-  };
-}
-
 function createPermissionCallbackError(params: Readonly<{
   definition: AcpRuntimeDefinition;
   message: string;
@@ -320,12 +302,10 @@ function mapPermissionDecisionToHandlerResult(
     return null;
   }
   const followUpPrompt = normalizePermissionFollowUpPrompt(decision.followUpPrompt);
-  const persistAllowRule = normalizePermissionPersistAllowRule(decision.persistAllowRule);
   return {
     decision: decision.kind === 'allow' ? 'approved' : 'denied',
     ...(decision.rationale ? { rationale: decision.rationale } : {}),
     ...(followUpPrompt ? { followUpPrompt } : {}),
-    ...(persistAllowRule ? { persistAllowRule } : {}),
   };
 }
 

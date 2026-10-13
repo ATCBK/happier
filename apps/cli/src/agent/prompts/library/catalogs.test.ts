@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { createPromptProviderCatalog } from './providers';
-import { createPromptRegistryCatalog } from './registries';
 
 describe('prompt catalog contracts', () => {
-  it('creates empty prompt provider and registry catalogs without scanning runtime sources', () => {
+  it('creates an empty prompt provider catalog without scanning runtime sources', () => {
     expect(createPromptProviderCatalog().entries).toEqual([]);
-    expect(createPromptRegistryCatalog().entries).toEqual([]);
   });
 
-  it('preserves explicit prompt provider and registry entries as catalog data', () => {
+  it('preserves explicit prompt provider entries as catalog data', () => {
     expect(createPromptProviderCatalog([
       {
         id: 'prompt-provider-1',
@@ -21,19 +19,6 @@ describe('prompt catalog contracts', () => {
         id: 'prompt-provider-1',
         pluginId: 'plugin.prompts',
         adapterExportName: 'registerPromptProvider',
-      },
-    ]);
-    expect(createPromptRegistryCatalog([
-      {
-        id: 'prompt-registry-1',
-        pluginId: 'plugin.prompts',
-        adapterExportName: 'registerPromptRegistry',
-      },
-    ]).entries).toEqual([
-      {
-        id: 'prompt-registry-1',
-        pluginId: 'plugin.prompts',
-        adapterExportName: 'registerPromptRegistry',
       },
     ]);
   });

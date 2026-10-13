@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { prepareNativeSessionMcpConfig } from '../nativeSessionMcpConfig';
+import { prepareNativeSessionConfig } from '../nativeSessionConfig';
 
 const DECLARATION: PluginAgentAcpNativeSessionMcpConfigV2 = {
   configRootEnvKey: { posix: 'XDG_CONFIG_HOME', win32: 'APPDATA' },
@@ -32,7 +32,7 @@ afterEach(() => {
 
 describe('native session MCP config delivery', () => {
   it('does nothing when the Session contributes no MCP servers', async () => {
-    const delivery = await prepareNativeSessionMcpConfig({
+    const delivery = await prepareNativeSessionConfig({
       declaration: DECLARATION,
       cwd: createHome(),
       env: { HOME: createHome() },
@@ -40,6 +40,39 @@ describe('native session MCP config delivery', () => {
       platform: 'linux',
     });
     expect(delivery.env).toEqual({});
+  });
+
+  it('composes a real skills directory and preserves native MCP subprocess config provenance for a skills-only launch', async () => {
+    const home = createHome();
+    const sourceRoot = join(home, '.config');
+    await mkdir(join(sourceRoot, 'devin', 'skills', 'native'), { recursive: true });
+    await writeFile(join(sourceRoot, 'devin', 'skills', 'native', 'SKILL.md'), 'native skill');
+    const originalMcp = '{"mcpServers":{"user":{"command":"user-tool"}}}';
+    await writeFile(join(sourceRoot, 'devin', 'mcp_config.json'), originalMcp);
+    const skillsRoot = join(home, 'session', 'skills');
+    await mkdir(join(skillsRoot, 'delivered', 'scripts'), { recursive: true });
+    await writeFile(join(skillsRoot, 'delivered', 'SKILL.md'), 'delivered skill');
+    await writeFile(join(skillsRoot, 'delivered', 'scripts', 'nested.txt'), 'supporting file');
+    const delivery = await prepareNativeSessionConfig({
+      declaration: DECLARATION, cwd: home, env: { HOME: home }, mcpServers: {}, platform: 'linux',
+      skills: { subdirectory: 'skills', delivery: { pluginRoot: join(home, 'session'), skillsRoot,
+        items: [{ name: 'delivered', skillId: 'delivered', digest: 'sha256:fixture' }], nativeDisables: [] } },
+    });
+    cleanups.push(delivery.cleanup);
+    const privateRoot = delivery.env.XDG_CONFIG_HOME!;
+    expect(privateRoot).toBeTruthy();
+    const privateSkills = join(privateRoot, 'devin', 'skills');
+    expect(lstatSync(privateSkills).isDirectory()).toBe(true);
+    expect(lstatSync(privateSkills).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(privateSkills, 'native', 'SKILL.md'), 'utf8')).toBe('native skill');
+    expect(readFileSync(join(privateSkills, 'delivered', 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
+    expect(JSON.parse(readFileSync(join(privateRoot, 'devin', 'mcp_config.json'), 'utf8'))).toEqual({
+      mcpServers: { user: { command: 'user-tool', env: { XDG_CONFIG_HOME: sourceRoot } } },
+    });
+    expect(readFileSync(join(sourceRoot, 'devin', 'mcp_config.json'), 'utf8')).toBe(originalMcp);
+    expect(existsSync(join(sourceRoot, 'devin', 'skills', 'delivered'))).toBe(false);
+    delivery.cleanup();
+    expect(existsSync(privateRoot)).toBe(false);
   });
 
   it('merges Session servers into a session-private root that links the real provider state', async () => {
@@ -54,7 +87,7 @@ describe('native session MCP config delivery', () => {
       JSON.stringify({ version: 2, mcpServers: { userTool: { command: 'user-tool' } } }),
     );
 
-    const delivery = await prepareNativeSessionMcpConfig({
+    const delivery = await prepareNativeSessionConfig({
       declaration: DECLARATION,
       cwd: home,
       env: { HOME: home },
@@ -95,7 +128,7 @@ describe('native session MCP config delivery', () => {
     const declaredRoot = join(createHome(), 'provider-config');
     await mkdir(join(declaredRoot, 'devin'), { recursive: true });
 
-    const delivery = await prepareNativeSessionMcpConfig({
+    const delivery = await prepareNativeSessionConfig({
       declaration: DECLARATION,
       cwd: home,
       env: { HOME: home, XDG_CONFIG_HOME: declaredRoot },
@@ -120,7 +153,7 @@ describe('native session MCP config delivery', () => {
       JSON.stringify({ mcpServers: { happier: { command: 'impostor' } } }),
     );
 
-    await expect(prepareNativeSessionMcpConfig({
+    await expect(prepareNativeSessionConfig({
       declaration: DECLARATION,
       cwd: workspace,
       env: { HOME: home },

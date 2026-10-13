@@ -17,7 +17,10 @@ import type {
   AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
+import { createAgentLaunchObserver, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
+import { createCodexAgentRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/engine';
 import { createGeminiAgentRuntime } from '../../../../../../../packages/plugins/gemini/src/agent/runtime/factory';
+import { createGeminiConnectedServiceRuntimeAuthAdapter } from '../../../../../../../packages/plugins/gemini/src/agent/connectedServices/runtimeAuthAdapter';
 import { buildGrokAcpRuntimeDefinition } from '../../../../../../../packages/plugins/grok/src/agent/acp/definition';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
@@ -308,6 +311,11 @@ function writePublicComposerAgent(dir: string): string {
             }
             ok(request.id, {});
           } else if (request.method === 'session/new') {
+            if (scenario === 'codex-skill-acp') {
+              writeFileSync(process.env.PUBLIC_ACP_MEDIA_PATH, JSON.stringify({
+                argv: process.argv.slice(2), env: { HOME: process.env.HOME }, acpSessionNew: request.params,
+              }));
+            }
             if (scenario.startsWith('agy-auth-')) {
               send({ jsonrpc: '2.0', id: request.id, error: {
                 code: scenario === 'agy-auth-wrong-code' ? -32603 : -32000,
@@ -611,7 +619,16 @@ function writePublicComposerAgent(dir: string): string {
             ok(request.id, { success: true });
           } else if (request.method === 'session/prompt') {
             const sessionId = request.params.sessionId;
-            if (scenario.startsWith('sidechain-')) {
+            if (scenario.startsWith('gemini-request-error-')) {
+              // Gemini CLI v0.60.0 acpSession.ts:453-457 (also v0.8.2 zedIntegration.ts:300-305)
+              // emits numeric ACP RequestError(429), not a provider-message quota parser.
+              send({ jsonrpc: '2.0', id: request.id, error: {
+                code: Number(scenario.slice('gemini-request-error-'.length)),
+                message: 'Fixture provider rejection', data: { token: 'private-provider-token' },
+              } });
+              const countPath = process.env.PUBLIC_ACP_PROMPT_COUNT_PATH;
+              if (countPath) writeFileSync(countPath, String((existsSync(countPath) ? Number(readFileSync(countPath, 'utf8')) : 0) + 1));
+            } else if (scenario.startsWith('sidechain-')) {
               updateRaw(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'child-launch', title: scenario.slice('sidechain-'.length), kind: 'other', status: 'in_progress', rawInput: { prompt: 'child work' } });
               updateRaw(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 'child-launch', status: 'completed', rawOutput: { output: 'child fallback output', metadata: { sessionId: 'provider-child' } } });
               update(sessionId, 'parent output');
@@ -1169,6 +1186,28 @@ function createHistoryDefinition(): AgentAcpRuntimeDefinition {
 }
 
 describe('createPublicAcpSession', () => {
+  it('rejects a valid unsupported MCP policy update without treating the SDK carrier as malformed', async () => {
+    await withTempDir('happier-public-acp-mcp-update-', async dir => {
+      const fixture = createFixture(dir, 'completed');
+      const session = await createPublicAcpSession({ kind: 'create', sessionId: 'mcp-update', cwd: dir },
+        fixture.options, fixture.dependencies);
+      try {
+        await expect(session.updateConfiguration({
+          mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+          permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+          mcpToolPolicy: { docs: { unlisted: 'ask', tools: { read_page: 'off' } } },
+        })).resolves.toMatchObject({ status: 'rejected', diagnostic: { code: 'acp_mcp_tool_policy_update_unsupported' } });
+        await expect(session.updateConfiguration({
+          mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+          permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+          providerBinding: { connectionId: 'fixture-provider', model: { id: 'fixture-model', name: 'Fixture model' },
+            upstream: { protocol: 'openai_chat_completions', normalizedUrl: 'https://example.test/v1', credential: 'none' },
+            materialization: { v: 1, kind: 'spawnEnv' } },
+        })).resolves.toMatchObject({ status: 'rejected', diagnostic: { code: 'acp_provider_binding_update_unsupported' } });
+      } finally { await session.dispose(); }
+    });
+  });
+
   it.each(['agy-auth-setup', 'agy-auth-required', 'agy-auth-wrong-code'])('retains the declared authentication setup category through the real composer (%s)', async scenario => {
     await withTempDir('public-acp-auth-diagnostic-', async dir => {
       const fixture = createFixture(dir, scenario);
@@ -2628,6 +2667,74 @@ describe('createPublicAcpSession', () => {
     });
   });
 
+  it.each([
+    { scope: 'session', requestErrorCode: 429 },
+    { scope: 'run', requestErrorCode: 429 },
+    { scope: 'session', requestErrorCode: -32603 },
+  ] as const)('classifies Gemini numeric ACP failures through its native $scope codec ($requestErrorCode)', async ({ scope, requestErrorCode }) => {
+    await withTempDir('happier-gemini-native-failure-', async dir => {
+      const fixture = createFixture(dir, `gemini-request-error-${requestErrorCode}`);
+      const promptCountPath = path.join(dir, 'prompt-count');
+      const resolved = await fixture.resolve();
+      fixture.resolve.mockResolvedValue({ ...resolved, toolId: 'gemini-cli' });
+      const signal = new AbortController().signal;
+      const runHelp: ExecService['run'] = async () => ({
+        termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+        stdout: new TextEncoder().encode('--acp'), stderr: new Uint8Array(),
+        stdoutTruncated: false, stderrTruncated: false,
+      });
+      const factory = await createGeminiAgentRuntime({
+        plugin: { id: 'happier.agent.gemini', version: '0.0.0' }, agent: { id: 'gemini' }, signal,
+      });
+      // Only OS help and the ACP subprocess are external fakes; the native factory and composer are real.
+      const context = {
+        signal, services: { exec: { run: runHelp } },
+        protocols: { acp: {
+          open: (request: AgentSessionOpenRequest, options: AgentAcpRuntimeOptions) => createPublicAcpSession(request, options, fixture.dependencies),
+          openExecutionRunV1: (request: Parameters<typeof createPublicAcpExecutionRun>[0], options: AgentAcpRuntimeOptions) => createPublicAcpExecutionRun(request, options, fixture.dependencies),
+        } },
+      } as unknown as AgentSessionRuntimeContext;
+      if (!factory.sessions?.executionRunContextV1) throw new Error('Expected Gemini native Session and Run');
+      const native = scope === 'session'
+        ? await factory.sessions.open({ kind: 'create', sessionId: 'gemini-failure', cwd: dir,
+            launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, context)
+        : await factory.sessions.executionRunContextV1.open({ kind: 'create', runId: 'gemini-failure', cwd: dir,
+            profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
+            input: { text: 'hello' }, localInputId: 'gemini-input',
+            launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, context);
+      const events: Array<AgentSessionRuntimeEvent | AgentExecutionRunEvent> = [];
+      const subscription = native.watch(event => { events.push(event); });
+      try {
+        if (scope === 'session' && 'send' in native) {
+          await native.send({ inputIds: ['gemini-input'], input: { text: 'hello' }, delivery: { kind: 'newTurn', turnId: 'gemini-turn' } });
+        }
+        await waitForCondition(() => events.some(event => event.kind === 'input-rejected' || event.kind === 'run-failed'),
+          { timeoutMs: 5000, intervalMs: 10, label: 'Gemini native numeric failure' });
+        const failure = events.find(event => event.kind === 'input-rejected' || event.kind === 'run-failed');
+        if (!failure || !('diagnostic' in failure)) throw new Error('Expected native failed diagnostic');
+        expect(failure.diagnostic).toMatchObject({ code: 'acp_input_rejected_before_effect', details: { requestErrorCode } });
+        expect(readFileSync(promptCountPath, 'utf8')).toBe('1');
+        expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'run-completed')).toBe(false);
+        expect(JSON.stringify(failure)).not.toContain('private-provider-token');
+        const adapter = createGeminiConnectedServiceRuntimeAuthAdapter();
+        const classification = adapter.classifyRuntimeAuthFailure({ target: { agentId: 'gemini' }, error: failure.diagnostic,
+          selection: { kind: 'group', serviceId: 'happier.agent.gemini/gemini-account', groupId: 'current-group', activeProfileId: 'current-profile', generation: 3,
+            credentialRevision: 'csr_abcdefghijklmnopqrstuv' } });
+        if (requestErrorCode === 429) {
+          expect(failure.diagnostic.details).toMatchObject({ runtimeAuthClassification: {
+            kind: 'rate_limit', limitCategory: 'rate_limit', serviceId: 'happier.agent.gemini/gemini-account',
+            profileId: null, groupId: null, source: 'structured_provider_error',
+          } });
+          expect(classification).toMatchObject({ kind: 'rate_limit', serviceId: 'happier.agent.gemini/gemini-account',
+            profileId: 'current-profile', groupId: 'current-group', groupGeneration: 3, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' });
+        } else {
+          expect(failure.diagnostic.details).not.toHaveProperty('runtimeAuthClassification');
+          expect(classification).toBeNull();
+        }
+      } finally { subscription.dispose(); await native.dispose(); }
+    });
+  });
+
   it('composes VB4 launch environment, model, MCP, and plugin-owned static ACP policy', async () => {
     await withTempDir('happier-public-acp-vb4-', async (dir) => {
       const fixture = createFixture(dir, 'vb4');
@@ -3980,6 +4087,69 @@ describe('createPublicAcpSession', () => {
       } finally {
         subscription.dispose();
         await session.dispose();
+      }
+    });
+  });
+
+  it('reports Codex ACP skill delivery truthfully through the native selector and real composer', async () => {
+    await withTempDir('happier-public-acp-codex-skills-', async dir => {
+      const home = path.join(dir, 'home');
+      for (const root of ['.claude', '.agents', '.codex', '.config/opencode', '.copilot', '.gemini', '.pi', '.qwen']) {
+        await mkdir(path.join(home, root), { recursive: true });
+        await writeFile(path.join(home, root, 'retained-native-config'), 'preserve native bytes');
+      }
+      await mkdir(path.join(dir, 'generated'), { recursive: true });
+      const observer = createAgentLaunchObserver({ home });
+      const boundaries = observer.boundaries as AgentLaunchObserverBoundaries;
+      const skills = { pluginRoot: path.join(dir, 'private-plugin'), skillsRoot: path.join(dir, 'private-plugin', 'skills'),
+        items: [{ name: 'contract-skill', skillId: 'contract:skill', digest: 'sha256:contract' }],
+        nativeDisables: [{ name: 'contract-native-blocked', path: path.join(home, '.codex', 'skills', 'blocked', 'SKILL.md') }] };
+      let baseline: ReturnType<typeof observer.observeLaunch> | undefined;
+      for (const withSkills of [false, true, false]) {
+        boundaries.reset();
+        const fixture = createFixture(dir, 'codex-skill-acp');
+        // Only managed executable resolution is replaced; the selector, launch
+        // composition, ACP client and subprocess protocol all execute unchanged.
+        const dependencies: PublicAcpComposerDependencies = {
+          ...fixture.dependencies, pluginId: 'codex', agentId: 'codex',
+          managedDependencies: { async resolve(request) {
+            expect(request.dependencyId).toBe('codex-acp');
+            const resolved = await fixture.resolve();
+            return { command: resolved.launch.executablePath, args: resolved.launch.args,
+              env: resolved.launch.env, release() {} };
+          } },
+        };
+        const context = {
+          signal: dependencies.signal,
+          protocols: { acp: { open: (request: AgentSessionOpenRequest, options: AgentAcpRuntimeOptions) =>
+            createPublicAcpSession(request, options, dependencies) } },
+        } as unknown as AgentSessionRuntimeContext;
+        const factory = await createCodexAgentRuntime({ plugin: { id: 'codex', version: '0.0.0' },
+          agent: { id: 'codex' }, signal: dependencies.signal });
+        if (!factory.sessions) throw new Error('Codex Session factory missing');
+        const session = await factory.sessions.open({ kind: 'create', sessionId: 'codex-acp-skills', cwd: dir,
+          launchEnvironment: { values: { HOME: home, HAPPIER_CODEX_BACKEND_MODE: 'acp' }, unset: [] },
+          ...(withSkills ? { skills } : {}) }, context);
+        try {
+          const captured = JSON.parse(readFileSync(path.join(dir, 'generated', 'generated.png'), 'utf8')) as {
+            argv: string[]; env: Record<string, string>; acpSessionNew: unknown;
+          };
+          boundaries.recordLaunch(captured);
+          boundaries.recordAcpSessionNew(captured.acpSessionNew);
+          const observed = observer.observeLaunch();
+          expect(observed.filesWritten, 'K5: unsupported ACP cannot mutate native HOME').toEqual([]);
+          if (withSkills) {
+            expect(session.skillsDelivered, 'K10: selectable ACP must expose unsupported delivery').toBe(false);
+            expect(await session.refreshSkills?.({ skills })).toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
+            expect(JSON.stringify(observed)).not.toContain(skills.pluginRoot);
+            expect(JSON.stringify(observed)).not.toContain('contract-native-blocked');
+          } else {
+            expect(session.skillsDelivered).toBeUndefined();
+            expect(session.refreshSkills).toBeUndefined();
+          }
+          if (baseline) expect(observed).toEqual(baseline);
+          else baseline = observed;
+        } finally { await session.dispose(); }
       }
     });
   });

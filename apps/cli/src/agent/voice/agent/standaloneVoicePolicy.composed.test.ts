@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { reloadConfiguration } from '@/configuration';
 import { ExecutionRunStartRequestSchema, type ExecutionRunVoiceAgentIntentInputV1 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/testkit';
+import { createVoiceSessionRuntimeThroughNativeFactory } from '@/agent/runtime/bridges/executionRun/testkit/nativeSessionContext';
+import type { AgentRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { startExecutionRun } from '@/agent/runtime/bridges/executionRun/startExecutionRun';
 import { ensureExecutionRun } from '@/agent/runtime/bridges/executionRun/ensureExecutionRun';
 import { projectExecutionRunPublicState } from '@/agent/runtime/bridges/executionRun/publicState';
@@ -23,6 +24,8 @@ vi.mock('socket.io-client', async (importOriginal) => {
 });
 
 type UiHandle = Readonly<{ voiceAgentId: string; voicePolicy?: ExecutionRunVoiceAgentIntentInputV1['voicePolicy'] }>;
+type SdkEventBody<T = AgentSessionRuntimeEvent> = T extends AgentSessionRuntimeEvent
+  ? Omit<T, 'sessionId' | 'sequence' | 'emittedAtMs'> : never;
 type UiHarness = Readonly<{
   sessionId: string;
   handle: UiHandle;
@@ -69,19 +72,49 @@ describe('standalone Local Voice policy from UI admission to provider input', ()
     let runtimeIndex = 0;
     const createRuntime = () => {
       runtimeIndex += 1;
-      let releaseCancelled: (() => void) | undefined;
-      const runtime = createTestExecutionRunHostRuntime({ runtimeId: `voice-runtime-${runtimeIndex}`,
-        providerSessionId: `voice-provider-${runtimeIndex}`, resumeSupported: true,
-        async onSendPrompt(_id, prompt) {
-        prompts.push(prompt);
-        if (prompt.includes('Annule cette demande.')) {
-          await new Promise<void>((resolve) => { releaseCancelled = resolve; });
-          return;
-        }
-        runtime.emitMessage({ type: 'model-output', fullText: prompt.includes('reply with exactly READY') ? 'READY' : 'Bonjour.' });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      }, onCancel() { releaseCancelled?.(); } });
-      return runtime;
+      const providerSessionId = `voice-provider-${runtimeIndex}`;
+      // Only the Agent SDK is scripted. The retained host, input admission,
+      // output projection and cancellation lifecycle use their real owners.
+      const sdk: AgentRuntime = { sessions: { async open(request, context) {
+        const sessionId = context.session.id;
+        const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+        let sequence = 0;
+        const publish = (event: SdkEventBody) => {
+          const value = { ...event, sessionId, sequence: sequence++, emittedAtMs: Date.now() };
+          for (const listener of listeners) listener(value);
+        };
+        return {
+          watch(listener) {
+            listeners.add(listener);
+            publish({ kind: 'provider-session-id', providerSessionId: request.kind === 'resume' ? request.providerSessionId : providerSessionId });
+            return { dispose() { listeners.delete(listener); } };
+          },
+          async send(input) {
+            const prompt = input.input.text;
+            prompts.push(prompt);
+            const turnId = input.delivery.turnId;
+            publish({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+            publish({ kind: 'turn-start', turnId, startedBy: 'host' });
+            if (!prompt.includes('Annule cette demande.')) {
+              publish({ kind: 'message-delta', turnId, channel: 'assistant', text: prompt.includes('reply with exactly READY') ? 'READY' : 'Bonjour.' });
+              publish({ kind: 'turn-complete', turnId });
+            }
+            return { status: 'admitted' };
+          },
+          async cancel(input) {
+            publish({ kind: 'turn-complete', turnId: input.turnId });
+            // The provider finishes while cancellation itself is unavailable.
+            // The real Manager must retire this unconfirmed cancellation and
+            // seed a fresh native Session with the retained admitted policy.
+            return { status: 'unavailable', diagnostic: { code: 'voice_cancel_unavailable', severity: 'error' } };
+          },
+          async dispose() { listeners.clear(); },
+        };
+      } } };
+      return createVoiceSessionRuntimeThroughNativeFactory({
+        runtime: sdk, modelId: `voice-runtime-${runtimeIndex}`,
+        capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
+      });
     };
     manager = new VoiceAgentManager({ createRuntime });
     const runs = new Map<string, ExecutionRunState>();

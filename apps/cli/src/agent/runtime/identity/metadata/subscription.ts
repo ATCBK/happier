@@ -6,6 +6,9 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
 import type { RuntimeTurnOperations } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { SessionStateSyncEngine } from '@happier-dev/agents';
+import { SessionCapabilityAgentFactsV1Schema, type CapabilityApplyTimingInputV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
+import type { RuntimeDescriptorV1 } from '@happier-dev/protocol';
+import { logger } from '@/ui/logger';
 
 function updateRuntimePublicationMetadata(
   metadata: Metadata,
@@ -29,11 +32,26 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
   providerSessionMetadataKey?: string | null;
   /** Shared-editor runtimes retain runtime-local publications but cannot write owner metadata. */
   publishOwnerMetadata?: boolean;
+  capabilitySelection?: CapabilityApplyTimingInputV1['agent'];
+  resolveCapabilitySelectionForDescriptor?: (descriptor: RuntimeDescriptorV1) => Promise<CapabilityApplyTimingInputV1['agent']>;
 }>): () => void {
   let lastPublishedNativeIdentity: string | null = null;
   let lastPublishedDescriptor: unknown = undefined;
   let lastPublishedCapabilities: unknown = undefined;
   let lastPublishedFacets: unknown = undefined;
+  let capabilitySelection = params.capabilitySelection;
+  let disposed = false;
+  const publishCapabilitySelection = (): void => {
+    if (!capabilitySelection || params.publishOwnerMetadata === false || disposed) return;
+    const facts = SessionCapabilityAgentFactsV1Schema.parse(capabilitySelection);
+    void params.session.updateMetadata(metadata => {
+      const capabilities = metadata.agentRuntimeCapabilitiesV1;
+      return { ...metadata, agentRuntimeCapabilitiesV1: { ...(capabilities ?? {}), capabilitySelection: facts } };
+    }).catch(() => {
+      logger.debug('[RuntimePublication] Capability selection facts publication unavailable');
+    });
+  };
+  publishCapabilitySelection();
 
   const publishProviderSessionId = (
     rawProviderSessionId: unknown,
@@ -110,6 +128,17 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
         }
         const previousDescriptor = lastPublishedDescriptor;
         lastPublishedDescriptor = nextDescriptor;
+        if (params.resolveCapabilitySelectionForDescriptor) {
+          void params.resolveCapabilitySelectionForDescriptor(nextDescriptor).then(facts => {
+            if (disposed || !isDeepStrictEqual(lastPublishedDescriptor, nextDescriptor)) return;
+            capabilitySelection = SessionCapabilityAgentFactsV1Schema.parse(facts);
+            publishCapabilitySelection();
+          }).catch(() => {
+            if (disposed || !isDeepStrictEqual(lastPublishedDescriptor, nextDescriptor) || !capabilitySelection) return;
+            capabilitySelection = { ...capabilitySelection, vendorResume: 'unsupported' };
+            publishCapabilitySelection();
+          });
+        }
         void params.sessionState.writeHappierField({
           sessionId: params.session.sessionId,
           fieldId: 'identity.runtimeDescriptor',
@@ -130,7 +159,11 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
 
       if (publication.fact === 'runtimeCapabilities') {
         if (params.publishOwnerMetadata === false) return;
-        const nextCapabilities = publication.value ?? null;
+        const nativeCapabilities = publication.value;
+        const nextCapabilities = capabilitySelection ? {
+          ...(nativeCapabilities !== null && typeof nativeCapabilities === 'object' && !Array.isArray(nativeCapabilities) ? nativeCapabilities : {}),
+          capabilitySelection,
+        } : nativeCapabilities ?? null;
         if (isDeepStrictEqual(lastPublishedCapabilities, nextCapabilities)) {
           return;
         }
@@ -139,7 +172,9 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
           metadata,
           'agentRuntimeCapabilitiesV1',
           nextCapabilities,
-        ));
+        )).catch(() => {
+          logger.debug('[RuntimePublication] Native capabilities publication unavailable');
+        });
         return;
       }
 
@@ -158,6 +193,7 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
   );
 
   return () => {
+    disposed = true;
     unsubscribeRuntimeEvents();
     unsubscribeIdentityPublication?.();
   };

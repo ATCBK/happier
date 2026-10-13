@@ -5,7 +5,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { HostSessionRuntimeHookRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
 import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
-import { createNativeAgentRuntimeSessionPlan } from './nativeAgentSession';
+import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan } from './nativeAgentSession.testkit';
 import { createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
 
 async function openSession(binding?: SessionTeamCredentialBindingIntentV1, connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']> = [], runtimeAuth?: AgentSessionRuntime['runtimeAuth']) {

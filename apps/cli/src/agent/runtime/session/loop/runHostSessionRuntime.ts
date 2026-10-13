@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
-import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { formatProcessOwnerTag, PROCESS_OWNER_ENV_KEY } from '@/processes/ownerTag';
@@ -114,7 +114,7 @@ import { resolvePermissionModeSeedForAgentStart } from '@/settings/permissions/p
 import {
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
-  readActiveAccountRoleOverrides,
+  readAccountRoleOverridesFromSnapshot,
   subscribeActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { prepareActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
@@ -122,6 +122,15 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
+import { projectMcpToolLaunchPolicies } from '@/mcp/runtime/projectMcpToolLaunchPolicy';
+import type { McpServerIdentity } from '@/mcp/runtime/assignMcpWireNames';
+import type { McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import { resolveRunnerSkills, type RunnerSkillsResult } from '@/prompts/skills/runtime/resolveRunnerSkills';
+import { readAppliedSessionSkillDelivery } from '@/prompts/skills/runtime/reapplySessionSkills';
+import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
+import { publishRunnerSkillNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
@@ -186,6 +195,8 @@ import { resolveInitialHostSessionModelSelection } from '@/agent/runtime/session
 import { createSessionRuntimeModelsPublisher } from '@/agent/runtime/controls/sessionRuntimeModelsPublisher';
 import { createSessionRuntimeModesPublisher } from '@/agent/runtime/controls/sessionRuntimeModesPublisher';
 import type { RuntimeTurnOperations } from '@/agent/runtime/turns/runtimeTurnOperations';
+import type { HostCurrentSessionPresentationService } from '@/agent/runtime/state/currentSessionUiTypes';
+import { createCurrentSessionPresentationHost, type CurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import {
   createInitialHostRuntimeActivityMutation,
   createHostRuntimeActivityProjection,
@@ -499,6 +510,7 @@ export type HostSessionRuntimeHookRuntime = Readonly<{
   >;
   getSessionId?: () => string | null;
   refreshGoal?: SessionRuntimeControls['refreshGoal'];
+  refreshSkills?: AgentSessionRuntime['refreshSkills'];
   setGoal?: SessionRuntimeControls['setGoal'];
   clearGoal?: SessionRuntimeControls['clearGoal'];
   listVendorPlugins?: SessionRuntimeControls['listVendorPlugins'];
@@ -525,9 +537,17 @@ export type HostSessionRuntimeFactoryParams = Readonly<{
   agentTargetKey: string;
   session: ApiSessionClient;
   transcriptSession: TranscriptSessionPort;
+  /** The logical Session's presentation survives native runtime replacement. */
+  currentSessionPresentation: () => HostCurrentSessionPresentationService;
   messageQueue?: MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
   messageBuffer: MessageBuffer;
   mcpServers: Record<string, McpServerConfig>;
+  mcpToolPolicy?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['mcpToolPolicy'];
+  mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
+  resolvedMcpServers?: readonly import('@/mcp/runtimeTypes').ResolvedSessionMcpServer[];
+  getMcpToolContext?: () => McpToolPolicyContext | null;
+  resolveMcpToolPolicy?: (permissionMode: string) => import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['mcpToolPolicy'];
+  skills?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['skills'];
   accountSettings?: AccountSettings | null;
   resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
   /** Explicit scope for Account-settings consumers; Session scope is fail-closed. */
@@ -801,8 +821,11 @@ export type HostSessionRuntimeConfig = {
   agentMessageType: ACPProvider;
   providerSessionMetadataKey?: string | null;
   checkpointToolProtocol?: RuntimeCheckpointToolProtocolV1;
-  mcpBindingIdentities?: Readonly<Record<string, import('@happier-dev/protocol/usage/coach/usageMcpBindingUsage').UsageMcpBindingIdentity>>;
+  mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
   runtimeActivityApplicability: RuntimeActivityApplicability;
+  /** Reads the acknowledged current delivery, including live reload and refusal. */
+  readSkillDelivery?: () => import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionSkillDelivery | undefined;
+  skillUsageAccount?: import('@/prompts/skills/store/skillUsage').SkillUsageAccount;
   /** Scoped source DEKs for restricted runtimes; ordinary runtimes omit this. */
   sessionFollowSourceMaterialResolver?: SessionFollowSourceMaterialController | null;
   hostContextOnlyInput?: HostContextOnlyInputPort;
@@ -841,6 +864,7 @@ export type HostSessionRuntimeConfig = {
   runtimeActionSettingsProvider?: RuntimeActionSettingsProvider;
   /** Exact caller-owned executable registry for daemonless scoped runtimes. */
   pluginRuntimeRegistryLease?: PluginRuntimeRegistryLease;
+  pluginMcpRuntimeRegistry?: PluginRuntimeRegistryLease['registry'];
   /** Reviewed activation-local MCP material already resolved by the canonical owner. */
   resolvedMcpServers?: Record<string, McpServerConfig>;
   /** Explicit host Action/MCP authority; absent for ordinary Account runtimes. */
@@ -976,6 +1000,7 @@ export async function runHostSessionRuntime(
   };
   recordStartupPhase('entered');
   const startupRegistrationLifetime = new AbortController();
+  let currentSessionPresentationHost: CurrentSessionPresentationHost | null = null;
   let runtimeStopRequested = false;
   let runtimeStopDelegate: (() => Promise<void>) | null = null;
   let runtimeStopDispatchPromise: Promise<void> | null = null;
@@ -1155,10 +1180,13 @@ export async function runHostSessionRuntime(
   let initialPermissionMode: PermissionMode;
   let permissionHandler: ProviderEnforcedPermissionHandler;
   let abortRequestedCallback: (() => void | Promise<void>) | null = null;
+  let readHostTurnAbortSignal: (() => AbortSignal) | undefined;
   let currentControlRpcRegistrar: ReturnType<typeof createSwapAwareRpcHandlerRegistrar> | null = null;
   let rebindPermissionModeQueueSession: ((session: ApiSessionClient) => void) | null = null;
   let pendingPermissionModeQueueSessionSwap: ApiSessionClient | null = null;
   let runtimeForInFlightSteer: HostSessionRuntimeHookRuntime | null = null;
+  let readMcpToolContext: () => McpToolPolicyContext | null = () => null;
+  let applyMcpAccountPolicyUpdate: (() => void) | null = null;
   let runtimeForSessionRollback: HostSessionRuntimeHookRuntime | null = null;
   let runtimeActivityProjection: HostRuntimeActivityProjection | null = null;
   let agentRuntimeActivityBinding: ReturnType<HostRuntimeActivityProjection['bindAgentRuntime']> | null = null;
@@ -1325,7 +1353,11 @@ export async function runHostSessionRuntime(
       }
     }
     await newSession.activateDurableMutationDelivery();
+    if (previousSession && previousSession.sessionId !== newSession.sessionId) {
+      currentSessionPresentationHost?.retire();
+    }
     session = newSession;
+    currentSessionPresentationHost?.bindCurrentSession();
     process.env[PROCESS_OWNER_ENV_KEY] = formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir,
       owner: { kind: 'session', sessionId: newSession.sessionId } });
     if (previousSession && previousSession !== newSession) {
@@ -1411,11 +1443,7 @@ export async function runHostSessionRuntime(
   const permissionModeSeed = resolvePermissionModeSeedForAgentStart({
     agentId: policyAgentId,
     backendTarget: runtimeOpts.backendTarget
-      ? convertBackendTargetRefV2ToV1(
-          runtimeOpts.backendTarget.kind === 'agent'
-            ? { kind: 'backend', backendId: policyAgentId, sourceKind: 'built_in' }
-            : runtimeOpts.backendTarget,
-        )
+      ? convertBackendTargetRefV2ToV1(readBackendTargetRefV2(runtimeOpts.backendTarget))
       : undefined,
     explicitPermissionMode: runtimeOpts.permissionMode,
     accountSettings,
@@ -1560,6 +1588,7 @@ export async function runHostSessionRuntime(
 
     const initializedSession = await initializeBackendRunSessionFn({
       api: runtimeSessionApi,
+      credentials: runtimeOpts.credentials,
       sessionTag,
       ...(runtimeOpts.initialAccess !== undefined ? { initialAccess: runtimeOpts.initialAccess } : {}),
       ...(runtimeOpts.primaryTeamId !== undefined ? { primaryTeamId: runtimeOpts.primaryTeamId } : {}),
@@ -1620,26 +1649,6 @@ export async function runHostSessionRuntime(
     owner: { kind: 'session', sessionId: session.sessionId } });
   const startupCustody = await joinCurrentWindowsSessionProcessCustody();
   if (startupCustody?.state === 'unavailable') logger.debug('[session] Windows process custody unavailable');
-
-  // Daemon launches already captured this policy in their admitted environment.
-  // A manual launch reads opened Machine metadata once before starting its Agent.
-  if (runtimeOpts.startedBy !== 'daemon' && runtimeAuthority.scope === 'account') {
-    const initialPolicySession = session;
-    const policy = await readMachineResourcesPolicySnapshot({
-      machineId,
-      readMachine: async () => (await ApiClient.create(runtimeAuthority.accountCredentials)).getMachine(machineId),
-      isCurrent: () => session === initialPolicySession,
-    });
-    Object.assign(process.env, buildToolIdleTimeoutEnvironmentOverlay({
-      environment: buildScopedProcessEnv({
-        baseEnv: process.env,
-        explicitEnv: runtimeOpts.environmentVariables,
-        unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
-      }),
-      policy,
-      unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
-    }));
-  }
 
   let claimedSessionForAuthorityPreparation: ApiSessionClient | null = null;
   let claimedSessionAuthorityPreparation:
@@ -1838,17 +1847,6 @@ export async function runHostSessionRuntime(
       await preparation;
     }
     if (await terminalizeBeforeAgentAdmission()) return;
-    if (pendingSessionInitializedHook) {
-      await config.lifecycleHooks?.onSessionInitialized?.({
-        session,
-        opts: runtimeOpts,
-        metadata: runtimeContextMetadataFallback(metadata, session),
-        attachedToExistingSession:
-          pendingSessionInitializedHook.attachedToExistingSession,
-        machineId,
-      });
-      pendingSessionInitializedHook = null;
-    }
     recordStartupPhase('session_custody');
   currentControlRpcRegistrar = createSwapAwareRpcHandlerRegistrar(() => session.rpcHandlerManager);
   runtimeActivityProjection = createHostRuntimeActivityProjection({
@@ -1870,6 +1868,75 @@ export async function runHostSessionRuntime(
     );
   });
   const currentLifecycleSession = createCurrentSessionClient(() => session, currentControlRpcRegistrar.registrar);
+  const presentationHost = createCurrentSessionPresentationHost({
+    session: currentLifecycleSession,
+    signal: startupRegistrationLifetime.signal,
+  });
+  currentSessionPresentationHost = presentationHost;
+  // Home, credentials and Account lifetime come from the admitted Session once.
+  // Finite material reads may refresh their snapshot without selecting another Home or Account.
+  const sessionOpenContext = {
+    home: session.getServerBinding(),
+    credentials: runtimeAuthority.accountCredentials,
+    scopeKey: runtimeAuthority.accountCredentials
+      ? runtimeOpts.accountSettingsContext?.scopeKey ?? resolveAccountSettingsScopeKey(runtimeAuthority.accountCredentials)
+      : null,
+    lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+  };
+  const isSessionOpenAccountCurrent = () => sessionOpenContext.scopeKey !== null
+    && getActiveAccountSettingsSnapshot()?.scopeKey === sessionOpenContext.scopeKey
+    && getActiveAccountSettingsSnapshotLifetimeToken() === sessionOpenContext.lifetimeToken;
+  let capturedOpenAccountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot> = null;
+  let capturedOpenAccountOperation: SavedSecretOperationContextV1 | undefined;
+  const readSessionOpenAccountOperation = (): SavedSecretOperationContextV1 | undefined => {
+    const snapshot = getActiveAccountSettingsSnapshot();
+    if (!sessionOpenContext.credentials) return undefined;
+    if (!snapshot || !isSessionOpenAccountCurrent()) {
+      // Once this open admitted Account material, a later consumer cannot fall
+      // back to ambient state and capture the replacement lifetime as its own.
+      if (capturedOpenAccountOperation) throw Object.assign(new Error('context_source_unavailable'), {
+        code: 'context_source_unavailable', reason: 'scope-retired',
+      });
+      return undefined;
+    }
+    if (snapshot !== capturedOpenAccountSnapshot) {
+      capturedOpenAccountSnapshot = snapshot;
+      capturedOpenAccountOperation = runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () =>
+        createInvocationSavedSecretOperationContextV1({ credentials: sessionOpenContext.credentials!, snapshot,
+          serverHttpBaseUrl: sessionOpenContext.home.serverUrl, isCurrent: async () => isSessionOpenAccountCurrent() }));
+    }
+    return capturedOpenAccountOperation;
+  };
+  // Daemon launches already captured this policy in their admitted environment.
+  // Manual/deferred launches read it only after the real Session supplies its Home.
+  if (runtimeOpts.startedBy !== 'daemon' && runtimeAuthority.scope === 'account') {
+    const initialPolicySession = session;
+    const policy = await readMachineResourcesPolicySnapshot({
+      machineId,
+      readMachine: async () => runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl,
+        async () => (await ApiClient.create(runtimeAuthority.accountCredentials)).getMachine(machineId)),
+      isCurrent: () => session === initialPolicySession,
+    });
+    Object.assign(process.env, buildToolIdleTimeoutEnvironmentOverlay({
+      environment: buildScopedProcessEnv({
+        baseEnv: process.env,
+        explicitEnv: runtimeOpts.environmentVariables,
+        unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
+      }),
+      policy,
+      unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
+    }));
+  }
+  if (pendingSessionInitializedHook) {
+    await config.lifecycleHooks?.onSessionInitialized?.({
+      session,
+      opts: runtimeOpts,
+      metadata: runtimeContextMetadataFallback(metadata, session),
+      attachedToExistingSession: pendingSessionInitializedHook.attachedToExistingSession,
+      machineId,
+    });
+    pendingSessionInitializedHook = null;
+  }
   const accountCredentials = runtimeAuthority.accountCredentials;
   const workflowAccountId = accountCredentials ? readAccountIdFromToken(accountCredentials.token) : null;
   let currentWorkflowInput: Readonly<{ sessionId: string; port: HostContextOnlyInputPort }> | undefined;
@@ -2032,16 +2099,15 @@ export async function runHostSessionRuntime(
     ? 'rich_sender'
     : 'home_required';
   session.setOwnerActivityDelivery?.(ownerActivityDelivery);
-  const roleAccountScopeKey = runtimeOpts.accountSettingsContext?.scopeKey;
-  const roleAccountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+  const roleAccountScopeKey = sessionOpenContext.scopeKey;
+  const roleAccountLifetimeToken = sessionOpenContext.lifetimeToken;
   const readRoleAccountSnapshot = () => {
     if (runtimeAuthority.scope !== 'account') return null;
-    const current = getActiveAccountSettingsSnapshot();
-    return current && roleAccountScopeKey && current.scopeKey === roleAccountScopeKey
-      && getActiveAccountSettingsSnapshotLifetimeToken() === roleAccountLifetimeToken ? current : null;
+    return readSessionOpenAccountOperation()?.readSnapshot() ?? null;
   };
   const readRoleSources = createRoleSourceReader(runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials
-    ? { artifactStore: createCredentialedAccountArtifactStore(runtimeAuthority.accountCredentials),
+    ? { artifactStore: runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl,
+          () => createCredentialedAccountArtifactStore(runtimeAuthority.accountCredentials!)),
         accountId: readAccountIdFromToken(runtimeAuthority.accountCredentials.token) ?? undefined,
         readRawAccountSettings: async () => {
           const current = readRoleAccountSnapshot();
@@ -2054,14 +2120,18 @@ export async function runHostSessionRuntime(
   const sessionRoleContext = createSessionRoleContext({
     readMetadata: () => currentLifecycleSession.getMetadataSnapshot?.() ?? runtimeMetadata,
     readRoleSources,
-    readAccountRoleOverrides: () => runtimeAuthority.scope !== 'account'
-      ? { status: 'ready', overrides: {} }
-      : roleAccountScopeKey ? readActiveAccountRoleOverrides({ scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken })
-        : { status: 'unavailable', reason: 'source-unavailable' },
+    readAccountRoleOverrides: () => {
+      if (runtimeAuthority.scope !== 'account') return { status: 'ready', overrides: {} };
+      const snapshot = readRoleAccountSnapshot();
+      return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+        : { status: 'unavailable', reason: 'source-unavailable' };
+    },
     prepareAccountRoleOverrides: async (signal) => {
       if (runtimeAuthority.scope === 'account' && roleAccountScopeKey && runtimeAuthority.accountCredentials) {
-        await prepareActiveAccountRoleOverrides({ credentials: runtimeAuthority.accountCredentials,
-          scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken, signal });
+        await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () =>
+          prepareActiveAccountRoleOverrides({ credentials: runtimeAuthority.accountCredentials!,
+            scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken,
+            operationContext: readSessionOpenAccountOperation(), signal }));
       }
     },
     readDefaultEngine: () => ({ agentTargetKey: modelTargetKey }),
@@ -2087,6 +2157,7 @@ export async function runHostSessionRuntime(
     getAccountSettings: () => runtimeOpts.accountSettingsContext?.settings ?? null,
     getCodingPromptBehavior: () => resolveFreshSessionSystemPrompt?.readCodingPromptBehavior?.() ?? null,
     getWorkspaceWrites: sessionRoleContext.readWorkspaceWrites,
+    getMcpToolContext: () => readMcpToolContext(),
     getAccountSettingsSecretsReadKeys: () => runtimeOpts.accountSettingsContext?.settingsSecretsReadKeys ?? [],
     onAbortRequested: () => abortRequestedCallback?.(),
     toolTrace: config.resolvePermissionToolTrace?.({
@@ -2443,6 +2514,7 @@ export async function runHostSessionRuntime(
   const unsubscribePendingQueueDeliveryTiming = runtimeAuthority.scope === 'session'
     ? () => undefined
     : subscribeActiveAccountSettingsSnapshot(() => {
+      applyMcpAccountPolicyUpdate?.();
       const nextPendingQueueDeliveryTiming = readPendingQueueDeliveryTiming();
       const broadenedEligibility = lastPendingQueueDeliveryTiming === 'after_runtime_idle'
         && nextPendingQueueDeliveryTiming === 'after_foreground_ready';
@@ -2474,35 +2546,41 @@ export async function runHostSessionRuntime(
     config.pluginRuntimeRegistryLease?.registry.contributes,
   );
   const receivesUserMcpServers = agentReceivesUserMcpServersV1(agentToolsDelivery);
-  const mcpAccountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-  const mcpAccountScopeKey = runtimeAuthority.accountCredentials ? resolveAccountSettingsScopeKey(runtimeAuthority.accountCredentials) : null;
+  const mcpToolControl = (config.pluginRuntimeRegistryLease?.registry.contributes ?? readAgentCatalogSnapshot()).catalogEntriesById[policyAgentId]?.mcpToolControl;
+  const mcpAccountLifetimeToken = sessionOpenContext.lifetimeToken;
+  const mcpAccountScopeKey = sessionOpenContext.scopeKey;
   const resolveMcpAccountSettingsSnapshot: NonNullable<HostSessionRuntimeFactoryParams['resolveAccountSettingsSnapshot']> = async input => {
     if (effectiveRunnerMcpAccountSettings === null || !runtimeAuthority.accountCredentials || !mcpAccountScopeKey) return null;
-    const current = () => getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
-      && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken;
+    const current = isSessionOpenAccountCurrent;
     if (!current()) return null;
-    await prepareActiveMcpServerCatalog({ credentials: runtimeAuthority.accountCredentials, scopeKey: mcpAccountScopeKey,
-      lifetimeToken: mcpAccountLifetimeToken, signal: input?.signal });
+    await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () =>
+      prepareActiveMcpServerCatalog({ credentials: runtimeAuthority.accountCredentials!, scopeKey: mcpAccountScopeKey,
+        lifetimeToken: mcpAccountLifetimeToken, signal: input?.signal }));
     if (input?.savedSecretReferences?.length) {
       const snapshot = getActiveAccountSettingsSnapshot();
       if (!current() || !snapshot) return null;
-      const serverHttpBaseUrl = session.getServerBinding().serverUrl;
+      const serverHttpBaseUrl = sessionOpenContext.home.serverUrl;
       return await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
-        const operationContext = createInvocationSavedSecretOperationContextV1({
-          credentials: runtimeAuthority.accountCredentials!, snapshot, serverHttpBaseUrl, isCurrent: async () => current(),
-        });
+        const operationContext = readSessionOpenAccountOperation();
+        if (!operationContext) return null;
         const admitted = await refreshSavedSecretCatalogForOperation({ expectedScopeKey: mcpAccountScopeKey,
           references: input.savedSecretReferences, operationContext, signal: input.signal });
         return current() ? admitted : null;
       });
     }
-    return current() ? getActiveAccountSettingsSnapshot() : null;
+    return current() ? readSessionOpenAccountOperation()?.readSnapshot() ?? null : null;
   };
   const activeRunnerMcpAccountSnapshot = receivesUserMcpServers ? await resolveMcpAccountSettingsSnapshot() : null;
   const runnerMcpSavedSecretResources = activeRunnerMcpAccountSnapshot?.savedSecretResources;
+  let runnerSkills: RunnerSkillsResult | null = null;
   let activeAgentCompositionToolSelection: AgentCompositionToolSelection | null = null;
   const runnerMcpSession = applyRunnerMcpSessionContext(currentLifecycleSession, {
+    getCurrentSessionSkillItems: () => runnerSkills && !runnerSkills.unavailable
+      ? runnerSkills.plan.items.filter(item => item.state === 'delivered')
+        .map(({ skillId, name, digest }) => ({ skillId, name, digest }))
+      : null,
     getCurrentResolvedRoles: sessionRoleContext.readResolvedRoles,
+    getPluginMcpRuntimeRegistry: () => config.pluginMcpRuntimeRegistry ?? config.pluginRuntimeRegistryLease?.registry ?? null,
     readRoleSources,
     getCurrentWorkspaceWrites: sessionRoleContext.readWorkspaceWrites,
     prepareWorkspaceWritesPolicy,
@@ -2522,10 +2600,9 @@ export async function runHostSessionRuntime(
     },
     getActiveTurnAdmissionWitness: () => runtimeForInFlightSteer?.readActiveTurnAdmissionWitness?.() ?? null,
     getRuntimeLifetimeSignal: () => runtimeForInFlightSteer?.getRuntimeLifetimeSignal?.() ?? null,
+    getHostTurnAbortSignal: () => readHostTurnAbortSignal?.() ?? null,
     getBackendTarget: () => runtimeOpts.backendTarget
-      ? runtimeOpts.backendTarget.kind === 'agent'
-        ? { kind: 'backend', backendId: policyAgentId, sourceKind: 'built_in' }
-        : runtimeOpts.backendTarget
+      ? readBackendTargetRefV2(runtimeOpts.backendTarget)
       : null,
     getCurrentSessionLocation: () => ({
       path: runtimeDirectory,
@@ -2557,13 +2634,14 @@ export async function runHostSessionRuntime(
     });
   }
   currentLifecycleSession.bindMcpRequestAuthPort(daemonTurnContributionsBridge?.mcpRequestAuth);
-  const { happierMcpServer, mcpServers, mcpBindingIdentities } = receivesUserMcpServers
-    ? await resolveRunnerMcpServersFn({
+  const { happierMcpServer, mcpServers, mcpServerIdentities, mcpToolPolicy, resolvedServers } = receivesUserMcpServers
+    ? await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () => resolveRunnerMcpServersFn({
       session: runnerMcpSession,
       credentials: runtimeAuthority.sessionCredentials,
       accountCredentials: runtimeAuthority.accountCredentials,
       accountSettings: effectiveRunnerMcpAccountSettings,
       accountSettingsSnapshot: activeRunnerMcpAccountSnapshot,
+      operationContext: readSessionOpenAccountOperation(),
       ...(config.runtimeActionSettingsProvider
         ? { actionsSettingsProvider: config.runtimeActionSettingsProvider }
         : {}),
@@ -2577,12 +2655,53 @@ export async function runHostSessionRuntime(
       directory: runtimeDirectory,
       agentId: policyAgentId,
       agentAcceptsUserMcp: receivesUserMcpServers,
+      mcpToolControl,
+      mcpPermissionHandler: permissionHandler,
       includeHappierMcpServer: agentToolsDelivery === 'native_mcp',
       sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,
       ...(config.resolvedMcpServers ? { resolvedMcpServers: config.resolvedMcpServers } : {}),
-    })
-    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpBindingIdentities: undefined };
+    }))
+    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpServerIdentities: undefined, mcpToolPolicy: undefined, resolvedServers: undefined };
+  readMcpToolContext = () => ({ mcpServerIdentities: mcpServerIdentities ?? {},
+    catalog: mcpAccountScopeKey && getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
+      && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken
+      ? getActiveAccountSettingsSnapshot()?.mcpServerCatalog ?? null : null });
+  const resolveMcpToolPolicy = (mode: string) => {
+    const context = readMcpToolContext();
+    const catalog = context?.catalog;
+    return projectMcpToolLaunchPolicies({ mcpServerIdentities: context?.mcpServerIdentities ?? {},
+      catalog: catalog?.status === 'ready' && catalog.authority === 'active' ? catalog.catalog : { v: 1, servers: [], bindings: [] },
+      control: mcpToolControl, permissionMode: parseAgentPermissionIntentV1Alias(mode) ?? 'default' });
+  };
+  let lastMcpToolPolicy = mcpToolPolicy;
+  applyMcpAccountPolicyUpdate = () => {
+    if (mcpToolControl?.approval !== 'native' || !runtimeForInFlightSteer) return;
+    const next = resolveMcpToolPolicy(permissionModeState.getCurrentPermissionMode() ?? initialPermissionMode);
+    if (JSON.stringify(next) === JSON.stringify(lastMcpToolPolicy)) return;
+    lastMcpToolPolicy = next;
+    void runtimeForInFlightSteer.updateSessionRuntimeConfig({ mcpToolPolicy: next }).then(outcome => {
+      if (outcome.status !== 'applied') logger.warn('[HOST RUNTIME] MCP tool policy configuration update was not applied');
+    }).catch(() => {
+      logger.warn('[HOST RUNTIME] MCP tool policy configuration update failed');
+    });
+  };
   mcpServerForConstructionCleanup = happierMcpServer;
+  if (runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials) {
+    const accountSnapshot = getActiveAccountSettingsSnapshot();
+    runnerSkills = await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () => resolveRunnerSkills({
+      ownerKey: currentLifecycleSession.sessionId,
+      agentId: policyAgentId, machineId, directory: runtimeDirectory,
+      sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,
+      credentials: runtimeAuthority.accountCredentials,
+      accountSnapshot: accountSnapshot?.scopeKey === mcpAccountScopeKey ? accountSnapshot : null,
+      operationContext: readSessionOpenAccountOperation(),
+      contributes: config.pluginRuntimeRegistryLease?.registry.contributes,
+      agentHasActionChannel: agentToolsDelivery !== 'unsupported',
+      isCurrent: () => getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
+        && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken,
+    }));
+    await publishRunnerSkillNotice(currentLifecycleSession, runnerSkills);
+  }
   recordStartupPhase('mcp_preparation');
   const memoryRecallGuidanceEnabled = await resolveCliMemoryRecallGuidanceEnabled();
   const messageBuffer = new MessageBuffer();
@@ -2651,10 +2770,13 @@ export async function runHostSessionRuntime(
   }
   resolveFreshSessionSystemPrompt = createSessionPromptPlanResolver({
     opts: runtimeOpts, session: currentLifecycleSession, agentId: policyAgentId,
+    serverId: sessionOpenContext.home.serverId,
     machineId, directory: runtimeDirectory, memoryRecallGuidanceEnabled,
     readNativeSessionId: () => runtimeForInFlightSteer?.readSessionIdentity().sessionId ?? null,
     resolveRoleContext: resolveSessionRolePromptContext,
     daemonBridge: daemonTurnContributionsBridge,
+    readSessionSkills: () => runnerSkills,
+    readOperationContext: readSessionOpenAccountOperation,
   });
   const sessionRuntimeParams: HostSessionRuntimeFactoryParams = {
     directory: runtimeDirectory,
@@ -2669,9 +2791,20 @@ export async function runHostSessionRuntime(
     agentTargetKey: modelTargetKey,
     session: currentLifecycleSession,
     transcriptSession,
+    currentSessionPresentation: presentationHost.bindCurrentSession,
     messageQueue,
     messageBuffer,
     mcpServers,
+    mcpServerIdentities,
+    resolvedMcpServers: resolvedServers,
+    mcpToolPolicy,
+    getMcpToolContext: () => readMcpToolContext(),
+    ...(mcpToolControl?.approval === 'native' ? { resolveMcpToolPolicy: (mode: string) => {
+      const next = resolveMcpToolPolicy(mode);
+      lastMcpToolPolicy = next;
+      return next;
+    } } : {}),
+    ...(runnerSkills?.delivery ? { skills: runnerSkills.delivery } : {}),
     accountSettings: runnerMcpAccountSettings,
     resolveAccountSettingsSnapshot: resolveMcpAccountSettingsSnapshot,
     accountSettingsAuthority: runtimeAuthority.scope,
@@ -2741,10 +2874,14 @@ export async function runHostSessionRuntime(
     nativeRuntime,
     terminalRemoteModeLoop: initialTerminalRemoteModeLoop,
     admittedProviderBindingHandoff,
+    skillsDelivered,
   } = resolveHostSessionRuntimeFactoryResult(createdRuntime);
   let terminalRemoteModeLoop = initialTerminalRemoteModeLoop;
   let presentationOwnsCurrentTerminalDisplay = false;
   const hookRuntime = (nativeRuntime ?? runtime) as HostSessionRuntimeHookRuntime;
+  if (skillsDelivered === false && runnerSkills?.delivery) {
+    await publishRunnerSkillNotice(currentLifecycleSession, runnerSkills, false);
+  }
   constructedRuntimeForConstructionCleanup = hookRuntime;
   const parentRegistrationStartedAt = performance.now();
   // The accepted native open already admits ordinary input. Registration is
@@ -3128,6 +3265,7 @@ export async function runHostSessionRuntime(
     },
   );
   runtimeForInFlightSteer = hookRuntime;
+  applyMcpAccountPolicyUpdate?.();
   bindAgentRuntimeActivityProducer(hookRuntime, session.sessionId);
 
   const completeClaimedSessionAuthorityPreparation = async (
@@ -3347,12 +3485,17 @@ export async function runHostSessionRuntime(
     },
   });
   runtimeForSessionRollback = nativeRuntime;
+  const capabilitySelectionAgentFacts = await resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
+    metadata: { runtimeDescriptorV1: nativeRuntime?.runtimeDescriptorV1 ?? runtimeOpts.runtimeDescriptorV1 }, sessionRunning: true });
   const unsubscribeRuntimePublication = subscribeSessionRuntimePublicationToMetadata({
     session: currentLifecycleSession,
     sessionState: sessionStateBridge.engine,
     runtime,
     providerSessionMetadataKey: config.providerSessionMetadataKey,
     publishOwnerMetadata: currentLifecycleSession.hasOwnerMetadataAuthority(),
+    capabilitySelection: capabilitySelectionAgentFacts,
+    resolveCapabilitySelectionForDescriptor: descriptor => resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
+      metadata: { runtimeDescriptorV1: descriptor }, sessionRunning: true }),
   });
   if (nativeRuntime) {
     const runtimeAuthControl = nativeRuntime.runtimeAuth;
@@ -3468,6 +3611,11 @@ export async function runHostSessionRuntime(
       ...(typeof nativeRuntime.clearGoal === 'function' ? { clearGoal: nativeRuntime.clearGoal.bind(nativeRuntime) } : {}),
       ...(typeof nativeRuntime.listVendorPlugins === 'function' ? { listVendorPlugins: nativeRuntime.listVendorPlugins.bind(nativeRuntime) } : {}),
       ...(typeof nativeRuntime.listSkills === 'function' ? { listSkills: nativeRuntime.listSkills.bind(nativeRuntime) } : {}),
+      readSkillDelivery: () => readAppliedSessionSkillDelivery({
+        current: runnerSkills,
+        initialDelivery: sessionRuntimeParams.skills,
+        skillsDelivered,
+      }),
       ...(typeof nativeRuntime.startInlineReview === 'function' ? { startInlineReview: nativeRuntime.startInlineReview.bind(nativeRuntime) } : {}),
       ...(typeof nativeRuntime.invalidateConnectedServiceAuthTransports === 'function'
         ? { invalidateConnectedServiceAuthTransports: nativeRuntime.invalidateConnectedServiceAuthTransports.bind(nativeRuntime) }
@@ -3559,7 +3707,14 @@ export async function runHostSessionRuntime(
       opts: runtimeOpts,
       config: {
         ...config,
-        mcpBindingIdentities,
+        mcpServerIdentities,
+        readSkillDelivery: () => readAppliedSessionSkillDelivery({ current: runnerSkills,
+          initialDelivery: sessionRuntimeParams.skills, skillsDelivered }),
+        skillUsageAccount: runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials
+          && readAccountIdFromToken(runtimeAuthority.accountCredentials.token)
+          ? { accountId: readAccountIdFromToken(runtimeAuthority.accountCredentials.token)!,
+              serverHttpBaseUrl: currentLifecycleSession.getServerBinding().serverUrl }
+          : undefined,
         ...(presentationOwnsCurrentTerminalDisplay ? { shouldRenderTerminalDisplay: () => false } : {}),
         onRuntimeStopReady: (stop) => {
           runtimeStopDelegate = stop;
@@ -3579,6 +3734,26 @@ export async function runHostSessionRuntime(
       runtime,
       hookRuntime,
       terminalRemoteModeLoop,
+      capabilitySelection: {
+        agent: capabilitySelectionAgentFacts,
+        ...(runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials ? { skillsRunner: {
+          readInput: () => ({
+            ownerKey: currentLifecycleSession.sessionId, agentId: policyAgentId, machineId, directory: runtimeDirectory,
+            sessionMetadata: currentLifecycleSession.getMetadataSnapshot(), credentials: runtimeAuthority.accountCredentials,
+            accountSnapshot: readSessionOpenAccountOperation()?.readSnapshot() ?? null,
+            operationContext: readSessionOpenAccountOperation(),
+            contributes: config.pluginRuntimeRegistryLease?.registry.contributes, agentHasActionChannel: agentToolsDelivery !== 'unsupported',
+            isCurrent: () => getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
+              && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken,
+          }),
+          runtime: nativeRuntime,
+          onApplied: (result: RunnerSkillsResult) => {
+            runnerSkills = result;
+            void publishRunnerSkillNotice(currentLifecycleSession, result).catch(error =>
+              logger.debug('[HOST RUNTIME] Skill notice publication failed', { error: String(error) }));
+          },
+        } } : {}),
+      },
       messageBuffer,
       permissionHandler,
       permissionModeState: runtimePermissionModeState,
@@ -3605,8 +3780,9 @@ export async function runHostSessionRuntime(
       resolveSessionRolePromptContext,
       resolveFreshSessionSystemPrompt,
       prepareSessionRolePromptPolicy,
-      setAbortRequestedCallback: (callback) => {
+      setAbortRequestedCallback: (callback, readSignal) => {
         abortRequestedCallback = callback;
+        readHostTurnAbortSignal = readSignal;
       },
       transitionModelSelection: async (
         selection,
@@ -3685,15 +3861,17 @@ export async function runHostSessionRuntime(
     if (runtimeStopRequested) rejectRuntimeStop(error);
     if (!lifecycleOwnsConstructionResources) {
       if (hostOwnsSessionConstructionCleanup) {
-        if (!runtimeStopRequested && (error instanceof DaemonPluginToolCatalogUnavailableError
-          || error instanceof PromptStackPreparationError)) {
+        const startupIssue = !runtimeStopRequested ? classifyPrimarySessionRuntimeIssue({
+          cause: 'session_error', error, provider: policyAgentId,
+        }) : null;
+        if (startupIssue && (error instanceof DaemonPluginToolCatalogUnavailableError
+          || error instanceof PromptStackPreparationError
+          || startupIssue.code === 'preparation_pending' && startupIssue.source === 'dependency_failure')) {
           // Required preparation resolves after Session custody, before the live loop owns a
           // turn lifecycle. Publish through that same canonical owner before
           // releasing durable delivery; an unavailable prerequisite is not idle.
           await createSessionTurnLifecycle({ session, agentId: policyAgentId }).failTurn({
-            issue: classifyPrimarySessionRuntimeIssue({
-              cause: 'session_error', error, provider: policyAgentId,
-            }),
+            issue: startupIssue,
             allocateWhenIdle: true,
           });
         }

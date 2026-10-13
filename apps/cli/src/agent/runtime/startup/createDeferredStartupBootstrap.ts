@@ -242,6 +242,7 @@ export async function createDeferredStartupBootstrap(params: Readonly<{
             const initializedSession = await awaitStartupAbortable(
                 initializeBackendRunSessionFn({
                     api: runtimeSessionApi,
+                    credentials: params.credentials,
                     sessionTag: params.sessionTag,
                     metadata: initializedSessionMetadata.metadata,
                     state: initializedSessionMetadata.state,

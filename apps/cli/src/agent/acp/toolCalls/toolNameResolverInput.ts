@@ -21,8 +21,8 @@ export function buildAcpToolNameResolverInput(input: unknown, title: unknown): R
     const existingAcp: Readonly<Record<string, unknown>> = isRecord(next._acp)
         ? next._acp
         : Object.freeze({});
-    if (typeof existingAcp.title !== 'string' || existingAcp.title.trim().length === 0) {
-        next._acp = Object.freeze({ ...existingAcp, title: normalizedTitle });
-    }
+    // The observed tool-call title belongs to the transport, while a similarly named
+    // field inside rawInput is an operand and cannot replace permission identity.
+    next._acp = Object.freeze({ ...existingAcp, title: normalizedTitle });
     return Object.freeze(next);
 }

@@ -23,12 +23,14 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { PluginServices } from '@happier-dev/plugin-sdk';
 import type { WorkStateService } from '@happier-dev/plugin-sdk/sessions/work-state';
+import { randomUUID } from 'node:crypto';
 import { createExecutionRunHostBackendFromSessionRuntime } from '@happier-dev/plugin-sdk/host/registration';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 import type { CreateCliExecutionRunBackendParams, EngineResolutionAgent } from '@/agent/runtime/registry/engineRegistryTypes';
 import type { AgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { continueNativeRuntimeAfterFailure, createRecoveringAgentSessionRuntime } from './hostRuntime/recovery';
 import {
     createPluginInteractionsService,
     createPluginInvocationPresentation,
@@ -51,6 +53,7 @@ import { resolveNativeAgentSessionStateSharingPolicy } from '@/agent/runtime/reg
 import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
 import {
     createNativeAgentSessionInteractionOperations,
+    applyNativeAgentConfigurationUpdate,
     resolveNativeAgentSessionNativeHomeService,
     resolveAgentSessionMcpLaunchConfigs,
     toNativeAgentUsageObservation,
@@ -68,10 +71,14 @@ import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invo
 import type { HostCurrentSessionUiServices } from '@/agent/runtime/state/currentSessionUiTypes';
 import { createNativeAgentExecutionRunHostServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
 import type { PluginRuntimeAuthoritySnapshotV1 } from '@/plugins/runtime/lifecycle/activation/runtimeAuthority';
-import { readRuntimeTurnFailureAlreadySurfacedEvent } from '@/agent/runtime/turns/runtimeTurnOperations';
+import {
+    createRuntimeTurnFailureAlreadySurfacedError,
+    readRuntimeTurnFailureAlreadySurfacedEvent,
+} from '@/agent/runtime/turns/runtimeTurnOperations';
 import { resolveStructuredInputProviderDispatchContext } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
 import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { logger } from '@/ui/logger';
+import { publishSkillLaunchNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
 import { createExecutionRunCodedError, readExecutionRunRejectedStartDiagnostic, type ExecutionRunRejectedStartError } from './errors';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
@@ -79,6 +86,15 @@ import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/con
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 import { listSelectedMcpSharedSecretReferences, materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { projectResolvedMcpServers } from '@/mcp/runtime/projectResolvedMcpServers';
+import { readLoadedMcpNativeServerNames } from '@/mcp/runtime/assignMcpWireNames';
+import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProviderMcpServers';
+import type { ResolvedSessionMcpServer } from '@/mcp/runtimeTypes';
+import type { McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { projectMcpToolLaunchPolicies } from '@/mcp/runtime/projectMcpToolLaunchPolicy';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import {
     isWorkflowInteractionCapacityError,
     WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
@@ -97,6 +113,12 @@ type NativeAgentRunUsagePublisher = Readonly<{
 type NativeAgentSessionContextLease = Readonly<{
     context: AgentSessionRuntimeContext;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+    subscribeMcpToolPolicy?: (listener: (policy: NonNullable<AgentSessionOpenRequest['mcpToolPolicy']>) => void) => () => void;
+    skills?: AgentSessionOpenRequest['skills'];
+    observeSkillUse?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'skill-usage' }>) => Promise<void>;
+    skillIndex?: string;
+    capabilityNoticeSession?: Parameters<typeof publishSkillLaunchNotice>[0];
     usagePublisher?: NativeAgentRunUsagePublisher;
     dispose(): Promise<void>;
 }>;
@@ -124,6 +146,9 @@ export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
 type NativeAgentExecutionRunContextLease = Readonly<{
     context: AgentExecutionRunRuntimeContextV1;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+    skills?: AgentSessionOpenRequest['skills'];
+    skillIndex?: string;
     dispose(): Promise<void>;
 }>;
 
@@ -184,7 +209,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
     directory: string;
     machineId: string;
     accountSettings: AccountSettings | null;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
+    resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
     permissionMode: string;
     workspaceWrites?: 'allow' | 'deny';
     start: ExecutionRunBackendStartContext;
@@ -204,16 +229,18 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
     const runId = readRequiredString(params.runId, 'a run id');
     const callId = readRequiredString(params.callId, 'a call id');
     const sidechainId = readRequiredString(params.sidechainId, 'a sidechain id');
+    let readMcpToolContext: () => McpToolPolicyContext | null = () => null;
     const permissionHandler = createExecutionRunPermissionHandler({
         permissionMode: params.permissionMode,
         ...(params.start.allowedTools !== undefined ? { allowedTools: params.start.allowedTools } : {}),
         ...(params.start.unlistedTools !== undefined ? { unlistedTools: params.start.unlistedTools } : {}),
         workspaceWrites: params.workspaceWrites,
         backendId: params.lease.agentId,
+        getMcpToolContext: () => readMcpToolContext(),
         ...(Object.hasOwn(params, 'causalPermissionAuthority')
             ? { causalPermissionAuthority: params.causalPermissionAuthority }
             : {}),
-        publishPendingRequest: async ({ requestId, toolName, toolInput, turnId }) => {
+        publishPendingRequest: async ({ requestId, toolName, toolInput, turnId, mcpTool }) => {
             const requestStore = params.getPermissionRequestStore?.() ?? null;
             if (!requestStore) {
                 throw Object.assign(
@@ -250,6 +277,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                 createdAt: envelope.createdAtMs,
                 source: 'execution_run',
                 ...(turnId ? { turnId } : {}),
+                ...(mcpTool ? { mcpTool } : {}),
                 responseTarget: envelope.responseTarget,
                 sidechainId,
             };
@@ -338,7 +366,11 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
             sourceEnvironment: params.sourceEnvironment ?? {},
         }) : null;
         signal.throwIfAborted();
+        let resolvedRunMcpServers: readonly ResolvedSessionMcpServer[] = [];
+        const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
+        const disposeAttachments = async () => { await Promise.all(pluginAttachments.splice(0).map(attachment => attachment.dispose())); };
         const executionRunServices = createNativeAgentExecutionRunHostServices({
+            readResolvedMcpServers: () => resolvedRunMcpServers,
             signal,
             executionRunId: runId,
             directory: params.directory,
@@ -357,15 +389,22 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         let context: AgentExecutionRunRuntimeContextV1;
         let mcpMaterial: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | null = null;
         let mcpServers: AgentSessionOpenRequest['mcpServers'];
+        let mcpToolPolicy: AgentSessionOpenRequest['mcpToolPolicy'];
         try {
             if (params.capabilitySelection?.mcp && (params.capabilitySelection.mcp.managedServersEnabled || params.capabilitySelection.mcp.forceIncludeServerIds.length > 0)) {
                 let snapshot = await params.resolveAccountSettingsSnapshot?.({ mcpServerCatalog: true, signal }) ?? null;
                 signal.throwIfAborted();
                 if (!snapshot) throw new McpServerCatalogUnavailableError('catalog-unobserved');
+                const pluginItems = await params.runtimeRegistry?.projectMcpServerItems?.(readMcpServersSettingsFromAccountSettings(snapshot)) ?? [];
+                const detected = params.runtimeRegistry?.discoverMcpServersForDetection
+                    ? await detectProviderMcpServers({ directory: params.directory, providers: [params.lease.agentId],
+                        env: { ...process.env, ...params.sourceEnvironment }, runtimeRegistry: params.runtimeRegistry }) : { servers: [] };
+                const nativeServerNames = readLoadedMcpNativeServerNames({ servers: detected.servers, agentId: params.lease.agentId });
                 const select = (admitted: NonNullable<typeof snapshot>) => resolveSessionCapabilitiesForDirectory({
                     settings: readMcpServersSettingsFromAccountSettings(admitted),
                     machineId: params.machineId, directory: params.directory, selection: params.capabilitySelection,
                     agentId: params.lease.agentId, agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.lease.agentId, params.runtimeRegistry?.contributes)),
+                    mcpPluginItems: pluginItems, nativeServerNames,
                 });
                 let selected = select(snapshot);
                 const references = listSelectedMcpSharedSecretReferences(selected.selectedServersByName);
@@ -375,12 +414,50 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                     if (!snapshot) throw new McpServerCatalogUnavailableError('catalog-unobserved');
                     selected = select(snapshot);
                 }
+                if (params.runtimeRegistry?.materializePluginMcpServers) {
+                    const attached = await params.runtimeRegistry.materializePluginMcpServers({ scope: { kind: 'execution_run', executionRunId: runId },
+                        directory: params.directory, signal, currentSession: bound.currentSession,
+                        servers: Object.values(selected.selectedServersByName).map(server => ({ id: server.serverId, name: server.name,
+                            transport: server.config.remote ? { kind: 'http' as const, url: server.config.remote.url } : { kind: 'stdio' as const },
+                            scope: { executionRunId: runId, directory: params.directory } })),
+                        addDisposable: attachment => pluginAttachments.push(attachment) });
+                    selected = { ...selected, selectedServersByName: Object.fromEntries(attached.map(server => {
+                        const original = selected.selectedServersByName[server.name]!;
+                        return [server.name, server.transport.kind === 'http' || server.transport.kind === 'sse'
+                            ? { ...original, config: { ...original.config, remote: { ...original.config.remote!, url: server.transport.url } } } : original];
+                    })) };
+                }
                 mcpMaterial = await materializeMcpServerConfigRecord({
                     resolved: { directory: params.directory, strictMode: selected.strictMode, serversByName: selected.selectedServersByName },
                     savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(snapshot),
                     processEnv: { ...process.env, ...params.sourceEnvironment }, tmpDir: null,
                 });
+                const settings = readMcpServersSettingsFromAccountSettings(snapshot);
+                const identities = { mcpServerIdentities: Object.fromEntries(Object.entries(selected.mcpServerIdentities)
+                    .filter(([name]) => Object.hasOwn(mcpMaterial!.mcpServers, name))) };
                 mcpServers = await resolveAgentSessionMcpLaunchConfigs(mcpMaterial.mcpServers, params.start, signal);
+                resolvedRunMcpServers = projectResolvedMcpServers({ mcpServers: mcpMaterial.mcpServers,
+                    identities: identities.mcpServerIdentities, scope: { executionRunId: runId, directory: params.directory } });
+                const capturedMcpAccount = params.resolveAccountSettingsSnapshot?.readOperationContext?.();
+                const activeScope = getActiveAccountSettingsSnapshot()?.scopeKey;
+                const activeLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+                if (capturedMcpAccount && capturedMcpAccount.readSnapshot()?.scopeKey === snapshot.scopeKey) {
+                    readMcpToolContext = () => ({ mcpServerIdentities: identities.mcpServerIdentities, catalog: capturedMcpAccount.readSnapshot()?.mcpServerCatalog ?? null });
+                } else if (activeScope && activeScope === snapshot.scopeKey && getActiveAccountSettingsSnapshot()?.mcpServerCatalog?.status === 'ready') {
+                    readMcpToolContext = () => ({ mcpServerIdentities: identities.mcpServerIdentities,
+                        catalog: getActiveAccountSettingsSnapshot()?.scopeKey === activeScope
+                            && getActiveAccountSettingsSnapshotLifetimeToken() === activeLifetime
+                            ? getActiveAccountSettingsSnapshot()?.mcpServerCatalog ?? null : null });
+                }
+                if (readMcpToolContext()) {
+                    const control = readAgentCatalogSnapshot().catalogEntriesById[params.lease.agentId]?.mcpToolControl;
+                    if (control?.approval === 'host') {
+                        mcpToolPolicy = projectMcpToolLaunchPolicies({ catalog: { v: 1, servers: settings.servers, bindings: settings.bindings,
+                            ...(settings.pluginServers ? { pluginServers: settings.pluginServers } : {}) },
+                            mcpServerIdentities: identities.mcpServerIdentities, control,
+                            permissionMode: parseAgentPermissionIntentV1Alias(params.permissionMode) ?? 'default' });
+                    }
+                }
                 signal.throwIfAborted();
             }
             const created = createNativeAgentInvocationContext({
@@ -409,7 +486,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         } catch (error) {
             try {
                 try { mcpMaterial?.cleanup(); }
-                finally { await executionRunServices.dispose(); }
+                finally { try { await disposeAttachments(); } finally { await executionRunServices.dispose(); } }
             } finally {
                 await runPermissionScope.dispose('Execution run context construction failed');
             }
@@ -418,10 +495,11 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         return Object.freeze({
             context,
             ...(mcpServers ? { mcpServers } : {}),
+            ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             async dispose() {
                 try {
                     try { mcpMaterial?.cleanup(); }
-                    finally { await executionRunServices.dispose(); }
+                    finally { try { await disposeAttachments(); } finally { await executionRunServices.dispose(); } }
                 } finally {
                     await runPermissionScope.dispose('Execution run disposed');
                 }
@@ -589,6 +667,11 @@ function buildInput(prompt: string, structuredInput: unknown): AgentSessionInput
     });
 }
 
+/** The Run's prepared metadata-only index follows its own Agent and selection. */
+function withRunSkillIndex(input: AgentSessionInput, skillIndex: string | undefined): AgentSessionInput {
+    return skillIndex ? { ...input, text: `${skillIndex}\n\n${input.text}` } : input;
+}
+
 function rejectStructuredInputBeforeProviderEffect(error: unknown) {
     const candidate = error && typeof error === 'object'
         ? error as Readonly<{ code?: unknown; message?: unknown; retryable?: unknown }>
@@ -735,6 +818,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     lease: NativeAgentRuntimeLeaseIdentity;
     options: CreateCliExecutionRunBackendParams;
     supportsResume: boolean;
+    /** Session-derived carriers intercept native turn failures before this projection. */
+    sessionTurnRecoveryOwned?: boolean;
     generationSignal?: AbortSignal;
     services?: Promise<PluginServices>;
     createExecutionRunContext?: NativeAgentExecutionRunContextLeaseFactory;
@@ -796,6 +881,9 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     let openingInitialInput = false;
     let providerWorkObserved = false;
     let rejectedStart: ExecutionRunRejectedStartError | null = null;
+    let checkpointId: string | null = null;
+    let recovery: AbortController | null = null;
+    let admittedInputMeta: Parameters<AgentExecutionRunRuntime['send']>[1];
     let resolveTerminal!: () => void;
     let rejectTerminal!: (error: Error) => void;
     const terminalPromise = new Promise<void>((resolve, reject) => {
@@ -844,6 +932,87 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         rejectTerminal(error);
     }
 
+    function settleEvent(normalizedEvent: AgentExecutionRunEvent): void {
+        const message = toHostMessage(normalizedEvent, sanitizeProviderDiagnosticText);
+        if (message) emit(message);
+        if (normalizedEvent.kind === 'run-complete' || normalizedEvent.kind === 'run-cancelled') {
+            terminal = true;
+            if (normalizedEvent.kind === 'run-complete' && !params.sessionTurnRecoveryOwned && params.options.connectedServiceRuntimeTurnCompleted) {
+                void params.options.connectedServiceRuntimeTurnCompleted().then(resolveTerminal, resolveTerminal);
+            } else resolveTerminal();
+        } else if (normalizedEvent.kind === 'run-failed') {
+            terminal = true;
+            rejectTerminal(createExecutionRunCodedError(
+                normalizedEvent.diagnostic?.code ?? 'agent_execution_run_failed',
+                diagnosticMessage(normalizedEvent.diagnostic, sanitizeProviderDiagnosticText),
+            ));
+        }
+    }
+
+    async function recoverNativeFailure(
+        failure: Extract<AgentExecutionRunEvent, { kind: 'run-failed' | 'run-cancelled' }>,
+        nativeIdentity: string,
+        attempt: AbortController,
+    ): Promise<void> {
+        const recoverySignal = AbortSignal.any([signal, attempt.signal]);
+        try {
+            const continued = await continueNativeRuntimeAfterFailure({
+                input: {
+                    diagnostic: failure.diagnostic!,
+                    providerSessionId: nativeIdentity,
+                    interruptedOriginId: admittedInputMeta?.localInputId ?? params.options.start?.localInputId ?? `${runId}-initial-input`,
+                    signal: recoverySignal,
+                },
+                prepare: params.options.prepareRuntimeFailureRecovery!,
+                async retireNative() {
+                    const previous = await nativeRuntimePromise;
+                    await watchDisposable?.dispose();
+                    watchDisposable = null;
+                    nativeRuntime = null;
+                    nativeRuntimePromise = null;
+                    await previous?.dispose();
+                    await executionRunContextLease?.dispose();
+                    executionRunContextLease = null;
+                },
+                async resumeNative(environment) {
+                    lastSequence = -1;
+                    openRequest = {
+                        kind: 'resume', runId, cwd: params.options.cwd, profile,
+                        ...boundedOpenInputs,
+                        ...(environment ? { launchEnvironment: environment } : {}),
+                        checkpointId: nativeIdentity,
+                    };
+                    await openNative(openRequest);
+                },
+                async sendContinuation(input) {
+                    recovery = null;
+                    admittedInputMeta = {
+                        ...admittedInputMeta,
+                        localInputId: `runtime-continuation:${randomUUID()}`,
+                    };
+                    const result = await nativeRuntime!.send({ text: input }, {
+                        ...admittedInputMeta,
+                        signal: recoverySignal,
+                    });
+                    if (result.status !== 'admitted' && !terminal) {
+                        settleEvent({ ...failure, ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}) });
+                    }
+                },
+            });
+            if (!continued && !terminal && recovery === attempt) {
+                recovery = null;
+                settleEvent(failure);
+            }
+        } catch (error) {
+            if (terminal || disposed || recoverySignal.aborted) return;
+            recovery = null;
+            const diagnostic = error instanceof Error && 'code' in error && typeof error.code === 'string'
+                ? { code: error.code, message: sanitizeProviderDiagnosticText(error.message), severity: 'error' as const }
+                : failure.diagnostic;
+            settleEvent({ ...failure, ...(diagnostic ? { diagnostic } : {}) });
+        }
+    }
+
     function handleEvent(event: AgentExecutionRunEvent): void {
         const parsed = AgentExecutionRunEventSchema.safeParse(event);
         if (!parsed.success) {
@@ -861,6 +1030,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         }
         if (terminal) return;
         lastSequence = normalizedEvent.sequence;
+        if (normalizedEvent.kind === 'checkpoint') checkpointId = normalizedEvent.checkpointId;
+        if (recovery && normalizedEvent.kind === 'run-cancelled') return;
         if (normalizedEvent.kind === 'run-progress' || normalizedEvent.kind === 'output-delta'
             || normalizedEvent.kind === 'run-complete' || normalizedEvent.kind === 'run-cancelled') {
             providerWorkObserved = true;
@@ -876,18 +1047,19 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             }
         }
         if (normalizedEvent.kind === 'run-failed') logProviderFailure();
-        const message = toHostMessage(normalizedEvent, sanitizeProviderDiagnosticText);
-        if (message) emit(message);
-        if (normalizedEvent.kind === 'run-complete' || normalizedEvent.kind === 'run-cancelled') {
-            terminal = true;
-            resolveTerminal();
-        } else if (normalizedEvent.kind === 'run-failed') {
-            terminal = true;
-            rejectTerminal(createExecutionRunCodedError(
-                normalizedEvent.diagnostic?.code ?? 'agent_execution_run_failed',
-                diagnosticMessage(normalizedEvent.diagnostic, sanitizeProviderDiagnosticText),
-            ));
+        if (normalizedEvent.kind === 'run-failed' && normalizedEvent.diagnostic && checkpointId
+            // This typed ACP outcome is admission uncertainty, not an accepted
+            // turn failure. Provider health facts cannot authorize continuation.
+            && normalizedEvent.diagnostic.code !== 'acp_input_custody_unknown'
+            && normalizedEvent.diagnostic.code !== 'acp_input_rejected_before_effect'
+            && params.supportsResume && params.options.prepareRuntimeFailureRecovery
+            && !params.sessionTurnRecoveryOwned && !recovery) {
+            const attempt = new AbortController();
+            recovery = attempt;
+            void recoverNativeFailure(normalizedEvent, checkpointId, attempt);
+            return;
         }
+        settleEvent(normalizedEvent);
     }
 
     async function openNative(request: AgentExecutionRunOpenRequest): Promise<AgentExecutionRunRuntime> {
@@ -928,8 +1100,13 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             }
             assertUsable();
             let opened: AgentExecutionRunRuntime;
-            const admittedRequest = executionRunContextLease?.mcpServers
-                ? { ...request, mcpServers: executionRunContextLease.mcpServers } : request;
+            const admittedRequest = {
+                ...request,
+                ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, executionRunContextLease?.skillIndex) } : {}),
+                ...(executionRunContextLease?.mcpServers ? { mcpServers: executionRunContextLease.mcpServers } : {}),
+                ...(executionRunContextLease?.mcpToolPolicy ? { mcpToolPolicy: executionRunContextLease.mcpToolPolicy } : {}),
+                ...(executionRunContextLease?.skills ? { skills: executionRunContextLease.skills } : {}),
+            };
             try {
                 if (params.executionRunContextV1) {
                     if (!('executionRun' in context)) {
@@ -947,7 +1124,13 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 assertUsable();
                 nativeRuntime = opened;
                 openingInitialInput = request.kind === 'create';
-                watchDisposable = opened.watch(handleEvent);
+                if (request.kind === 'resume') checkpointId = request.checkpointId;
+                if (request.kind === 'create') admittedInputMeta = {
+                    ...(request.localInputId ? { localInputId: request.localInputId } : {}),
+                    ...(request.resultContract ? { resultContract: request.resultContract } : {}),
+                    ...(request.causalPermissionAuthority ? { causalPermissionAuthority: request.causalPermissionAuthority } : {}),
+                };
+                watchDisposable = opened.watch(event => { if (nativeRuntime === opened) handleEvent(event); });
                 if (rejectedStart) throw rejectedStart;
             } catch (error) {
                 if (rejectedStart === error) throw error;
@@ -1064,6 +1247,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 return { status: 'admitted' as const };
             }
             const opened = await nativeRuntimePromise;
+            admittedInputMeta = { ...meta, localInputId: localId };
             let result: Awaited<ReturnType<AgentExecutionRunRuntime['send']>>;
             try {
                 result = await opened.send(input, {
@@ -1094,6 +1278,14 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         async cancel(runtimeId) {
             assertUsable();
             if (!provisionPromise || runtimeId !== runId) return;
+            if (recovery) {
+                recovery.abort(new Error('Execution Run recovery cancelled'));
+                recovery = null;
+                terminal = true;
+                emit({ type: 'status', status: 'stopped' });
+                resolveTerminal();
+                return;
+            }
             const opened = nativeRuntime ?? (nativeRuntimePromise ? await nativeRuntimePromise : null);
             if (!opened) return;
             let result: Awaited<ReturnType<AgentExecutionRunRuntime['stop']>>;
@@ -1112,7 +1304,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             return () => listeners.delete(handler);
         },
         async waitForTurnCompletion() {
-            if (!nativeRuntimePromise) return;
+            if (!nativeRuntimePromise && !recovery) return;
             await terminalPromise;
         },
         async dispose() {
@@ -1126,6 +1318,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 rejectTerminal(createDisposedError());
             }
             ownedAbortController.abort(new Error('Native Agent execution run disposed'));
+            recovery?.abort(new Error('Execution Run recovery disposed'));
+            recovery = null;
             const watch = watchDisposable;
             watchDisposable = null;
             listeners.clear();
@@ -1208,6 +1402,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                     throw contextBoundaryError;
                 }
                 let execution: AgentExecutionRunRuntime;
+                let unsubscribeMcpToolPolicy: (() => void) | undefined;
                 try {
                     const runScopedContext: AgentSessionRuntimeContext = Object.freeze({
                         ...sessionContext.context,
@@ -1215,29 +1410,63 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                         // services, but it never owns the parent's published work state.
                         workState: createRunScopedWorkStateService(executionContext.signal),
                     });
+                    const openNativeSession = async (sessionRequest: Extract<AgentSessionOpenRequest, { kind: 'create' | 'resume' }>) => {
+                        const opened = await sessions.open(sessionRequest, runScopedContext);
+                        let boundaryError = readBoundaryError();
+                        if (!boundaryError && opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
+                            await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
+                            boundaryError = readBoundaryError();
+                        }
+                        if (boundaryError) {
+                            void Promise.resolve().then(() => opened.dispose('runtime_recovery')).catch(() => undefined);
+                            throw boundaryError;
+                        }
+                        return opened;
+                    };
                     execution = await createExecutionRunHostBackendFromSessionRuntime({
-                        request: sessionContext.mcpServers
-                            ? { ...request, mcpServers: sessionContext.mcpServers }
-                            : request,
+                        request: {
+                            ...request,
+                            ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, sessionContext.skillIndex) } : {}),
+                            ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
+                            ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                            ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
+                        },
                         sessionId: sessionContext.context.session.id,
                         openSession: async (sessionRequest) => {
-                            const opened = await sessions.open(sessionRequest, runScopedContext);
-                            const boundaryError = readBoundaryError();
-                            if (boundaryError) {
-                                void Promise.resolve()
-                                    .then(() => opened.dispose('runtime_recovery'))
-                                    .catch(() => {
-                                        // Preserve the refusal when provider cleanup fails or never settles.
-                                    });
-                                throw boundaryError;
-                            }
+                            const native = await openNativeSession(sessionRequest);
+                            const opened = params.supportsResume && params.options.prepareRuntimeFailureRecovery
+                                ? createRecoveringAgentSessionRuntime({
+                                    session: native,
+                                    request: sessionRequest,
+                                    openSession: openNativeSession,
+                                    recover: params.options.prepareRuntimeFailureRecovery,
+                                    ...(params.options.connectedServiceRuntimeTurnCompleted ? { onTurnCompleted: params.options.connectedServiceRuntimeTurnCompleted } : {}),
+                                    signal: executionContext.signal,
+                                })
+                                : native;
+                            unsubscribeMcpToolPolicy = sessionContext.subscribeMcpToolPolicy?.(mcpToolPolicy => {
+                                if (readBoundaryError()) return;
+                                const configuration = sessionRequest.configuration;
+                                if (!configuration || !opened.updateConfiguration) {
+                                    logger.warn('[MCP] Native Session Run configuration update is unavailable');
+                                    return;
+                                }
+                                const update = applyNativeAgentConfigurationUpdate(configuration, { mcpToolPolicy });
+                                void opened.updateConfiguration(update.request).then(result => {
+                                    if (result.status !== 'applied' && result.status !== 'deferred') logger.warn('[MCP] Native Session Run policy update was not applied');
+                                }).catch(() => { logger.warn('[MCP] Native Session Run policy update failed'); });
+                            });
                             return opened;
                         },
                         readCheckpointId: (event) => event.kind === 'provider-session-id'
                             ? event.providerSessionId
                             : null,
-                        ...(sessionContext.usagePublisher || params.options.start?.observeWorkflowUsage ? {
-                            observeSessionUsage: (event: Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' }>) => {
+                        ...(sessionContext.usagePublisher || params.options.start?.observeWorkflowUsage || sessionContext.observeSkillUse ? {
+                            observeSessionUsage: (event: Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' | 'skill-usage' }>) => {
+                                if (event.kind === 'skill-usage') {
+                                    if (!readBoundaryError()) void sessionContext.observeSkillUse?.(event).catch(() => undefined);
+                                    return;
+                                }
                                 const publisher = sessionContext.usagePublisher;
                                 const observation = toNativeAgentUsageObservation(
                                     event,
@@ -1259,6 +1488,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                         } : {}),
                     });
                 } catch (error) {
+                    unsubscribeMcpToolPolicy?.();
                     try {
                         await sessionContext.dispose();
                     } catch {
@@ -1268,12 +1498,14 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                 }
                 let disposed = false;
                 return Object.freeze({
-                    send: execution.send.bind(execution),
+                    send: (input: AgentSessionInput, options?: Parameters<AgentExecutionRunRuntime['send']>[1]) =>
+                        execution.send(withRunSkillIndex(input, sessionContext.skillIndex), options),
                     stop: execution.stop.bind(execution),
                     watch: execution.watch.bind(execution),
                     async dispose() {
                         if (disposed) return;
                         disposed = true;
+                        unsubscribeMcpToolPolicy?.();
                         // The SDK lifecycle has already settled terminal truth.
                         // Both native cleanup leaves are exactly-once, detached,
                         // and best effort so neither can retain the controller.
@@ -1290,6 +1522,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
     });
     return createNativeAgentExecutionRunHostRuntime({
         runtime: derivedRuntime,
+        sessionTurnRecoveryOwned: true,
         lease: params.lease,
         options: params.options,
         supportsResume: params.supportsResume,
@@ -1350,6 +1583,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
     let turnOrdinal = 0;
     let pendingTurnTerminalSettlement: Promise<void> | null = null;
     let resumedProviderSessionId: string | null = null;
+    let skillIndex: string | undefined;
 
     const assertUsable = (): void => {
         if (disposed) throw new Error('Native Agent Session interaction is disposed');
@@ -1388,11 +1622,15 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 throw error;
             }
             const context = sessionContext.context;
-            disposeSessionContext = sessionContext.dispose;
+            skillIndex = sessionContext.skillIndex;
+            let unsubscribeMcpToolPolicy: (() => void) | undefined;
+            disposeSessionContext = async () => { unsubscribeMcpToolPolicy?.(); await sessionContext.dispose(); };
             const common = {
                 sessionId: context.session.id,
                 cwd: params.options.cwd,
                 ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
+                ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
                 stateSharing: resolveNativeAgentSessionStateSharingPolicy(params.lease.agentId),
                 ...(launchEnvironment ? { launchEnvironment } : {}),
                 ...(params.options.runtimeDescriptorV1
@@ -1409,16 +1647,61 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
             try {
                 opened = await sessions.open(request, context);
                 assertUsable();
+                if (opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
+                    await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
+                    assertUsable();
+                }
+                if (supportsResume && params.options.prepareRuntimeFailureRecovery) {
+                    opened = createRecoveringAgentSessionRuntime({
+                        session: opened,
+                        request,
+                        openSession: async request => {
+                            const resumed = await sessions.open(request, context);
+                            try {
+                                assertUsable();
+                                if (resumed.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
+                                    await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
+                                    assertUsable();
+                                }
+                                return resumed;
+                            } catch (error) {
+                                void Promise.resolve().then(() => resumed.dispose('runtime_recovery')).catch(() => undefined);
+                                throw error;
+                            }
+                        },
+                        recover: params.options.prepareRuntimeFailureRecovery,
+                        ...(params.options.connectedServiceRuntimeTurnCompleted ? { onTurnCompleted: params.options.connectedServiceRuntimeTurnCompleted } : {}),
+                        signal,
+                    });
+                }
                 operations = createNativeAgentSessionInteractionOperations({
                     session: opened,
                     sessionId: context.session.id,
                     cwd: params.options.cwd,
                     context,
                     capabilities: params.sessionCapabilities,
+                    ...(sessionContext.usagePublisher || params.options.start?.observeWorkflowUsage ? {
+                        usagePublisher: {
+                            provider: sessionContext.usagePublisher?.provider ?? params.lease.agentId,
+                            publish(input) {
+                                params.options.start?.observeWorkflowUsage?.({
+                                    turnId: input.turnId,
+                                    observation: input.observation,
+                                });
+                                return sessionContext.usagePublisher?.publish(input);
+                            },
+                        },
+                    } : {}),
                     ...(resumeSessionId ? { expectedProviderSessionId: resumeSessionId } : {}),
                     ...(params.options.configuration
                         ? { initialConfiguration: params.options.configuration }
                         : {}),
+                });
+                unsubscribeMcpToolPolicy = sessionContext.subscribeMcpToolPolicy?.(mcpToolPolicy => {
+                    if (!operations || disposed || signal.aborted || !params.lease.isCurrent()) return;
+                    void operations.updateSessionRuntimeConfig({ mcpToolPolicy }).then(result => {
+                        if (!result || result.status !== 'applied') logger.warn('[MCP] Retained Session Run policy update was not applied');
+                    }).catch(() => { logger.warn('[MCP] Retained Session Run policy update failed'); });
                 });
                 // A successful native resume admitted this existing vendor id.
                 // Fresh sessions remain unknown until validated provider evidence.
@@ -1430,6 +1713,9 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 });
                 unsubscribeEvents = operations.subscribeRuntimeEvents((event) => {
                     if ('type' in event) return;
+                    if (event.kind === 'skill-usage' && !disposed && !signal.aborted && params.lease.isCurrent()) {
+                        void sessionContext.observeSkillUse?.(event).catch(() => undefined);
+                    }
                     for (const listener of runtimeEventListeners) listener(event);
                     if (
                         event.kind === 'turn-complete'
@@ -1485,11 +1771,23 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
         }
         if (!completionError) return;
         const event = readRuntimeTurnFailureAlreadySurfacedEvent(completionError);
-        if (event?.diagnostic.code !== WORKFLOW_INTERACTION_CAPACITY_EXCEEDED) throw completionError;
+        if (event?.diagnostic.code !== WORKFLOW_INTERACTION_CAPACITY_EXCEEDED) {
+            if (!event) throw sanitizeThrownError(completionError, sanitize);
+            throw createRuntimeTurnFailureAlreadySurfacedError({
+                message: sanitize(completionError instanceof Error ? completionError.message : event.diagnostic.code),
+                event: {
+                    ...event,
+                    diagnostic: {
+                        ...event.diagnostic,
+                        ...(event.diagnostic.message ? { message: sanitize(event.diagnostic.message) } : {}),
+                    },
+                },
+            });
+        }
         throw Object.assign(
             createExecutionRunCodedError(
                 WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
-                event.diagnostic.message ?? WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
+                sanitize(event.diagnostic.message ?? WORKFLOW_INTERACTION_CAPACITY_EXCEEDED),
             ),
             { code: WORKFLOW_INTERACTION_CAPACITY_EXCEEDED, recoverable: true as const },
         );
@@ -1556,7 +1854,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 if (options?.initialPrompt !== undefined) {
                     const turnId = `${runId}-turn-${++turnOrdinal}`;
                     operations!.beginTurnLifecycle();
-                    await operations!.sendTurnPrompt(options.initialPrompt, {
+                    await operations!.sendTurnPrompt(withRunSkillIndex({ text: options.initialPrompt }, skillIndex).text, {
                         turnId,
                         localId: `${runId}-input-${turnOrdinal}`,
                         ...(params.options.causalPermissionAuthority
@@ -1586,7 +1884,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 return rejectStructuredInputBeforeProviderEffect(error);
             }
             operations!.beginTurnLifecycle();
-            await operations!.sendTurnPrompt(resolvedInput.text, {
+            await operations!.sendTurnPrompt(withRunSkillIndex(resolvedInput, skillIndex).text, {
                 ...meta,
                 localId,
                 ...(resolvedInput.structuredInput === undefined ? {} : { structuredInput: resolvedInput.structuredInput }),

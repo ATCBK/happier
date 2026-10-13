@@ -22,6 +22,30 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('createSessionTurnLifecycle', () => {
+    it.each([false, true])('retains the receiver-bound persistence port with marker publication=%s', async markers => {
+        // Home mutation persistence is the system boundary; its connection
+        // method uses its receiver, as the real ApiSessionClient does.
+        const persistence = {
+            sessionId: 'receiver-session',
+            mutations: [] as SessionTurnMutationV1[],
+            async enqueueSessionTurnMutation(mutation: SessionTurnMutationV1) {
+                this.mutations.push(mutation);
+            },
+        };
+        const lifecycle = createSessionTurnLifecycle({ session: persistence,
+            ...(markers ? { onAcceptedTurnLifecycle: async () => {} } : {}),
+        });
+        lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: persistence.sessionId,
+            emittedAtMs: 100, turnId: 'receiver-turn' }));
+        lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: persistence.sessionId,
+            emittedAtMs: 200, turnId: 'receiver-turn' }));
+        await lifecycle.drainAcceptedLifecycle();
+        expect(persistence.mutations).toEqual(expect.arrayContaining([
+            expect.objectContaining({ action: 'begin', sessionId: persistence.sessionId, turnId: 'receiver-turn' }),
+            expect.objectContaining({ action: 'complete', sessionId: persistence.sessionId, turnId: 'receiver-turn' }),
+        ]));
+    });
+
     it('persists qualified quota attribution and the current Agent from a canonical diagnostic', async () => {
         const mutations: SessionTurnMutationV1[] = [];
         const lifecycle = createSessionTurnLifecycle({ agentId: 'agy',

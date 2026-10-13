@@ -6,11 +6,17 @@ import { SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SESSION_FOLLOW_OBSERVE_PENDING_EVE
   serializeWorkflowStoredContentEnvelopeV1, WorkflowRunSummaryV1Schema,
   createAccountScopedCryptoMaterialSnapshotV1, prepareWorkflowRunDataKeyV1,
   convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
+  TranscriptRawAgentEventV1Schema, TranscriptRawRecordV1Schema, WorkerUpdateV1Schema,
+  type SessionWorkerPublishInputV1,
   type SessionFollowPendingObservationV1, type WorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createSessionScopedSocket } from '@/api/session/sockets';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
-import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1, SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V2,
+  SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1, SessionTranscriptObservationInputSchema,
+  SessionTranscriptObservationAckV1Schema, SessionTranscriptObservationCapabilityAckSchema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { createPlainSessionFixture, createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { findTranscriptMessagesQueryRejection } from '@/testkit/transcript/transcriptMessagesRouteContract';
@@ -20,6 +26,10 @@ import { createSessionFollowSourceMaterialResolver } from './sessionFollowSource
 import type { RawTranscriptRow } from '@/session/replay/fetchEncryptedTranscriptMessages';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { StoredCredentials } from '@/persistence';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { isSessionFollowFrontierEqualV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { SessionFollowAcknowledgeRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 const { mockIo } = vi.hoisted(() => ({ mockIo: vi.fn() }));
 // Socket.IO and HTTP are network boundaries; all internal owners remain real.
@@ -55,8 +65,16 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
     metadata: review?.keyState ? encryptSessionPayload({ ctx, payload: metadata }) : JSON.stringify(metadata), active: true,
     activeAt: Date.now(), updatedAt: Date.now(), latestTurnStatus: status === 'running' ? 'in_progress' : status,
     latestTurnStatusObservedAt: Date.now(), latestReadyEventSeq: 1,
-    pendingReviewRuns, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
+    reportsTo: { sessionId: 'lead' }, pendingReviewRuns, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
   const app = fastify();
+  const features = FeaturesResponseSchema.parse({ features: {}, capabilities: { session: {
+    runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 4 }, publisherAuthority: { protocolVersion: 1 },
+  } } });
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+    return url.pathname === '/v1/features' ? Response.json(features) : new Response('{}', { status: 404 });
+  }));
+  app.get('/v1/auth/ping', async () => ({ ok: true }));
   const finalText = { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'Actual final result' } } };
   const messages: RawTranscriptRow[] = [{ seq: 1, createdAt: 1,
     content: review?.keyState ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: finalText }) } : { t: 'plain', v: finalText } }];
@@ -158,12 +176,39 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
   });
   const restore = installAxiosFastifyAdapter({ app, origin });
   const acknowledgements: unknown[] = [];
+  const leadMessages: RawTranscriptRow[] = [];
+  const acknowledgementState = { accepted: true };
+  const runtimeActivityHome = createSessionRuntimeActivityHomeStub({ machineId: 'worker-machine' });
   const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, payload) => {
+    const activity = runtimeActivityHome.answer(event, payload);
+    if (activity !== null) return activity;
+    if (event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1) {
+      return SessionTranscriptObservationCapabilityAckSchema.parse({ ok: true, capability: SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V2 });
+    }
+    if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+      const request = SessionTranscriptObservationInputSchema.parse(payload);
+      expect([workerId, 'lead']).toContain(request.sessionId);
+      const content = SessionStoredMessageContentSchema.parse(request.content);
+      if (content.t !== 'plain') throw new Error('Expected plain producer fixture');
+      const target = request.sessionId === workerId ? messages : leadMessages;
+      const seq = request.sessionId === workerId ? observation.observed.transcriptSeq + 1 : target.length + 1;
+      target.push({ seq, createdAt: seq, localId: request.localId, messageRole: request.messageRole, content });
+      if (request.sessionId === workerId) {
+        observation.observed = { ...observation.observed, transcriptSeq: seq };
+        row.seq = seq;
+      }
+      return SessionTranscriptObservationAckV1Schema.parse({ ok: true, status: 'observed', id: `message-${seq}`,
+        seq, localId: request.localId, didWrite: true, ingestedAt: Date.now() });
+    }
     if (event === SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) return { ok: true, v: 1, sessionId: 'lead',
-      publisherGeneration: '1', currentSourceSessionIds: [workerId], observations: [{ ...observation }] };
+      publisherGeneration: '1', currentSourceSessionIds: [workerId],
+      observations: isSessionFollowFrontierEqualV1(observation.delivered, observation.observed) ? [] : [{ ...observation }] };
     if (event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
-      acknowledgements.push(payload);
-      return { ok: true, v: 1, destinationSessionId: 'lead', sourceSessionId: workerId, delivered: observation.observed };
+      const request = SessionFollowAcknowledgeRequestV1Schema.parse(payload);
+      acknowledgements.push(request);
+      if (!acknowledgementState.accepted) return { ok: false, error: 'stale_observation' };
+      observation.delivered = request.consumed;
+      return { ok: true, v: 1, destinationSessionId: 'lead', sourceSessionId: workerId, delivered: request.consumed };
     }
     return { ok: true };
   } });
@@ -173,6 +218,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
     ? { ...leadSession, encryptionMode: 'e2ee', encryptionKey: secret, encryptionVariant: 'legacy' }
     : leadSession, {
     metadataAuthority: { kind: 'shared_editor' },
+    localMachineId: 'worker-machine',
     transport: { serverId: 'worker-home', serverUrl: origin,
       createSessionSocketTransport: ({ sessionId, machineId }) => {
         const liveSocket = createSessionScopedSocket({ token: 'lead-own-grant', sessionId, machineId, serverUrl: origin });
@@ -183,7 +229,28 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
   const sourceMaterialResolver = restricted ? createSessionFollowSourceMaterialResolver() : null;
   if (sourceMaterialResolver) cleanups.push(async () => { sourceMaterialResolver.dispose(); });
   const hydrateObservation = createSessionFollowSourceHydrator({ session, credentials, sourceMaterialResolver });
-  return { observation, acknowledgements, row, messages, runAccess,
+  let workerSession: ApiSessionClient | undefined;
+  const getWorkerSession = () => {
+    if (!workerSession) {
+      workerSession = new ApiSessionClient(credentials.token, createPlainSessionFixture({ id: workerId }), {
+        metadataAuthority: { kind: 'shared_editor' },
+        localMachineId: 'worker-machine',
+        transport: { serverId: 'worker-home', serverUrl: origin,
+          createSessionSocketTransport: ({ sessionId, machineId }) => {
+            const liveSocket = createSessionScopedSocket({ token: credentials.token, sessionId, machineId, serverUrl: origin });
+            return { socket: liveSocket, transport: createSocketTransportAdapter(liveSocket) };
+          } },
+      });
+      cleanups.push(() => workerSession!.close());
+    }
+    return workerSession;
+  };
+  const publisher = createCliActionDeps({ token: credentials.token, credentials, sessionId: workerId,
+    mode: 'plain', ctx: null, serverHttpBaseUrl: origin,
+    publishWorkerReport: (report) => session.enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
+  });
+  return { observation, acknowledgements, acknowledgementState, row, messages, leadMessages, session, runAccess,
+    publish: (report: SessionWorkerPublishInputV1) => publisher.sessionWorkerPublish!({ context: {}, ...report }),
     reconcile: createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 }) };
 }
 
@@ -288,6 +355,62 @@ describe('session WorkerUpdate producer through Follow', () => {
     expect((await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' }))?.workerUpdates).toEqual([
       expect.objectContaining({ ownerState: 'published', wake: 'published', result: 'Partial finding', deliverables }),
     ]);
+  });
+  it.each([true, false])('delivers a real publish once per accepted frontier and retries an unaccepted ACK (accepted=%s)', async (accepted) => {
+    const f = await fixture('running');
+    const report = { summary: 'Partial finding', deliverables: [
+      { kind: 'workspace_file' as const, sessionId: workerId, path: 'docs/result.md' },
+      { kind: 'artifact' as const, artifactId: 'document-1' },
+    ] };
+    expect(await f.publish(report)).toMatchObject({ sessionId: workerId, leadSessionId: 'lead', localId: expect.any(String) });
+    await vi.waitFor(() => expect(f.row.seq).toBe(2));
+    const published = SessionStoredMessageContentSchema.parse(f.messages.at(-1)?.content);
+    if (published.t !== 'plain') throw new Error('Expected plain worker report');
+    expect(TranscriptRawRecordV1Schema.parse(published.v)).toMatchObject({ role: 'agent',
+      content: { type: 'event', data: { type: 'worker-report', ...report } } });
+    const prepared = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(prepared?.workerUpdates).toEqual([expect.objectContaining({ workerId, ownerState: 'published',
+      wake: 'published', result: report.summary, deliverables: report.deliverables,
+      transcriptPointer: { kind: 'session', sessionId: workerId, seq: 2 } })]);
+    expect(prepared?.updates).toEqual([]);
+    expect(prepared?.workerUpdateEvents).toHaveLength(1);
+    const update = WorkerUpdateV1Schema.parse(prepared?.workerUpdates?.[0]);
+    expect(TranscriptRawAgentEventV1Schema.parse({ type: 'worker-update', update })).toEqual({ type: 'worker-update', update });
+    // The committed host event must carry the event role used by the Home's ACK acceptance proof.
+    expect(await f.session.enqueueSessionEventCommitted({ type: 'worker-update', update }, prepared?.workerUpdateEvents?.[0]?.localId))
+      .toMatchObject({ persisted: true });
+    await vi.waitFor(() => expect(f.leadMessages).toHaveLength(1));
+    const hostEvent = f.leadMessages[0]!;
+    const hostContent = SessionStoredMessageContentSchema.parse(hostEvent.content);
+    expect(hostEvent.messageRole).toBe('event');
+    if (hostContent.t !== 'plain') throw new Error('Expected plain host event');
+    expect(TranscriptRawRecordV1Schema.parse(hostContent.v)).toMatchObject({ role: 'agent',
+      content: { type: 'event', data: { type: 'worker-update', update } } });
+    expect(f.messages.at(-1)?.messageRole).toBe('event');
+    const retry = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(retry?.workerUpdateEvents).toEqual(prepared?.workerUpdateEvents);
+    expect(f.acknowledgements).toEqual([]);
+    prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: 'another-wake' });
+    expect(f.acknowledgements).toEqual([]);
+    f.acknowledgementState.accepted = accepted;
+    prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: prepared.wakeEventLocalId! });
+    await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(1));
+    expect(f.acknowledgements[0]).toMatchObject({ edgeKind: 'reports_to', attachedAt: 100,
+      expected: { transcriptSeq: 0 }, consumed: { transcriptSeq: 2 },
+      acceptance: { kind: 'context_only_wake', eventLocalId: prepared?.wakeEventLocalId } });
+    if (!accepted) {
+      const unaccepted = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+      expect(unaccepted?.workerUpdateEvents).toEqual(prepared?.workerUpdateEvents);
+      f.acknowledgementState.accepted = true;
+      unaccepted?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: unaccepted.wakeEventLocalId! });
+      await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(2));
+    }
+    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
+    expect(await f.publish({ summary: 'Second finding' })).toMatchObject({ sessionId: workerId, leadSessionId: 'lead' });
+    await vi.waitFor(() => expect(f.row.seq).toBe(3));
+    const next = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(next?.workerUpdates?.[0]).toMatchObject({ ownerState: 'published', result: 'Second finding' });
+    expect(next?.workerUpdateEvents?.[0]?.localId).not.toBe(prepared?.workerUpdateEvents?.[0]?.localId);
   });
   it.each([['lead', 'accepted', true], ['other-lead', 'accepted', false], ['lead', 'rejected', false]] as const)(
     'suppresses final text only after the exact current lead accepted the last send (%s/%s)', async (target, status, omitted) => {

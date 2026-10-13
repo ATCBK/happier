@@ -2,22 +2,21 @@ import type {
   PluginContributionIdentityV1,
   VoiceProviderContribution,
 } from '@happier-dev/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   createAgentSessionRunnerFactoryBinding,
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
-import type { PluginContributionRuntimeLifecycle } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 import {
   resolveAgentSessionRealtimeVoiceAuthority,
   resolveRetainedAgentSessionRealtimeVoiceAuthority,
 } from './resolveAgentSessionRealtimeVoiceAuthority';
 
-type AgentRuntimeIdentity = Parameters<typeof resolveAgentSessionRealtimeVoiceAuthority>[0]['agentRuntimeIdentity'];
-
 const selectedAgent = {
-  pluginId: 'happier.agent.codex',
+  pluginId: 'acme.voice-agent',
   localId: 'codex',
 } as const;
 const installedProvider = {
@@ -28,6 +27,42 @@ const wrongAgentProvider = {
   pluginId: installedProvider.pluginId,
   localId: 'wrong-agent',
 } as const;
+const fixtures: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+afterEach(async () => {
+  for (const fixture of fixtures.splice(0).reverse()) await fixture.dispose();
+});
+
+async function providerRegistry(definitions: readonly VoiceProviderContribution[]) {
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+    plugins: [{
+      manifest: createPluginManifestV2Fixture({
+        id: selectedAgent.pluginId,
+        entrypoints: {},
+        contributes: { systemTools: [{ id: 'fixture-acp', title: 'Fixture ACP', executableNames: ['fixture-acp'] }], agents: [selectedAgent.localId, 'other'].map((id) => ({
+          id, title: id, primary: 'sessions',
+          runtime: { kind: 'acp', transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture-acp' } } },
+          capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        })) },
+      }),
+      files: {},
+    }, {
+      manifest: createPluginManifestV2Fixture({
+        id: installedProvider.pluginId,
+        activation: { events: [{ kind: 'startup' }] },
+        contributes: { voiceProviders: definitions },
+      }),
+      files: { 'daemon.mjs': 'export function activate(api) {}' },
+    }],
+  });
+  fixtures.push(fixture);
+  return fixture;
+}
+
+function registryAgent(fixture: Awaited<ReturnType<typeof providerRegistry>>, localId: string = selectedAgent.localId) {
+  const agent = [...fixture.registry.agentRuntimesByAgentId.values()].find((entry) => entry.pluginId === selectedAgent.pluginId && entry.localAgentId === localId);
+  if (!agent) throw new Error('Admitted Agent runtime missing');
+  return agent;
+}
 function conversation(
   id: string,
   agent: PluginContributionIdentityV1,
@@ -73,133 +108,55 @@ function conversation(
 }
 
 describe('resolveAgentSessionRealtimeVoiceAuthority', () => {
-  it('materializes exact installed declarations from the current registry occurrence', () => {
-    let current = true;
-    const retirement = new AbortController();
-    const resolveVoiceProviderRuntimeLifecycle = vi.fn((identity: PluginContributionIdentityV1) => (
-      identity.pluginId === installedProvider.pluginId && identity.localId === installedProvider.localId
-        ? {
-            occurrenceId: 'installed-provider-occurrence',
-            isCurrent: () => current,
-            retirementSignal: retirement.signal,
-          } satisfies PluginContributionRuntimeLifecycle
-        : null
-    ));
+  it('materializes exact installed declarations from the current registry occurrence', async () => {
+    const fixture = await providerRegistry([
+      conversation(installedProvider.localId, selectedAgent),
+      conversation(wrongAgentProvider.localId, { pluginId: selectedAgent.pluginId, localId: 'other' }),
+    ]);
+    const providerOccurrence = fixture.registry.readPluginOccurrenceId?.(installedProvider.pluginId);
+    expect(providerOccurrence).toBeTruthy();
+    const agent = registryAgent(fixture);
     const authority = resolveAgentSessionRealtimeVoiceAuthority({
-      runtimeRegistry: {
-        contributes: {
-          voiceProviders: [
-            {
-              pluginId: installedProvider.pluginId,
-              identity: installedProvider,
-              definition: conversation(
-                installedProvider.localId,
-                selectedAgent,
-              ),
-            },
-            {
-              pluginId: wrongAgentProvider.pluginId,
-              identity: wrongAgentProvider,
-              definition: conversation(
-                wrongAgentProvider.localId,
-                {
-                  pluginId: 'happier.agent.other',
-                  localId: 'other',
-                },
-              ),
-            },
-          ],
-        },
-        resolveVoiceProviderRuntimeLifecycle,
-      },
+      runtimeRegistry: fixture.registry,
       policyAgentRef: selectedAgent,
-      agentRuntimeIdentity: {
-        pluginId: selectedAgent.pluginId,
-        agentId: selectedAgent.localId,
-        occurrenceId: 'agent-occurrence',
-        sourceCustody: {
-          kind: 'managed',
-          immutableGenerationId: 'installed-agent-generation',
-          installSource: 'npm',
-        },
-        isCurrent: () => current,
-      } satisfies AgentRuntimeIdentity,
-      agentRetirementSignal: retirement.signal,
+      agentRuntimeIdentity: agent,
+      agentRetirementSignal: agent.retirementSignal,
     });
 
     expect(authority).not.toBeNull();
-    expect(authority?.occurrenceId).toBe('agent-occurrence');
+    expect(authority?.occurrenceId).toBe(agent.occurrenceId);
     expect(authority?.resolveDeclaration(installedProvider)?.id).toBe(
       installedProvider.localId,
     );
     expect(authority?.resolveProviderOccurrenceId(installedProvider)).toBe(
-      'installed-provider-occurrence',
+      providerOccurrence,
     );
     expect(authority?.isCurrent(installedProvider)).toBe(true);
     expect(authority?.resolveDeclaration(wrongAgentProvider)).toBeNull();
     expect(authority?.isCurrent(wrongAgentProvider)).toBe(false);
-    expect(resolveVoiceProviderRuntimeLifecycle).toHaveBeenCalledWith(installedProvider);
 
-    current = false;
-    retirement.abort();
+    await fixture.dispose();
     expect(authority?.isCurrent(installedProvider)).toBe(false);
     expect(
       authority?.resolveRetirementSignal(installedProvider)?.aborted,
     ).toBe(true);
   });
 
-  it('fails closed when the selected runtime identity is not the policy Agent', () => {
+  it('fails closed when the selected runtime identity is not the policy Agent', async () => {
+    const fixture = await providerRegistry([conversation(installedProvider.localId, selectedAgent)]);
     expect(resolveAgentSessionRealtimeVoiceAuthority({
-      runtimeRegistry: {
-        contributes: { voiceProviders: [] },
-        resolveVoiceProviderRuntimeLifecycle: () => null,
-      },
+      runtimeRegistry: fixture.registry,
       policyAgentRef: selectedAgent,
-      agentRuntimeIdentity: {
-        pluginId: selectedAgent.pluginId,
-        agentId: 'other',
-        occurrenceId: 'agent-occurrence',
-        sourceCustody: {
-          kind: 'development',
-          registeredRootId: 'development-root-1',
-        },
-        isCurrent: () => true,
-      } satisfies AgentRuntimeIdentity,
+      agentRuntimeIdentity: registryAgent(fixture, 'other'),
     })).toBeNull();
   });
 
-  it('keeps an Agent-session realtime declaration eligible without a Connected Services binding', () => {
-    const providerRetirement = new AbortController();
+  it('keeps an Agent-session realtime declaration eligible without a Connected Services binding', async () => {
+    const fixture = await providerRegistry([conversation(installedProvider.localId, selectedAgent, null)]);
     const authority = resolveAgentSessionRealtimeVoiceAuthority({
-      runtimeRegistry: {
-        contributes: {
-          voiceProviders: [{
-            pluginId: installedProvider.pluginId,
-            identity: installedProvider,
-            definition: conversation(
-              installedProvider.localId,
-              selectedAgent,
-              null,
-            ),
-          }],
-        },
-        resolveVoiceProviderRuntimeLifecycle: () => ({
-          occurrenceId: 'installed-provider-occurrence',
-          isCurrent: () => !providerRetirement.signal.aborted,
-          retirementSignal: providerRetirement.signal,
-        } satisfies PluginContributionRuntimeLifecycle),
-      },
+      runtimeRegistry: fixture.registry,
       policyAgentRef: selectedAgent,
-      agentRuntimeIdentity: {
-        pluginId: selectedAgent.pluginId,
-        agentId: selectedAgent.localId,
-        occurrenceId: 'agent-occurrence',
-        sourceCustody: {
-          kind: 'development',
-          registeredRootId: 'development-root-1',
-        },
-        isCurrent: () => true,
-      } satisfies AgentRuntimeIdentity,
+      agentRuntimeIdentity: registryAgent(fixture),
     });
 
     expect(authority?.resolveDeclaration(installedProvider)?.id).toBe(
@@ -208,37 +165,10 @@ describe('resolveAgentSessionRealtimeVoiceAuthority', () => {
     expect(authority?.isCurrent(installedProvider)).toBe(true);
   });
 
-  it('fails closed for a malformed runner-carried retained Agent binding', () => {
-    const registryWithCurrentG = {
-      contributes: {
-        voiceProviders: [{
-          pluginId: installedProvider.pluginId,
-          identity: installedProvider,
-          definition: conversation(installedProvider.localId, selectedAgent),
-        }],
-      },
-      agentRuntimesByAgentId: new Map([['codex-session', {
-        pluginId: selectedAgent.pluginId,
-        agentId: 'codex-session',
-        occurrenceId: 'agent-occurrence-G',
-        immutableGenerationId: 'installed-agent-generation-G',
-        sessionRunnerFactoryBinding: {
-          pluginId: selectedAgent.pluginId,
-          agentId: 'codex-session',
-          localAgentId: selectedAgent.localId,
-          immutableGenerationId: 'installed-agent-generation-G',
-        },
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-      }]]),
-      resolveVoiceProviderRuntimeLifecycle: () => ({
-        occurrenceId: 'installed-provider-occurrence',
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-      } satisfies PluginContributionRuntimeLifecycle),
-    };
+  it('fails closed for a malformed runner-carried retained Agent binding', async () => {
+    const fixture = await providerRegistry([conversation(installedProvider.localId, selectedAgent)]);
     expect(resolveRetainedAgentSessionRealtimeVoiceAuthority({
-      runtimeRegistry: registryWithCurrentG,
+      runtimeRegistry: fixture.registry,
       retainedAgent: {
         pluginId: selectedAgent.pluginId,
         agentId: 'codex-session',
@@ -248,8 +178,8 @@ describe('resolveAgentSessionRealtimeVoiceAuthority', () => {
     })).toBeNull();
   });
 
-  it('keeps retained G Voice authority current when H replaces its registry Agent, then retires with the current Voice provider', () => {
-    const providerRetirement = new AbortController();
+  it('keeps retained G Voice authority current when H replaces its registry Agent, then retires with the current Voice provider', async () => {
+    const fixture = await providerRegistry([conversation(installedProvider.localId, selectedAgent)]);
     const retainedAgent = createAgentSessionRunnerFactoryBinding({
       v: 1,
       pluginId: selectedAgent.pluginId,
@@ -269,36 +199,12 @@ describe('resolveAgentSessionRealtimeVoiceAuthority', () => {
       normalizedModulePath: 'agent/runtime.js',
       loadMode: 'immutable-js',
     });
-    const registryAfterH = {
-      contributes: {
-        voiceProviders: [{
-          pluginId: installedProvider.pluginId,
-          identity: installedProvider,
-          definition: conversation(installedProvider.localId, selectedAgent),
-        }],
-      },
-      agentRuntimesByAgentId: new Map([['codex-session', {
-        pluginId: selectedAgent.pluginId,
-        agentId: 'codex-session',
-        occurrenceId: 'agent-occurrence-H',
-        immutableGenerationId: 'installed-agent-generation-H',
-        sessionRunnerFactoryBinding: {
-          pluginId: selectedAgent.pluginId,
-          agentId: 'codex-session',
-          localAgentId: selectedAgent.localId,
-          immutableGenerationId: 'installed-agent-generation-H',
-        },
-        isCurrent: () => true,
-        retirementSignal: new AbortController().signal,
-      }]]),
-      resolveVoiceProviderRuntimeLifecycle: () => ({
-        occurrenceId: 'installed-provider-occurrence',
-        isCurrent: () => !providerRetirement.signal.aborted,
-        retirementSignal: providerRetirement.signal,
-      } satisfies PluginContributionRuntimeLifecycle),
-    };
+    // The retained G runner has independent source custody from the registry's
+    // newly admitted H Agent; the real registry remains the provider authority.
+    const currentAgent = registryAgent(fixture);
+    expect(currentAgent.sourceCustody).not.toEqual(retainedAgent.sourceCustody);
     const authority = resolveRetainedAgentSessionRealtimeVoiceAuthority({
-      runtimeRegistry: registryAfterH,
+      runtimeRegistry: fixture.registry,
       retainedAgent,
     });
 
@@ -309,7 +215,7 @@ describe('resolveAgentSessionRealtimeVoiceAuthority', () => {
     expect(authority?.isCurrent(installedProvider)).toBe(true);
     expect(retirementSignal?.aborted).toBe(false);
 
-    providerRetirement.abort(new Error('current Voice provider retired'));
+    await fixture.dispose();
 
     expect(retirementSignal?.aborted).toBe(true);
     expect(authority?.isCurrent(installedProvider)).toBe(false);

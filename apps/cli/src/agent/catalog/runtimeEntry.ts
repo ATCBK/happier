@@ -1,5 +1,53 @@
 import { AGENTS } from './registry';
 import type { AgentCatalogEntry, CatalogAgentId } from './types';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+
+/** A native factory may omit a CLI; a declaration alone never proves that factory. */
+export function requiresAgentSessionCli(agentId: CatalogAgentId, registry: ResolvedExecutablePluginRuntimeRegistry): boolean {
+  const agent = registry.contributes.agentDefinitionsById.get(agentId);
+  const definition = agent?.richDefinition?.definition;
+  const runtime = registry.agentRuntimesByAgentId.get(agentId);
+  const binding = runtime?.sessionRunnerFactoryBinding;
+  return !(definition?.runtime.kind === 'custom'
+    && definition.primary === 'sessions'
+    && definition.cli === undefined
+    && agent?.cliMetadata == null
+    && agent.runtimeSpec == null
+    && runtime?.hasPrimaryRuntime === true
+    && runtime.isCurrent()
+    && binding && 'locator' in binding
+    && binding.agentId === agentId
+    && binding.pluginId === agent.identity?.pluginId
+    && binding.localAgentId === agent.identity?.localId);
+}
+
+/** Observes the same admitted factory used by Session launch, never manifest-only readiness. */
+export async function observeCurrentAgentSessionFactory(agentId: CatalogAgentId): Promise<Readonly<{
+  nativeAuthenticationRequired: boolean;
+  isCurrent(): boolean;
+}> | null> {
+  const { tryAcquireAuthoritativePluginRuntimeRegistryLease } = await import('@/plugins/runtime/reload/runtimeLease');
+  const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
+  if (!lease) return null;
+  try {
+    const agent = lease.registry.contributes.agentDefinitionsById.get(agentId);
+    const definition = agent?.richDefinition?.definition;
+    if (definition?.runtime.kind !== 'custom' || definition.primary !== 'sessions'
+      || definition.cli !== undefined || agent?.cliMetadata != null || agent.runtimeSpec != null) return null;
+    const { activateAgentRuntimeContributionOnDemand } = await import('@/agent/runtime/registry/activationDemand');
+    await activateAgentRuntimeContributionOnDemand(lease.registry, agentId);
+    if (requiresAgentSessionCli(agentId, lease.registry)) return null;
+    const runtime = lease.registry.agentRuntimesByAgentId.get(agentId)!;
+    return Object.freeze({
+      nativeAuthenticationRequired: Boolean(runtime.cliAuth || runtime.connectedAccountLaunch
+        || definition.connectedAccounts?.length),
+      isCurrent: () => lease.registry.agentRuntimesByAgentId.get(agentId) === runtime
+        && !requiresAgentSessionCli(agentId, lease.registry),
+    });
+  } finally {
+    await lease.release();
+  }
+}
 
 async function acquireCurrentCatalogEntry(
   agentId: CatalogAgentId,

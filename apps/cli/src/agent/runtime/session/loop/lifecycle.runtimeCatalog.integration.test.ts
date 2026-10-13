@@ -20,6 +20,7 @@ import { configuration } from '@/configuration';
 import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import type { Metadata } from '@/api/types';
 import type { ApiClient } from '@/api/api';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { createDeferredStartupBootstrap } from '@/agent/runtime/startup/createDeferredStartupBootstrap';
 import {
   computeRunnerTerminationOutcome,
@@ -45,10 +46,12 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import * as persistence from '@/persistence';
 import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequestSchema } from '@/daemon/browser/actions/controlTransport';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 
-const { loggerDebugMock, recoveryNotify, recoveryBoundary } = vi.hoisted(() => ({
+const { loggerDebugMock, recoveryNotify, capabilityRestart, recoveryBoundary } = vi.hoisted(() => ({
   loggerDebugMock: vi.fn(),
   recoveryNotify: vi.fn(),
+  capabilityRestart: vi.fn(),
   recoveryBoundary: { outboxRoot: '' },
 }));
 vi.mock('@/configuration', async (importOriginal) => {
@@ -57,7 +60,7 @@ vi.mock('@/configuration', async (importOriginal) => {
 });
 vi.mock('@/daemon/controlClient', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/daemon/controlClient')>();
-  return { ...actual, notifyDaemonConnectedServiceRuntimeAuthFailure: recoveryNotify };
+  return { ...actual, notifyDaemonConnectedServiceRuntimeAuthFailure: recoveryNotify, requestDaemonSessionRunnerRestart: capabilityRestart };
 });
 
 vi.mock('@/ui/logger', async (importOriginal) => {
@@ -279,6 +282,69 @@ function loggerReceivedIdentity(value: unknown): boolean {
 }
 
 describe('runSessionLoopLifecycle presence renewal', () => {
+  it('applies capability changes after a provider-owned turn settles while the host input queue remains idle', async () => {
+    capabilityRestart.mockReset();
+    capabilityRestart.mockResolvedValue({ ok: true, status: 'restarted', sessionId: 'session-1' });
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const provider: AgentSessionRuntime = {
+      async send() { throw new Error('Provider-owned turn must not receive a host prompt'); },
+      watch(value) { listener = value; return { dispose() { listener = undefined; } }; },
+      dispose() {},
+    };
+    const runtime = createNativeAgentSessionOperations(provider, 'session-1', undefined, undefined, undefined, undefined, undefined, {
+      context: {} as AgentSessionRuntimeContext, cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+      cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    const fixture = createMutableApiSessionClientFixture({ sessionId: 'session-1', metadata: createMetadata() });
+    let acknowledgeTerminal!: () => void;
+    const terminalAcknowledgement = new Promise<void>(resolve => { acknowledgeTerminal = resolve; });
+    let terminalPending = false;
+    const session = Object.assign(fixture, {
+      enqueueSessionTurnMutation: async (mutation: Parameters<NonNullable<SessionLoopLifecycleParams['session']['enqueueSessionTurnMutation']>>[0]) => {
+        if (mutation.action === 'complete') { terminalPending = true; await terminalAcknowledgement; }
+      },
+      updateMetadataAsCurrentPublisher: async (update: (current: Metadata) => Metadata) => {
+        fixture.updateMetadata(current => update(current!));
+      },
+      enqueueSessionEventCommitted: async () => ({ persisted: true as const, delivered: false as const }),
+    });
+    const run = runSessionLoopLifecycle({ ...base, session, runtime, hookRuntime: runtime,
+      config: { ...base.config, startRuntimeBeforeFirstPrompt: true,
+        lifecycleHooks: { createCheckpointLifecycle: () => ({}) } },
+      capabilitySelection: { agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' } },
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      deps: { ...base.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources,
+        registerKillSessionHandlerFn: undefined,
+        registerRunnerTerminationHandlersFn: options => registerRunnerTerminationHandlers({
+        ...options, processLifecycleOwnership: 'caller', sessionExitReport: null, exit: () => undefined,
+      }) },
+    });
+    try {
+      await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
+      listener?.(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'session-1', turnId: 'native-turn', startedBy: 'provider', emittedAtMs: 1 }));
+      fixture.updateMetadata(current => writeSessionCapabilitySelectionToMetadataV1(current!, {
+        mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+      }, { sessionActive: true }));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(capabilityRestart).not.toHaveBeenCalled();
+      listener?.(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', turnId: 'native-turn', emittedAtMs: 2 }));
+      await vi.waitFor(() => expect(terminalPending).toBe(true));
+      expect(capabilityRestart).not.toHaveBeenCalled();
+      acknowledgeTerminal();
+      await vi.waitFor(() => expect(capabilityRestart).toHaveBeenCalledWith({
+        sessionId: 'session-1', mode: 'force_current_cli', reason: 'capability_selection_change',
+      }));
+      expect(queue.size()).toBe(0);
+    } finally {
+      acknowledgeTerminal();
+      listener?.(canonicalRuntimeEvent({ kind: 'runtime-ended', sessionId: 'session-1', cause: 'providerEnded', retryable: false, emittedAtMs: 3 }));
+      await run;
+    }
+  });
   it('parks idle until the configured renewal deadline and retires renewal on disposal', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -1794,6 +1860,13 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
           kind: 'openView', commandId: 'stop-open', browserSessionId: 'session-1', viewId: 'view', platform: 'web',
           target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' },
       } };
+      const turnId = runtime.readActiveTurnPermissionWitness?.()?.turnId;
+      expect(turnId).toBeDefined();
+      listener?.(canonicalRuntimeEvent({ kind: 'tool-call', sessionId: 'session-1', emittedAtMs: 1,
+        turnId, toolCallId: 'browser-stop-tool', toolName: 'action_execute', input: args }));
+      await vi.waitFor(() => expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
+        expect.anything(), expect.objectContaining({ type: 'tool-call', callId: 'browser-stop-tool' }), expect.anything(),
+      ));
       if (entrypoint === 'native') {
         pending = rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, {
           toolName: 'action_execute', toolCallId: 'browser-stop-tool', args,
@@ -1815,6 +1888,10 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       expect(signal?.aborted).toBe(true);
       if (entrypoint === 'native') await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
       else await expect(pending).resolves.toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('outcome_unknown') }] });
+      await vi.waitFor(() => expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
+        expect.anything(), expect.objectContaining({ type: 'tool-result', callId: 'browser-stop-tool', isError: true,
+          output: expect.objectContaining({ status: 'cancelled' }) }), expect.anything(),
+      ));
       expect(runtimeLifetime.signal.aborted).toBe(false);
     } finally {
       release(); terminate?.({ kind: 'killSession' }); await pending?.catch(() => undefined); await running;
@@ -2779,7 +2856,13 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     expect(JSON.stringify(session.enqueueAgentMessageCommitted.mock.calls)).not.toContain(spoofedAgentTurnId);
   });
 
-  it.each([{ connected: true, acceptsFailure: true }, { connected: true, acceptsFailure: false }, { connected: false, acceptsFailure: true }])('reports attributed quota failure only after the host accepts its failed turn (%j)', async ({ connected, acceptsFailure }) => {
+  it.each([
+    { connected: true, acceptsFailure: true, recoveryUnavailable: false },
+    { connected: true, acceptsFailure: false, recoveryUnavailable: false },
+    { connected: false, acceptsFailure: true, recoveryUnavailable: false },
+    { connected: false, acceptsFailure: false, recoveryUnavailable: false },
+    { connected: false, acceptsFailure: true, recoveryUnavailable: true },
+  ])('reports valid quota evidence only after the host accepts its failed turn (%j)', async ({ connected, acceptsFailure, recoveryUnavailable }) => {
     const outboxRoot = await mkdtemp(join(tmpdir(), 'agy-host-recovery-'));
     recoveryBoundary.outboxRoot = outboxRoot;
     try {
@@ -2818,6 +2901,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
                   kind: 'usage_limit', limitCategory: 'usage_limit', serviceId: 'happier.agent.antigravity/antigravity-account',
                   profileId: connected ? 'selected-profile' : null, groupId: connected ? 'selected-pool' : null,
                   ...(connected ? { groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' } : {}),
+                  ...(recoveryUnavailable ? { connectedServiceRecovery: 'unavailable' } : {}),
                   source: 'stable_provider_message', resetsAtMs: null, retryAfterMs: null, quotaScope: 'account', rateLimits: null,
                 } },
               } },
@@ -2860,8 +2944,9 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
         try { await run; } finally { terminate?.({ kind: 'killSession' }); await run; }
         expect(vi.mocked(base.session.enqueueSessionTurnMutation!).mock.calls.some(([mutation]) => mutation.action === 'fail')).toBe(true);
         expect(failedTurnAccepted).toBe(acceptsFailure);
-        expect(reports).toEqual(connected && acceptsFailure ? [expect.objectContaining({ sessionId: 'session-1', classification: expect.objectContaining({
-          serviceId: 'happier.agent.antigravity/antigravity-account', profileId: 'selected-profile', groupId: 'selected-pool', groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv',
+        expect(reports).toEqual(acceptsFailure && !recoveryUnavailable ? [expect.objectContaining({ sessionId: 'session-1', classification: expect.objectContaining({
+          serviceId: 'happier.agent.antigravity/antigravity-account', profileId: connected ? 'selected-profile' : null, groupId: connected ? 'selected-pool' : null,
+          ...(connected ? { groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' } : {}),
         }) })] : []);
       } finally { await lease.release(); }
     } finally {
@@ -3693,7 +3778,7 @@ describe('runSessionLoopLifecycle required transcript admission', () => {
           committedBodies.push(body);
           return await outbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
             sessionId: 'session-1', localId: options.localId,
-            content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', data: body } } },
+            content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: _provider, body, meta: options.meta }) },
             messageRole: 'agent',
             createdAt: options.createdAt ?? Date.now(), updatedAt: options.updatedAt,
             provenance: options.provenance,
@@ -3735,6 +3820,8 @@ describe('runSessionLoopLifecycle required transcript admission', () => {
       expect(committedBodies).toEqual([
         { type: 'message', message: 'QA_HOST_R6_OK' },
         expect.objectContaining({ type: 'tool-call', callId: 'call-after-reply', name: 'Read' }),
+        expect.objectContaining({ type: 'tool-result', callId: 'call-after-reply', isError: true,
+          output: expect.objectContaining({ status: 'failed' }) }),
       ]);
       expect(base.deps.cleanupBackendRunResourcesFn).toHaveBeenCalled();
       expect(session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({ action: 'complete' }));

@@ -16,6 +16,9 @@ import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdent
 import type { AgentSessionConfigurationSnapshotV1 } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 import { permissionMode } from '@/agent/executionRuns/policy/permissionMode';
+import { resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 
 const EXECUTION_RUN_EXACT_READ_ONLY_SHELL_COMMANDS = new Set([
   'git status',
@@ -51,8 +54,8 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   input?: unknown;
   causalPermissionAuthority?: AcpPermissionCausalAuthority;
   context?: AcpPermissionCallContext;
+  getMcpToolContext?: () => McpToolPolicyContext | null;
 }>): { decision: 'approved' | 'approved_for_session' | 'denied' } | null {
-  if (isWorkspaceWriteDeniedByRole({ workspaceWrites: args.workspaceWrites, toolName: args.toolName, toolInput: args.input })) return { decision: 'denied' };
   const rawLower = String(args.permissionMode ?? '').trim().toLowerCase();
   const normalizedMode = permissionMode(args.permissionMode);
   const hasContextCausalAuthority = Boolean(
@@ -74,6 +77,8 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   // or later response bypass the malformed admitted ceiling.
   if (!effective.ok) return { decision: 'denied' };
   const effectiveMode = effective.effectiveMode;
+  const mcpTool = resolveMcpToolIdentity({ toolName: args.toolName, context: args.getMcpToolContext?.(), permissionMode: parseAgentPermissionIntentV1Alias(effectiveMode) ?? 'default' });
+  if (isWorkspaceWriteDeniedByRole({ workspaceWrites: args.workspaceWrites, toolName: args.toolName, toolInput: args.input, mcpEffectClass: mcpTool?.decision.effectClass })) return { decision: 'denied' };
 
   const allowedIdentifiers = new Set<string>();
   applyAllowedToolsToAllowlist(allowedIdentifiers, args.allowedTools);
@@ -85,6 +90,11 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   // Execution runs still support legacy "no_tools" semantics: deny everything except the shared-safe tools
   // (e.g. title changes) regardless of how it normalizes onto the canonical PermissionMode surface.
   if (rawLower === 'no_tools') return { decision: 'denied' };
+  if (mcpTool) {
+    if (mcpTool.decision.approval === 'deny') return { decision: 'denied' };
+    if (mcpTool.decision.approval === 'allow') return { decision: 'approved' };
+    return listed ? { decision: 'approved_for_session' } : null;
+  }
 
   if (effectiveMode === 'read-only' || effectiveMode === 'plan') {
     const normalizedToolName = String(args.toolName ?? '').trim().toLowerCase();
@@ -134,6 +144,7 @@ export function resolveExecutionRunPermissionDecision(args: Readonly<{
   toolName: string;
   input?: unknown;
   causalPermissionAuthority?: AcpPermissionCausalAuthority;
+  getMcpToolContext?: () => McpToolPolicyContext | null;
 }>): 'approved_for_session' | 'denied' {
   const immediate = resolveExecutionRunImmediateDecision(args);
   if (!immediate) return 'denied';
@@ -147,20 +158,22 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
   workspaceWrites?: 'allow' | 'deny';
   backendId: string;
   causalPermissionAuthority?: AcpPermissionCausalAuthority;
+  getMcpToolContext?: () => McpToolPolicyContext | null;
   publishPendingRequest?: (request: Readonly<{
     requestId: string;
     toolName: string;
     toolInput: unknown;
     turnId?: string;
+    mcpTool?: ResolvedMcpToolIdentityV1;
   }>) => Promise<void> | void;
   }>): ExecutionRunPermissionHandler {
-  const pending = new Map<string, { resolve: (value: { decision: 'approved' | 'denied' }) => void }>();
+  const pending = new Map<string, { resolve: (value: { decision: 'approved' | 'denied' }) => void; readCurrentDecision: () => ReturnType<typeof resolveExecutionRunImmediateDecision> }>();
 
   function respondToPermissionRequest(toolCallId: string, approved: boolean): boolean {
     const request = pending.get(toolCallId) ?? null;
     if (!request) return false;
     pending.delete(toolCallId);
-    request.resolve({ decision: approved ? 'approved' : 'denied' });
+    request.resolve({ decision: approved && request.readCurrentDecision()?.decision !== 'denied' ? 'approved' : 'denied' });
     return true;
   }
 
@@ -178,6 +191,7 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
       backendId: args.backendId,
       toolName,
       input,
+      getMcpToolContext: args.getMcpToolContext,
       ...(Object.prototype.hasOwnProperty.call(args, 'causalPermissionAuthority')
         ? { causalPermissionAuthority: args.causalPermissionAuthority }
         : {}),
@@ -203,13 +217,18 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
         throw error;
       }
       const pendingDecision = new Promise<{ decision: 'approved' | 'denied' }>((resolve) => {
-        pending.set(toolCallId, { resolve });
+        pending.set(toolCallId, { resolve, readCurrentDecision: () => readImmediate(toolCallId, toolName, input, context) });
       });
       try {
         await args.publishPendingRequest({
           requestId: toolCallId,
           toolName,
           toolInput: input,
+          ...(() => {
+            const effective = resolveCausalPermissionMode({ currentPermissionMode: permissionMode(args.permissionMode), context: context ?? (args.causalPermissionAuthority ? { causalPermissionAuthority: args.causalPermissionAuthority } : undefined) });
+            const mcpTool = effective.ok ? resolveMcpToolIdentity({ toolName, context: args.getMcpToolContext?.(), permissionMode: parseAgentPermissionIntentV1Alias(effective.effectiveMode) ?? 'default' }) : null;
+            return mcpTool ? { mcpTool } : {};
+          })(),
           ...(context?.turnId ? { turnId: context.turnId } : {}),
         });
       } catch (error) {

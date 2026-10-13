@@ -19,10 +19,13 @@ export function isWorkspaceWriteDeniedByRole(input: Readonly<{
     workspaceWrites?: 'allow' | 'deny';
     toolName: string;
     toolInput?: unknown;
+    /** Classified by the canonical MCP policy owner, never by the tool spelling. */
+    mcpEffectClass?: 'read' | 'write' | 'unknown';
 }>): boolean {
     if (input.workspaceWrites !== 'deny' || resolveAgentRequestKind(input.toolName) === 'user_action') return false;
     const actionId = resolveHappierActionForMcpToolName({ toolName: input.toolName, input: input.toolInput });
     if (actionId) return getActionSpec(actionId).workspaceWrite === true;
+    if (input.mcpEffectClass !== undefined) return input.mcpEffectClass !== 'read';
     if (isSharedPermissionSafeToolName(input.toolName)) return false;
     const normalized = input.toolName.trim().toLowerCase();
     if (normalized === 'bash' || normalized === 'execute' || normalized === 'shell') {

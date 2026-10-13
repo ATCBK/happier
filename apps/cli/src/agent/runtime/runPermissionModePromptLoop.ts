@@ -77,6 +77,7 @@ import { logger } from '@/ui/logger';
 import type { AgentCompositionToolSelection } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import type { HostPreparedContext } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
 import { createPromptCompositionScope, type PromptPlanComposition } from '@/agent/prompting/promptComposition';
+import type { SessionPromptPlanResolver } from '@/agent/prompting/coding/sessionPromptPlan';
 
 export { projectSessionComposerAttachmentDispatchInput } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 export type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
@@ -624,10 +625,10 @@ export async function runPermissionModePromptLoop(opts: {
   pendingQueueDrainMaxPopPerWake?: number;
   pendingQueueDeliveryTiming?: SessionPendingQueueDeliveryTiming;
   inputConsumer?: SessionProviderInputConsumer<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
-  resolveFreshSessionSystemPrompt?: (args: {
+  resolveFreshSessionSystemPrompt?: ((args: {
     baseOverride?: string | null;
     excludePluginIds?: readonly string[];
-  }) => Promise<string | null | undefined>;
+  }) => Promise<string | null | undefined>) & Pick<SessionPromptPlanResolver, 'assertPreparedPlanCurrent'>;
   /** Catalog support and current full-plan native acceptance, supplied by the host owner. */
   readSessionPromptPlanDeliveryState?: () => Readonly<{
     marker?: AgentSessionStartupInstructionsMarkerV1;
@@ -1402,6 +1403,7 @@ export async function runPermissionModePromptLoop(opts: {
         const effectiveAppendSystemPrompt = typeof freshSessionSystemPrompt === 'string'
           ? freshSessionSystemPrompt.trim()
           : '';
+        if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         const planDeliveryState = resolveSessionPlan ? opts.readSessionPromptPlanDeliveryState?.() : undefined;
         const marker = planDeliveryState?.marker;
         const nativeMarker = planDeliveryState?.nativeDeliveredMarker;
@@ -1432,6 +1434,7 @@ export async function runPermissionModePromptLoop(opts: {
               }) : null;
           // A preserved terminal host retains old startup text. Close only the native runtime
           // incarnation and reopen the same conversation through its canonical factory.
+          opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
           await opts.runtime.resetOrDisposeRuntime('session_closed', { ...nextIntent, startupInstructions });
           modelRequestScope = createPromptCompositionScope();
           if (startupInstructions) {
@@ -1627,6 +1630,8 @@ export async function runPermissionModePromptLoop(opts: {
               }
             : null,
         );
+        // Awaited context and checkpoint preparation can withdraw the resolved plan.
+        if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         opts.onBeforeTurnBegin?.(message.message);
         opts.runtime.beginTurnLifecycle();

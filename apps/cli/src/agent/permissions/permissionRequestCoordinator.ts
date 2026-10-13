@@ -1,4 +1,5 @@
 import { deepEqual } from '@/utils/deterministicJson';
+import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import type {
     AgentStateOutstandingRequest,
     AgentStateRequestResponseTarget,
@@ -20,6 +21,7 @@ export type PermissionRequestCoordinatorRequest = Readonly<{
     toolName: string;
     toolInput: unknown;
     createdAt?: number;
+    mcpTool?: ResolvedMcpToolIdentityV1;
     /** Host-stamped exact turn identity when this request has mediated source authority. */
     turnId?: string;
     lifetime?: 'turn' | 'occurrence';
@@ -74,6 +76,7 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         toolName: string;
         toolInput: unknown;
         createdAt: number;
+        mcpTool?: ResolvedMcpToolIdentityV1;
         turnId?: string;
         kind?: string;
         source?: string;
@@ -161,6 +164,7 @@ type PendingPermissionRequest<TResult> = {
     createdAt: number;
     turnId?: string;
     lifetime: 'turn' | 'occurrence';
+    mcpTool?: ResolvedMcpToolIdentityV1;
     kind?: string;
     source?: string;
     sourceLocalId: string | null;
@@ -275,6 +279,7 @@ export class PermissionRequestCoordinator<TResult> {
             toolName: request.toolName,
             toolInput: request.toolInput,
             createdAt: request.createdAt ?? Date.now(),
+            ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
             lifetime: request.lifetime ?? 'turn',
             ...(typeof request.turnId === 'string' ? { turnId: request.turnId } : {}),
             ...(typeof request.kind === 'string' ? { kind: request.kind } : {}),
@@ -299,6 +304,7 @@ export class PermissionRequestCoordinator<TResult> {
             toolName: entry.toolName,
             toolInput: entry.toolInput,
             createdAt: entry.createdAt,
+            ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
             ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
             ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
             ...(typeof entry.source === 'string' ? { source: entry.source } : {}),

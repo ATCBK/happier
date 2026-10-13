@@ -45,6 +45,8 @@ export type RuntimeTurnConfigUpdate = Readonly<{
   modelId?: string | null;
   /** Host-private exact Provider binding; public callers must use session.model.set. */
   providerBinding?: AgentSessionProviderBinding;
+  /** Reprojection from the canonical MCP policy owner on the existing configuration path. */
+  mcpToolPolicy?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['mcpToolPolicy'];
   permissionMode?: string | null;
   /** Host-resolved role ceiling, independent of permission intent. */
   workspaceWrites?: 'allow' | 'deny';

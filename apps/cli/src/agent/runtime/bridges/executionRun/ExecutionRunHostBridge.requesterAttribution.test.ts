@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, it, onTestFinished, vi } from 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdir, readFile } from 'node:fs/promises';
 import fastify, { type FastifyInstance } from 'fastify';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { ApiSessionClient } from '@/api/session/sessionClient';
@@ -43,6 +44,11 @@ import { createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperatio
 import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
 import { registerCapabilitiesHandlers } from '@/rpc/handlers/capabilities';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { captureSessionLaunchControlMetadata, createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 // This is a host attribution contract, not Claude codec/process certification.
 // An authored public-SDK Agent supplies the external sessions.open/send behavior;
@@ -56,28 +62,34 @@ vi.mock('node:fs', async (importOriginal) => {
 
 const nativeOpen = vi.fn<(request: AgentSessionOpenRequest) => Promise<AgentSessionRuntime>>();
 const nativeDetachedOpen = vi.fn<(request: AgentExecutionRunOpenRequest) => Promise<AgentExecutionRunRuntime>>();
-const testAgentPlugin = definePlugin({
-  id: 'test.c42.attribution', version: '0.0.0', displayName: 'Attribution test Agent',
+const createTestAgentPlugin = (skills: boolean) => definePlugin({
+  id: skills ? 'test.skills.own-set' : 'test.c42.attribution', version: '0.0.0', displayName: 'Attribution test Agent',
   entrypoints: { daemon: './daemon.mjs' },
   agents: {
     agent: {
       declaration: { title: 'Attribution test Agent', runtime: { kind: 'custom' }, primary: 'sessions',
         capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true,
-          executionRunContext: { versions: [1] } } } },
+          executionRunContext: { versions: [1] } }, skills: {
+            delivery: skills ? 'session_dir' : 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          } } },
       factory: () => ({ sessions: { open: request => nativeOpen(request),
         executionRunContextV1: { open: request => nativeDetachedOpen(request) } } }),
       sessionRunnerFactory: { module: './agent-runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
     },
   },
 });
+const testAgentPlugin = createTestAgentPlugin(false);
+const skillsAgentPlugin = createTestAgentPlugin(true);
 const testAgentIdentity = { pluginId: testAgentPlugin.manifest.id, localId: 'agent' };
 let directory: string;
 let admittedRuntimeFixture: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
+let admittedSkillsRuntimeFixture: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
 let home: FastifyInstance | undefined;
 let daemon: FastifyInstance | undefined;
 let restoreHttp: (() => void) | undefined;
 let pluginChanges: ReturnType<typeof createDaemonPluginChangeService> | undefined;
-afterAll(async () => { await admittedRuntimeFixture?.dispose(); });
+let skillStore: ReturnType<typeof createSkillStore> | undefined;
+afterAll(async () => { await admittedSkillsRuntimeFixture?.dispose(); await admittedRuntimeFixture?.dispose(); });
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'happier-run-attribution-'));
   vi.stubEnv('HAPPIER_HOME_DIR', directory);
@@ -91,6 +103,9 @@ afterEach(async () => {
   await home?.close(); home = undefined;
   await daemon?.close(); daemon = undefined;
   await pluginChanges?.shutdown(); pluginChanges = undefined;
+  await skillStore?.releaseSkillSessionDirs('admitted-session');
+  await skillStore?.collectSkillCache({ libraryDigests: [] });
+  skillStore = undefined;
   vi.unstubAllEnvs();
   reloadConfiguration();
   rmSync(directory, { recursive: true, force: true });
@@ -98,14 +113,18 @@ afterEach(async () => {
 
 it.each(['protected child', 'ordinary accepted marker', 'legacy metadata only'] as const)(
   'carries protected child admission through actual Session Run startup into the sole inventory without metadata inference (%s)',
-  runRequesterAttributionCase,
+  source => runRequesterAttributionCase(source),
 );
 
 it('carries admitted Bob Workflow custody through its real detached Action child Run into the sole inventory', async () => {
   await runRequesterAttributionCase('admitted Workflow');
 });
 
-async function runRequesterAttributionCase(source: 'protected child' | 'ordinary accepted marker' | 'legacy metadata only' | 'admitted Workflow') {
+it('delivers a public Session-owned Run its own Agent-qualified workspace skills and supporting files', async () => {
+  await runRequesterAttributionCase('ordinary accepted marker', true);
+});
+
+async function runRequesterAttributionCase(source: 'protected child' | 'ordinary accepted marker' | 'legacy metadata only' | 'admitted Workflow', skillsScenario = false) {
   vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
   const origin = 'http://run-requester-home.test';
   vi.stubEnv('HAPPIER_SERVER_URL', origin);
@@ -115,6 +134,17 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
   // sub-only legacy Account bearers are intentionally invalidated by its reader.
   const token = `header.${Buffer.from(JSON.stringify({ sub: accountId, session: 'run-attribution-terminal' })).toString('base64url')}.signature`;
   const attribution = { serverId: configuration.activeServerId, accountId, machineId: 'admitted-machine', installationId: 'admitted-installation' };
+  const agentPlugin = skillsScenario ? skillsAgentPlugin : testAgentPlugin;
+  const agentIdentity = { pluginId: agentPlugin.manifest.id, localId: 'agent' };
+  const runDirectory = skillsScenario ? join(directory, 'child-workspace') : directory;
+  if (skillsScenario) await mkdir(runDirectory);
+  const artifacts = ['parent', 'child'].map(name => ({ id: `skill-${name}`, ownerAccountId: accountId,
+    access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+    header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: name, bundleSchemaId: 'skills.skill_md_v1' }),
+    body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
+      { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from(`---\nname: ${name}\ndescription: ${name} only\n---\nPrivate body`).toString('base64') },
+      { path: 'references/note.md', contentKind: 'utf8', contentBase64: Buffer.from(`${name} supporting file`).toString('base64') },
+    ] }) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }));
   const workflowRunId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
   const workflowDefinition = { version: 1 as const, inputs: [],
     defaults: { agentTarget: { kind: 'agent' as const, identity: testAgentIdentity },
@@ -173,16 +203,23 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
   home.get(MCP_SERVER_CATALOG_ROWS_ROUTE_V1, async () => McpServerCatalogRowReadResponseV1Schema.parse({
     status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } },
   }));
-  if (source === 'admitted Workflow') {
+  if (source === 'admitted Workflow' || skillsScenario) {
     // Fresh host Agent-start admission reads real Account Role sources and
     // their canonical private catalog before supplying the detached context.
-    home.get('/v1/artifacts', async () => []);
+    home.get('/v1/artifacts', async () => skillsScenario ? artifacts : []);
+    if (skillsScenario) home.get<{ Params: { id: string } }>('/v1/artifacts/:id', async request =>
+      artifacts.find(artifact => artifact.id === request.params.id));
     home.get(PROMPT_LIBRARY_ROWS_ROUTE_V1, async () => PromptLibraryRowsListResponseV1Schema.parse({
-      status: 'listed', rows: [{ key: 'role-overrides', revision: 1,
+      status: 'listed', rows: skillsScenario ? PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+        content: { t: 'plain', v: key === 'skill-rules' ? { key, value: { v: 1, rules: [
+          { id: 'parent', skillId: 'skill-parent', target: { t: 'allMachines' }, agentId: 'claude', enabled: true, createdAt: 1, updatedAt: 1 },
+          { id: 'child', skillId: 'skill-child', target: { t: 'workspace', machineId: attribution.machineId, workspaceRoot: runDirectory },
+            agentId: `${agentIdentity.pluginId}/${agentIdentity.localId}`, enabled: true, createdAt: 1, updatedAt: 1 },
+        ] } } : emptyPromptLibraryRecordV1(key) } })) : [{ key: 'role-overrides', revision: 1,
         content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } } }],
     }));
-    home.post<{ Body: WorkflowRunStorageTestkitOperation }>('/v3/automations/runs/workflow-storage', async request =>
-      await workflowStorage!.execute(request.body));
+    if (workflowStorage) home.post<{ Body: WorkflowRunStorageTestkitOperation }>('/v3/automations/runs/workflow-storage', async request =>
+      await workflowStorage.execute(request.body));
   }
   await home.ready();
   restoreHttp = installAxiosFastifyAdapter({ app: home, origin });
@@ -192,7 +229,9 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
   pluginChanges = createDaemonPluginChangeService({
     prepare: async () => { throw new Error('Unexpected plugin installation'); },
   });
+  skillStore = skillsScenario ? createSkillStore({ happyHomeDir: directory }) : undefined;
   daemon = createDaemonControlApp({
+    ...(skillStore ? { skillStore } : {}),
     getChildren: () => [], machineId: 'admitted-machine', controlToken,
     stopSession: async () => ({ status: 'not_found' as const }),
     spawnSession: async () => { throw new Error('Unexpected child spawn'); },
@@ -244,10 +283,11 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
     || getActiveAccountSettingsSnapshotLifetimeToken() !== accountLifetime) {
     throw new Error('Fixture Account retired during executable catalog admission');
   }
-  admittedRuntimeFixture ??= await createAuthoredAdmittedPluginRuntimeFixture({
+  const existingFixture = skillsScenario ? admittedSkillsRuntimeFixture : admittedRuntimeFixture;
+  const admittedFixture = existingFixture ?? await createAuthoredAdmittedPluginRuntimeFixture({
     controller: pluginReloadController,
     plugins: [{
-      manifest: testAgentPlugin.manifest,
+      manifest: agentPlugin.manifest,
       files: {
         'agent-runtime.mjs': `let open, openDetached;
           export function configureUnitOpen(callback, detachedCallback) { open = callback; openDetached = detachedCallback; }
@@ -276,6 +316,8 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
       },
     }],
   });
+  if (skillsScenario) admittedSkillsRuntimeFixture = admittedFixture;
+  else admittedRuntimeFixture = admittedFixture;
   let resolveNativeOpened!: () => void;
   let rejectNativeStartup!: (error: Error) => void;
   const nativeStartup = new Promise<void>((resolve, reject) => {
@@ -324,9 +366,19 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
     resolveNativeOpened();
     return runtime;
   });
+  const parentProcessIdentity = skillsScenario ? await readProcessIdentityByPid(process.pid) : null;
+  if (skillsScenario && parentProcessIdentity?.processStartTimeMs === undefined) {
+    throw new Error('Missing actual parent process generation for Session-owned Run');
+  }
+  const parentMetadata = skillsScenario ? createSessionMetadata({
+    flavor: 'claude', machineId: attribution.machineId, directory, startedBy: 'daemon',
+    hostProcessStartTimeMs: parentProcessIdentity?.processStartTimeMs,
+    launchControlMetadata: captureSessionLaunchControlMetadata({ processEnvironment: {} }),
+    augmentMetadata: metadata => ({ ...metadata, homeDir: directory }),
+  }).metadata : { path: directory, host: 'host', homeDir: directory, happyHomeDir: directory, happyLibDir: directory,
+    happyToolsDir: directory, flavor: 'claude', machineId: 'metadata-decoy-machine' };
   const session = source === 'admitted Workflow' ? undefined : createTestApiSessionClient(ApiSessionClient, token, createPlainSessionFixture({ id: 'admitted-session',
-    metadata: { path: directory, host: 'host', homeDir: directory, happyHomeDir: directory, happyLibDir: directory,
-      happyToolsDir: directory, flavor: 'claude', machineId: 'metadata-decoy-machine' },
+    metadata: parentMetadata,
   }), { metadataAuthority: { kind: 'owner', credentials, readCurrentCredentials: async () => credentials } });
   const rpc = session?.rpcHandlerManager ?? new RpcHandlerManager({ scopePrefix: attribution.machineId, encryptionMode: 'plain' });
   if (!session) {
@@ -433,7 +485,8 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
       }, rejectNativeStartup).catch(rejectNativeStartup);
     } else {
       const raw = await rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
-        sessionId: 'admitted-session', intent: 'delegate', backendTarget: { kind: 'agent', identity: testAgentIdentity },
+        sessionId: 'admitted-session', intent: 'delegate', backendTarget: { kind: 'agent', identity: agentIdentity },
+        ...(skillsScenario ? { cwd: runDirectory } : {}),
         instructions: 'Inspect.', permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
         requesterWorkAttributionV1: { ...attribution, accountId: 'alice', machineId: 'authored-decoy-machine' },
       }, { verifiedPeerAuthority: 'present_user' });
@@ -457,6 +510,13 @@ async function runRequesterAttributionCase(source: 'protected child' | 'ordinary
     }
     phase = 'native_startup';
     await nativeStartup;
+    if (skillsScenario) {
+      const opened = nativeOpen.mock.calls[0]?.[0];
+      expect(opened?.cwd).toBe(runDirectory);
+      expect(opened?.skills?.pluginRoot).toBe(join(directory, 'skills', 'sessions', 'admitted-session', 'runs', runId!));
+      expect(opened?.skills?.items).toEqual([expect.objectContaining({ skillId: 'skill-child', name: 'child' })]);
+      expect(await readFile(join(opened!.skills!.skillsRoot, 'child', 'references', 'note.md'), 'utf8')).toBe('child supporting file');
+    }
     stopObservingRun?.(); stopObservingRun = undefined;
     phase = 'inventory_observation';
     const observed = await vi.waitFor(async () => {

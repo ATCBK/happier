@@ -1,10 +1,10 @@
 import { resolveCodingPromptSessionTitleUpdatesModeV1 } from '@happier-dev/protocol/prompts/codingPromptBehaviorV1';
-import type { PromptBlockV1 } from '@happier-dev/protocol';
+import type { AgentToolsDelivery, PromptBlockV1 } from '@happier-dev/protocol';
 
 import { buildHappierToolsPromptAppendix } from '@/agent/tools/happierTools/runtime/buildHappierToolsPromptAppendix';
 
 export function resolveCodingToolDeliveryBlocks(args: Readonly<{
-  delivery: 'native_mcp' | 'native_extension' | 'shell_bridge' | 'unsupported';
+  delivery: AgentToolsDelivery;
   sessionId: string;
   directory: string;
   memoryRecallGuidance?: Readonly<{

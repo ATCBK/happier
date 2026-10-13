@@ -47,6 +47,9 @@ export function normalizePluginDeclarativeAcpRuntime(
       ...(parsed.definition.permissionModeArgv
         ? { permissionModeArgv: parsed.definition.permissionModeArgv }
         : {}),
+      ...(parsed.definition.skills
+        ? { skills: parsed.definition.skills }
+        : {}),
       ...(parsed.definition.models
         ? {
           models: buildAcpModelSuffixOptionControls(

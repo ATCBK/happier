@@ -12,6 +12,11 @@ export type AcpRequestOperation =
 
 export type AcpRequestFailureKind = 'transport' | 'timeout' | 'provider_rejection' | 'unknown';
 
+export function readAcpRequestErrorCode(error: unknown): number | null {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  return typeof code === 'number' && Number.isSafeInteger(code) ? code : null;
+}
+
 export function classifyAcpRequestFailureForLog(error: unknown): AcpRequestFailureKind {
   const message = error instanceof Error ? error.message : String(error ?? '');
   const normalized = message.toLowerCase();
@@ -41,16 +46,14 @@ export function createAcpRequestFailureLogRecord(params: Readonly<{
   authenticationSetupFailure?: true;
 }> {
   // JSON-RPC numeric codes are diagnostic metadata; provider messages/data may contain credentials.
-  const code = params.error && typeof params.error === 'object' && 'code' in params.error
-    ? params.error.code
-    : undefined;
+  const code = readAcpRequestErrorCode(params.error);
   return Object.freeze({
     operation: params.operation,
     failureKind: classifyAcpRequestFailureForLog(params.error),
     ...(params.error && typeof params.error === 'object'
       && 'authenticationSetupFailure' in params.error
       && params.error.authenticationSetupFailure === true ? { authenticationSetupFailure: true as const } : {}),
-    ...(typeof code === 'number' && Number.isSafeInteger(code) ? { requestErrorCode: code } : {}),
+    ...(code !== null ? { requestErrorCode: code } : {}),
   });
 }
 

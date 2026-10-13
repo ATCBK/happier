@@ -109,7 +109,6 @@ import {
     composeNativeAgentSessionRuntimeContext,
     createNativeAgentSessionHostServices,
     createNativeAgentSessionOperations as createNativeAgentSessionOperationsBase,
-    createNativeAgentRuntimeSessionPlan,
     type NativeAgentNewTurnAdmissionWitness,
     type NativeAgentSessionHostServiceOwners,
 } from './nativeAgentSession';
@@ -158,7 +157,7 @@ import { withHerdrApi } from '@/integrations/herdr/herdrApi.testkit';
 import { buildTerminalMetadataFromHostHandle, buildTerminalMetadataFromRuntimeFlags } from '@/terminal/runtime/terminalMetadata';
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 import { writeTerminalHostAttachmentInfo, readTerminalHostAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
-import type { HostSessionRuntimeFactoryParams } from '@/agent/runtime/session/loop/runHostSessionRuntime';
+import type { NativeAgentRuntimeSessionFixtureParams as HostSessionRuntimeFactoryParams } from './nativeAgentSession.testkit';
 import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
@@ -170,7 +169,7 @@ import { withCodexNativeAttachFixture } from '../../../../../../../packages/plug
 import { managedServiceHandle } from '../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly.managedServices.testkit';
 import { resolveCodexAttachTarget, createCodexAttachArgs, resolveCodexAttachReachability } from '../../../../../../../packages/plugins/codex/src/agent/surfaces/sessions/attachDescriptor';
 import { resolveOpenCodeAttachTarget, createOpenCodeAttachArgs, resolveOpenCodeAttachReachability } from '../../../../../../../packages/plugins/opencode/src/agent/surfaces/sessions/attach/descriptor';
-import { createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
+import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan, createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
 import { createClaudeExternalSessionsContribution } from '../../../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/contribution';
 import { PLUGIN_MANIFEST as CLAUDE_ACCOUNTING_MANIFEST } from '../../../../../../../packages/plugins/claude/src/manifest';
 import { createBoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
@@ -1635,7 +1634,7 @@ describe('native Agent session host adapter', () => {
             getWorkspaceWrites: roleContext.readWorkspaceWrites,
             resolveFreshSessionSystemPrompt: async () => {
                 const { resolveEffectiveCodingPromptText } = await import('@/agent/prompting/coding/resolveEffectiveCodingPrompt');
-                return resolveEffectiveCodingPromptText({
+                return resolveEffectiveCodingPromptText({ toolDelivery: 'native_mcp',
                     settings: null, profileId: null, baseOverride: 'FULL_ROLE_PLAN', startupInstructions,
                     roleContext: await roleContext.resolvePromptContext(),
                 });
@@ -1854,7 +1853,6 @@ describe('native Agent session host adapter', () => {
             metadata: {},
             machineId: 'machine-1',
             session: createNativeSessionClientTestPort('session-runner-owned-runtime', {
-                getLastObservedMessageSeq: () => 42,
                 enqueueSessionTurnMutation: async (mutation: SessionTurnMutationV1) => {
                     turnMutations.push(mutation);
                 },
@@ -1957,15 +1955,11 @@ describe('native Agent session host adapter', () => {
         await vi.waitFor(() => {
             expect(canonicalTerminalEvents).toHaveLength(1);
         });
-        expect(turnMutations).toContainEqual(expect.objectContaining({
+        // Native evidence must not append anchors before the host's serialized
+        // begin/transcript ACKs. The real host composition verifies their values.
+        expect(turnMutations).not.toContainEqual(expect.objectContaining({
             action: 'append_transcript_anchors',
             turnId: 'turn-runner-owned-runtime',
-            transcriptAnchors: {
-                startUserMessageSeq: 17,
-                userMessageSeqs: [17],
-                startSeqInclusive: 17,
-                endSeqInclusive: 42,
-            },
         }));
         expect(activeTurnAdmissionWitnessReader.current?.()).toBeNull();
 
@@ -2837,6 +2831,8 @@ describe('native Agent session host adapter', () => {
                 ...base.agent.richDefinition,
                 definition: {
                     ...base.agent.richDefinition.definition,
+                    capabilities: { ...base.agent.richDefinition.definition.capabilities,
+                        skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'supported' } },
                     surfaces: {
                         externalSession: {
                             sources: [{
@@ -2923,6 +2919,9 @@ describe('native Agent session host adapter', () => {
             executeProviderSessionFollow,
             retire: retireExternalSessionHostOperations,
         }));
+        // A contributed Agent is the native boundary; host terminal ownership remains real.
+        const refreshSkills = vi.fn<NonNullable<AgentSessionRuntime['refreshSkills']>>(async () => ({ kind: 'applied' }));
+        const skillRefresh = { skills: { pluginRoot: '/tmp/native-terminal-skills', skillsRoot: '/tmp/native-terminal-skills/skills', items: [], nativeDisables: [] } };
         const open = vi.fn(async () => {
             const providerIdentityEvent: AgentSessionRuntimeEvent = {
                 sequence: 1,
@@ -2932,6 +2931,8 @@ describe('native Agent session host adapter', () => {
                 providerSessionId: 'provider-terminal-1',
             };
             return {
+                refreshSkills,
+                async prepareTerminalPresentation() { return { kind: 'terminal_launch' as const, plan: { argv: ['--terminal'] } }; },
                 send: vi.fn(async () => ({ status: 'admitted' as const })),
                 watch(listener: (event: AgentSessionRuntimeEvent) => void) {
                     listener(providerIdentityEvent);
@@ -3142,9 +3143,12 @@ describe('native Agent session host adapter', () => {
             (created.operations as unknown as Readonly<Record<string, unknown>>)
                 .resolveTerminalRemoteSessionModeLoop,
         ).toBeUndefined();
-        const modeLoop = created.terminalRemoteModeLoop ?? null;
+        const startupPresentation = await created.prepareStartupPresentation?.();
+        const modeLoop = startupPresentation?.terminalRemoteModeLoop ?? null;
         expect(modeLoop).not.toBeNull();
         expect(modeLoop?.startingMode).toBe('remote');
+        await created.operations.prepareTerminalPresentation?.({ modelSelection: null });
+        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
         const unsubscribeRuntimeEvents =
             created.operations.subscribeRuntimeEvents(() => undefined);
         let remoteSettled = false;
@@ -3241,7 +3245,7 @@ describe('native Agent session host adapter', () => {
                 projectId: 'project-1',
             },
             options: expect.objectContaining({
-                admissionDeadlineAtMs: expect.any(Number),
+                projection: 'terminal',
                 initialReplay: true,
                 signal: expect.any(AbortSignal),
             }),
@@ -3296,6 +3300,7 @@ describe('native Agent session host adapter', () => {
             expect(executeFollow).toHaveBeenCalledTimes(2);
         });
         expect(stableTerminalEffectActive).toBe(true);
+        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
         requestTerminalModelTransition({
             agentTargetKey: `backend:${agentId}`,
             providerConnectionId: 'pc_next',
@@ -3412,6 +3417,7 @@ describe('native Agent session host adapter', () => {
         await expect(processResolutionRace).resolves.toEqual({
             type: 'switch',
         });
+        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
         expect(terminalModelSelection).toMatchObject({
             providerConnectionId: null,
             modelId: 'native-model-after-terminal',
@@ -3745,7 +3751,8 @@ describe('native Agent session host adapter', () => {
             ]?.[2],
         ).toEqual(expect.objectContaining({
             admission: expect.objectContaining({
-                deadlineAtMs: expect.any(Number),
+                deadlineAtMs: undefined,
+                requireDelivery: true,
                 signal: expect.any(AbortSignal),
             }),
         }));
@@ -5374,6 +5381,21 @@ describe('native Agent session host adapter', () => {
         } finally {
             await runtime.resetOrDisposeRuntime();
         }
+    });
+
+    it('forwards MCP policy through the existing native configuration update without changing permission mode', async () => {
+        const received: unknown[] = [];
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }), watch: () => ({ dispose() {} }), dispose() {},
+            updateConfiguration: async request => { received.push(request); return { status: 'applied', changed: ['mcpToolPolicy'] }; },
+        };
+        const initial = { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 }, permissionIntent: { value: 'default' as const, updatedAtMs: 1 }, options: {} };
+        const runtime = createNativeAgentSessionOperations(session, 'mcp-update', undefined, undefined, undefined, initial);
+        const mcpToolPolicy = { docs: { unlisted: 'ask' as const, tools: { write: 'off' as const } } };
+        try {
+            await runtime.updateSessionRuntimeConfig({ mcpToolPolicy });
+            expect(received).toEqual([{ ...initial, mcpToolPolicy }]);
+        } finally { await runtime.resetOrDisposeRuntime(); }
     });
 
     it('passes the exact host-private Provider binding through a live configuration update', async () => {
@@ -7061,11 +7083,12 @@ describe('native Agent session host adapter', () => {
             },
         });
 
-        await expect(context.services.sessions.current!.auth.services.refreshRuntimeAuth(request))
+        await expect(context.session.services.auth!.services.refreshRuntimeAuth(request))
             .resolves.toEqual({ status: 'unavailable', reason: 'run-member-B' });
         expect(context.session.id).toBe(parentId);
         expect(context.session.services.transcripts).toBe(sessionServices.transcripts);
         expect(context.services.sessions.current!.summary).toBe(services.sessions.current.summary);
+        expect(context.services.sessions.current!.auth).toBe(parentAuth);
         expect(parentRequests).toHaveLength(1);
         expect(runRequests).toEqual([expect.objectContaining({ selection: expect.objectContaining({ profileId: 'member-B' }) })]);
         await expect(services.sessions.current.auth.services.refreshRuntimeAuth(request))
@@ -10142,6 +10165,7 @@ describe('native Agent session host adapter', () => {
         const committedObserver: CommittedUserMessageSeqObserverFixture = { current: null };
         const committedSeqByLocalId = new Map<string, number>();
         const onRollbackBoundary = vi.fn();
+        let terminalWitness: unknown;
         const runtime = createNativeAgentSessionOperations(
             session,
             'session-checkpoint-anchor-before-start',
@@ -10154,7 +10178,7 @@ describe('native Agent session host adapter', () => {
             undefined,
             [],
             {
-                onTurnTerminal: () => undefined,
+                onTurnTerminal: (_event, witness) => { terminalWitness = witness; },
                 onRollbackBoundary,
                 subscribeCommittedUserMessageSeq(listener) {
                     committedObserver.current = listener;
@@ -10218,6 +10242,10 @@ describe('native Agent session host adapter', () => {
         }
         await Promise.resolve();
 
+        expect(terminalWitness).toMatchObject({
+            inputId: 'queue-anchor-before-start', turnId: 'host-turn-anchor-before-start',
+            userMessageSeq: 7, userMessageSeqs: [7],
+        });
         expect(onRollbackBoundary).toHaveBeenCalledOnce();
         expect(onRollbackBoundary).toHaveBeenCalledWith({
             event: expect.objectContaining({

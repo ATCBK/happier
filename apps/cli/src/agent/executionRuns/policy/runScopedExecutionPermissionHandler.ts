@@ -1,6 +1,8 @@
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { ExecutionRunPermissionInteractionMode } from './executionRunPermissionInteractionPolicy';
 import { createExecutionRunPermissionHandler } from './executionRunPermissionDecision';
+import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
 
 function requestIdPrefix(runId: string): string {
   return `execution-run:${encodeURIComponent(runId)}:`;
@@ -45,6 +47,7 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
   controllerOccurrenceId: string;
   handler: AcpPermissionHandler;
   toolPolicy?: Omit<Parameters<typeof createExecutionRunPermissionHandler>[0], 'publishPendingRequest'>;
+  mcpToolPolicy?: NonNullable<AcpPermissionCallContext['mcpToolPolicy']>;
   onPendingRequestAborted?: (request: Readonly<{
     requestId: string;
     reason: string;
@@ -72,8 +75,15 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
     controllerOccurrenceId,
     providerRequestId: requestId,
   });
+  const mcpContext = (toolName: string, context: AcpPermissionCallContext | undefined): AcpPermissionCallContext | undefined => {
+    const policy = params.mcpToolPolicy ?? (params.toolPolicy?.getMcpToolContext
+      ? { permissionMode: params.toolPolicy.permissionMode, readContext: params.toolPolicy.getMcpToolContext } : undefined);
+    const current = policy?.readContext();
+    return policy && current && parseMcpToolWireNameV1(toolName, new Set(Object.keys(current.mcpServerIdentities)))
+      ? { ...context, mcpToolPolicy: policy } : context;
+  };
   const readImmediate: NonNullable<AcpPermissionHandler['getImmediateDecision']> = (toolCallId, toolName, input, context) => {
-    const inherited = params.handler.getImmediateDecision?.(toolCallId, toolName, input, context) ?? null;
+    const inherited = params.handler.getImmediateDecision?.(toolCallId, toolName, input, mcpContext(toolName, context)) ?? null;
     if (inherited?.decision === 'denied' || inherited?.decision === 'abort') return inherited;
     return toolPolicy?.getImmediateDecision(toolCallId, toolName, input, context) ?? inherited;
   };
@@ -123,7 +133,7 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
         }
         pendingRequestIds.add(requestId);
         try {
-          return await params.handler.handleToolCall(requestId, toolName, input, context);
+          return await params.handler.handleToolCall(requestId, toolName, input, mcpContext(toolName, context));
         } finally {
           if (!abortingRequestIds.has(requestId)) pendingRequestIds.delete(requestId);
         }

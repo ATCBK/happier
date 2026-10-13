@@ -1,9 +1,9 @@
-import type { PluginAgentToolsDeliveryV2 } from '@happier-dev/protocol';
+import type { AgentToolsDelivery } from '@happier-dev/protocol';
 
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 
-export type AgentToolsDelivery = PluginAgentToolsDeliveryV2 | 'unsupported';
+export type { AgentToolsDelivery } from '@happier-dev/protocol';
 
 /**
  * The resolved Agent catalog is the single current projection for bundled and

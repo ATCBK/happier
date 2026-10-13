@@ -26,6 +26,7 @@ import { resolveExecutionRunRoleV1 } from '@/agent/executionRuns/profiles/review
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
+import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessionPromptStack';
 import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerprint';
 import { runScmCommand } from '@/scm/runtime';
@@ -375,6 +376,7 @@ async function startAdmittedExecutionRun(
       : null;
     if (role || inheritedMemory?.promptStack.length) {
       const plan = await resolveEffectiveCodingPromptPlan({
+        toolDelivery: resolveAgentToolsDelivery(resolveExecutionRunRuntimeBackendId(args.params.backendTarget)),
         credentials: args.params.promptCredentials,
         settings: args.params.accountSettings,
         profileId: args.params.launchProfileId ?? role?.profileId,

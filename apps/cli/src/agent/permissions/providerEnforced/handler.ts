@@ -32,6 +32,10 @@ import { resolveAgentRequestKind } from '../requestKind';
 import { resolveCausalPermissionMode } from '../causalPermissionMode';
 import { isWorkspaceWriteDeniedByRole } from '../workspaceWritePolicy';
 import type { PermissionRequestCoordinatorContext } from '../permissionRequestCoordinator';
+import { resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import { parseSessionPermissionModeAlias } from '@happier-dev/protocol/sessions/metadata/permission-modes';
+import { resolveEffectivePermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
 
 export type { PermissionResult, PendingRequest };
 
@@ -40,6 +44,7 @@ type HandlerOpts = Readonly<{
   getAccountSettings?: (() => AccountSettings | null) | null;
   getCodingPromptBehavior?: (() => CodingPromptBehaviorV1 | null) | null;
   getWorkspaceWrites?: (() => 'allow' | 'deny' | undefined) | null;
+  getMcpToolContext?: (() => McpToolPolicyContext | null) | null;
   getAccountSettingsSecretsReadKeys?: (() => ReadonlyArray<Uint8Array | null | undefined>) | null;
   onAbortRequested?: (() => void | Promise<void>) | null;
   toolTrace?: { protocol: ToolTraceProtocol; provider: string } | null;
@@ -70,6 +75,7 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
   private readonly logPrefix: string;
   private readonly alwaysAutoApproveToolNameIncludes: ReadonlyArray<string>;
   private currentPermissionMode: PermissionMode = 'default';
+  private readonly getMcpToolContext: () => McpToolPolicyContext | null;
 
   constructor(
     session: ApiSessionClient,
@@ -87,6 +93,7 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       isMediatorContributionCurrent: params.isMediatorContributionCurrent ?? null,
     });
     this.logPrefix = params.logPrefix;
+    this.getMcpToolContext = params.getMcpToolContext ?? (() => null);
     this.alwaysAutoApproveToolNameIncludes = [
       ...DEFAULT_SAFE_TOOL_NAME_SEGMENTS,
       ...(params.alwaysAutoApproveToolNameIncludes ?? []),
@@ -191,6 +198,16 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     return this.alwaysAutoApproveToolNameIncludes.some((name) => normalized === name.trim().toLowerCase());
   }
 
+  private resolveMcpTool(toolName: string, context: AcpPermissionCallContext | undefined, parentMode: PermissionMode) {
+    const child = context?.mcpToolPolicy;
+    const effective = child ? resolveEffectivePermissionMode({
+      currentMode: parseSessionPermissionModeAlias(child.permissionMode) ?? 'default',
+      admittedPermissionCeiling: parseAgentPermissionIntentV1Alias(parentMode) ?? 'default',
+    }) : null;
+    return resolveMcpToolIdentity({ toolName, context: child ? child.readContext() : this.getMcpToolContext(),
+      permissionMode: parseAgentPermissionIntentV1Alias(effective?.ok ? effective.effectiveMode : parentMode) ?? 'default' });
+  }
+
   getImmediateDecision(
     toolCallId: string,
     toolName: string,
@@ -198,8 +215,6 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     context?: AcpPermissionCallContext,
   ): PermissionResult | null {
     if (this.isUnlistedToolDenied(toolName, input)) return { decision: 'denied' };
-    const workspaceDecision = this.resolveWorkspaceWriteDecision(toolName, input);
-    if (workspaceDecision) return workspaceDecision;
     const effective = resolveCausalPermissionMode({
       currentPermissionMode: this.currentPermissionMode,
       context,
@@ -209,6 +224,9 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       return { decision: 'denied' };
     }
     const permissionMode = effective.effectiveMode;
+    const mcpTool = this.resolveMcpTool(toolName, context, permissionMode);
+    const workspaceDecision = this.resolveWorkspaceWriteDecision(toolName, input, mcpTool?.decision.effectClass);
+    if (workspaceDecision) return workspaceDecision;
 
     if (shouldDenyAgentSessionTitleToolCall({
       settings: this.getAccountSettingsSnapshot(),
@@ -235,6 +253,10 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       // configurable confirmation. The provider layer only applies the
       // effective permission-mode ceiling before delegating to that owner.
       return { decision: happierActionPermission.decision };
+    }
+    if (mcpTool) {
+      return mcpTool.decision.approval === 'deny' ? { decision: 'denied' }
+        : mcpTool.decision.approval === 'allow' ? { decision: 'approved' } : null;
     }
     if (deniesHostMediatedFsWrites(permissionMode)
       && this.isAllowedBySessionToolPolicy(toolName, input)
@@ -357,6 +379,10 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       ...(options?.signal ? { signal: options.signal } : {}),
       ...(options ? { causalPermissionContext: options } : {}),
       resolveCurrentPermissionDecision,
+      ...(() => {
+        const mcpTool = this.resolveMcpTool(toolName, options, effective.effectiveMode);
+        return mcpTool ? { mcpTool } : {};
+      })(),
       ...(options?.acknowledgeDecisionApplication
         ? { acknowledgeDecisionApplication: options.acknowledgeDecisionApplication }
         : {}),

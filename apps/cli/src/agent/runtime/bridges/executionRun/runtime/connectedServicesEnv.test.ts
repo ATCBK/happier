@@ -67,6 +67,7 @@ function createDeps(overrides: Partial<{
     readCredentials: ReturnType<typeof vi.fn>;
     resolveSessionSpawnDefaults: ReturnType<typeof vi.fn>;
     recoverRejectedStart: ReturnType<typeof vi.fn>;
+    recoverRuntimeFailure: ReturnType<typeof vi.fn>;
 }> = {}) {
     const requestMaterialization = overrides.requestMaterialization ?? vi.fn(async () => ({
         ok: true as const,
@@ -81,10 +82,32 @@ function createDeps(overrides: Partial<{
     const readCredentials = overrides.readCredentials ?? vi.fn(async () => CREDENTIALS);
     const resolveSessionSpawnDefaults = overrides.resolveSessionSpawnDefaults ?? vi.fn(async () => null);
     return { requestMaterialization, release, readCredentials, resolveSessionSpawnDefaults,
+        ...(overrides.recoverRuntimeFailure ? { recoverRuntimeFailure: overrides.recoverRuntimeFailure } : {}),
         ...(overrides.recoverRejectedStart ? { recoverRejectedStart: overrides.recoverRejectedStart } : {}), runnerPid: 777 };
 }
 
 describe('resolveExecutionRunConnectedServicesEnv', () => {
+    it('recovers the exact Run activation then rematerializes retained native state without prior release', async () => {
+        const recoverRuntimeFailure = vi.fn(async () => ({ status: 'continue' as const, input: 'Continue where you left off', rematerialize: true }));
+        const deps = createDeps({ recoverRuntimeFailure });
+        const resolved = await resolveExecutionRunConnectedServicesEnv({
+            runId: 'run_1', backendId: 'codex', backendSourceKind: 'built_in',
+            connectedServices: CONNECTED_BINDINGS, cwd: '/tmp/project', deps,
+        });
+        const signal = new AbortController().signal;
+        const diagnostic = { code: 'provider_capacity', severity: 'error' as const };
+        const decision = await resolved?.recoverRuntimeFailure({ diagnostic, providerSessionId: 'native-original', interruptedOriginId: 'run-turn-1', signal });
+        expect(decision).toEqual({ status: 'continue', input: 'Continue where you left off', rematerialize: true });
+        expect(recoverRuntimeFailure).toHaveBeenCalledWith({
+            runId: 'run_1', runnerPid: 777, activationId: ACTIVATION_ID,
+            nativeResumeId: 'native-original', interruptedOriginId: 'run-turn-1', diagnostic,
+        }, { signal });
+        await resolved?.rematerializeForRecovery('native-original');
+        expect(deps.requestMaterialization).toHaveBeenLastCalledWith(expect.objectContaining({
+            runId: 'run_1', recovery: { activationId: ACTIVATION_ID, nativeResumeId: 'native-original' },
+        }));
+        expect(deps.release).not.toHaveBeenCalled();
+    });
     it('materializes an attached parent pool rather than Account defaults or the selected parent member', async () => {
         const parentPool = { v: 2 as const, bindingsByServiceId: {
             [OPENAI_CODEX_ACCOUNT_SERVICE_ID]: { source: 'connected' as const, selection: 'group' as const,

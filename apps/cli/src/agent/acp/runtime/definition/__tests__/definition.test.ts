@@ -1206,10 +1206,6 @@ describe('ACP runtime definitions', () => {
             prompt: 'Continue with the approved read.',
             delivery: 'followUp',
           },
-          persistAllowRule: {
-            scope: 'session',
-            toolName: 'read',
-          },
         };
       }
       if (toolName === 'write') {
@@ -1253,10 +1249,6 @@ describe('ACP runtime definitions', () => {
         prompt: 'Continue with the approved read.',
         delivery: 'followUp',
       },
-      persistAllowRule: {
-        scope: 'session',
-        toolName: 'read',
-      },
     });
     await expect(wrappedHandler?.handleToolCall('tool-1', 'read', {})).resolves.toEqual({
       decision: 'approved',
@@ -1264,10 +1256,6 @@ describe('ACP runtime definitions', () => {
       followUpPrompt: {
         prompt: 'Continue with the approved read.',
         delivery: 'followUp',
-      },
-      persistAllowRule: {
-        scope: 'session',
-        toolName: 'read',
       },
     });
     await expect(wrappedHandler?.handleToolCall('tool-2', 'write', {})).resolves.toEqual({

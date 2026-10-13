@@ -12,6 +12,8 @@ import type {
     AgentSessionOpenRequest,
     AgentSessionProviderBinding,
     AgentSessionRuntimeFactory,
+    AgentSessionRuntimeEvent,
+    AgentLaunchEnvironment,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type { ExecutionRunOccurrenceWitnessV1 } from '@/agent/runtime/bridges/executionRun/runOccurrenceWitness';
@@ -45,7 +47,10 @@ import type { RuntimeAuthRefreshViaDaemon } from '@/plugins/runtime/context/runt
  * rebuilding the profile.
  */
 export type NativeAgentSessionRunToolBindingRequest = Readonly<{
+    mcpPermissionHandler?: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
     runId: string;
+    /** The child Run's Agent, independently of the parent's Agent. */
+    agentId: string;
     /** Absolute depth frozen by the Run manager's host admission. */
     workDepth: number;
     cwd: string;
@@ -58,7 +63,16 @@ export type NativeAgentSessionRunToolBindingRequest = Readonly<{
 }>;
 
 export type NativeAgentSessionRunToolBinding = Readonly<{
+    resolvedMcpServers?: readonly import('@/mcp/runtimeTypes').ResolvedSessionMcpServer[];
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+    mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;
+    getMcpToolContext?: () => import('@/mcp/runtime/resolveMcpToolIdentity').McpToolPolicyContext | null;
+    subscribeMcpToolPolicy?: (listener: (policy: NonNullable<AgentSessionOpenRequest['mcpToolPolicy']>) => void) => () => void;
+    skills?: AgentSessionOpenRequest['skills'];
+    observeSkillUse?: (event: Extract<import('@happier-dev/protocol').AgentSessionRuntimeEvent, { kind: 'skill-usage' }>) => Promise<void>;
+    /** Prepared metadata-only fallback for this Run's actual Agent. */
+    skillIndex?: string;
     /** Exact Session read Actions advertised by this occurrence's tool profile. */
     supportedSessionReadActions: readonly SessionRunPromptReadActionIdV1[];
     /** Releases only this Run's binding; the parent Session bridge is untouched. */
@@ -108,6 +122,7 @@ export type NativeAgentSessionInteractionHostBinding = Readonly<{
         | 'enqueueAgentMessageCommitted'
     > & Partial<Pick<ApiSessionClient,
         | 'publishUsageObservation'
+        | 'enqueueSessionEventCommitted'
         | 'enqueueSessionUserMessage'
         | 'enqueueSessionUserMessageWithDisposition'
         | 'bindExecutionRunPendingInput'
@@ -192,7 +207,7 @@ export type CreateCliExecutionRunBackendParams = Readonly<{
     /** Host-only active-turn authority; never a public backend request field. */
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
     accountSettings?: AccountSettings | null;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
+    resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
     start?: ExecutionRunBackendStartContext | null;
     isolation?: ExecutionRunBackendIsolation;
     parentSessionStateTarget?: ExecutionRunSessionStateTarget | null;
@@ -208,6 +223,20 @@ export type CreateCliExecutionRunBackendParams = Readonly<{
     sessionOwnedRunScope?: ExecutionRunHostRunScopeBinding;
     /** Captures the Run materialization's activation; never uses parent Session auth. */
     connectedServiceRuntimeAuthRefresh?: RuntimeAuthRefreshViaDaemon;
+    /** Exact successful native turn evidence, not admission or parent Session activity. */
+    connectedServiceRuntimeTurnCompleted?: () => Promise<void>;
+    /** Shared daemon recovery, bound to this Run's current materialization. */
+    prepareRuntimeFailureRecovery?: (input: Readonly<{
+        diagnostic: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>['diagnostic'];
+        providerSessionId: string;
+        interruptedOriginId: string;
+        signal: AbortSignal;
+    }>) => Promise<Readonly<{
+        status: 'continue';
+        input: string;
+        /** Called after the failed native occurrence has released its state. */
+        prepareResume(): Promise<AgentLaunchEnvironment | undefined>;
+    }> | Readonly<{ status: 'failed' }>>;
 }>;
 
 export type CliSessionRuntime = HostSessionRuntimePlan;

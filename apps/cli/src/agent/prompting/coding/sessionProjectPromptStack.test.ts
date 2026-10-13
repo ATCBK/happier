@@ -20,7 +20,7 @@ it('resolves Project association on the supplied exact Home rather than the acti
   ] } });
   await expect(resolveSessionProjectPromptStack({ serverId, credentials: { token: 'project-token', encryption: null },
     metadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' }, machineId: 'machine',
-  })).resolves.toMatchObject([{ id: 'project.memory', ref: { serverId } }]);
+  })).resolves.toMatchObject({ entries: [{ id: 'project.memory', ref: { serverId } }] });
 });
 
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot();
@@ -70,10 +70,10 @@ it('uses only current Source context for a Source-backed Project and retains the
   const input = { credentials: { token: 'project-token', encryption: null }, machineId: 'machine', directory: '/container',
     metadata: { workspaceId: 'checkout', projectId: 'project', path: '/container', work: { promptStack: [entry('lead')] },
       sessionWorkspaceLocationV1: { v: 1, machineId: 'machine', agentPath: '/container', machinePath: '/repo' } } };
-  expect(await resolveSessionProjectPromptStack(input)).toMatchObject([
+  expect((await resolveSessionProjectPromptStack(input)).entries).toMatchObject([
     { id: 'shared', ref: { serverId } },
   ]);
-  expect((await resolveSessionProjectPromptStack(input)).map(value => value.id)).toEqual(['shared-new']);
+  expect((await resolveSessionProjectPromptStack(input)).entries.map(value => value.id)).toEqual(['shared-new']);
 });
 it('reads only the exact current Project association and reports unavailable Source rather than omitting its context', async () => {
   const serverId = configuration.activeServerId;

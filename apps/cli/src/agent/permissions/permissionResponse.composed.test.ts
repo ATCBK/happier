@@ -19,6 +19,7 @@ import type { RpcRequest } from '@/api/rpc/types';
 import { ProviderEnforcedPermissionHandler } from './providerEnforced/handler';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
 import { db } from '../../../../server/sources/storage/db';
+import { inTx } from '../../../../server/sources/storage/inTx';
 import { registerSocketRpcHandlers } from '../../../../server/sources/app/api/socket/rpc/registerSocketRpcHandlers';
 import { evaluateAccountStoredContentSocketCompatibility } from '../../../../server/sources/app/clientCompatibility/accountStoredContentCompatibility';
 import { createSessionMachineAccessKeyInTx } from '../../../../server/sources/app/accessKeys/sessionMachineAccessKeyMutations';
@@ -33,6 +34,13 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '..
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '../../../../ui/sources/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionActionFixture } from '../../../../ui/sources/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '../../../../ui/sources/dev/testkit/harness/syncSingletonLoader';
+import { McpServerCatalogV1Schema, McpServerCatalogRowMutationV1Schema, McpServerCatalogRowReadResponseV1Schema,
+    McpServerCatalogRowMutationResponseV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { mutateMcpServerCatalogRowInTx, readMcpServerCatalogRowInTx } from '../../../../server/sources/app/account/mcp/serverRows';
+import { answerSessionPermission } from '../../../../ui/sources/sync/ops/sessionPermissionAnswers';
+import { renderHook, createDeferred } from '../../../../ui/sources/dev/testkit';
+import { act } from 'react-test-renderer';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../../../../ui/sources/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 vi.mock('socket.io-client', async importOriginal =>
@@ -58,6 +66,8 @@ const { createBoundPluginSurfaceController } = await import('../../../../ui/sour
 const { createCanonicalPluginReactNativeHostApiAdapter } = await import('../../../../ui/sources/components/plugins/reactNative/hostApi');
 const { createPluginSurfaceContextFixture } = await import('../../../../ui/sources/dev/testkit/fixtures/pluginSurfaceContextFixture');
 const { captureActiveServerAccountScopeLifetime } = await import('../../../../ui/sources/sync/domains/scope/activeServerAccountScope');
+const { useMcpAlwaysAllow } = await import('../../../../ui/sources/components/tools/shell/permissions/useMcpAlwaysAllow');
+const { createDefaultActionExecutor } = await import('../../../../ui/sources/sync/ops/actions/defaultActionExecutor');
 
 describe('Session permission responses through production UI Actions and the authenticated relay', () => {
     let database: LightSqliteHarness;
@@ -78,8 +88,9 @@ describe('Session permission responses through production UI Actions and the aut
     afterEach(() => resetActiveAccountSettingsSnapshotForTests());
     afterEach(standardCleanup);
 
-    it.each(['allowOnce', 'acceptEdits', 'nativeAllowOnce', 'nativeBashPlugin', 'misboundAction'] as const)('delivers %s through the production Action and relay', async button => {
+    it.each(['allowOnce', 'acceptEdits', 'nativeAllowOnce', 'nativeBashPlugin', 'misboundAction', 'mcpAlwaysAllow'] as const)('delivers %s through the production Action and relay', async button => {
         const isNative = button === 'nativeAllowOnce' || button === 'nativeBashPlugin';
+        const isMcp = button === 'mcpAlwaysAllow';
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
         const row = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: '{}' } });
@@ -103,10 +114,19 @@ describe('Session permission responses through production UI Actions and the aut
                 state = next;
             },
         };
-        const handler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, { logPrefix: '[Permission seam]' });
+        let catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'github-catalog', name: 'github', title: 'GitHub', transport: 'stdio',
+            stdio: { command: 'fixture-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+            tools: { default: 'allow_read_only', overrides: {} }, toolsSnapshot: { checkedAt: 1, machineId: machine.id,
+                tools: [{ name: 'delete_file', title: 'Delete file', annotations: { destructiveHint: true }, tokens: 10 }] } }], bindings: [] });
+        if (isMcp) await expect(inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: account.id,
+            expectedRevision: 'absent', sourceSettingsVersion: account.settingsVersion, content: { t: 'plain', v: catalog }, referencedSavedSecretIds: [] })))
+            .resolves.toMatchObject({ status: 'updated', revision: 0 });
+        const handler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, { logPrefix: '[Permission seam]',
+            ...(isMcp ? { getMcpToolContext: () => ({ catalog: { status: 'ready' as const, authority: 'active' as const,
+                revision: 1, diagnostics: [], catalog }, mcpServerIdentities: { github: { serverId: 'github-catalog', serverTitle: 'GitHub' } } }) } : {}) });
         let requestId: string = randomUUID();
         const turnId = `native-turn-${randomUUID()}-1`;
-        const toolName = button === 'nativeBashPlugin' ? 'Bash' : 'Edit';
+        const toolName = isMcp ? 'mcp__github__delete_file' : button === 'nativeBashPlugin' ? 'Bash' : 'Edit';
         const input = toolName === 'Bash' ? { command: 'pwd' }
             : { file_path: '/fixture/alpha.txt', old_string: 'before', new_string: 'after' };
         const permissionContext = { turnId,
@@ -125,7 +145,28 @@ describe('Session permission responses through production UI Actions and the aut
             ? createClaudeNativePermissionEngine(nativeContext).canCallTool(toolName, input)
             : handler.handleToolCall(requestId, toolName, input, permissionContext);
         void pending.catch(() => {});
-        const http = createServer();
+        let failCatalogSave = isMcp;
+        const catalogSaveStarted = createDeferred<void>();
+        const releaseCatalogSave = createDeferred<void>();
+        const http = createServer((request, response) => {
+            if (request.url !== '/v1/account/entity-rows/mcp') { response.writeHead(404); response.end(); return; }
+            void (async () => {
+                response.setHeader('Content-Type', 'application/json');
+                if (request.method !== 'POST') {
+                    response.end(JSON.stringify(McpServerCatalogRowReadResponseV1Schema.parse(await readMcpServerCatalogRowInTx(db, { accountId: account.id }))));
+                    return;
+                }
+                const chunks: Buffer[] = [];
+                for await (const chunk of request) chunks.push(Buffer.from(chunk));
+                const mutation = McpServerCatalogRowMutationV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
+                catalogSaveStarted.resolve();
+                await releaseCatalogSave.promise;
+                if (failCatalogSave) { response.writeHead(503); response.end('{}'); return; }
+                const result = await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: account.id, ...mutation }));
+                if (result.status === 'updated' && mutation.content?.t === 'plain') catalog = mutation.content.v;
+                response.end(JSON.stringify(McpServerCatalogRowMutationResponseV1Schema.parse(result)));
+            })().catch(error => { response.writeHead(500); response.end(JSON.stringify({ error: String(error) })); });
+        });
         const sockets = new Server(http);
         const compatibility = evaluateAccountStoredContentSocketCompatibility(
             buildAccountStoredContentCompatibilitySocketAuthV1(CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION),
@@ -222,6 +263,58 @@ describe('Session permission responses through production UI Actions and the aut
                 installSessionActionFixture({ homes, storage, serverId, session: { id: other.id, encryptionMode: 'plain' } });
             }
             const actions = createAppSessionTranscriptActions(actionSessionId, serverId);
+            if (isMcp) {
+                for (const method of ['GET', 'POST']) homes.answer(serverId, `${method} /v1/account/entity-rows/mcp`, {
+                    select: async input => {
+                        const response = await fetch(`${url}/v1/account/entity-rows/mcp`, { method,
+                            headers: { 'Content-Type': 'application/json' }, ...(method === 'POST' ? { body: JSON.stringify(input) } : {}) });
+                        return { status: response.status, body: await response.json() };
+                    },
+                });
+                const identity = permission.mcpTool;
+                if (!identity) throw new Error('Real permission producer omitted MCP identity');
+                const hook = await renderHook(() => useMcpAlwaysAllow({ requestId, turnId, identity, scope: { serverId, accountId: account.id },
+                    canWriteCatalog: true, answerForSession: () => answerSessionPermission({ requestId, turnId, toolName,
+                        answer: 'allowForSession', policy: { protocol: 'standard', usePermissionUpdates: false }, respondToPermission: actions.respondToPermission }) }));
+                await vi.waitFor(() => expect(hook.getCurrent().available).toBe(true));
+                let save!: Promise<void>;
+                let phase: 'catalog' | 'settled' = 'settled';
+                await act(async () => {
+                    save = hook.getCurrent().allow();
+                    phase = await Promise.race([catalogSaveStarted.promise.then(() => 'catalog' as const), save.then(() => 'settled' as const)]);
+                });
+                expect(phase, JSON.stringify({ state: hook.getCurrent(), emittedMethods, rpcReplies,
+                    requests: homes.requests.map(({ path, input }) => ({ path, input })) })).toBe('catalog');
+                expect(hook.getCurrent().status).toBe('saving');
+                await expect(pending).resolves.toMatchObject({ decision: 'approved' });
+                const before = await readMcpServerCatalogRowInTx(db, { accountId: account.id });
+                expect(before).toMatchObject({ revision: 0, content: { v: { servers: [{ tools: { overrides: {} } }] } } });
+                await act(async () => { releaseCatalogSave.resolve(); await save; });
+                expect(hook.getCurrent().status).toBe('save_failed');
+                failCatalogSave = false;
+                await act(async () => { await hook.getCurrent().retrySave(); });
+                expect(hook.getCurrent().status).toBe('saved');
+                expect(emittedMethods).toEqual([`${row.id}:session.permission.respond`]);
+                expect(await readMcpServerCatalogRowInTx(db, { accountId: account.id })).toMatchObject({ revision: 1,
+                    content: { v: { servers: [{ tools: { default: 'allow_read_only', overrides: { delete_file: 'allow' } } }] } } });
+                const receipt = await createDefaultActionExecutor().execute('mcp.servers.tools.list', { serverId: identity.item.serverId },
+                    { serverId, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+                expect(receipt.ok).toBe(true);
+                if (!receipt.ok) throw new Error(receipt.error);
+                expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse(receipt.result)).toMatchObject({
+                    settings: { default: 'allow_read_only', tools: { delete_file: 'allow' } }, tools: [{ name: 'delete_file', setting: 'allow', source: 'tool' }] });
+                // A new permission owner proves persistence, rather than merely the first handler's session grant.
+                const freshSession = { ...session, sessionId: `fresh-${row.id}`,
+                    rpcHandlerManager: new RpcHandlerManager({ scopePrefix: `fresh-${row.id}`, encryptionMode: 'plain', logger: () => {} }),
+                    getAgentStateSnapshot: () => ({ requests: {}, completedRequests: {} }) };
+                const fresh = new ProviderEnforcedPermissionHandler(freshSession as unknown as ApiSessionClient, { logPrefix: '[Persisted MCP seam]',
+                    getMcpToolContext: () => ({ catalog: { status: 'ready', authority: 'active', revision: 2, diagnostics: [], catalog },
+                        mcpServerIdentities: { github: { serverId: identity.item.serverId, serverTitle: 'GitHub' } } }) });
+                try { expect(fresh.getImmediateDecision('next-call', toolName, {})).toMatchObject({ decision: 'approved' }); }
+                finally { await fresh.reset(); }
+                await hook.unmount();
+                return;
+            }
             if (button === 'nativeAllowOnce') {
                 // Real Action producer -> exact strict native consumer. An
                 // unsupported reusable grant must leave the request pending.
@@ -301,6 +394,7 @@ describe('Session permission responses through production UI Actions and the aut
                 } : {}),
             });
         } finally {
+            releaseCatalogSave.resolve();
             await connection?.dispose();
             await handler.reset();
             manager.onSocketDisconnect();

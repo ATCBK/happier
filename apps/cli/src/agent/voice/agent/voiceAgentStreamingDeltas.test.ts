@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createVoiceAgentOutputTurnV1 } from '@happier-dev/protocol';
+import { VoiceAgentSpeechSegmentEventV1Schema } from '@happier-dev/protocol/voice/outputEvents';
 
 import { finalizeVoiceAgentStreamingSpeech, ingestVoiceAgentStreamingDelta } from './voiceAgentStreamingDeltas';
 
-function createStream() {
+type StreamingState = Parameters<typeof ingestVoiceAgentStreamingDelta>[0];
+
+function createStream(): StreamingState {
   return {
     done: false,
     suppressActionDeltas: false,
@@ -12,11 +15,20 @@ function createStream() {
     outputSpeechText: '',
     outputBudget: createVoiceAgentOutputTurnV1('turn-1'),
     outputIncomplete: false,
-    events: [] as any[],
+    events: [],
     id: 'turn-1',
     outputSeq: 0,
     outputSegmentIndex: 0,
   };
+}
+
+function speechSegments(stream: StreamingState) {
+  return stream.events.map((event) => {
+    expect(event).toMatchObject({ t: 'voice_output' });
+    return VoiceAgentSpeechSegmentEventV1Schema.parse(
+      typeof event === 'object' && event !== null && 'output' in event ? event.output : undefined,
+    );
+  });
 }
 
 function patchStream(stream: ReturnType<typeof createStream>) {
@@ -31,7 +43,7 @@ describe('voice agent streaming speech segmentation', () => {
     for (const character of expected) ingestVoiceAgentStreamingDelta(stream, patch, character);
     finalizeVoiceAgentStreamingSpeech(stream, patch);
 
-    const segments = stream.events.map((event) => event.output);
+    const segments = speechSegments(stream);
     expect(segments.length).toBeLessThanOrEqual(256);
     expect(segments.every((event) => event.kind === 'speech_segment' && event.text.length <= 1_024)).toBe(true);
     expect(segments.map((event) => event.text).join('')).toBe(expected);
@@ -46,16 +58,12 @@ describe('voice agent streaming speech segmentation', () => {
     }
     finalizeVoiceAgentStreamingSpeech(stream, patch);
 
-    expect(stream.events.map((event) => event.output.text).join('')).toBe('Speak this. ');
+    expect(speechSegments(stream).map((event) => event.text).join('')).toBe('Speak this. ');
     expect(stream.suppressActionDeltas).toBe(true);
   });
   it('emits a useful first sentence before completion and filters split action tags', () => {
-    const stream = {
-      done: false, suppressActionDeltas: false, deltaHold: '', outputSpeechBuffer: '',
-      outputSpeechText: '', outputBudget: createVoiceAgentOutputTurnV1('turn'), outputIncomplete: false,
-      events: [] as unknown[], id: 'turn', outputSeq: 0, outputSegmentIndex: 0,
-    };
-    const patch = (next: Partial<typeof stream>) => Object.assign(stream, next);
+    const stream = createStream();
+    const patch = patchStream(stream);
     ingestVoiceAgentStreamingDelta(stream, patch, 'Open index.');
     expect(stream.events).toEqual([]);
     ingestVoiceAgentStreamingDelta(stream, patch, 'ts at https://example.com at 10:30. ');
@@ -65,7 +73,7 @@ describe('voice agent streaming speech segmentation', () => {
     ingestVoiceAgentStreamingDelta(stream, patch, '<voice_act');
     ingestVoiceAgentStreamingDelta(stream, patch, 'ions>{"actions":[]}</voice_actions>');
     finalizeVoiceAgentStreamingSpeech(stream, patch);
-    const speech = stream.events.map((event) => (event as { output: { text: string } }).output.text).join('');
+    const speech = speechSegments(stream).map((event) => event.text).join('');
     expect(speech.trim()).toBe('Open index.ts at https://example.com at 10:30.');
   });
 });

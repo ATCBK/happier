@@ -167,7 +167,7 @@ async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]
       && Reflect.get(metadata, 'projectId') === undefined ? [] : input.credentials && input.machineId
         ? await resolveSessionProjectPromptStack({ credentials: input.credentials, metadata,
             signal: input.signal, machineId: input.machineId, directory: input.directory,
-            serverId: input.serverId ?? undefined })
+            serverId: input.serverId ?? undefined }).then(project => project.entries)
         : (() => { throw new PromptStackPreparationError('unavailable'); })());
     const profileId: unknown = Reflect.get(metadata, 'profileId');
     const projectKey: unknown = Reflect.get(metadata, 'projectId');

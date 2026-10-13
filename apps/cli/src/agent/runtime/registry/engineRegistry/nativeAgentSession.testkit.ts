@@ -1,6 +1,38 @@
 import type { AgentRuntimeRegistrationLease } from '@/plugins/runtime/lifecycle/contributions/targetAgents';
 import type { ResolvedAgentContribution, ResolvedAgentRuntimeContribution } from '@/plugins/projection/registry/types';
-import type { NativeAgentSessionHostServiceOwners } from './nativeAgentSession';
+import { createNativeAgentRuntimeSessionPlan, type NativeAgentSessionHostServiceOwners } from './nativeAgentSession';
+import type { HostSessionRuntimeFactoryParams } from '@/agent/runtime/session/loop/runHostSessionRuntime';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+
+export type NativeAgentRuntimeSessionFixtureParams = Omit<HostSessionRuntimeFactoryParams, 'currentSessionPresentation'>;
+
+/** Supplies the real logical-Session owner normally composed by runHostSessionRuntime. */
+export async function createNativeAgentRuntimeSessionPlanFixture(
+    params: Parameters<typeof createNativeAgentRuntimeSessionPlan>[0],
+) {
+    const plan = await createNativeAgentRuntimeSessionPlan(params);
+    const createSessionRuntime = plan.config.createSessionRuntime;
+    if (!createSessionRuntime) throw new Error('Native Session factory unavailable');
+    return {
+        ...plan,
+        config: {
+            ...plan.config,
+            createSessionRuntime: async (hostRuntimeParams: NativeAgentRuntimeSessionFixtureParams) => {
+                const presentationHost = createCurrentSessionPresentationHost({
+                    session: hostRuntimeParams.session,
+                    signal: params.generationSignal ?? params.lease?.retirementSignal ?? new AbortController().signal,
+                    ...(hostRuntimeParams.recordRuntimeLimitMeasurement
+                        ? { recordRuntimeLimitMeasurement: hostRuntimeParams.recordRuntimeLimitMeasurement }
+                        : {}),
+                });
+                return await createSessionRuntime({
+                    ...hostRuntimeParams,
+                    currentSessionPresentation: presentationHost.bindCurrentSession,
+                });
+            },
+        },
+    };
+}
 
 export function createNativeSessionClientTestPort(sessionId: string, overrides: Readonly<Record<string, unknown>> = {}) {
     let agentState: Record<string, unknown> = {};

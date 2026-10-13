@@ -12,6 +12,7 @@ export function createProviderEnforcedPermissionHandler(params: {
   getAccountSettings?: (() => AccountSettings | null) | null;
   getCodingPromptBehavior?: (() => CodingPromptBehaviorV1 | null) | null;
   getWorkspaceWrites?: (() => 'allow' | 'deny' | undefined) | null;
+  getMcpToolContext?: (() => import('@/mcp/runtime/resolveMcpToolIdentity').McpToolPolicyContext | null) | null;
   getAccountSettingsSecretsReadKeys?: (() => ReadonlyArray<Uint8Array | null | undefined>) | null;
   onAbortRequested?: (() => void | Promise<void>) | null;
   toolTrace?: { protocol: ToolTraceProtocol; provider: string } | null;
@@ -28,6 +29,7 @@ export function createProviderEnforcedPermissionHandler(params: {
     getAccountSettings: params.getAccountSettings ?? null,
     getCodingPromptBehavior: params.getCodingPromptBehavior ?? null,
     getWorkspaceWrites: params.getWorkspaceWrites ?? null,
+    getMcpToolContext: params.getMcpToolContext ?? null,
     getAccountSettingsSecretsReadKeys: params.getAccountSettingsSecretsReadKeys ?? null,
     onAbortRequested: params.onAbortRequested ?? null,
     toolTrace: params.toolTrace ?? null,

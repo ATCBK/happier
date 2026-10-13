@@ -3,6 +3,7 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 import { resolveRuntimeCheckpointToolProtocol } from '@happier-dev/agents/session/controls/checkpoints';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { isRecord } from '@happier-dev/plugin-sdk';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
 import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionRuntimeIssueV1, SessionTurnFactsV1, SessionRolePromptContextV1 } from '@happier-dev/protocol';
 import { render } from 'ink';
@@ -23,6 +24,7 @@ import {
   type RuntimeOverrideTarget,
 } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/runnerTerminationHandlers';
+import type { CapabilitySelectionSynchronizerInput } from '@/agent/runtime/capabilitySelectionSynchronizer';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import {
@@ -57,7 +59,6 @@ import { readAgentSessionCapabilities } from '@/plugins/projection/registry/agen
 import { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedToolTurnChangeTracker';
 import { createRepositoryCheckpointPromptLifecycle } from '@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle';
 import { notifyDaemonConnectedServiceTurnLifecycle } from '@/daemon/controlClient';
-import { hasConnectedServiceRuntimeAuthRecoveryContext } from '@/agent/runtime/session/errors/connectedServiceRuntimeAuthRecoveryContext';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
@@ -85,7 +86,7 @@ import {
 } from '@/agent/runtime/session/turn/lifecycle';
 import {
   commitRequiredRuntimeTranscriptMessage,
-  projectRuntimeTranscriptEvent,
+  createRuntimeTranscriptProjector,
   RuntimeTranscriptRequiredAdmissionError,
 } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import {
@@ -359,6 +360,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   sessionIsNew?: boolean;
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
+  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner'>;
   registerProviderAcceptedEffect: (
     localId: string,
     onAccepted: (() => void) | null,
@@ -398,7 +400,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   runtimeState: {
     thinking: boolean;
   };
-  setAbortRequestedCallback: (callback: (() => void | Promise<void>) | null) => void;
+  setAbortRequestedCallback: (callback: (() => void | Promise<void>) | null, readSignal?: () => AbortSignal) => void;
   transitionModelSelection: (
     selection: ProviderBoundModelRef,
     source: 'metadata' | 'prompt',
@@ -535,10 +537,18 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   });
   const terminalTurnStateMachine = createTerminalTurnStateMachine();
   const pendingRuntimeTranscriptProjections = new Set<Promise<void>>();
-  const requiredTranscriptAdmissionFailureByTurnId = new Map<
-    string,
-    RuntimeTranscriptRequiredAdmissionError
-  >();
+  const runtimeTranscriptStateByTurnId = new Map<string, {
+    failure?: RuntimeTranscriptRequiredAdmissionError;
+    userLocalIds: Set<string>;
+  }>();
+  const readTurnTranscriptState = (turnId: string) => {
+    let state = runtimeTranscriptStateByTurnId.get(turnId);
+    if (!state) {
+      state = { userLocalIds: new Set<string>() };
+      runtimeTranscriptStateByTurnId.set(turnId, state);
+    }
+    return state;
+  };
   let activeRuntimeTranscriptTurnId: string | null = null;
   const trackRuntimeTranscriptProjection = (projection: Promise<void>): void => {
     pendingRuntimeTranscriptProjections.add(projection);
@@ -573,7 +583,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       try {
         await Promise.all(projectionsBeforeTerminalMutation);
         if ('turnId' in mutation) {
-          const earlierFailure = requiredTranscriptAdmissionFailureByTurnId.get(mutation.turnId);
+          const earlierFailure = runtimeTranscriptStateByTurnId.get(mutation.turnId)?.failure;
           if (earlierFailure) throw earlierFailure;
         }
       } catch (error) {
@@ -603,7 +613,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           },
         };
         await enqueueTerminalMutation(failureMutation);
-        requiredTranscriptAdmissionFailureByTurnId.delete(mutation.turnId);
+        runtimeTranscriptStateByTurnId.delete(mutation.turnId);
         if (activeRuntimeTranscriptTurnId === mutation.turnId) {
           activeRuntimeTranscriptTurnId = null;
         }
@@ -612,31 +622,50 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
 
       try {
+        // Resolve only acknowledged rows after prior transcript projections.
+        // Native acceptance can precede both begin-marker admission and HTTP ACKs.
+        const userMessageSeqs = 'turnId' in mutation
+          ? [...new Set([...readTurnTranscriptState(mutation.turnId).userLocalIds]
+              .map(localId => params.session.getCommittedUserMessageSeq?.(localId))
+              .filter((seq): seq is number => typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0))]
+              .sort((left, right) => left - right)
+          : [];
+        const startUserMessageSeq = userMessageSeqs[0];
+        const snapshot = params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot();
+        const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
+          && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
+          ? snapshot.seq : null;
+        const observedSeq = params.session.getLastObservedMessageSeq?.();
+        const endSeqs = [...userMessageSeqs,
+          ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
+          ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
+        if ((mutation.action === 'fail' || mutation.action === 'cancel') && startUserMessageSeq !== undefined) {
+          await enqueueTerminalMutation({
+            v: mutation.v, sessionId: mutation.sessionId,
+            mutationId: `${mutation.mutationId}:input-anchors`, observedAt: mutation.observedAt,
+            ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
+            action: 'append_transcript_anchors', turnId: mutation.turnId,
+            transcriptAnchors: { startUserMessageSeq, userMessageSeqs,
+              startSeqInclusive: startUserMessageSeq, endSeqInclusive: Math.max(...endSeqs) },
+          });
+        }
         const settledMutation: RuntimeSessionTurnMutationV1 =
           mutation.action === 'complete'
             ? {
                 ...mutation,
                 transcriptAnchors: {
                   ...mutation.transcriptAnchors,
-                  finalAssistantMessageSeq: (() => {
-                    const snapshot = params.session
-                      .getTurnAssistantTextSnapshotStore?.()
-                      ?.getCurrentTurnSnapshot();
-                    return (
-                      (snapshot?.source === 'committed' || snapshot?.source === 'socket')
-                      && typeof snapshot.seq === 'number'
-                      && Number.isSafeInteger(snapshot.seq)
-                      && snapshot.seq >= 0
-                    )
-                      ? snapshot.seq
-                      : null;
-                  })(),
+                  ...(startUserMessageSeq !== undefined ? {
+                    startUserMessageSeq, userMessageSeqs,
+                    startSeqInclusive: startUserMessageSeq, endSeqInclusive: Math.max(...endSeqs),
+                  } : {}),
+                  finalAssistantMessageSeq,
                 },
               }
             : mutation;
         await enqueueTerminalMutation(settledMutation);
         if ('turnId' in mutation) {
-          requiredTranscriptAdmissionFailureByTurnId.delete(mutation.turnId);
+          runtimeTranscriptStateByTurnId.delete(mutation.turnId);
           if (activeRuntimeTranscriptTurnId === mutation.turnId) {
             activeRuntimeTranscriptTurnId = null;
           }
@@ -653,6 +682,8 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     trackRuntimeTranscriptProjection(terminalMutation.then(() => undefined));
     return terminalMutation;
   };
+  let capabilityOverrideSync: RuntimeOverrideSynchronizers | null = null;
+  let lastCapabilitySettledTurnId: string | undefined;
   const sessionTurnLifecycle = createSessionTurnLifecycle({
     session: {
       get sessionId() {
@@ -666,13 +697,22 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     }),
     onTurnFactsChanged: (input) => {
       params.session.observeHostTurnFacts?.(input);
-      if (input.facts === null) preparedTurnFacts = null;
+      if (input.facts === null) {
+        preparedTurnFacts = null;
+        lastCapabilitySettledTurnId = input.turnId;
+        // Do not join this wake to transcript/marker custody: a restart waits
+        // for this runner to exit, whose cleanup drains those same owners.
+        void flushCapabilitiesAfterSettlement(input.turnId).catch(() => {
+          logger.debug('[CapabilitySelection] Settled-turn apply unavailable; selection remains pending');
+        });
+      }
     },
     onAcceptedTurnFailure: async (event) => {
+      const details = event.diagnostic.details;
       const classification = sanitizeConnectedServiceRuntimeFailureClassification(
-        event.diagnostic.details?.runtimeAuthClassification,
+        isRecord(details) ? details.runtimeAuthClassification : undefined,
       );
-      if (!classification || !hasConnectedServiceRuntimeAuthRecoveryContext(classification)) return;
+      if (!classification || classification.connectedServiceRecovery === 'unavailable') return;
       try {
         const report = await reportConnectedServiceRuntimeAuthFailureToDaemon({
           sessionId: params.session.sessionId,
@@ -715,6 +755,11 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         }
       : {}),
   });
+  async function flushCapabilitiesAfterSettlement(turnId?: string): Promise<void> {
+    await drainRuntimeTranscriptProjections();
+    await sessionTurnLifecycle.drainAcceptedLifecycle();
+    if (!shouldExit) await capabilityOverrideSync?.flushAfterSettledTurn?.(turnId);
+  }
   const runtimeTranscriptProvider = normalizeAcpProvider(params.config.agentMessageType, 'agent');
   const normalizedToolTurnChangeTracker = new NormalizedToolTurnChangeTracker({
     provider: runtimeTranscriptProvider,
@@ -732,12 +777,22 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     resolvedStartingMode.kind === 'switching' ? resolvedStartingMode.startingMode : 'remote';
   let terminalHandoffFailureRequiresManualAction = false;
   let runtimeTranscriptProjectionSerial = Promise.resolve();
+  const projectRuntimeTranscript = createRuntimeTranscriptProjector();
   let requestRuntimeEndedTermination = (): void => undefined;
   const observeRuntimeLifecycleMessage = (message: unknown): void => {
     const parsedRuntimeEvent = AgentSessionRuntimeEventSchema.safeParse(message);
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'turn-start') {
       activeRuntimeTranscriptTurnId = parsedRuntimeEvent.data.turnId;
-      requiredTranscriptAdmissionFailureByTurnId.delete(parsedRuntimeEvent.data.turnId);
+      delete readTurnTranscriptState(parsedRuntimeEvent.data.turnId).failure;
+    }
+    if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'input-accepted') {
+      const event = parsedRuntimeEvent.data;
+      const state = readTurnTranscriptState(event.delivery.turnId);
+      for (const localId of event.inputIds) state.userLocalIds.add(localId);
+    }
+    if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'transcript-message-committed'
+      && parsedRuntimeEvent.data.role === 'user' && parsedRuntimeEvent.data.turnId) {
+      readTurnTranscriptState(parsedRuntimeEvent.data.turnId).userLocalIds.add(parsedRuntimeEvent.data.messageId);
     }
     const parsedProjectionTurnId = parsedRuntimeEvent.success && 'turnId' in parsedRuntimeEvent.data
       ? parsedRuntimeEvent.data.turnId
@@ -760,13 +815,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     const transcriptProjection = runtimeTranscriptProjectionSerial.then(async () => {
       let transcriptProjectionError: unknown = null;
       try {
-        await projectRuntimeTranscriptEvent({
+        await projectRuntimeTranscript({
           session: params.session,
           provider: runtimeTranscriptProvider,
           runtimeMessageDeltaBridge,
           normalizedToolTurnChangeTracker,
           toolNormalizationProtocol,
-          mcpBindingIdentities: params.config.mcpBindingIdentities,
+          mcpServerIdentities: params.config.mcpServerIdentities,
+          skillDelivery: params.config.readSkillDelivery?.(),
+          usageAccount: params.config.skillUsageAccount,
           event: message,
         });
       } catch (error) {
@@ -792,7 +849,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           projectionTurnId
           && error instanceof RuntimeTranscriptRequiredAdmissionError
         ) {
-          requiredTranscriptAdmissionFailureByTurnId.set(projectionTurnId, error);
+          readTurnTranscriptState(projectionTurnId).failure = error;
         }
         logger.debug(
           error instanceof RuntimeTranscriptRequiredAdmissionError
@@ -900,7 +957,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       });
     }
   };
-  params.setAbortRequestedCallback(handleAbort);
+  params.setAbortRequestedCallback(handleAbort, () => abortController.signal);
   let inkInstance: ReturnType<typeof render> | null = null;
   let staticControl: RemoteModeStaticControl | null = null;
   const requestTerminalExit = async (): Promise<void> => {
@@ -1290,14 +1347,24 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       replaySeedRetirement: params.permissionModeState.replaySeedRetirement,
       permissionHandler: params.permissionHandler,
       runtime: runtimeForPromptLoop,
-      createOverrideSynchronizer: (isStarted): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => createRuntimeOverrideSynchronizersFn({
+      createOverrideSynchronizer: (isStarted): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => {
+        const sync = createRuntimeOverrideSynchronizersFn({
         agentTargetKey: buildBackendTargetKeyV2(params.opts.backendTarget
           ? params.opts.backendTarget
           : { kind: 'backend', backendId: params.policyAgentId, sourceKind: 'built_in' }),
         session: params.session,
         runtime: runtimeOverrideTarget,
         isStarted,
-      }),
+        ...(params.capabilitySelection ? { capabilitySelection: {
+          ...params.capabilitySelection,
+          session: params.session,
+          isStarted,
+          isSettled: () => !sessionTurnLifecycle.hasActiveTurn() && !params.runtimeState.thinking,
+        } } : {}),
+        });
+        capabilityOverrideSync = sync;
+        return sync;
+      },
       messageBuffer: params.messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
@@ -1352,11 +1419,12 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               ),
           }
         : {}),
-      resolveFreshSessionSystemPrompt: async (args) => {
+      resolveFreshSessionSystemPrompt: Object.assign(async (args: Parameters<SessionPromptPlanResolver>[0]) => {
         const prompt = await resolveFreshSessionSystemPrompt({ ...args, signal: abortController.signal });
         await params.prepareSessionRolePromptPolicy?.();
+        resolveFreshSessionSystemPrompt.assertPreparedPlanCurrent?.();
         return prompt;
-      },
+      }, { assertPreparedPlanCurrent: resolveFreshSessionSystemPrompt.assertPreparedPlanCurrent }),
       readSessionPromptPlanDeliveryState: () => {
         const startup = resolveFreshSessionSystemPrompt.readStartupInstructions?.();
         const capabilities = readAgentSessionCapabilities(readAgentCatalogSnapshot()
@@ -1452,6 +1520,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       onAfterLoopBoundary:
         async (loopParams) => {
           await drainRuntimeTranscriptProjections();
+          await flushCapabilitiesAfterSettlement(lastCapabilitySettledTurnId);
           await params.sessionSwapStrategy.flushPendingSessionSwap?.();
           await params.config.lifecycleHooks?.onAfterLoopBoundary?.({ ...loopParams, session: params.session, runtime: hookRuntimeForCallbacks });
         },

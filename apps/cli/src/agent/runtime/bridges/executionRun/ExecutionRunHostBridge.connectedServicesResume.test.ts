@@ -219,7 +219,8 @@ describe('connected execution-run resume custody', () => {
             : { source: 'native' } } },
         });
         try {
-          await expect(run.provisionRuntime()).resolves.toMatchObject({ runtimeId: expect.any(String) });
+          await expect(run.provisionRuntime({ initialPrompt: 'Check the selected launch environment.' }))
+            .resolves.toMatchObject({ runtimeId: expect.any(String) });
           const launch = providerRequests.at(-1)?.launchEnvironment;
           if (!launch) throw new Error('Actual external provider launch environment unavailable');
           if (connected) {

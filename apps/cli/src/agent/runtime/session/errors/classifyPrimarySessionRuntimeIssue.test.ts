@@ -5,6 +5,22 @@ import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/libra
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it.each(['context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete'])(
+    'publishes %s as a private-safe preparation refusal', (code) => {
+      const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error:
+        Object.assign(new Error('private Account route'), {
+          code, reason: 'scope-retired',
+        }),
+      });
+      expect(issue).toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+      expect(issue.sanitizedPreview).toMatch(/retry/iu);
+      expect(JSON.stringify(issue)).not.toContain('private');
+      const published = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+        code: issue.code, details: { v: 1, source: issue.source },
+      } });
+      expect(published).toMatchObject({ code: issue.code, source: issue.source, sanitizedPreview: issue.sanitizedPreview });
+    },
+  );
   it('retains the deterministic Home preparation cause through terminal publication', () => {
     const error = Object.assign(new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-doc' }), {
       cause: new HomeTargetResolutionError('profile_missing', 'private Home reference'),

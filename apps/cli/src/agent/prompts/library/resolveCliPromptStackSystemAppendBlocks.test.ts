@@ -86,11 +86,13 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
   }
   const rows = new Map<string, ReturnType<typeof row>>();
   const requests: string[] = [];
+  const authenticatedRequests: string[] = [];
   let responseBytes = 0;
   let status = 200;
   const peer = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     requests.push(url.pathname);
+    if (request.headers.authorization) authenticatedRequests.push(url.pathname);
     let data: unknown;
     let code = 200;
     const requestToken = request.headers.authorization?.slice('Bearer '.length);
@@ -149,6 +151,7 @@ async function home(id: string, token: string, accountMarkdownByToken?: Readonly
     id,
     url,
     requests,
+    authenticatedRequests,
     get responseBytes() { return responseBytes; },
     rows,
     set: (artifactId: string, markdown: string, kind?: string) => {
@@ -186,6 +189,44 @@ async function profiles(homes: readonly Awaited<ReturnType<typeof home>>[]) {
   );
 }
 describe('CLI qualified current Artifact prompt preparation', () => {
+  it.each(['local', 'published'] as const)('uses the admitted %s route when descriptor HTTPS is unreachable', async carrier => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    const path = join(taskHome, 'settings.json');
+    const saved = JSON.parse(await readFile(path, 'utf8'));
+    saved.servers.alpha.localServerUrl = a.url;
+    saved.servers.alpha.serverUrl = 'https://127.0.0.1:1';
+    saved.servers.alpha.homeConnectionDescriptor = { v: 1, homeServerIdentityId: 'srv_alpha',
+      canonicalServerUrl: 'https://127.0.0.1:1', revision: 1,
+      endpoints: [{ kind: 'https', url: 'https://127.0.0.1:1' }] };
+    await writeFile(path, JSON.stringify(saved));
+    a.set('doc', 'Admitted route instructions');
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const { resolveCurrentCliHomeTarget } = await import('@/server/homeTarget');
+    expect(await resolveCurrentCliHomeTarget()).toMatchObject({ homeServerIdentityId: 'srv_alpha',
+      applicationUrl: 'https://127.0.0.1:1' });
+    const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
+    const release = carrier === 'published' ? publishServerHttpRuntimeOrigin(a.url, 'iroh') : () => {};
+    try {
+      expect(await resolve({ surface: 'coding', memoryEnabled: false, accountEntries: [entry('doc', a.id)] }))
+        .toMatchObject({ blocks: ['Admitted route instructions'], admittedEntries: [{ outcome: 'ready' }] });
+      expect(a.requests).toContain('/v1/artifacts');
+      expect(a.requests).toContain('/v1/artifacts/doc');
+    } finally { release(); }
+  });
+  it('ignores the retired settings-root stack while composing explicit canonical entries', async () => {
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const readArtifact = async (ref: { artifactId: string }) => ({ id: ref.artifactId,
+      header: { v: 1, kind: 'prompt_doc.v2', title: ref.artifactId },
+      body: JSON.stringify({ v: 1, markdown: ref.artifactId, createdAtMs: 1, updatedAtMs: 1 }),
+      revision: { headerVersion: 1, bodyVersion: 1 } });
+    const result = await resolve({ surface: 'coding', readArtifact,
+      settings: { promptStacksV1: { v: 1, surfaces: { coding: [entry('retired-root')] } } },
+    });
+    expect(result.blocks).toEqual([]);
+    expect((await resolve({ surface: 'coding', readArtifact, accountEntries: [entry('canonical-row')] })).blocks)
+      .toEqual(['canonical-row']);
+  });
   it('prepares an empty effective stack without resolving an unavailable Home', async () => {
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
     const args = { surface: 'coding' as const, serverId: 'missing-home' };
@@ -272,7 +313,35 @@ describe('CLI qualified current Artifact prompt preparation', () => {
         await expect(reader.readArtifact({ kind: 'doc', artifactId: 'alice-doc', serverId: alice.id }))
           .rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
       }, { credentials, serverId: bob.id });
-      expect(alice.requests).toEqual([]);
+      expect(alice.authenticatedRequests).toEqual([]);
+      expect(alice.requests.filter(path => /^\/v[12]\/(?:account|artifacts)(?:\/|$)/.test(path))).toEqual([]);
+    });
+    it('keeps ordinary private invocation reads in their captured Home and retires cached readers', async () => {
+      const { createInvocationSavedSecretOperationContextV1 } = await import('@/settings/secrets/hydrateSavedSecretCatalog');
+      const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
+      const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
+      const credentials = { token: 'bob-token', encryption: null };
+      let current = true;
+      const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, serverHttpBaseUrl: bob.url,
+        snapshot: { source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
+          loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) },
+        isCurrent: async () => current });
+      await withReader(async reader => {
+        expect(await reader.readArtifact({ kind: 'doc', artifactId: 'bob-doc' }))
+          .toMatchObject({ body: expect.stringContaining('Bob current prompt') });
+        expect(await reader.readArtifact({ kind: 'doc', artifactId: 'bob-doc', serverId: bob.id }))
+          .toMatchObject({ body: expect.stringContaining('Bob current prompt') });
+        await expect(reader.readArtifact({ kind: 'doc', artifactId: 'alice-doc', serverId: alice.id }))
+          .rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+        current = false;
+        const previousRequests = [...bob.requests];
+        await expect(reader.readArtifact({ kind: 'doc', artifactId: 'bob-doc' }))
+          .rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+        expect(bob.requests).toEqual(previousRequests);
+      }, { credentials, serverId: bob.id, operationContext });
+      expect(alice.authenticatedRequests).toEqual([]);
+      // Anonymous canonical Home discovery is allowed; no foreign Account or Artifact read is.
+      expect(alice.requests.filter(path => /^\/v[12]\/(?:account|artifacts)(?:\/|$)/.test(path))).toEqual([]);
     });
   });
   describe('admitted inventory', () => {
@@ -289,13 +358,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       ({ resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks'));
     });
     it('publishes qualified admission facts with current revisions and valid-empty documents on each preparation', async () => {
-      const settings = {
-        promptStacksV1: {
-          v: 1,
-          surfaces: { coding: [entry('doc'), entry('empty')], voice: [], profilesById: {} },
-        },
-      };
-      const args = { surface: 'coding' as const, credentials: { token, encryption: null }, settings };
+      const args = { surface: 'coding' as const, credentials: { token, encryption: null },
+        accountEntries: [entry('doc'), entry('empty')] };
       const admitted = (id: string, bodyVersion: number, outcome: 'ready' | 'valid-empty') => ({
         entryId: id, layer: 'account', scope: { serverId: a.id, accountId: a.id },
         ref: { kind: 'doc', artifactId: id, serverId: a.id }, revision: { headerVersion: 1, bodyVersion }, outcome,
@@ -378,13 +442,15 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     await expect(resolve({ ...args, accountEntries: [optional, { ...optional, id: 'required-foreign', required: true }] }))
       .rejects.toMatchObject({ reason: 'not_found', cause: { code: 'profile_missing' } });
   });
-  it('retains transient failures even for optional context', async () => {
+  it('continues with typed unavailable facts for optional context, while required context fails closed', async () => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
     a.set('optional', 'Optional local context');
     a.fail(503);
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
-    await expect(resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
+    expect(await resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
+      .toMatchObject({ blocks: [], admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
+    await expect(resolve({ surface: 'coding', accountEntries: [entry('optional')] }))
       .rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
   });
   it('qualifies identical ids to distinct Homes without forwarding active credentials', async () => {
@@ -482,7 +548,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
         disabledInheritedEntryIds: ['missing'],
       }),
     ).toEqual({ blocks: [], admittedEntries: [] });
-    expect(a.requests).toEqual([]);
+    expect(a.authenticatedRequests).toEqual([]);
+    expect(a.requests.filter(path => /^\/v[12]\/(?:account|artifacts)(?:\/|$)/.test(path))).toEqual([]);
   });
   it('does not load a body when the current header is unreadable', async () => {
     const a = await home('alpha', 'active-token'); await profiles([a]); a.set('doc', 'must not load');

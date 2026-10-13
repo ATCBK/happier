@@ -42,6 +42,7 @@ import {
     type NativeAgentSessionContextLeaseFactory,
 } from '@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun';
 import { selectExecutionRunSessionAdapter } from '@/agent/runtime/bridges/executionRun/retainedInteractionEligibility';
+import { createLazyExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/hostRuntime/lazy';
 import { resolveAgentSessionRealtimeVoiceAuthority } from '@/agent/runtime/session/realtime/resolveAgentSessionRealtimeVoiceAuthority';
 import type {
     PluginRuntimeAuthoritySnapshotV1,
@@ -228,6 +229,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 }
                                 : { runtime: nativeAgentRuntime! }),
                             identity: nativeIdentity,
+                            pluginMcpRuntimeRegistry: runtimeRegistry ?? undefined,
                             ...(runtimeRegistry?.resolveServerFeaturesSnapshot
                                 ? {
                                     resolveServerFeaturesSnapshot:
@@ -326,6 +328,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                         ? { accountSettingsAuthority: hostRuntimeParams.accountSettingsAuthority }
                                         : {}),
                                     permissionHandler: hostRuntimeParams.permissionHandler,
+                                    readResolvedMcpServers: () => hostRuntimeParams.resolvedMcpServers ?? [],
                                 },
                                 ...(hostRuntimeParams.currentTerminalMetadata
                                     ? { currentTerminalMetadata: hostRuntimeParams.currentTerminalMetadata }
@@ -477,10 +480,37 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                         };
                     },
                     createExecutionRunBackend(options) {
-                        if (!nativeAgentRuntime) {
-                            throw new Error(
-                                'Daemon execution-run runtime is unavailable',
+                        const host = options.scope === 'session_owned' ? options.sessionInteractionHost : undefined;
+                        if (options.scope === 'session_owned' && !host) {
+                            throw Object.assign(
+                                new Error('Execution-run parent Session host custody is unavailable'),
+                                { code: 'execution_run_interaction_unavailable' },
                             );
+                        }
+                        if (!nativeAgentRuntime) {
+                            const createRuntime = params.createNativeAgentRuntime;
+                            if (!createRuntime) throw new Error('Daemon execution-run runtime is unavailable');
+                            const lazy = createLazyExecutionRunHostRuntime({
+                                async resolveRuntime() {
+                                    const signal = agentRetirementSignal
+                                        ? AbortSignal.any([lazy.getRuntimeLifetimeSignal(), agentRetirementSignal])
+                                        : lazy.getRuntimeLifetimeSignal();
+                                    signal.throwIfAborted();
+                                    if (!nativeIdentity.isCurrent()) throw new Error('Native Agent runtime generation retired');
+                                    if (host) await params.prepareNativeAgentRuntimeSource?.({ sessionId: host.session.sessionId, signal });
+                                    signal.throwIfAborted();
+                                    if (!nativeIdentity.isCurrent()) throw new Error('Native Agent runtime generation retired');
+                                    const runtime = await createRuntime({ signal });
+                                    signal.throwIfAborted();
+                                    if (!nativeIdentity.isCurrent()) throw new Error('Native Agent runtime generation retired');
+                                    const adapter = await resolveBackendRuntimeCore({ ...params, nativeAgentRuntime: runtime });
+                                    signal.throwIfAborted();
+                                    const run = adapter?.runtimeCore.createExecutionRunBackend(options);
+                                    if (!run) throw new Error('Native Agent execution-run runtime is unavailable');
+                                    return run;
+                                },
+                            });
+                            return lazy;
                         }
                         const runtimeLease: NativeAgentRuntimeLeaseIdentity = engineEntry ?? Object.freeze({
                             pluginId: nativeIdentity.pluginId,
@@ -492,19 +522,14 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                             occurrenceId: nativeIdentity.occurrenceId,
                             isCurrent: nativeIdentity.isCurrent,
                         });
+                        const createRunInvocationServices = runtimeRegistry?.createAgentInvocationServices
+                            ? runtimeRegistry.createAgentInvocationServices.bind(runtimeRegistry)
+                            : params.createNativeAgentInvocationServices;
+                        const invocationIdentity = engineEntry ?? nativeIdentity;
                         const openCapabilities = readAgentExecutionRunCapabilities(
                             params.agent.richDefinition?.definition,
                         )?.open;
                         const runId = options.runId?.trim();
-                        const host = options.scope === 'session_owned'
-                            ? options.sessionInteractionHost
-                            : undefined;
-                        if (options.scope === 'session_owned' && !host) {
-                            throw Object.assign(
-                                new Error('Execution-run parent Session host custody is unavailable'),
-                                { code: 'execution_run_interaction_unavailable' },
-                            );
-                        }
                         const parentToolPolicy = host?.session.getMetadataSnapshot();
                         if (parentToolPolicy?.unlistedTools === 'deny') {
                             const parentTools = new Set(parentToolPolicy.allowedTools ?? []);
@@ -595,12 +620,14 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                         // the interactive Session loop retains its richer terminal/media/resume
                         // owners while reusing the same facet builders and exhaustive composer.
                         const runScope = options.sessionOwnedRunScope ?? null;
+                        let readRunMcpToolContext: NativeAgentSessionRunToolBinding['getMcpToolContext'];
                         const runPermissionScope = host && options.runId
                             ? createRunScopedExecutionPermissionHandler({
                                 runId: options.runId,
                                 controllerOccurrenceId: options.controllerOccurrenceId ?? '',
                                 handler: host.permissionHandler,
                                 toolPolicy: resolveSessionOwnedRunToolPolicy({ options, parentMetadata: parentToolPolicy, agentId: nativeIdentity.agentId }),
+                                mcpToolPolicy: { permissionMode: options.permissionMode, readContext: () => readRunMcpToolContext?.() ?? null },
                                 readInteractionMode: () => {
                                     const { intent, runClass, ioMode, retentionPolicy } = options.start ?? {};
                                     if (!intent || !runClass || !ioMode || !retentionPolicy) {
@@ -633,6 +660,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                     // target re-reads controller custody per write and refuses there,
                                     // so no path silently reaches the parent's main transcript.
                                     const runTranscriptSession = runScope?.projectRunTranscriptSession() ?? null;
+                                    let runToolBinding: NativeAgentSessionRunToolBinding | null = null;
                                     const sessionOwners = createNativeAgentSessionHostServiceOwners({
                                         runtimeRegistry,
                                         identity: nativeIdentity,
@@ -646,6 +674,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 ? { accountSettings: options.accountSettings }
                                                 : {}),
                                             permissionHandler: executionPermissionHandler ?? host.permissionHandler,
+                                            readResolvedMcpServers: () => runToolBinding?.resolvedMcpServers ?? [],
                                         },
                                         sessionId,
                                         directory: options.cwd,
@@ -658,13 +687,14 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             : {}),
                                     });
                                     let publications: ReturnType<typeof createNativeAgentSessionPublications> | null = null;
-                                    let runToolBinding: NativeAgentSessionRunToolBinding | null = null;
                                     try {
                                         // The parent Session's materialization owner resolves the profile;
                                         // only its Happier bridge entry is rebound to this Run occurrence.
                                         runToolBinding = runScope && host.composeRunToolBinding
                                             ? await host.composeRunToolBinding({
+                                                mcpPermissionHandler: executionPermissionHandler,
                                                 runId: runScope.runId,
+                                                agentId: params.agent.id,
                                                 workDepth: runScope.workDepth,
                                                 cwd: options.cwd,
                                                 signal,
@@ -678,6 +708,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 readCurrentRunOccurrence: runScope.readCurrentRunOccurrence,
                                             })
                                             : null;
+                                        readRunMcpToolContext = runToolBinding?.getMcpToolContext;
                                         if (runToolBinding?.mcpServers) {
                                             runToolBinding = { ...runToolBinding, mcpServers: await resolveAgentSessionMcpLaunchConfigs(
                                                 runToolBinding.mcpServers, options.start ?? {}, signal,
@@ -713,12 +744,12 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             readPermissionMode: () => options.permissionMode,
                                             readActiveTurnAdmissionWitness,
                                         });
-                                        const invocationServices = runId && runtimeRegistry?.createAgentInvocationServices && engineEntry
-                                            ? await runtimeRegistry.createAgentInvocationServices({
-                                                pluginId: engineEntry.pluginId,
-                                                pluginVersion: engineEntry.pluginVersion,
-                                                agentId: engineEntry.agentId,
-                                                occurrenceId: engineEntry.occurrenceId,
+                                        const invocationServices = runId && createRunInvocationServices
+                                            ? await createRunInvocationServices({
+                                                pluginId: invocationIdentity.pluginId,
+                                                pluginVersion: invocationIdentity.pluginVersion,
+                                                agentId: invocationIdentity.agentId,
+                                                occurrenceId: invocationIdentity.occurrenceId,
                                                 correlationId: runId,
                                                 processOwner: { kind: 'run', runId, sessionId },
                                                 cwd: options.cwd,
@@ -726,7 +757,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 signal,
                                                 session: { id: sessionId, current: currentSession },
                                                 readActiveTurnAdmissionWitness,
-                                                isOccurrenceCurrent: engineEntry.isCurrent,
+                                                isOccurrenceCurrent: invocationIdentity.isCurrent,
                                             })
                                             : fallbackServices;
                                         const nativeHome = await resolveNativeAgentSessionNativeHomeService({
@@ -794,6 +825,8 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             workState: createRunScopedWorkStateService(signal),
                                         });
                                         const disposeRunToolBinding = runToolBinding?.dispose ?? null;
+                                        const enqueueSessionEventCommitted = runToolBinding?.skills
+                                            ? host.session.enqueueSessionEventCommitted?.bind(host.session) : undefined;
                                         return Object.freeze({
                                             context,
                                             ...(host.session.publishUsageObservation ? {
@@ -807,6 +840,14 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             ...(runToolBinding?.mcpServers
                                                 ? { mcpServers: runToolBinding.mcpServers }
                                                 : {}),
+                                            ...(runToolBinding?.mcpToolPolicy ? { mcpToolPolicy: runToolBinding.mcpToolPolicy } : {}),
+                                            ...(runToolBinding?.subscribeMcpToolPolicy ? { subscribeMcpToolPolicy: runToolBinding.subscribeMcpToolPolicy } : {}),
+                                            ...(runToolBinding?.skills ? { skills: runToolBinding.skills } : {}),
+                                            ...(runToolBinding?.observeSkillUse ? { observeSkillUse: runToolBinding.observeSkillUse } : {}),
+                                            ...(enqueueSessionEventCommitted ? {
+                                                capabilityNoticeSession: { enqueueSessionEventCommitted },
+                                            } : {}),
+                                            ...(runToolBinding?.skillIndex ? { skillIndex: runToolBinding.skillIndex } : {}),
                                             async dispose() {
                                                 // Only this Run's binding; the parent Session bridge and
                                                 // sibling Run bindings keep their own leases.
@@ -876,17 +917,17 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 ...(params.nativeAgentAcpRuntimeDefinition
                                     ? { acpRuntimeDefinition: params.nativeAgentAcpRuntimeDefinition }
                                     : {}),
-                                ...(runtimeRegistry?.createAgentInvocationServices && engineEntry
+                                ...(createRunInvocationServices
                                     ? {
                                         createInvocationServices: async ({
                                             currentSession,
                                             signal,
                                             readActiveTurnAdmissionWitness,
-                                        }) => await runtimeRegistry.createAgentInvocationServices({
-                                            pluginId: engineEntry.pluginId,
-                                            pluginVersion: engineEntry.pluginVersion,
-                                            agentId: engineEntry.agentId,
-                                            occurrenceId: engineEntry.occurrenceId,
+                                        }) => await createRunInvocationServices({
+                                            pluginId: invocationIdentity.pluginId,
+                                            pluginVersion: invocationIdentity.pluginVersion,
+                                            agentId: invocationIdentity.agentId,
+                                            occurrenceId: invocationIdentity.occurrenceId,
                                             correlationId: options.runId!,
                                             processOwner: { kind: 'run', runId: options.runId! },
                                             cwd: options.cwd,
@@ -898,7 +939,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             ...(readActiveTurnAdmissionWitness
                                                 ? { readActiveTurnAdmissionWitness }
                                                 : {}),
-                                            isOccurrenceCurrent: engineEntry.isCurrent,
+                                            isOccurrenceCurrent: invocationIdentity.isCurrent,
                                         }),
                                     }
                                     : {}),

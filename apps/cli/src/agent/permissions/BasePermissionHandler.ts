@@ -702,7 +702,7 @@ export abstract class BasePermissionHandler {
     protected abstract getLogPrefix(): string;
 
     /** Re-evaluated for pending responses as well as fresh calls, before YOLO or grants. */
-    protected resolveWorkspaceWriteDecision(toolName: string, input: unknown): PermissionResult | null {
+    protected resolveWorkspaceWriteDecision(toolName: string, input: unknown, mcpEffectClass?: 'read' | 'write' | 'unknown'): PermissionResult | null {
         let workspaceWrites: 'allow' | 'deny' | undefined;
         if (this.getWorkspaceWrites) workspaceWrites = this.getWorkspaceWrites();
         else {
@@ -714,7 +714,7 @@ export abstract class BasePermissionHandler {
                 ? readSessionWorkspaceWritesV1(metadata, { settingsOverrides: read.overrides })
                 : inherited ? readSessionWorkspaceWritesV1(metadata) : 'deny';
         }
-        return isWorkspaceWriteDeniedByRole({ workspaceWrites, toolName, toolInput: input }) ? { decision: 'denied' } : null;
+        return isWorkspaceWriteDeniedByRole({ workspaceWrites, toolName, toolInput: input, mcpEffectClass }) ? { decision: 'denied' } : null;
     }
 
     private readonly approvalReviews = new Map<string, Promise<'allow_once' | 'escalate'>>();
@@ -3845,6 +3845,7 @@ export abstract class BasePermissionHandler {
             causalPermissionContext?: AcpPermissionCallContext;
             resolveCurrentPermissionDecision?: () => PermissionResult;
             acknowledgeDecisionApplication?: (decision: PermissionResult) => Promise<void>;
+            mcpTool?: import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1').ResolvedMcpToolIdentityV1;
         }>,
     ): Promise<PermissionResult> {
         const source = typeof options?.source === 'string' ? options.source.trim() : '';
@@ -3889,6 +3890,7 @@ export abstract class BasePermissionHandler {
             toolName,
             toolInput: input,
             createdAt: Date.now(),
+            ...(options?.mcpTool ? { mcpTool: options.mcpTool } : {}),
             ...(turnId ? { turnId } : {}),
             ...(options?.causalPermissionContext?.lifetime ? { lifetime: options.causalPermissionContext.lifetime } : {}),
             ...(source ? { source } : {}),

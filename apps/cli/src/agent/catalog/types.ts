@@ -217,6 +217,8 @@ export type AgentCatalogEntry = Readonly<{
   id: CatalogAgentLookupId;
   /** Agent-declared channel for receiving contributed Happier tools. */
   toolDelivery?: PluginAgentToolsDeliveryV2;
+  mcpToolControl?: import('@happier-dev/protocol').PluginAgentToolsCapabilityV2['mcpToolControl'];
+  mcpToolLoading?: import('@happier-dev/protocol').PluginAgentToolsCapabilityV2['mcpToolLoading'];
   /** Agent-declared session-private skills and native discovery facts. */
   skills?: PluginAgentSkillsCapabilityV2;
   /** Provider-owned authoritative Runtime Activity characterization. */
@@ -368,6 +370,8 @@ export type AgentCatalogEntry = Readonly<{
    * Used by the daemon to decide whether it may pass `--resume <providerSessionId>`.
    */
   vendorResumeSupport: VendorResumeSupportLevel;
+  /** Data-only ACP Registry aliases declared by the Agent. */
+  acpRegistryIds?: readonly string[];
   /**
    * Optional predicate used when vendor resume support is experimental.
    *

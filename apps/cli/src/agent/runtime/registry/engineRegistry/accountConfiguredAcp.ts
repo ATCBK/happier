@@ -1,6 +1,7 @@
 import { isCustomAcpAgentContributionIdentityV1, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { agentRoutingIdAddressesContributionIdentityV1, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 
 import { readSettings, readStoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -86,7 +87,7 @@ export async function resolveAccountConfiguredAcpLaunch(
       }
     }
     const references = Object.values(configuredBackend.env)
-      .flatMap(value => value.t === 'savedSecret' ? [{ ref: value.secretId }] : []);
+      .flatMap(value => listValueRefSecretIdsV1(value).map(ref => ({ ref })));
     if (references.length > 0) {
       try {
         const refresh = () => refreshSavedSecretCatalogForOperation({
@@ -98,7 +99,7 @@ export async function resolveAccountConfiguredAcpLaunch(
       } catch (error) {
         if (!(error instanceof SavedSecretOperationAdmissionError)) throw error;
         const field = Object.entries(configuredBackend.env)
-          .find(([, value]) => value.t === 'savedSecret' && value.secretId === error.reference)?.[0];
+          .find(([, value]) => listValueRefSecretIdsV1(value).includes(error.reference))?.[0];
         throw new SavedSecretResolutionError({
           status: savedSecretOperationAdmissionStatus(error.reason), reference: error.reference,
           consumer: 'acp', field: `env:${field ?? error.reference}`,
@@ -116,6 +117,7 @@ export async function resolveAccountConfiguredAcpLaunch(
       accountId: savedSecretOperationContext?.machineAdmission?.actorAccountId ?? readAccountIdFromToken(credentials.token) ?? undefined,
       definition: { id: configuredBackend.backendId, title: configuredBackend.title, launch: configuredBackend.launch },
       platform: process.platform, arch: process.arch, env: process.env,
+      launchEnv,
       settings: launchSnapshot.settings, machineId: (await readSettings()).machineId ?? '',
     });
     await assertAccountCurrent();

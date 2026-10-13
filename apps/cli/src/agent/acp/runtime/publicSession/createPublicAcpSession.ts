@@ -1,7 +1,7 @@
 import { PluginAgentAcpTransportSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { buildQualifiedPluginContributionKey, isGenericSubAgentToolName, type PluginAgentAcpTransport } from '@happier-dev/protocol';
-import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionConfigurationUpdateV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import {
   isWorkflowInteractionCapacityError,
   WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
@@ -44,6 +44,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { extname, isAbsolute, relative, sep } from 'node:path';
 
 import { createAcpBackend, type CreateAcpBackendOptions } from '@/agent/acp/createAcpBackend';
+import { readAcpRequestErrorCode } from '@/agent/acp/withRetry';
 import type { AcpBackend, AcpBackendOptions } from '@/agent/acp/AcpBackend';
 import type {
   AcpPromptSubmissionResult,
@@ -71,9 +72,10 @@ import {
   type PublicAcpTransportTimeouts,
 } from '@/agent/acp/runtime/launch/acpTransportLaunch';
 import {
-  prepareNativeSessionMcpConfig,
-  type NativeSessionMcpConfigDelivery,
-} from '@/agent/acp/runtime/definition/nativeSessionMcpConfig';
+  prepareNativeSessionConfig,
+  type NativeSessionConfigDelivery,
+} from '@/agent/acp/runtime/definition/nativeSessionConfig';
+import { prepareAcpSessionSkills } from '@/agent/acp/runtime/definition/skillsSessionDelivery';
 import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 import { buildAcpToolNameResolverInput, createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { canonicalizeToolNameV2 } from '@/agent/tools/normalization';
@@ -327,11 +329,13 @@ function validateGeneratedMediaDescriptors(
   return Object.freeze(descriptors);
 }
 
-function diagnostic(code: string, message?: string) {
+function diagnostic(code: string, message?: string, error?: unknown) {
+  const requestErrorCode = readAcpRequestErrorCode(error);
   return Object.freeze({
     code,
     severity: 'error' as const,
     ...(message ? { message } : {}),
+    ...(requestErrorCode !== null ? { details: { requestErrorCode } } : {}),
   });
 }
 
@@ -590,39 +594,62 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     options.definition,
   );
   const resolvedLaunch = await resolveTransport(transport, request, dependencies);
-  let nativeMcpDelivery: NativeSessionMcpConfigDelivery | null = null;
+  let nativeMcpDelivery: NativeSessionConfigDelivery | null = null;
+  let skillsDelivery: NativeSessionConfigDelivery | null = null;
+  let skillsDelivered = false;
   let launchReleased = false;
   const releaseLaunch = (): void => {
     if (launchReleased) return;
     launchReleased = true;
     nativeMcpDelivery?.cleanup();
+    skillsDelivery?.cleanup();
     if (resolvedLaunch.kind === 'stdio') resolvedLaunch.release?.();
   };
   let launch = resolvedLaunch;
   try {
     const nativeSessionConfig = options.definition?.mcp.nativeSessionConfig;
+    const skillsDeclaration = request.skills ? options.definition?.skills?.sessionDelivery : undefined;
+    const effectiveEnv = resolvedLaunch.kind === 'stdio' ? buildScopedProcessEnv({
+      baseEnv: process.env, explicitEnv: resolvedLaunch.env, unsetEnvKeys: resolvedLaunch.unsetEnv,
+    }) : {};
     if (nativeSessionConfig && resolvedLaunch.kind === 'stdio') {
-      nativeMcpDelivery = await prepareNativeSessionMcpConfig({
+      const params = {
         declaration: nativeSessionConfig,
         cwd: request.cwd,
         // The Agent resolves its config root from the environment it will
         // actually run with: the host process environment, the resolved launch
         // overrides, then this Session's unset keys.
-        env: buildScopedProcessEnv({
-          baseEnv: process.env,
-          explicitEnv: resolvedLaunch.env,
-          unsetEnvKeys: resolvedLaunch.unsetEnv,
-        }),
+        env: effectiveEnv,
         mcpServers: request.mcpServers,
-      });
+      };
+      const nativeSkills = skillsDeclaration?.kind === 'native_config_skills_dir' && request.skills
+        ? { subdirectory: skillsDeclaration.subdirectory, delivery: request.skills } : undefined;
+      try {
+        nativeMcpDelivery = await prepareNativeSessionConfig({ ...params, ...(nativeSkills ? { skills: nativeSkills } : {}) });
+        skillsDelivered = nativeSkills !== undefined;
+      } catch (error) {
+        if (!nativeSkills) throw error;
+        assertComposerCurrent(dependencies);
+        // Skills are optional; the existing MCP launch still owns its normal failure semantics.
+        nativeMcpDelivery = await prepareNativeSessionConfig(params);
+        logger.debug('[skills] ACP native config delivery unavailable');
+      }
       assertComposerCurrent(dependencies);
-      launch = Object.freeze({
-        ...resolvedLaunch,
-        env: Object.freeze({ ...resolvedLaunch.env, ...nativeMcpDelivery.env }),
-        unsetEnv: Object.freeze(resolvedLaunch.unsetEnv.filter(
-          (key) => !Object.prototype.hasOwnProperty.call(nativeMcpDelivery!.env, key),
-        )),
-      });
+    }
+    if (skillsDeclaration && skillsDeclaration.kind !== 'native_config_skills_dir' && request.skills && resolvedLaunch.kind === 'stdio') {
+      try {
+        skillsDelivery = await prepareAcpSessionSkills({ declaration: skillsDeclaration, skills: request.skills, cwd: request.cwd, env: effectiveEnv });
+        skillsDelivered = true;
+      } catch {
+        assertComposerCurrent(dependencies);
+        logger.debug('[skills] ACP native delivery unavailable');
+      }
+      assertComposerCurrent(dependencies);
+    }
+    if (resolvedLaunch.kind === 'stdio' && (nativeMcpDelivery || skillsDelivery)) {
+      const env = { ...nativeMcpDelivery?.env, ...skillsDelivery?.env };
+      launch = Object.freeze({ ...resolvedLaunch, env: Object.freeze({ ...resolvedLaunch.env, ...env }),
+        unsetEnv: Object.freeze(resolvedLaunch.unsetEnv.filter(key => !Object.hasOwn(env, key))) });
     }
   } catch (error) {
     releaseLaunch();
@@ -664,6 +691,8 @@ async function createPublicAcpConversationFromAwaitableAdapter(
   const transportHandler = options.definition
     ? createAcpTransportHandlerFromDefinition({
         backendId: dependencies.agentId,
+        mcpServerKeys: new Set(Object.keys(request.mcpServers ?? {})),
+        mcpToolPolicyServerKeys: new Set(Object.keys(request.mcpToolPolicy ?? {}).filter(key => request.mcpServers?.[key])),
         ...(options.definition.permissions ? { permissions: options.definition.permissions } : {}),
         timeouts: {
           ...(launch.timeouts.initializeMs ? { initMs: launch.timeouts.initializeMs } : {}),
@@ -1717,6 +1746,14 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     return { status: 'applied', changed: Object.freeze(changed) };
   };
   const session: PublicAcpSessionRuntime = Object.freeze({
+    ...(!executionRunRequest && request.skills ? {
+      skillsDelivered,
+      async refreshSkills(update: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[0]) {
+        assertComposerCurrent(dependencies);
+        update.signal?.throwIfAborted();
+        return { kind: 'restart_required' as const, reason: 'launch_path_unsupported' as const };
+      },
+    } : {}),
     ...(conversationRollback ? { conversationRollback } : {}),
     get runtimeCapabilities() {
       const capabilities = backend.getNegotiatedSessionCapabilities();
@@ -1944,6 +1981,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
             admissionFailure
               ? `ACP pre-admission buffer rejected a provider message (${admissionFailure.status}${admissionFailure.status === 'overflow' ? `:${admissionFailure.reason}` : ''})`
               : error instanceof Error ? error.message : 'ACP prompt admission failed',
+            error,
           ),
         });
         if (pendingTransportTermination) {
@@ -1989,6 +2027,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           diagnostic: diagnostic(
             'acp_input_rejected_before_effect',
             settledResult.error.message,
+            settledResult.error,
           ),
           retryable: true,
         });
@@ -2004,6 +2043,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
         settledResult.kind === 'effect_may_have_occurred'
         || settledResult.kind === 'effect_observed_without_prompt_response'
       ) {
+        const outcome = backend.getLastTurnOutcome();
         publish({
           kind: 'input-custody-unknown',
           inputIds: turn.inputIds,
@@ -2012,6 +2052,8 @@ async function createPublicAcpConversationFromAwaitableAdapter(
             settledResult.kind === 'effect_may_have_occurred'
               ? settledResult.error.message
               : 'ACP provider effect was observed before the prompt response settled',
+            settledResult.kind === 'effect_may_have_occurred'
+              ? settledResult.error : outcome?.kind === 'failed' ? outcome.error : undefined,
           ),
         });
         if (settledResult.kind === 'effect_may_have_occurred') {
@@ -2087,6 +2129,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
                   ? WORKFLOW_INTERACTION_CAPACITY_EXCEEDED
                   : 'acp_turn_failed',
               outcome.kind === 'failed' ? outcome.error.message : undefined,
+              outcome.kind === 'failed' ? outcome.error : undefined,
             ),
           });
         } else {
@@ -2120,6 +2163,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
                     ? WORKFLOW_INTERACTION_CAPACITY_EXCEEDED
                     : 'acp_turn_failed',
                   error instanceof Error ? error.message : undefined,
+                  error,
                 ),
               }),
         } as UnsequencedAgentSessionRuntimeEvent);
@@ -2176,7 +2220,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
             diagnostic: diagnostic('acp_configuration_update_aborted'),
           };
         }
-        const parsed = AgentSessionConfigurationSnapshotV1Schema.safeParse(configurationRequest);
+        const parsed = AgentSessionConfigurationUpdateV1Schema.safeParse(configurationRequest);
         if (!parsed.success) {
           return {
             status: 'rejected',
@@ -2184,6 +2228,12 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           };
         }
         const update = parsed.data;
+        if (update.mcpToolPolicy !== undefined) {
+          return { status: 'rejected', diagnostic: diagnostic('acp_mcp_tool_policy_update_unsupported') };
+        }
+        if (update.providerBinding !== undefined) {
+          return { status: 'rejected', diagnostic: diagnostic('acp_provider_binding_update_unsupported') };
+        }
         if (update.workspaceWrites === 'deny') {
           return { status: 'rejected', diagnostic: diagnostic('role_policy_unenforceable') };
         }

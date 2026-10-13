@@ -134,6 +134,7 @@ import { createNativeAgentProviderAttachModeBinding, waitForNativeAgentTerminalR
 import type {
     HostSessionRuntimeConfig,
     HostSessionRuntimeFactoryParams,
+    HostSessionRuntimeHookRuntime,
 } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import {
     registerRunnerManagedServiceEndpointReadRpcHandlers,
@@ -200,7 +201,6 @@ import { buildSessionRollbackRangesV1, readSessionRollbackRangesV1FromMetadata }
 import { SessionTurnProviderCheckpointV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import type { SessionRollbackRpcParams, SessionRollbackRpcResult } from '@happier-dev/protocol';
 import { PluginTerminalHostError } from '@/plugins/runtime/context/terminalHost';
-import { createCurrentSessionPresentationService } from '@/session/presentation/currentSessionPresentationService';
 import { registerCurrentSessionUiBinding } from '@/session/presentation/currentSessionUiBindings';
 import { readStoredCredentials } from '@/persistence';
 import { buildHappyCliSubprocessLaunchSpec } from '@/utils/spawnHappyCLI';
@@ -299,7 +299,7 @@ function readTranscriptFollowFailureCode(error: unknown): string {
     return 'native_agent_terminal_transcript_follow_failed';
 }
 
-function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperations>(params: Readonly<{
+function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperations & Pick<HostSessionRuntimeHookRuntime, 'refreshSkills'>>(params: Readonly<{
     runtime: TRuntime;
     terminal: NativeAgentTerminalExecutionSurface;
     agentId: string;
@@ -333,6 +333,7 @@ function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperat
         });
     }
     const requiresTranscriptFollow = params.requiresTranscriptFollow === true;
+    let activeTerminalRun: Promise<unknown> | null = null;
 
     const lifecycleAbortController = new AbortController();
     const signal = AbortSignal.any([
@@ -372,7 +373,7 @@ function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperat
             const transcriptFollow = params.host?.transcriptFollow;
             let transcriptFollowBinding: HostTerminalTranscriptFollowBinding | null = null;
             try {
-                const run = await params.runWithTerminalModelSelection(
+                const terminalRun = params.runWithTerminalModelSelection(
                     async (
                         modelSelection,
                         runWithCurrentPublisherPermit,
@@ -544,6 +545,8 @@ function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperat
                             : { type: 'switch' as const };
                     },
                 );
+                activeTerminalRun = terminalRun;
+                const run = await terminalRun;
                 if (run.status === 'blocked') {
                     throw new HostTerminalModelSelectionBlockedError();
                 }
@@ -552,6 +555,7 @@ function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperat
                 if (transcriptFollowBinding) {
                     await disposeTranscriptFollowBinding(transcriptFollowBinding);
                 }
+                activeTerminalRun = null;
             }
         },
         runRemote: async () => await waitForNativeAgentTerminalRemoteDisposition({
@@ -563,6 +567,12 @@ function createNativeAgentTerminalModeBinding<TRuntime extends RuntimeTurnOperat
 
     const runtime = Object.freeze({
         ...params.runtime,
+        ...(params.runtime.refreshSkills ? {
+            async refreshSkills(...args: Parameters<NonNullable<HostSessionRuntimeHookRuntime['refreshSkills']>>) {
+                if (activeTerminalRun) return { kind: 'restart_required' as const, reason: 'launch_path_unsupported' as const };
+                return await params.runtime.refreshSkills!(...args);
+            },
+        } : {}),
         async resetOrDisposeRuntime(
             reason?: RuntimeTurnDisposeReason,
             nextSessionOpenIntent?: RuntimeTurnSessionOpenIntent,
@@ -914,6 +924,7 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
     signal: AbortSignal;
     isCurrent: () => boolean;
     terminalHost?: NonNullable<AgentSessionHostServices['terminalHost']>;
+    auth?: AgentSessionHostServices['auth'];
     followSource?: AgentSessionHostServices['transcripts']['followSource'];
     nativeHome?: NonNullable<AgentSessionHostServices['nativeHome']>;
     session: Pick<ApiSessionClient, 'updateMetadata' | 'enqueueAgentMessageCommitted'> & Partial<Pick<ApiSessionClient, 'getMetadataSnapshot'>> & Readonly<{
@@ -1257,8 +1268,22 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
         readProviderSessionId: params.transcriptIdentity.readProviderSessionId,
         readCodec: () => params.transcriptIdentity!.readCodec() ?? null,
     }) : null;
+    const auth: AgentSessionHostServices['auth'] = params.auth
+        ? Object.freeze({ services: Object.freeze({
+            async refreshRuntimeAuth(
+                request: Parameters<NonNullable<AgentSessionHostServices['auth']>['services']['refreshRuntimeAuth']>[0],
+                options?: Parameters<NonNullable<AgentSessionHostServices['auth']>['services']['refreshRuntimeAuth']>[1],
+            ) {
+                assertSessionScopeAvailable('authentication');
+                return await params.auth!.services.refreshRuntimeAuth(request, {
+                    signal: combineSessionOperationSignal(params.signal, options?.signal),
+                });
+            },
+        }) })
+        : undefined;
     return Object.freeze({
         features,
+        ...(auth ? { auth } : {}),
         ...(terminalHost ? { terminalHost } : {}),
         models: params.publications.models,
         modes: params.publications.modes,
@@ -1358,7 +1383,7 @@ export async function resolveAgentSessionMcpLaunchConfigs(
             connectTimeoutMs: 0,
             listToolsTimeoutMs: 0,
         });
-        return [name, tools.map((tool) => tool.name)] as const;
+        return [name, tools.tools.map((tool) => tool.name)] as const;
     }));
     return toAgentSessionMcpLaunchConfigs(mcpServers, { ...toolPolicy, toolNamesByServer: Object.fromEntries(catalogs) });
 }
@@ -1513,7 +1538,7 @@ function buildNativeAgentSessionOpenInputs(
     });
 }
 
-function applyNativeAgentConfigurationUpdate(
+export function applyNativeAgentConfigurationUpdate(
     current: AgentSessionConfigurationSnapshot,
     update: RuntimeTurnConfigUpdate,
     getWorkspaceWrites?: () => 'allow' | 'deny' | undefined,
@@ -1559,6 +1584,7 @@ function applyNativeAgentConfigurationUpdate(
         request: {
             ...snapshot,
             ...(update.providerBinding ? { providerBinding: update.providerBinding } : {}),
+            ...(update.mcpToolPolicy ? { mcpToolPolicy: update.mcpToolPolicy } : {}),
         },
     };
 }
@@ -1607,6 +1633,7 @@ type NativeAgentSessionDirectFacets = Readonly<{
     readAppliedTeamCredentialModel?: () => import('@happier-dev/protocol').TeamCredentialProviderModelSelectionV1 | null | undefined;
     openedWithoutConnectedServices?: () => boolean;
     getWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
+    resolveMcpToolPolicy?: HostSessionRuntimeFactoryParams['resolveMcpToolPolicy'];
     prepareRunTeamCredentialProviderBinding?: SessionRuntimeControls['prepareRunTeamCredentialProviderBinding'];
     goals?: AgentSessionGoalControl;
     catalog?: AgentSessionCatalogControl;
@@ -2200,27 +2227,17 @@ export function composeNativeAgentSessionRuntimeContext(params: Readonly<{
     protocols: AgentSessionRuntimeContext['protocols'];
     workState: AgentSessionRuntimeContext['workState'];
 }>): AgentSessionRuntimeContext {
-    const currentSession = params.services.sessions.current;
-    if (params.refreshRuntimeAuthViaDaemon && !currentSession) {
-        throw new Error('Execution Run parent Session authentication custody is unavailable');
-    }
-    // A genuine Session-owned Run retains parent projections, but refreshes its own
-    // materialized account through the Run scope rather than the parent's selection.
-    const services = params.refreshRuntimeAuthViaDaemon && currentSession
+    // The native scope refreshes its own exact materialization without exposing
+    // unrelated Session operations or borrowing the parent's account selection.
+    const sessionServices = params.refreshRuntimeAuthViaDaemon
         ? Object.freeze({
-            ...params.services,
-            sessions: Object.freeze({
-                ...params.services.sessions,
-                current: Object.freeze({
-                    ...currentSession,
-                    auth: Object.freeze({ services: createDaemonRuntimeAuthRefreshService({
-                        refreshViaDaemon: params.refreshRuntimeAuthViaDaemon,
-                        signal: params.signal,
-                    }) }),
-                }),
-            }),
+            ...params.sessionServices,
+            auth: Object.freeze({ services: createDaemonRuntimeAuthRefreshService({
+                refreshViaDaemon: params.refreshRuntimeAuthViaDaemon,
+                signal: params.signal,
+            }) }),
         })
-        : params.services;
+        : params.sessionServices;
     return Object.freeze({
         plugin: Object.freeze({
             id: params.identity.pluginId,
@@ -2237,10 +2254,10 @@ export function composeNativeAgentSessionRuntimeContext(params: Readonly<{
         invokedAtMs: params.invokedAtMs,
         session: Object.freeze({
             id: params.sessionId,
-            services: params.sessionServices,
+            services: sessionServices,
         }),
         signal: params.signal,
-        services,
+        services: params.services,
         ui: params.ui,
         agent: Object.freeze({ id: params.identity.agentId }),
         protocols: params.protocols,
@@ -2264,6 +2281,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
     connectedAccounts?: NonNullable<AgentSessionOpenRequest['connectedAccounts']>;
     initialConfiguration?: AgentSessionConfigurationSnapshot;
     expectedProviderSessionId?: string;
+    usagePublisher?: NativeAgentSessionUsagePublisher;
 }>): PluginRuntimeHookOperations {
     const capabilities = params.capabilities;
     return createNativeAgentSessionOperations(
@@ -2271,7 +2289,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
         params.sessionId,
         undefined,
         params.expectedProviderSessionId,
-        undefined,
+        params.usagePublisher,
         params.initialConfiguration,
         undefined,
         {
@@ -2537,6 +2555,14 @@ export function createNativeAgentSessionOperations(
                 userMessageSeq: observation.seq,
                 userMessageSeqs: Object.freeze([observation.seq]),
             }));
+            if (activeTurnAdmissionWitness?.inputId === localId
+                && activeTurnAdmissionWitness.turnId === pendingJoin.turnId) {
+                activeTurnAdmissionWitness = Object.freeze({
+                    ...activeTurnAdmissionWitness,
+                    userMessageSeq: observation.seq,
+                    userMessageSeqs: Object.freeze([observation.seq]),
+                });
+            }
         }
 
         const index = rollbackTurns.findIndex(
@@ -3951,7 +3977,10 @@ export function createNativeAgentSessionOperations(
                     reason: 'native_agent_configuration_unsupported',
                 };
             }
-            const nextConfiguration = applyNativeAgentConfigurationUpdate(configuration, update, directFacets.getWorkspaceWrites);
+            const mcpToolPolicy = typeof update.permissionMode === 'string' ? directFacets.resolveMcpToolPolicy?.(update.permissionMode) : undefined;
+            const nextConfiguration = applyNativeAgentConfigurationUpdate(configuration, {
+                ...update, ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
+            }, directFacets.getWorkspaceWrites);
             if (nextConfiguration.snapshot.workspaceWrites === 'deny' && directFacets.capabilities.workspaceWrites !== 'deny') {
                 return { status: 'failed', reason: 'role_policy_unenforceable' };
             }
@@ -4281,6 +4310,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
     isMediatorContributionCurrent?: HostSessionRuntimeConfig['isMediatorContributionCurrent'];
     agentSessionRealtimeVoiceAuthority?:
         HostSessionRuntimeConfig['agentSessionRealtimeVoiceAuthority'];
+    pluginMcpRuntimeRegistry?: HostSessionRuntimeConfig['pluginMcpRuntimeRegistry'];
 }>): Promise<HostSessionRuntimePlan> {
     const identity = params.identity ?? params.lease;
     if (!identity) {
@@ -4429,6 +4459,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     && openIntent.startupInstructions === undefined && hostRuntimeParams.resolveFreshSessionSystemPrompt) {
                     // Resolve role sources before capturing their native workspace policy below.
                     const text = await hostRuntimeParams.resolveFreshSessionSystemPrompt({ signal });
+                    hostRuntimeParams.resolveFreshSessionSystemPrompt.assertPreparedPlanCurrent?.();
                     startupInstructions = hostRuntimeParams.resolveFreshSessionSystemPrompt.readStartupInstructions?.()
                         ?? (text.trim() ? AgentSessionStartupInstructionsV1Schema.parse({
                         v: 1, id: 'happier.coding_session_plan',
@@ -4871,14 +4902,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             if (hostRuntimeParams.session.sessionId !== sessionId) {
                 throw new Error('Native Agent current-session presentation target does not match the live session');
             }
-            const presentation = createCurrentSessionPresentationService({
-                session: hostRuntimeParams.session,
-                signal,
-                isCurrent: identity.isCurrent,
-                ...(hostRuntimeParams.recordRuntimeLimitMeasurement
-                    ? { recordRuntimeLimitMeasurement: hostRuntimeParams.recordRuntimeLimitMeasurement }
-                    : {}),
-            });
+            const presentation = hostRuntimeParams.currentSessionPresentation();
             const livePermissionHandler = hostRuntimeParams.permissionHandler
                 && typeof hostRuntimeParams.permissionHandler.handleToolCall === 'function'
                 ? hostRuntimeParams.permissionHandler
@@ -5278,6 +5302,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 sessionId,
                 sessionServices: createNativeAgentSessionHostServices({
                     owners: sessionHostServices,
+                    auth: currentSessionHandle.auth,
                     agentId: identity.agentId,
                     sessionId,
                     directory: cwd,
@@ -5421,6 +5446,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         source: nativeForkSource,
                         ...openInputs,
                         ...(mcpServers ? { mcpServers } : {}),
+                        ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     })
                     : resumeId
                     ? Object.freeze({
@@ -5434,6 +5461,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         ...openInputs,
                         ...(startupInstructions ? { startupInstructions } : {}),
                         ...(mcpServers ? { mcpServers } : {}),
+                        ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     })
                     : Object.freeze({
                         kind: 'create',
@@ -5442,6 +5471,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         ...openInputs,
                         ...(startupInstructions ? { startupInstructions } : {}),
                         ...(mcpServers ? { mcpServers } : {}),
+                        ...(hostRuntimeParams.mcpToolPolicy ? { mcpToolPolicy: hostRuntimeParams.mcpToolPolicy } : {}),
+                        ...(hostRuntimeParams.skills ? { skills: hostRuntimeParams.skills } : {}),
                     });
             let sessions: NonNullable<AgentRuntime['sessions']> | undefined;
             let continuationRefusalMustRemainPrimary = false;
@@ -5609,7 +5640,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 assertGenerationCurrent();
                 try {
                     session = await openNativeAgentSessionUntilAbort(
-                        () => sessionFactory.open(openRequest, context), signal,
+                        () => {
+                            if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
+                            return sessionFactory.open(openRequest, context);
+                        }, signal,
                     );
                 } catch (error) {
                     if (!startupInstructions || !isPluginError(error)
@@ -5621,7 +5655,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     assertGenerationCurrent();
                     await params.attestSessionOpen?.({ phase: 'prepare', request: openRequest, providerSessionId, signal });
                     session = await openNativeAgentSessionUntilAbort(
-                        () => sessionFactory.open(openRequest, context), signal,
+                        () => {
+                            if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
+                            return sessionFactory.open(openRequest, context);
+                        }, signal,
                     );
                 }
                 await params.attestSessionOpen?.({
@@ -5836,6 +5873,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     context,
                     cwd,
                     getWorkspaceWrites: hostRuntimeParams.getWorkspaceWrites,
+                    resolveMcpToolPolicy: hostRuntimeParams.resolveMcpToolPolicy,
                     connectedAccounts: openRequest.connectedAccounts ?? [],
                         capabilities: sessionCapabilities,
                         cancellation,
@@ -5847,7 +5885,6 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 {
                     onTurnTerminal: async (
                         event,
-                        admissionWitness,
                     ) => {
                         try {
                             await hostRuntimeParams.permissionHandler.cancelByPluginTurn(
@@ -5855,38 +5892,6 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                                 event.turnId,
                                 `agent_${event.kind}`,
                             );
-                            if (admissionWitness) {
-                                const userMessageSeqs = [...new Set([
-                                    ...admissionWitness.userMessageSeqs,
-                                    ...(admissionWitness.userMessageSeq === null
-                                        ? []
-                                        : [admissionWitness.userMessageSeq]),
-                                ])].filter((seq) => Number.isSafeInteger(seq) && seq >= 0).sort((left, right) => left - right);
-                                const startSeqInclusive = userMessageSeqs[0];
-                                const endSeqInclusive = hostRuntimeParams.session.getLastObservedMessageSeq?.();
-                                if (
-                                    startSeqInclusive !== undefined
-                                    && Number.isSafeInteger(endSeqInclusive)
-                                    && endSeqInclusive >= startSeqInclusive
-                                ) {
-                                    await hostRuntimeParams.session.enqueueSessionTurnMutation?.({
-                                        v: 1,
-                                        sessionId,
-                                        mutationId: `native-turn-input-anchors-${randomUUID()}`,
-                                        observedAt: event.emittedAtMs,
-                                        agentId: identity.agentId,
-                                        action: 'append_transcript_anchors',
-                                        turnId: event.turnId,
-                                        ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}),
-                                        transcriptAnchors: {
-                                            startUserMessageSeq: startSeqInclusive,
-                                            userMessageSeqs,
-                                            startSeqInclusive,
-                                            endSeqInclusive,
-                                        },
-                                    });
-                                }
-                            }
                         } catch (error) {
                             ownedAbortController.abort(error);
                             throw error;
@@ -5996,8 +6001,18 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     ...operations,
                     getRuntimeLifetimeSignal: () => signal,
                     readSessionStartupInstructions: () => startupInstructions,
+                    ...(params.agent.richDefinition?.definition.capabilities.skills?.liveReload === 'supported'
+                        ? { refreshSkills: async (request: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[0],
+                            options?: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[1]) => {
+                            assertGenerationCurrent();
+                            signal.throwIfAborted();
+                            if (!session.refreshSkills) throw new Error('Agent declared live skill reload without its runtime control');
+                            return await session.refreshSkills(request, { signal: options?.signal
+                                ? AbortSignal.any([signal, options.signal]) : signal });
+                        } } : {}),
                 },
                 configuration: openInputs.configuration,
+                ...(session.skillsDelivered !== undefined ? { skillsDelivered: session.skillsDelivered } : {}),
                 ...(session.runtimeDescriptorV1
                     ? { runtimeDescriptorV1: session.runtimeDescriptorV1 }
                     : {}),
@@ -6035,6 +6050,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 initializeSession: { ...plan.config.initializeSession, retainedTerminalRecovery: 'adopt' } } };
         }
     }
+    if (params.pluginMcpRuntimeRegistry) plan = { ...plan, config: { ...plan.config, pluginMcpRuntimeRegistry: params.pluginMcpRuntimeRegistry } };
     const createSessionRuntime = plan.config.createSessionRuntime;
     if (
         !createSessionRuntime

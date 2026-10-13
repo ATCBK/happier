@@ -1,10 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import { createRuntimeOverrideSynchronizers } from './createRuntimeOverrideSynchronizers';
+import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 
 describe('createRuntimeOverrideSynchronizers', () => {
+  it('holds the existing before-prompt override flush while a capability apply restart is in flight', async () => {
+    let metadata = createTestMetadata();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let requestEntered = false;
+    const session = { sessionId: 'session', getMetadataSnapshot: () => metadata,
+      updateMetadataAsCurrentPublisher: async (update: (current: typeof metadata) => typeof metadata) => { metadata = update(metadata); } };
+    const sync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:claude', session,
+      runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
+      isStarted: () => true, capabilitySelection: { session, agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+        isStarted: () => true, isSettled: () => true,
+        requestRestart: async () => { requestEntered = true; await held; return { ok: true, status: 'restarted', sessionId: 'session' }; },
+      } });
+    metadata = writeSessionCapabilitySelectionToMetadataV1(metadata,
+      { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } }, { sessionActive: true });
+    sync.syncFromMetadata();
+    let flushed = false;
+    const flush = sync.flushPendingAfterStart().then(() => { flushed = true; });
+    try {
+      await expect.poll(() => requestEntered).toBe(true);
+      await setImmediate();
+      expect(flushed).toBe(false);
+    } finally { release(); await flush; }
+  });
   it('applies metadata-only permission mode updates through the runtime target', async () => {
     const setPermissionMode = vi.fn(async (_mode: string) => {});
 

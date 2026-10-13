@@ -1,863 +1,514 @@
+import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import type { AgentRuntime, AgentSessionRuntimeEvent, AgentSessionSendRequest } from '@happier-dev/plugin-sdk/agents/runtime';
+import { SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import { MessageAckResponseSchema } from '@happier-dev/protocol/updates';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import {
+  SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1, SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+  SessionTranscriptObservationCapabilityAckSchema, SessionTranscriptObservationCapabilityRequestSchema,
+  SessionTranscriptObservationInputSchema, SessionTranscriptObservationAckV1Schema,
+} from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import { VoiceAgentManager } from '../../../voice/agent/VoiceAgentManager';
-import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/testkit';
+import { createVoiceSessionRuntimeThroughNativeFactory } from './testkit/nativeSessionContext';
+import { ApiSessionClient } from '@/api/session/sessionClient';
+import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
+import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTurnMutationAppliedSocketAck } from '@/testkit/backends/apiSessionSocketHarness';
+import * as executionRunRegistration from '@/rpc/handlers/executionRuns';
 import {
-  cancelVoiceAgentTurnStream,
-  commitVoiceAgentUserTranscript,
-  readVoiceAgentTurnStream,
-  startVoiceAgentTurnStream,
-} from '@/agent/runtime/bridges/executionRun/voiceAgentTurnStreams';
-import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
-import type { ExecutionRunVoiceAgentController } from '../../../executionRuns/controllers/types';
+  parseRuntimeSessionClientDurableMutation, resolveSessionClientDurableMutationOutboxPath,
+} from '@/api/session/client/transport/mutations/sessionClientDurableMutationPersistence';
+import type { PersistedTranscriptMessageAppendMutationV1, PersistedVoiceAgentTranscriptTurnMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
+import {
+  cancelVoiceAgentTurnStream, commitVoiceAgentUserTranscript, readVoiceAgentTurnStream, startVoiceAgentTurnStream,
+} from './voiceAgentTurnStreams';
+import { enqueueExecutionRunMarkerWrite, writeExecutionRunActivityMarker } from './activityMarkers';
+import type { ExecutionRunState } from './executionRunTypes';
+import type { ExecutionRunController, ExecutionRunVoiceAgentController } from '../../../executionRuns/controllers/types';
 
-function createVoiceAgentController(
-  persistenceMode: 'persistent' | 'ephemeral' = 'persistent',
-): ExecutionRunVoiceAgentController {
+// Native ESM namespaces are immutable. This configurable OS-boundary view still
+// delegates every operation to Node; the two scoped fault/observation spies below
+// leave the actual atomic writer and durable journal implementation untouched.
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+}));
+
+type ProviderEvent<T = AgentSessionRuntimeEvent> = T extends AgentSessionRuntimeEvent
+  ? Omit<T, 'sessionId' | 'sequence' | 'emittedAtMs'> : never;
+
+function createVoiceAgentController(voiceAgentId: string, persistenceMode: 'persistent' | 'ephemeral'): ExecutionRunVoiceAgentController {
   return {
-    kind: 'voice_agent',
-    controllerOccurrenceId: 'voice-agent-controller-1',
-    voiceAgentId: 'voice-agent-1',
-    cancelled: false,
-    lastMarkerWriteAtMs: 0,
-    terminalPromise: Promise.resolve(),
-    resolveTerminal: vi.fn(),
-    transcript: { persistenceMode, epoch: 7 },
-    externalStreamIdByInternal: new Map(),
-    internalStreamIdByExternal: new Map(),
-    pendingTranscriptTurnByExternalStreamId: new Map(),
-    terminalReadByExternalStreamId: new Map(),
-    readInFlightByExternalStreamId: new Map(),
+    kind: 'voice_agent', controllerOccurrenceId: 'voice-agent-controller-1', voiceAgentId,
+    cancelled: false, lastMarkerWriteAtMs: 0, terminalPromise: Promise.resolve(), resolveTerminal() {},
+    transcript: { persistenceMode, epoch: 7 }, externalStreamIdByInternal: new Map(), internalStreamIdByExternal: new Map(),
+    pendingTranscriptTurnByExternalStreamId: new Map(), terminalReadByExternalStreamId: new Map(), readInFlightByExternalStreamId: new Map(),
   };
+}
+
+/** Actual Session registration supplies the writer; native factory/Manager own admission and turns.
+ * Only Socket.IO receipts, Agent SDK events, and the exact Session journal's OS writes are scripted. */
+async function createTurnStreamFixture(options: Readonly<{
+  persistenceMode?: 'persistent' | 'ephemeral';
+  reply?: (prompt: string, index: number) => string;
+  onSend?: (request: AgentSessionSendRequest, publish: (event: ProviderEvent) => void) => void;
+}> = {}) {
+  const sessionId = `voice-turnstream-${randomUUID()}`;
+  const machineId = 'voice-fixture-machine';
+  const credentials = { token: 'voice-turnstream-token', encryption: null };
+  const sessionSnapshot = createPlainSessionFixture({ id: sessionId });
+  const sessionRecord = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: JSON.stringify(sessionSnapshot.metadata) });
+  const http = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+    if (path === `/v2/sessions/${sessionId}` || path === `/v1/sessions/${sessionId}`) return { status: 200, data: { session: sessionRecord } };
+    if (path === `/v1/sessions/${sessionId}/messages`) return { status: 200, data: { messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null } };
+    return { status: 404, data: {} };
+  });
+  const home = createSessionRuntimeActivityHomeStub({ machineId });
+  const observations: ReturnType<typeof SessionTranscriptObservationInputSchema.parse>[] = [];
+  const requests: AgentSessionSendRequest[] = [];
+  const order: string[] = [];
+  const journalTurns = new Map<string, PersistedVoiceAgentTranscriptTurnMutationV1>();
+  const journalMessages = new Map<string, PersistedTranscriptMessageAppendMutationV1>();
+  const journalPath = resolveSessionClientDurableMutationOutboxPath(sessionId);
+  let storage: 'normal' | 'held' | 'failed' = 'normal';
+  let announceWrite!: () => void;
+  const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+  let releaseWrite!: () => void;
+  const writeReleased = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const readJournalMutations = (data: unknown) => {
+    const value: unknown = typeof data === 'string' ? JSON.parse(data) : null;
+    if (!value || typeof value !== 'object' || !('mutations' in value) || !Array.isArray(value.mutations)) return [];
+    return value.mutations.flatMap((mutation: unknown) => parseRuntimeSessionClientDurableMutation(mutation, sessionId).mutations);
+  };
+  const writeFile = fs.writeFile;
+  const rename = fs.rename;
+  const diskWrite = vi.spyOn(fs, 'writeFile').mockImplementation(async (path, data, opts) => {
+    if (typeof path === 'string' && dirname(path) === dirname(journalPath) && typeof data === 'string') {
+      const turns = readJournalMutations(data).flatMap((queued) => queued.kind === 'voice_agent_transcript_turn' ? [queued.payload] : []);
+      if (turns.some((turn) => !journalTurns.has(turn.turnId)) && storage !== 'normal') {
+        announceWrite();
+        if (storage === 'held') await writeReleased;
+        else throw Object.assign(new Error('Voice transcript disk is full'), { code: 'ENOSPC' });
+      }
+    }
+    await writeFile(path, data, opts);
+  });
+  // Observe committed journal bytes after the real atomic rename; no journal decisions are copied.
+  const diskRename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    const mutations = String(to) === journalPath ? readJournalMutations(await fs.readFile(from, 'utf8')) : [];
+    await rename(from, to);
+    for (const queued of mutations) {
+      if (queued.kind === 'voice_agent_transcript_turn') journalTurns.set(queued.payload.turnId, queued.payload);
+      if (queued.kind === 'transcript_message_append') {
+        if (!journalMessages.has(queued.payload.localId) && queued.payload.messageRole === 'user') order.push(`persist:${queued.payload.localId}`);
+        journalMessages.set(queued.payload.localId, queued.payload);
+      }
+    }
+  });
+  let seq = 0;
+  const socket = createApiSessionSocketStub({
+    connected: true,
+    emit(event, args) { if (event === 'ping' && typeof args[0] === 'function') args[0](); },
+    emitWithAck(event, payload, currentSocket) {
+      if ((event === 'update-metadata' || event === 'update-state') && payload && typeof payload === 'object'
+        && 'expectedVersion' in payload && typeof payload.expectedVersion === 'number') {
+        return { result: 'success', version: payload.expectedVersion + 1,
+          ...(event === 'update-metadata' && 'metadata' in payload ? { metadata: payload.metadata } : {}),
+          ...(event === 'update-state' && 'agentState' in payload ? { agentState: payload.agentState } : {}),
+        };
+      }
+      if (event === 'session-turn-mutation') return createSessionTurnMutationAppliedSocketAck(SessionTurnMutationV1Schema.parse(payload));
+      if (event === 'message' && payload && typeof payload === 'object' && 'localId' in payload
+        && typeof payload.localId === 'string' && 'message' in payload) {
+        const content = SessionStoredMessageContentSchema.parse(payload.message);
+        const messageSeq = ++seq;
+        currentSocket.trigger('update', { id: `echo-${messageSeq}`, createdAt: Date.now(), body: {
+          t: 'new-message', sid: sessionId, message: { id: `message-${messageSeq}`, seq: messageSeq,
+            localId: payload.localId, content, ...('messageRole' in payload ? { messageRole: payload.messageRole } : {}),
+          },
+        } });
+        return MessageAckResponseSchema.parse({ ok: true, id: `message-${messageSeq}`, seq: messageSeq, localId: payload.localId });
+      }
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1) {
+        SessionTranscriptObservationCapabilityRequestSchema.parse(payload);
+        return SessionTranscriptObservationCapabilityAckSchema.parse({ ok: true, capability: 'session-transcript-observation-v1' });
+      }
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+        const observation = SessionTranscriptObservationInputSchema.parse(payload);
+        observations.push(observation);
+        const messageSeq = ++seq;
+        if (observation.messageRole === 'user') {
+          currentSocket.trigger('update', { id: `echo-${messageSeq}`, createdAt: Date.now(), body: { t: 'new-message', sid: sessionId, message: {
+            id: `message-${messageSeq}`, seq: messageSeq, localId: observation.localId,
+            messageRole: 'user', content: observation.content,
+          } } });
+        }
+        return SessionTranscriptObservationAckV1Schema.parse({
+          ok: true, status: 'observed', id: `message-${messageSeq}`, seq: messageSeq,
+          localId: observation.localId, didWrite: true, ingestedAt: 200,
+        });
+      }
+      const activity = home.answer(event, payload);
+      if (activity) return activity;
+      const message = payload && typeof payload === 'object' && 'localId' in payload ? payload : null;
+      return { ok: true, id: `message-${++seq}`, seq, localId: message?.localId };
+    },
+  });
+  // Observation only: the real registration body, handlers, and writer remain installed.
+  const registration = vi.spyOn(executionRunRegistration, 'registerExecutionRunHandlers');
+  let session: ApiSessionClient | undefined;
+  let manager: VoiceAgentManager | undefined;
+  try {
+    session = createTestApiSessionClient(ApiSessionClient, credentials.token, sessionSnapshot, {
+      metadataAuthority: { kind: 'owner', credentials, readCurrentCredentials: async () => credentials }, localMachineId: machineId,
+      transport: {
+        serverId: 'voice-turnstream-home', serverUrl: 'https://voice-turnstream.example.test',
+        // Incumbent structural Socket.IO boundary; real Session transport and supervisor remain beneath it.
+        createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }),
+      },
+    });
+    const actualSession = session;
+    await vi.waitFor(() => expect(registration.mock.calls.find(([, context]) => context.sessionId === sessionId)?.[1].transcriptWriter).toBeDefined());
+    const writer = registration.mock.calls.find(([, context]) => context.sessionId === sessionId)![1].transcriptWriter!;
+    registration.mockRestore();
+    let openCount = 0;
+    const sdk: AgentRuntime = { sessions: { async open() {
+      openCount += 1;
+      const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+      let sequence = 0;
+      const publish = (event: ProviderEvent) => {
+        const value = { ...event, sessionId, sequence: sequence++, emittedAtMs: 1 };
+        for (const listener of listeners) listener(value);
+      };
+      return {
+        watch(listener) {
+          listeners.add(listener);
+          listener({ kind: 'provider-session-id', sessionId, providerSessionId: 'voice-provider-session', sequence: sequence++, emittedAtMs: 1 });
+          return { dispose() { listeners.delete(listener); } };
+        },
+        async send(request) {
+          requests.push(request);
+          order.push('provider');
+          const turnId = request.delivery.turnId;
+          publish({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
+          publish({ kind: 'turn-start', turnId, startedBy: 'host' });
+          if (options.onSend) options.onSend(request, publish);
+          else {
+            publish({ kind: 'message-delta', turnId, channel: 'assistant', text: options.reply?.(request.input.text, requests.length) ?? 'assistant reply' });
+            publish({ kind: 'turn-complete', turnId });
+          }
+          return { status: 'admitted' as const };
+        },
+        async cancel(request) {
+          publish({ kind: 'turn-cancelled', turnId: request.turnId, cause: 'user' });
+          return { status: 'requested' as const, turnId: request.turnId };
+        },
+        async dispose() { listeners.clear(); },
+      };
+    } } };
+    manager = new VoiceAgentManager({ createRuntime: () => createVoiceSessionRuntimeThroughNativeFactory({
+      runtime: sdk, session: actualSession, modelId: 'chat-model', capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
+    }) });
+    const actualManager = manager;
+    const startedAgent = await actualManager.start({
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, chatModelId: 'chat-model', commitModelId: 'chat-model',
+      permissionIntent: 'read-only', idleTtlSeconds: 60, initialContext: 'CTX',
+    });
+    const ctrl = createVoiceAgentController(startedAgent.voiceAgentId, options.persistenceMode ?? 'persistent');
+    const run: ExecutionRunState = {
+      runId: 'run_1', callId: 'call_1', sidechainId: 'sidechain_1', sessionId, depth: 0,
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, backendId: 'claude', instructions: '', permissionMode: 'read_only',
+      retentionPolicy: 'resumable', runClass: 'long_lived', startedAtMs: 1, status: 'running', intent: 'voice_agent', ioMode: 'streaming',
+    };
+    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
+    const controllers = new Map<string, ExecutionRunController>([['run_1', ctrl]]);
+    const markerWriteChains = new Map<string, Promise<void>>();
+    const writeActivityMarker = (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) =>
+      writeExecutionRunActivityMarker({ runId, nowMs, opts, runs, controllers,
+        enqueueMarkerWrite: (markerRunId, write) => enqueueExecutionRunMarkerWrite({ markerWriteChains, runId: markerRunId, write }),
+      });
+    const base = { runId: 'run_1', runs, controllers, voiceAgentManager: actualManager, transcriptWriter: writer };
+    return {
+      ...base, manager: actualManager, session: actualSession, ctrl, socket, requests, order, observations, journalTurns, journalMessages,
+      getOpenCount: () => openCount, writeStarted, releaseWrite,
+      setStorage: (value: typeof storage) => { storage = value; },
+      start: (params: Parameters<typeof startVoiceAgentTurnStream>[0]['params']) => startVoiceAgentTurnStream({ ...base, params }),
+      read: (streamId: string, params: Omit<Parameters<typeof readVoiceAgentTurnStream>[0]['params'], 'streamId'> = { cursor: 0 }) =>
+        readVoiceAgentTurnStream({ ...base, params: { streamId, ...params }, writeActivityMarker, getNowMs: () => 123 }),
+      cancel: (streamId: string) => cancelVoiceAgentTurnStream({ ...base, params: { streamId } }),
+      async dispose() {
+        storage = 'normal'; releaseWrite();
+        try { await actualManager.dispose(); } finally {
+          try { await actualSession.close(); } finally { diskWrite.mockRestore(); diskRename.mockRestore(); http.mockRestore(); }
+        }
+      },
+    };
+  } catch (error) {
+    registration.mockRestore(); storage = 'normal'; releaseWrite();
+    try { await manager?.dispose(); await session?.close(); } finally { diskWrite.mockRestore(); diskRename.mockRestore(); http.mockRestore(); }
+    throw error;
+  }
+}
+
+function requireStream(result: Awaited<ReturnType<typeof startVoiceAgentTurnStream>>) {
+  if (!result.ok) throw new Error(result.error);
+  return result.streamId;
+}
+
+async function awaitFinished(fixture: Awaited<ReturnType<typeof createTurnStreamFixture>>, streamId: string) {
+  await vi.waitFor(() => {
+    expect(fixture.journalTurns.has(streamId)).toBe(true);
+    expect(fixture.manager.isTurnInFlight(fixture.ctrl.voiceAgentId)).toBe(false);
+  });
 }
 
 describe('voiceAgentTurnStreams', () => {
   it('persists the display override for an explicit user-transcript commit and otherwise uses provider text', async () => {
-    const appendUserTextCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
-    const runs = new Map([['run_1', {
-      status: 'running',
-      intent: 'voice_agent',
-      ioMode: 'streaming',
-    } as ExecutionRunState]]);
-    const controllers = new Map([['run_1', createVoiceAgentController()]]);
-    const transcriptWriter = {
-      appendUserTextCommitted,
-      appendAssistantTextCommitted: vi.fn(async () => ({ persisted: true, delivered: true })),
-      commitVoiceAgentTranscriptTurn: vi.fn(async () => ({ persisted: true, delivered: true })),
-    };
-
-    const result = await commitVoiceAgentUserTranscript({
-      runId: 'run_1',
-      text: 'Provider-facing text',
-      displayText: 'User-visible text',
-      localId: 'local-display',
-      runs,
-      controllers,
-      transcriptWriter,
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(appendUserTextCommitted).toHaveBeenCalledWith(
-      'User-visible text',
-      expect.objectContaining({
-        localId: 'local-display',
-        meta: expect.objectContaining({
-          happierProvenanceV1: {
-            v: 1,
-            kind: 'host',
-            producer: 'executionRunVoice',
-          },
-        }),
-      }),
-    );
-
-    await expect(commitVoiceAgentUserTranscript({
-      runId: 'run_1',
-      text: 'Provider-only text',
-      localId: 'local-provider',
-      runs,
-      controllers,
-      transcriptWriter,
-    })).resolves.toEqual({ ok: true });
-    expect(appendUserTextCommitted).toHaveBeenLastCalledWith(
-      'Provider-only text',
-      expect.objectContaining({ localId: 'local-provider' }),
-    );
+    const fixture = await createTurnStreamFixture();
+    try {
+      await expect(commitVoiceAgentUserTranscript({ ...fixture, text: 'Provider-facing text', displayText: 'User-visible text', localId: 'local-display' })).resolves.toEqual({ ok: true });
+      await expect(commitVoiceAgentUserTranscript({ ...fixture, text: 'Provider-only text', localId: 'local-provider' })).resolves.toEqual({ ok: true });
+      expect([...fixture.journalMessages.values()].filter((row) => row.messageRole === 'user')).toMatchObject([
+        { localId: 'local-display', content: { t: 'plain', v: { content: { type: 'text', text: 'User-visible text' }, meta: {
+          happierProvenanceV1: { v: 1, kind: 'host', producer: 'executionRunVoice' },
+        } } } },
+        { localId: 'local-provider', content: { t: 'plain', v: { content: { type: 'text', text: 'Provider-only text' } } } },
+      ]);
+      expect(fixture.requests).toEqual([]);
+    } finally { await fixture.dispose(); }
   });
 
   it('persists the exact v2 outer local id before starting the provider', async () => {
-    const events: string[] = [];
-    const appendUserTextCommitted = vi.fn(async (_text: string, options: Readonly<{ localId: string }>) => {
-      events.push(`persist:${options.localId}`);
-      return { persisted: true, delivered: true };
-    });
-    const appendAssistantTextCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
-    const startTurnStream = vi.fn(async () => {
-      events.push('provider');
-      return { streamId: 'internal-v2' };
-    });
-    const ctrl = createVoiceAgentController();
-
-    const result = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: {
-        message: 'provider payload',
-        displayMessage: 'Outer prompt',
-        userTranscript: { mode: 'persist', localId: ' opaque-local-id ' },
-      },
-      runs: new Map([['run_1', {
-        status: 'running',
-        intent: 'voice_agent',
-        ioMode: 'streaming',
-      } as ExecutionRunState]]),
-      controllers: new Map([['run_1', ctrl]]),
-      voiceAgentManager: { startTurnStream } as unknown as VoiceAgentManager,
-      transcriptWriter: {
-        appendUserTextCommitted,
-        appendAssistantTextCommitted,
-        commitVoiceAgentTranscriptTurn: vi.fn(async () => ({ persisted: true, delivered: true })),
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(events).toEqual(['persist: opaque-local-id ', 'provider']);
-    expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({
-      durableUserTranscriptLocalId: ' opaque-local-id ',
-    }));
+    const fixture = await createTurnStreamFixture();
+    try {
+      const streamId = requireStream(await fixture.start({ message: 'provider payload', displayMessage: 'Outer prompt', userTranscript: { mode: 'persist', localId: ' opaque-local-id ' } }));
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      expect(fixture.order.slice(0, 2)).toEqual(['persist: opaque-local-id ', 'provider']);
+      expect(fixture.requests[0].inputIds).toEqual([' opaque-local-id ']);
+      expect(fixture.journalMessages.get(' opaque-local-id ')).toMatchObject({ localId: ' opaque-local-id ', content: { t: 'plain', v: { content: { text: 'Outer prompt' } } } });
+      await vi.waitFor(async () => expect(await fixture.read(streamId)).toMatchObject({ ok: true, done: true }));
+    } finally { await fixture.dispose(); }
   });
 
   it('rejects v2 persist before provider effects without a persistent committed writer', async () => {
-    const startTurnStream = vi.fn();
-
-    const result = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: {
-        message: 'Outer prompt',
-        userTranscript: { mode: 'persist', localId: 'opaque-local-id' },
-      },
-      runs: new Map([['run_1', {
-        status: 'running',
-        intent: 'voice_agent',
-        ioMode: 'streaming',
-      } as ExecutionRunState]]),
-      controllers: new Map([['run_1', createVoiceAgentController('ephemeral')]]),
-      voiceAgentManager: { startTurnStream } as unknown as VoiceAgentManager,
-      transcriptWriter: null,
-    });
-
-    expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
-    expect(startTurnStream).not.toHaveBeenCalled();
+    const fixture = await createTurnStreamFixture({ persistenceMode: 'ephemeral' });
+    try {
+      await expect(startVoiceAgentTurnStream({ ...fixture, transcriptWriter: null, params: { message: 'Outer prompt', userTranscript: { mode: 'persist', localId: 'opaque-local-id' } } })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+      expect(fixture.requests).toEqual([]);
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.journalMessages.size).toBe(0);
+      expect(fixture.ctrl.internalStreamIdByExternal.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('allows explicit suppress without any transcript writer', async () => {
-    const startTurnStream = vi.fn(async () => ({ streamId: 'internal-suppress' }));
-
-    const result = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: {
-        message: 'tool follow-up',
-        userTranscript: { mode: 'suppress' },
-      },
-      runs: new Map([['run_1', {
-        status: 'running',
-        intent: 'voice_agent',
-        ioMode: 'streaming',
-      } as ExecutionRunState]]),
-      controllers: new Map([['run_1', createVoiceAgentController('ephemeral')]]),
-      voiceAgentManager: { startTurnStream } as unknown as VoiceAgentManager,
-      transcriptWriter: null,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(startTurnStream).toHaveBeenCalledTimes(1);
-    expect(startTurnStream).toHaveBeenCalledWith(expect.not.objectContaining({
-      durableUserTranscriptLocalId: expect.anything(),
-    }));
+    const fixture = await createTurnStreamFixture({ persistenceMode: 'ephemeral' });
+    try {
+      const streamId = requireStream(await startVoiceAgentTurnStream({ ...fixture, transcriptWriter: null, params: { message: 'tool follow-up', userTranscript: { mode: 'suppress' } } }));
+      await vi.waitFor(async () => expect(await fixture.read(streamId)).toMatchObject({ ok: true, done: true }));
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0].input.text).toContain('tool follow-up');
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.journalTurns.size).toBe(0);
+      expect(fixture.journalMessages.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('forwards an already-committed suppress local id for provider correlation without persisting again', async () => {
-    const startTurnStream = vi.fn(async () => ({ streamId: 'internal-suppress-correlated' }));
-    const appendUserTextCommitted = vi.fn();
-    const result = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: {
-        message: 'permission fallback',
-        userTranscript: { mode: 'suppress', localId: 'already-committed' },
-      },
-      runs: new Map([['run_1', { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState]]),
-      controllers: new Map([['run_1', createVoiceAgentController()]]),
-      voiceAgentManager: { startTurnStream } as unknown as VoiceAgentManager,
-      transcriptWriter: {
-        appendUserTextCommitted,
-        appendAssistantTextCommitted: vi.fn(),
-        commitVoiceAgentTranscriptTurn: vi.fn(),
-      },
-    });
-    expect(result.ok).toBe(true);
-    expect(appendUserTextCommitted).not.toHaveBeenCalled();
-    expect(startTurnStream).toHaveBeenCalledWith(expect.objectContaining({
-      durableUserTranscriptLocalId: 'already-committed',
-    }));
+    const fixture = await createTurnStreamFixture();
+    try {
+      await expect(commitVoiceAgentUserTranscript({ ...fixture, text: 'already committed user', localId: 'already-committed' })).resolves.toEqual({ ok: true });
+      const streamId = requireStream(await fixture.start({ message: 'permission fallback', userTranscript: { mode: 'suppress', localId: 'already-committed' } }));
+      await vi.waitFor(async () => expect(await fixture.read(streamId)).toMatchObject({ ok: true, done: true }));
+      expect(fixture.requests[0].inputIds).toEqual(['already-committed']);
+      expect([...fixture.journalMessages.values()].filter((row) => row.messageRole === 'user')).toHaveLength(1);
+      expect([...fixture.journalMessages.values()].filter((row) => row.messageRole === 'agent')).toMatchObject([{ localId: `${streamId}:assistant` }]);
+      expect(fixture.journalTurns.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('keeps persisted turn metadata keyed by the manager voiceAgentId rather than the execution run id', async () => {
-    const userTextCommitted = vi.fn(async (_text: string, _meta: Record<string, unknown>) => undefined);
-    const assistantTextCommitted = vi.fn(async (_text: string, _meta: Record<string, unknown>) => undefined);
-    const commitVoiceAgentTranscriptTurn = vi.fn(async (turn: Readonly<{
-      user: Readonly<{ text: string; meta: Record<string, unknown> }>;
-      assistant: Readonly<{ text: string; meta: Record<string, unknown> }>;
-    }>) => {
-      await userTextCommitted(turn.user.text, turn.user.meta);
-      await assistantTextCommitted(turn.assistant.text, turn.assistant.meta);
-      return { persisted: true, delivered: true };
-    });
-    const voiceAgentManager = {
-      startTurnStream: vi.fn(async ({
-        voiceAgentId,
-        onTurnFinal,
-      }: {
-        voiceAgentId: string;
-        userText: string;
-        onTurnFinal?: (assistantText: string) => Promise<void>;
-      }) => {
-        expect(voiceAgentId).toBe('voice-agent-1');
-        await onTurnFinal?.('assistant reply');
-        return { streamId: 'internal-stream-1' };
-      }),
-      readTurnStream: vi.fn(async ({ streamId, cursor }: { streamId: string; cursor: number }) => ({
-        streamId,
-        events: cursor === 0 ? [{
-          t: 'voice_output',
-          output: { v: 1, kind: 'turn_final', turnId: 'internal-stream-1', seq: 0, text: 'assistant reply' },
-        }] : [],
-        nextCursor: cursor + 1,
-        done: true,
-      })),
-    } as unknown as VoiceAgentManager;
-
-    const run = {
-      status: 'running',
-      intent: 'voice_agent',
-      ioMode: 'streaming',
-    } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-
-    const start = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'hello' },
-      runs,
-      controllers,
-      voiceAgentManager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn },
-    });
-
-    expect(start.ok).toBe(true);
-    if (!start.ok) {
-      throw new Error(start.error);
-    }
-    expect(userTextCommitted).toHaveBeenCalledTimes(1);
-
-    const read = await readVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: start.streamId, cursor: 0 },
-      runs,
-      controllers,
-      voiceAgentManager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn },
-      writeActivityMarker: vi.fn(async () => undefined),
-      getNowMs: () => 123,
-    });
-
-    expect(read.ok).toBe(true);
-    if (read.ok) {
-      expect(read.events).toEqual([{
-        t: 'voice_output',
-        output: { v: 1, kind: 'turn_final', turnId: start.streamId, seq: 0, text: 'assistant reply' },
-      }]);
-    }
-    expect(assistantTextCommitted).toHaveBeenCalledTimes(1);
-    expect(userTextCommitted).toHaveBeenCalledTimes(1);
-    expect(commitVoiceAgentTranscriptTurn).toHaveBeenCalledTimes(1);
-    expect(userTextCommitted.mock.calls[0]?.[1]).toMatchObject({
-      happierProvenanceV1: {
-        v: 1,
-        kind: 'host',
-        producer: 'executionRunVoice',
-      },
-      happier: {
-        kind: 'voice_agent_turn.v1',
-        payload: {
-          voiceAgentId: 'voice-agent-1',
-          role: 'user',
-        },
-      },
-    });
-    expect(assistantTextCommitted.mock.calls[0]?.[1]).toMatchObject({
-      happier: {
-        kind: 'voice_agent_turn.v1',
-        payload: {
-          voiceAgentId: 'voice-agent-1',
-          role: 'assistant',
-        },
-      },
-    });
+    const fixture = await createTurnStreamFixture();
+    try {
+      const streamId = requireStream(await fixture.start({ message: 'hello' }));
+      await awaitFinished(fixture, streamId);
+      const turn = fixture.journalTurns.get(streamId)!;
+      expect(turn.user.content).toMatchObject({ t: 'plain', v: { content: { text: 'hello' }, meta: {
+        happierProvenanceV1: { v: 1, kind: 'host', producer: 'executionRunVoice' },
+        happier: { kind: 'voice_agent_turn.v1', payload: { voiceAgentId: fixture.ctrl.voiceAgentId, runId: 'run_1', role: 'user' } },
+      } } });
+      expect(turn.assistant.content).toMatchObject({ t: 'plain', v: { content: { type: 'acp', data: { type: 'message', message: 'assistant reply' } }, meta: {
+        happier: { kind: 'voice_agent_turn.v1', payload: { voiceAgentId: fixture.ctrl.voiceAgentId, runId: 'run_1', role: 'assistant' } },
+      } } });
+      const read = await fixture.read(streamId);
+      expect(read).toMatchObject({ ok: true, done: true });
+      if (read.ok) expect(read.events).toContainEqual(expect.objectContaining({ t: 'voice_output', output: expect.objectContaining({ kind: 'turn_final', turnId: streamId, text: 'assistant reply' }) }));
+      expect(fixture.journalTurns.size).toBe(1);
+    } finally { await fixture.dispose(); }
   });
 
   it('commits the terminal transcript pair when the producer finishes even if no stream reader arrives', async () => {
-    let runtime: ReturnType<typeof createTestExecutionRunHostRuntime>;
-    runtime = createTestExecutionRunHostRuntime({
-      runtimeId: 'voice-agent-producer-completion-session',
-      onSendPrompt() {
-        runtime.emitMessage({ type: 'model-output', fullText: 'assistant persisted without a read' });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      },
-    });
-    const manager = new VoiceAgentManager({ createRuntime: () => runtime });
-    const startedAgent = await manager.start({
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model',
-      commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
-      idleTtlSeconds: 60,
-      initialContext: 'CTX',
-    });
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    ctrl.voiceAgentId = startedAgent.voiceAgentId;
-    const durableCommit = vi.fn(async () => ({ persisted: true, delivered: false }));
-
+    const fixture = await createTurnStreamFixture({ reply: () => 'assistant persisted without a read' });
     try {
-      const started = await startVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { message: 'persist this final' },
-        runs: new Map([['run_1', run]]),
-        controllers: new Map([['run_1', ctrl]]),
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
+      const streamId = requireStream(await fixture.start({ message: 'persist this final' }));
+      await awaitFinished(fixture, streamId);
+      expect(fixture.journalTurns.get(streamId)).toMatchObject({ turnId: streamId,
+        user: { content: { t: 'plain', v: { content: { text: 'persist this final' } } } },
+        assistant: { content: { t: 'plain', v: { content: { type: 'acp', data: { type: 'message', message: 'assistant persisted without a read' } } } } },
       });
-      if (!started.ok) throw new Error(started.error);
-
-      await vi.waitFor(() => expect(durableCommit).toHaveBeenCalledTimes(1));
-      expect(durableCommit).toHaveBeenCalledWith(expect.objectContaining({
-        turnId: started.streamId,
-        user: expect.objectContaining({ text: 'persist this final' }),
-        assistant: expect.objectContaining({ text: 'assistant persisted without a read' }),
-      }));
-      expect(ctrl.internalStreamIdByExternal.has(started.streamId)).toBe(true);
-    } finally {
-      await manager.dispose();
-    }
+      expect(fixture.ctrl.internalStreamIdByExternal.has(streamId)).toBe(true);
+      expect(fixture.ctrl.terminalReadByExternalStreamId.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('does not persist either side of a persistent turn that is cancelled', async () => {
-    const userTextCommitted = vi.fn(async (_text: string, _meta: Record<string, unknown>) => undefined);
-    const assistantTextCommitted = vi.fn(async () => undefined);
-    const voiceAgentManager = {
-      startTurnStream: vi.fn(async () => ({ streamId: 'internal-stream-cancelled' })),
-      cancelTurnStream: vi.fn(async () => ({ ok: true as const })),
-    } as unknown as VoiceAgentManager;
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-
-    const start = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'cancel me' },
-      runs,
-      controllers,
-      voiceAgentManager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: vi.fn() },
-    });
-    if (!start.ok) throw new Error(start.error);
-
-    await cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: start.streamId },
-      runs,
-      controllers,
-      voiceAgentManager,
-    });
-
-    expect(userTextCommitted).not.toHaveBeenCalled();
-    expect(assistantTextCommitted).not.toHaveBeenCalled();
-    expect(ctrl.pendingTranscriptTurnByExternalStreamId.size).toBe(0);
-    expect(ctrl.terminalReadByExternalStreamId.size).toBe(0);
-    expect(ctrl.readInFlightByExternalStreamId.size).toBe(0);
+    const fixture = await createTurnStreamFixture({ onSend() {} });
+    try {
+      const streamId = requireStream(await fixture.start({ message: 'cancel me' }));
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      await expect(fixture.cancel(streamId)).resolves.toEqual({ ok: true });
+      expect(fixture.journalTurns.size).toBe(0);
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.journalMessages.size).toBe(0);
+      expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.size).toBe(0);
+      expect(fixture.ctrl.terminalReadByExternalStreamId.size).toBe(0);
+      expect(fixture.ctrl.readInFlightByExternalStreamId.size).toBe(0);
+      expect(fixture.ctrl.internalStreamIdByExternal.size).toBe(0);
+      expect(fixture.ctrl.externalStreamIdByInternal.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('fails closed at producer completion when durable transcript custody rejects the final', async () => {
-    let runtime: ReturnType<typeof createTestExecutionRunHostRuntime>;
-    runtime = createTestExecutionRunHostRuntime({
-      runtimeId: 'voice-agent-producer-custody-failure-session',
-      onSendPrompt() {
-        runtime.emitMessage({ type: 'model-output', fullText: 'assistant final' });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      },
-    });
-    const manager = new VoiceAgentManager({ createRuntime: () => runtime });
-    const startedAgent = await manager.start({
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model',
-      commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
-      idleTtlSeconds: 60,
-      initialContext: 'CTX',
-    });
-    const ctrl = createVoiceAgentController();
-    ctrl.voiceAgentId = startedAgent.voiceAgentId;
-    const runs = new Map<string, ExecutionRunState>([['run_1', {
-      status: 'running',
-      intent: 'voice_agent',
-      ioMode: 'streaming',
-    } as ExecutionRunState]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-    const durableCommit = vi.fn(async () => ({ persisted: false, delivered: false }));
-
+    const fixture = await createTurnStreamFixture({ reply: () => 'assistant final' });
     try {
-      const started = await startVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { message: 'persist me' },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-      });
-      if (!started.ok) throw new Error(started.error);
-
-      await vi.waitFor(() => expect(durableCommit).toHaveBeenCalledTimes(1));
+      fixture.setStorage('failed');
+      const streamId = requireStream(await fixture.start({ message: 'persist me' }));
+      await fixture.writeStarted;
       await vi.waitFor(async () => {
-        const read = await readVoiceAgentTurnStream({
-          runId: 'run_1',
-          params: { streamId: started.streamId, cursor: 0 },
-          runs,
-          controllers,
-          voiceAgentManager: manager,
-          transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-          writeActivityMarker: vi.fn(async () => undefined),
-          getNowMs: () => 123,
-        });
-
-        expect(read).toMatchObject({
-          ok: true,
-          done: true,
-          events: [expect.objectContaining({ t: 'error' })],
-        });
+        const read = await fixture.read(streamId);
+        expect(read).toMatchObject({ ok: true, done: true });
+        if (read.ok) {
+          expect(read.events).toContainEqual(expect.objectContaining({ t: 'error' }));
+          expect(read.events).not.toContainEqual(expect.objectContaining({ t: 'voice_output', output: expect.objectContaining({ kind: 'turn_final' }) }));
+        }
       });
-      expect(durableCommit).toHaveBeenCalledTimes(1);
-    } finally {
-      await manager.dispose();
-    }
+      expect(fixture.journalTurns.size).toBe(0);
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.journalMessages.size).toBe(0);
+    } finally { await fixture.dispose(); }
   });
 
   it('single-flights concurrent terminal reads without giving readers transcript-write authority', async () => {
-    const readDeferred: { resolve: () => void } = { resolve: () => {} };
-    const readBarrier = new Promise<void>((resolve) => { readDeferred.resolve = resolve; });
-    const voiceAgentManager = {
-      readTurnStream: vi.fn(async () => {
-        await readBarrier;
-        return {
-          streamId: 'internal-concurrent',
-          events: [{
-            t: 'voice_output',
-            output: { v: 1, kind: 'turn_final', turnId: 'internal-concurrent', seq: 0, text: 'reply' },
-          }],
-          nextCursor: 1,
-          done: true,
-        };
-      }),
-    } as unknown as VoiceAgentManager;
-    const commitVoiceAgentTranscriptTurn = vi.fn(async () => ({ persisted: true, delivered: true }));
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    ctrl.externalStreamIdByInternal.set('internal-concurrent', 'stream_concurrent');
-    ctrl.internalStreamIdByExternal.set('stream_concurrent', 'internal-concurrent');
-    ctrl.pendingTranscriptTurnByExternalStreamId.set('stream_concurrent', {
-      mode: 'legacy_pair',
-      user: { text: 'user', localId: 'legacy-user-id', meta: {} },
-      assistant: null,
-      commitInFlight: null,
-    });
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-    const args = {
-      runId: 'run_1',
-      params: { streamId: 'stream_concurrent', cursor: 0 },
-      runs,
-      controllers,
-      voiceAgentManager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn },
-      writeActivityMarker: vi.fn(async () => undefined),
-      getNowMs: () => 123,
-    } as const;
-
-    const first = readVoiceAgentTurnStream(args);
-    const second = readVoiceAgentTurnStream(args);
-    readDeferred.resolve();
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      expect.objectContaining({ ok: true, done: true }),
-      expect.objectContaining({ ok: true, done: true }),
-    ]);
-    expect(voiceAgentManager.readTurnStream).toHaveBeenCalledTimes(1);
-    expect(commitVoiceAgentTranscriptTurn).not.toHaveBeenCalled();
+    const fixture = await createTurnStreamFixture();
+    try {
+      const streamId = requireStream(await fixture.start({ message: 'user' }));
+      await awaitFinished(fixture, streamId);
+      const readObserver = vi.spyOn(fixture.manager, 'readTurnStream');
+      const commitObserver = vi.spyOn(fixture.transcriptWriter, 'commitVoiceAgentTranscriptTurn');
+      const results = await Promise.all([fixture.read(streamId), fixture.read(streamId)]);
+      expect(results[0]).toMatchObject({ ok: true, done: true });
+      expect(results[1]).toEqual(results[0]);
+      expect(readObserver).toHaveBeenCalledTimes(1);
+      expect(commitObserver).not.toHaveBeenCalled();
+      expect(fixture.journalTurns.size).toBe(1);
+      expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.size).toBe(0);
+      expect(fixture.ctrl.readInFlightByExternalStreamId.size).toBe(0);
+      commitObserver.mockRestore(); readObserver.mockRestore();
+    } finally { await fixture.dispose(); }
   });
 
   it('integrates the real manager and bridge across invalid cursors, partial reads, durable handoff, and cancellation', async () => {
-    let runtime: ReturnType<typeof createTestExecutionRunHostRuntime>;
-    let releaseCancelledPrompt: () => void = () => {};
-    const cancelledPromptBarrier = new Promise<void>((resolve) => {
-      releaseCancelledPrompt = resolve;
-    });
-    runtime = createTestExecutionRunHostRuntime({
-      runtimeId: 'voice-agent-integration-session',
-      async onSendPrompt(_sessionId, prompt) {
-        if (prompt.includes('cancel this')) {
-          await cancelledPromptBarrier;
-          return;
-        }
-        runtime.emitMessage({ type: 'model-output', textDelta: 'assistant ' });
-        runtime.emitMessage({ type: 'model-output', textDelta: 'reply' });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      },
-      onCancel() {
-        releaseCancelledPrompt();
-      },
-    });
-    const manager = new VoiceAgentManager({ createRuntime: () => runtime });
-    const startedAgent = await manager.start({
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model',
-      commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
-      idleTtlSeconds: 60,
-      initialContext: 'CTX',
-    });
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    ctrl.voiceAgentId = startedAgent.voiceAgentId;
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-    const durableCommit = vi.fn(async (_turn: Readonly<{
-      turnId: string;
-      user: Readonly<{ text: string; meta: Record<string, unknown> }>;
-      assistant: Readonly<{ text: string; meta: Record<string, unknown> }>;
-    }>) => ({ persisted: true, delivered: false }));
-    const marker = vi.fn(async () => undefined);
-    const started = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'hello' },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-    });
-    if (!started.ok) throw new Error(started.error);
-    await vi.waitFor(() => expect(durableCommit).toHaveBeenCalledTimes(1));
-
-    await expect(readVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: started.streamId, cursor: 999 },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-      writeActivityMarker: marker,
-      getNowMs: () => 123,
-    })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input' });
-    expect(ctrl.internalStreamIdByExternal.has(started.streamId)).toBe(true);
-    expect(durableCommit).toHaveBeenCalledTimes(1);
-
-    let cursor = 0;
-    let done = false;
-    const observed: unknown[] = [];
-    while (!done) {
-      const read = await readVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { streamId: started.streamId, cursor, maxEvents: 1 },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-        writeActivityMarker: marker,
-        getNowMs: () => 123,
+    const fixture = await createTurnStreamFixture({ onSend(request, publish) {
+      if (request.input.text.includes('cancel this')) return;
+      publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'assistant ' });
+      publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'reply' });
+      publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+    } });
+    try {
+      const streamId = requireStream(await fixture.start({ message: 'hello' }));
+      await awaitFinished(fixture, streamId);
+      await expect(fixture.read(streamId, { cursor: 999 })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input' });
+      expect(fixture.ctrl.internalStreamIdByExternal.has(streamId)).toBe(true);
+      const observed: unknown[] = [];
+      let cursor = 0;
+      let done = false;
+      while (!done) {
+        const read = await fixture.read(streamId, { cursor, maxEvents: 1 });
+        if (!read.ok) throw new Error(read.error);
+        observed.push(...read.events); cursor = read.nextCursor; done = read.done;
+      }
+      expect(observed).toContainEqual(expect.objectContaining({ t: 'voice_output', output: expect.objectContaining({ kind: 'turn_final', turnId: streamId, text: 'assistant reply' }) }));
+      expect(fixture.journalTurns.get(streamId)).toMatchObject({ turnId: streamId,
+        user: { content: { t: 'plain', v: { content: { text: 'hello' } } } }, assistant: { content: { t: 'plain', v: { content: { type: 'acp', data: { type: 'message', message: 'assistant reply' } } } } },
       });
-      if (!read.ok) throw new Error(read.error);
-      observed.push(...read.events);
-      cursor = read.nextCursor;
-      done = read.done;
-    }
-    expect(JSON.stringify(observed)).toContain('turn_final');
-    expect(durableCommit).toHaveBeenCalledTimes(1);
-    expect(durableCommit).toHaveBeenCalledWith(expect.objectContaining({
-      turnId: started.streamId,
-      user: expect.objectContaining({ text: 'hello' }),
-      assistant: expect.objectContaining({ text: 'assistant reply' }),
-    }));
-    expect(ctrl.pendingTranscriptTurnByExternalStreamId.size).toBe(0);
-
-    // The public iterator releases a stream after receiving its terminal page.
-    // Release must not try to cancel the already-completed provider turn.
-    await expect(cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: 'stream_foreign' },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-    })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_stream_not_found' });
-    await expect(cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: started.streamId },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-    })).resolves.toEqual({ ok: true });
-    expect(ctrl.internalStreamIdByExternal.size).toBe(0);
-    expect(ctrl.externalStreamIdByInternal.size).toBe(0);
-    expect(ctrl.terminalReadByExternalStreamId.size).toBe(0);
-    expect(durableCommit).toHaveBeenCalledTimes(1);
-    await expect(readVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: started.streamId, cursor },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-      writeActivityMarker: marker,
-      getNowMs: () => 123,
-    })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_stream_not_found' });
-
-    // A new stream can be cancelled through the same real manager without
-    // ever handing a transcript pair to the durable boundary.
-    const cancelled = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'cancel this' },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-    });
-    if (!cancelled.ok) throw new Error(cancelled.error);
-    await expect(cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: cancelled.streamId },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-    })).resolves.toEqual({ ok: true });
-    expect(durableCommit).toHaveBeenCalledTimes(1);
-    await manager.dispose();
+      expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.size).toBe(0);
+      await expect(fixture.cancel('stream_foreign')).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_stream_not_found' });
+      await expect(fixture.cancel(streamId)).resolves.toEqual({ ok: true });
+      expect(fixture.ctrl.internalStreamIdByExternal.size).toBe(0);
+      expect(fixture.ctrl.externalStreamIdByInternal.size).toBe(0);
+      expect(fixture.ctrl.terminalReadByExternalStreamId.size).toBe(0);
+      await expect(fixture.read(streamId, { cursor })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_stream_not_found' });
+      const cancelled = requireStream(await fixture.start({ message: 'cancel this' }));
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
+      await expect(fixture.cancel(cancelled)).resolves.toEqual({ ok: true });
+      expect(fixture.journalTurns.size).toBe(1);
+    } finally { await fixture.dispose(); }
   });
 
   it('rejects completed-but-unread cancellation and preserves matching history and durable intent across adjacent same-text turns', async () => {
-    const seenPrompts: string[] = [];
-    let responseIndex = 0;
-    let runtime: ReturnType<typeof createTestExecutionRunHostRuntime>;
-    runtime = createTestExecutionRunHostRuntime({
-      runtimeId: 'voice-agent-completed-cancel-session',
-      onSendPrompt(_sessionId, prompt) {
-        seenPrompts.push(prompt);
-        responseIndex += 1;
-        runtime.emitMessage({
-          type: 'model-output',
-          fullText: prompt.includes('preparing a single instruction message')
-            ? `commit-${responseIndex}`
-            : `assistant-${responseIndex}`,
-        });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      },
-    });
-    const createRuntime = vi.fn(() => runtime);
-    const manager = new VoiceAgentManager({ createRuntime });
-    const startedAgent = await manager.start({
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model',
-      commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
-      idleTtlSeconds: 60,
-      initialContext: 'CTX',
-    });
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    ctrl.voiceAgentId = startedAgent.voiceAgentId;
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-    const durableCommit = vi.fn(async (_turn: Readonly<{
-      turnId: string;
-      user: Readonly<{ text: string; meta: Record<string, unknown> }>;
-      assistant: Readonly<{ text: string; meta: Record<string, unknown> }>;
-    }>) => ({ persisted: true, delivered: false }));
-    const marker = vi.fn(async () => undefined);
-
-    const finishTurn = async (message: string): Promise<string> => {
-      const started = await startVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { message },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-      });
-      if (!started.ok) throw new Error(started.error);
-      // Await the real durable handoff, not one event-loop tick: prompt
-      // preparation may still be admitting the turn on a cold module graph.
-      await vi.waitFor(() => {
-        expect(ctrl.pendingTranscriptTurnByExternalStreamId.get(started.streamId)?.assistant).toMatchObject({ text: expect.any(String) });
-        expect(manager.isTurnInFlight(startedAgent.voiceAgentId)).toBe(false);
-      });
-      await expect(cancelVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { streamId: started.streamId },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-      })).resolves.toMatchObject({
-        ok: false,
-        errorCode: 'execution_run_not_allowed',
-      });
-      expect(ctrl.pendingTranscriptTurnByExternalStreamId.has(started.streamId)).toBe(true);
-
-      const read = await readVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { streamId: started.streamId, cursor: 0, maxEvents: 128 },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-        writeActivityMarker: marker,
-        getNowMs: () => 123,
-      });
-      expect(read).toMatchObject({ ok: true, done: true });
-      return started.streamId;
-    };
-
-    const firstStreamId = await finishTurn('same user text');
-    const firstCommit = await manager.commit({ voiceAgentId: startedAgent.voiceAgentId, maxChars: 10_000 });
-    expect(firstCommit.commitText).toContain('commit-');
-    expect(seenPrompts.at(-1)).toContain('User: same user text');
-    expect(seenPrompts.at(-1)).toContain('Voice agent: assistant-1');
-
-    const secondStreamId = await finishTurn('same user text');
-    expect(secondStreamId).not.toBe(firstStreamId);
-    expect(durableCommit).toHaveBeenCalledTimes(2);
-    expect(durableCommit.mock.calls.map(([turn]) => turn.turnId)).toEqual([
-      firstStreamId,
-      secondStreamId,
-    ]);
-    expect(createRuntime).toHaveBeenCalledTimes(1);
-
-    // If commit wins the race, provider-visible history is already irreversible;
-    // cancellation must reject while the terminal read remains available.
-    const third = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'commit race' },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-    });
-    if (!third.ok) throw new Error(third.error);
-    await vi.waitFor(() => {
-      expect(ctrl.pendingTranscriptTurnByExternalStreamId.get(third.streamId)?.assistant).toMatchObject({ text: expect.any(String) });
-      expect(manager.isTurnInFlight(startedAgent.voiceAgentId)).toBe(false);
-    });
-    const committing = manager.commit({ voiceAgentId: startedAgent.voiceAgentId, maxChars: 10_000 });
-    const cancelling = cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: third.streamId },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-    });
-    await expect(committing).resolves.toMatchObject({ commitText: expect.any(String) });
-    await expect(cancelling).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'execution_run_not_allowed',
-    });
-    await expect(readVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: third.streamId, cursor: 0, maxEvents: 128 },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-      writeActivityMarker: marker,
-      getNowMs: () => 123,
-    })).resolves.toMatchObject({ ok: true, done: true });
-    expect(durableCommit).toHaveBeenCalledTimes(3);
-    await manager.dispose();
+    const fixture = await createTurnStreamFixture({ reply: (prompt, index) => prompt.includes('preparing a single instruction message') ? `commit-${index}` : `assistant-${index}` });
+    try {
+      const finishTurn = async (message: string) => {
+        const streamId = requireStream(await fixture.start({ message }));
+        await awaitFinished(fixture, streamId);
+        await expect(fixture.cancel(streamId)).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+        expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.has(streamId)).toBe(true);
+        await expect(fixture.read(streamId, { cursor: 0, maxEvents: 128 })).resolves.toMatchObject({ ok: true, done: true });
+        return streamId;
+      };
+      const firstStreamId = await finishTurn('same user text');
+      const firstCommit = await fixture.manager.commit({ voiceAgentId: fixture.ctrl.voiceAgentId, maxChars: 10_000 });
+      expect(firstCommit.commitText).toContain('commit-');
+      expect(fixture.requests.at(-1)?.input.text).toContain('User: same user text');
+      expect(fixture.requests.at(-1)?.input.text).toContain('Voice agent: assistant-1');
+      const secondStreamId = await finishTurn('same user text');
+      expect(secondStreamId).not.toBe(firstStreamId);
+      expect([...fixture.journalTurns.keys()]).toEqual([firstStreamId, secondStreamId]);
+      expect(fixture.getOpenCount()).toBe(1);
+      const third = requireStream(await fixture.start({ message: 'commit race' }));
+      await awaitFinished(fixture, third);
+      const committing = fixture.manager.commit({ voiceAgentId: fixture.ctrl.voiceAgentId, maxChars: 10_000 });
+      const cancelling = fixture.cancel(third);
+      await expect(committing).resolves.toMatchObject({ commitText: expect.any(String) });
+      await expect(cancelling).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+      await expect(fixture.read(third, { cursor: 0, maxEvents: 128 })).resolves.toMatchObject({ ok: true, done: true });
+      expect([...fixture.journalTurns.keys()]).toEqual([firstStreamId, secondStreamId, third]);
+    } finally { await fixture.dispose(); }
   });
 
   it('rejects cancellation while a producer final is crossing the durable handoff boundary', async () => {
-    let runtime: ReturnType<typeof createTestExecutionRunHostRuntime>;
-    runtime = createTestExecutionRunHostRuntime({
-      runtimeId: 'voice-agent-durable-handoff-session',
-      onSendPrompt() {
-        runtime.emitMessage({ type: 'model-output', fullText: 'durable assistant' });
-        runtime.emitMessage({ type: 'status', status: 'idle' });
-      },
-    });
-    const manager = new VoiceAgentManager({ createRuntime: () => runtime });
-    const startedAgent = await manager.start({
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      chatModelId: 'chat-model',
-      commitModelId: 'chat-model',
-      permissionIntent: 'read-only',
-      idleTtlSeconds: 60,
-      initialContext: 'CTX',
-    });
-    const run = { status: 'running', intent: 'voice_agent', ioMode: 'streaming' } as ExecutionRunState;
-    const ctrl = createVoiceAgentController();
-    ctrl.voiceAgentId = startedAgent.voiceAgentId;
-    const runs = new Map<string, ExecutionRunState>([['run_1', run]]);
-    const controllers = new Map<string, ExecutionRunVoiceAgentController>([['run_1', ctrl]]);
-    const persisted: { resolve: (result: Readonly<{ persisted: boolean; delivered: boolean }>) => void } = {
-      resolve: () => {},
-    };
-    const persistenceBarrier = new Promise<Readonly<{ persisted: boolean; delivered: boolean }>>((resolve) => {
-      persisted.resolve = resolve;
-    });
-    const durableCommit = vi.fn(async (_turn: Readonly<{
-      turnId: string;
-      user: Readonly<{ text: string; meta: Record<string, unknown> }>;
-      assistant: Readonly<{ text: string; meta: Record<string, unknown> }>;
-    }>) => await persistenceBarrier);
-    const started = await startVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { message: 'persist race' },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-      transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-    });
-    if (!started.ok) throw new Error(started.error);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    await vi.waitFor(() => expect(durableCommit).toHaveBeenCalledTimes(1));
-    await expect(cancelVoiceAgentTurnStream({
-      runId: 'run_1',
-      params: { streamId: started.streamId },
-      runs,
-      controllers,
-      voiceAgentManager: manager,
-    })).resolves.toMatchObject({ ok: false });
-    expect(ctrl.pendingTranscriptTurnByExternalStreamId.has(started.streamId)).toBe(true);
-    persisted.resolve({ persisted: true, delivered: false });
-    await vi.waitFor(async () => {
-      const read = await readVoiceAgentTurnStream({
-        runId: 'run_1',
-        params: { streamId: started.streamId, cursor: 0, maxEvents: 128 },
-        runs,
-        controllers,
-        voiceAgentManager: manager,
-        transcriptWriter: { commitVoiceAgentTranscriptTurn: durableCommit },
-        writeActivityMarker: vi.fn(async () => undefined),
-        getNowMs: () => 123,
-      });
-      expect(read).toMatchObject({ ok: true, done: true });
-    });
-    expect(ctrl.pendingTranscriptTurnByExternalStreamId.has(started.streamId)).toBe(false);
-    await manager.dispose();
+    const fixture = await createTurnStreamFixture({ reply: () => 'durable assistant' });
+    try {
+      fixture.setStorage('held');
+      const streamId = requireStream(await fixture.start({ message: 'persist race' }));
+      await fixture.writeStarted;
+      await expect(fixture.cancel(streamId)).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+      expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.has(streamId)).toBe(true);
+      expect(fixture.journalTurns.size).toBe(0);
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.journalMessages.size).toBe(0);
+      fixture.releaseWrite();
+      await awaitFinished(fixture, streamId);
+      await expect(fixture.read(streamId, { cursor: 0, maxEvents: 128 })).resolves.toMatchObject({ ok: true, done: true });
+      expect(fixture.ctrl.pendingTranscriptTurnByExternalStreamId.has(streamId)).toBe(false);
+      expect(fixture.journalTurns.get(streamId)).toMatchObject({ turnId: streamId });
+    } finally { await fixture.dispose(); }
   });
 });

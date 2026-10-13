@@ -15,12 +15,13 @@ import { hasPinnedArchiveManagedInstall } from '@/packagedRuntime/installables/s
 
 export type AcpLaunchDefinition = Pick<AcpBackendDefinitionV1, 'id' | 'title' | 'launch'>;
 export type AcpLaunchResolution =
-  | Readonly<{ kind: 'ready'; command: string; args: readonly string[]; env: Readonly<Record<string, string>> }>
+  | Readonly<{ kind: 'ready'; command: string; args: readonly string[]; env: Readonly<Record<string, string>>; runtimeEnv?: Readonly<Record<string, string>> }>
   | Readonly<{ kind: 'needs_install'; installable: InstallableDependencyDescriptor }>
   | Readonly<{ kind: 'cant_run'; fit: AcpPlatformFitV1 }>;
 export type AcpLaunchParams = Readonly<{
   accountId?: string;
   definition: AcpLaunchDefinition; platform: string | null; arch: string | null; env: NodeJS.ProcessEnv;
+  launchEnv?: Readonly<Record<string, string>>;
 }>;
 
 export function getAcpManagedInstallId(definition: Pick<AcpLaunchDefinition, 'id' | 'launch'>, accountId: string): string {
@@ -70,9 +71,9 @@ export async function resolveAcpLaunch(params: AcpLaunchParams): Promise<AcpLaun
   const launch = params.definition.launch;
   if (launch.kind === 'command') {
     if (isPackageRunnerCommand(launch.command)) {
-      const normalized = await normalizePackageRunnerInvocation({ command: launch.command, args: launch.args, processEnv: params.env });
+      const normalized = await normalizePackageRunnerInvocation({ command: launch.command, args: launch.args, processEnv: params.env, launchEnv: params.launchEnv });
       if (!normalized) throw new Error('Managed runtime unavailable for configured ACP package-runner command');
-      return { kind: 'ready', command: normalized.command, args: normalized.args, env: {} };
+      return { kind: 'ready', command: normalized.command, args: normalized.args, env: {}, runtimeEnv: normalized.env };
     }
     return { kind: 'ready', command: launch.command, args: launch.args, env: {} };
   }

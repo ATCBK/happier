@@ -47,8 +47,8 @@ describe('projectRuntimeTranscriptEvent', () => {
       emittedAtMs: 200, window: { startMs: 100, endMs: 200 }, coverage: 'complete',
       servers: [{ serverName: 'private-server-name', toolCallCount: 0, schemaBytes: null }] });
     const session = { sessionId: 'session-1', enqueueAgentMessageCommitted: capture.enqueueAgentMessageCommitted };
-    await projectRuntimeTranscriptEvent({ session, provider: 'claude', event, mcpBindingIdentities: {
-      'private-server-name': { serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40 },
+    await projectRuntimeTranscriptEvent({ session, provider: 'claude', event, mcpServerIdentities: {
+      'private-server-name': { serverId: 'server', serverTitle: 'Private server', usage: { serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40 } },
     } });
     expect(capture.bodies).toMatchObject([{ type: 'event', data: { type: 'mcp-binding-usage', usage: {
       sessionId: 'session-1', turnId: 'turn', coverage: 'complete', window: { startMs: 100, endMs: 200 },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AgentSessionProviderCheckpointMaxJsonBytesV1 } from '@happier-dev/protocol/runtime';
 import { SessionIndexedIdentifierMaxLengthV1 } from '@happier-dev/protocol/sessions/idsV1';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import {
   AgentRuntimeDaemonSessionDescriptorV1Schema,
@@ -148,6 +149,25 @@ describe('Runner Agent protocol', () => {
       },
     },
   ] as const)('accepts a strict $kind session-open request', (request) => {
+    const skills = {
+      pluginRoot: '/skills/session',
+      skillsRoot: '/skills/session/skills',
+      items: [{ name: 'review', skillId: 'library-review', digest: 'sha256:review' }],
+      nativeDisables: [{ name: 'native-review', path: '/native/review/SKILL.md' }],
+    } satisfies NonNullable<AgentSessionOpenRequest['skills']>;
+    const deliveredRequest = { ...request, skills };
+    expect(AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(deliveredRequest).skills).toEqual(skills);
+    expect(projectAgentRuntimeDaemonSessionOpenAttestationRequestV1(deliveredRequest)).toEqual(request);
+    expect(AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema.safeParse(deliveredRequest).success).toBe(false);
+    for (const invalidSkills of [
+      { ...skills, unexpected: true },
+      { ...skills, pluginRoot: '' },
+      { ...skills, items: [{ ...skills.items[0], digest: 42 }] },
+      { ...skills, items: [{ ...skills.items[0], content: 'undeclared body' }] },
+      { ...skills, nativeDisables: [{ ...skills.nativeDisables[0], unexpected: true }] },
+    ]) {
+      expect(AgentRuntimeDaemonSessionOpenRequestV1Schema.safeParse({ ...request, skills: invalidSkills }).success).toBe(false);
+    }
     expect(
       AgentRuntimeDaemonSessionOpenRequestV1Schema.safeParse(request)
         .success,

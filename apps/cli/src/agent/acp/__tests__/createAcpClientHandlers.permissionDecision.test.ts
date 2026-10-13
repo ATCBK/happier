@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DefaultTransport } from '@/agent/transport';
 
 import { createAcpClientHandlers } from '../createAcpClientHandlers';
+import { createAcpTransportHandlerFromDefinition } from '../runtime/definition/transport';
 import type { AcpPermissionHandler } from '../permissions/acpPermissionHandler';
 import type { HandlerContext } from '../sessionUpdateHandlers';
 import { createLegacyHandlerContextFixture } from './legacyToolRuntimeFixture';
@@ -12,6 +13,30 @@ function createHandlerContext(): HandlerContext {
 }
 
 describe('createAcpClientHandlers permission pre-prompt decisions', () => {
+  it('provides standard ACP permission title metadata to the leaf resolver without changing operands', async () => {
+    let observed: Readonly<Record<string, unknown>> | undefined;
+    const transport = createAcpTransportHandlerFromDefinition({
+      backendId: 'fixture', callbacks: { toolNameResolver: request => { observed = request.input; return null; } },
+    });
+    const handlerContext = createLegacyHandlerContextFixture({ transport });
+    const client = createAcpClientHandlers({
+      onSessionUpdate: () => undefined, transport, emit: () => undefined,
+      createHandlerContext: () => handlerContext,
+      getToolNameContext: () => ({ recentPromptHadChangeTitle: false, toolCallCountSincePrompt: 0 }),
+      getActiveSessionId: () => 'session-1',
+      capturePermissionRequest: () => ({ scope: 'turn', isCurrent: () => true, cancel: async () => undefined }),
+      emitPermissionResponse: async () => undefined, clearTrackedToolCall: () => undefined,
+      incrementToolCallCountSincePrompt: () => undefined, toolCalls: handlerContext.toolCalls,
+      lastSelectedPermissionOptionIdByToolCallId: new Map(),
+    });
+    const rawInput = { path: 'README.md', _acp: { title: 'mcp__docs__other_tool' } };
+    await client.requestPermission({ sessionId: 'session-1', toolCall: {
+      toolCallId: 'call', kind: 'other', title: 'mcp__docs__read_file', rawInput,
+    }, options: [{ optionId: 'deny', kind: 'reject_once', name: 'Deny' }] });
+    expect(observed).toEqual({ path: 'README.md', _acp: { title: 'mcp__docs__read_file' } });
+    expect(rawInput).toEqual({ path: 'README.md', _acp: { title: 'mcp__docs__other_tool' } });
+  });
+
   it('surfaces a recoverable Workflow interaction capacity failure to the ACP turn owner', async () => {
     const capacityError = Object.assign(
       new Error('Workflow interaction exceeds durable capacity'),

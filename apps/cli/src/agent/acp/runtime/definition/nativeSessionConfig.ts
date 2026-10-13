@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import type { PluginAgentAcpNativeSessionMcpConfigV2 } from '@happier-dev/protocol';
-import type { AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionMcpLaunchConfig, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   createSecureTempDirectorySync,
   expandHomePath,
@@ -13,14 +13,14 @@ import {
 type EnvLike = Readonly<Record<string, string | undefined>>;
 type JsonObject = Record<string, unknown>;
 
-export type NativeSessionMcpConfigDelivery = Readonly<{
+export type NativeSessionConfigDelivery = Readonly<{
   /** Launch environment overrides that point the Agent at the session-private root. */
   env: Readonly<Record<string, string>>;
   /** Removes the session-private root. Safe to call more than once. */
   cleanup(): void;
 }>;
 
-const NO_DELIVERY: NativeSessionMcpConfigDelivery = Object.freeze({
+const NO_DELIVERY: NativeSessionConfigDelivery = Object.freeze({
   env: Object.freeze({}),
   cleanup: () => {},
 });
@@ -32,7 +32,7 @@ function readPlatformValue<T>(
   return platform === 'win32' ? value.win32 : value.posix;
 }
 
-export function resolveNativeSessionMcpConfigPaths(params: Readonly<{
+export function resolveNativeSessionConfigPaths(params: Readonly<{
   declaration: PluginAgentAcpNativeSessionMcpConfigV2;
   env: EnvLike;
   platform: NodeJS.Platform;
@@ -173,27 +173,27 @@ function buildSessionServerEntry(params: Readonly<{
 }
 
 /**
- * Delivers Happier's Session MCP servers to an Agent that reads them only from
- * its own config file. The user's provider directory is linked into a
- * session-private root, the merged server map is written there, and the
+ * Composes Session MCP servers and skills into an Agent's private config root.
+ * The user's provider directory is linked into a session-private root, the merged server map is written there, and the
  * Agent's config-root variable points at that root for this launch alone;
  * nothing in the user's real provider state is mutated.
  */
-export async function prepareNativeSessionMcpConfig(params: Readonly<{
+export async function prepareNativeSessionConfig(params: Readonly<{
   declaration: PluginAgentAcpNativeSessionMcpConfigV2;
   cwd: string;
   /** Effective launch environment: process env, launch overrides, then unsets. */
   env: EnvLike;
   mcpServers: Readonly<Record<string, AgentSessionMcpLaunchConfig>> | undefined;
+  skills?: Readonly<{ subdirectory: string; delivery: AgentSessionSkillDelivery }>;
   platform?: NodeJS.Platform;
-}>): Promise<NativeSessionMcpConfigDelivery> {
+}>): Promise<NativeSessionConfigDelivery> {
   const sessionServers = params.mcpServers ?? {};
   const sessionServerNames = Object.keys(sessionServers);
-  if (sessionServerNames.length === 0) return NO_DELIVERY;
+  if (sessionServerNames.length === 0 && !params.skills) return NO_DELIVERY;
 
   const platform = params.platform ?? process.platform;
   const declaration = params.declaration;
-  if (declaration.projectShadowPaths) {
+  if (sessionServerNames.length > 0 && declaration.projectShadowPaths) {
     await assertNoProjectConfigShadowsSessionServer({
       cwd: params.cwd,
       relativePaths: declaration.projectShadowPaths,
@@ -202,7 +202,7 @@ export async function prepareNativeSessionMcpConfig(params: Readonly<{
     });
   }
 
-  const source = resolveNativeSessionMcpConfigPaths({
+  const source = resolveNativeSessionConfigPaths({
     declaration,
     env: params.env,
     platform,
@@ -237,7 +237,7 @@ export async function prepareNativeSessionMcpConfig(params: Readonly<{
       linkDirectoryChildren({
         source: source.directoryPath,
         destination: sessionDirectoryPath,
-        exclude: [declaration.fileName],
+        exclude: [declaration.fileName, ...(params.skills ? [params.skills.subdirectory] : [])],
       }),
       linkDirectoryChildren({
         source: source.configRoot,
@@ -251,6 +251,11 @@ export async function prepareNativeSessionMcpConfig(params: Readonly<{
       JSON.stringify({ ...userConfig, [declaration.serversKey]: mergedServers }),
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     );
+    if (params.skills) {
+      const destination = join(sessionDirectoryPath, params.skills.subdirectory);
+      await linkDirectoryChildren({ source: join(source.directoryPath, params.skills.subdirectory), destination });
+      await linkDirectoryChildren({ source: params.skills.delivery.skillsRoot, destination });
+    }
     let cleaned = false;
     return Object.freeze({
       env: Object.freeze({ [source.configRootEnvKey]: sessionRoot.path }),

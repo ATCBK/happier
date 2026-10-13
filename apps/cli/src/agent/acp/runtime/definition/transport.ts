@@ -1,6 +1,7 @@
 import type { AgentAcpRuntimeDefinition } from '@happier-dev/plugin-sdk/agents/runtime';
+import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { DefaultTransport, type TransportHandler } from '@/agent/transport';
-import { pickPermissionOptionId } from '@/agent/acp/permissions/permissionMapping';
+import { normalizePermissionOptionKind, pickPermissionOptionId } from '@/agent/acp/permissions/permissionMapping';
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 import type { ToolNameContext, ToolPattern } from '@/agent/transport/TransportHandler';
 import { extractHappierToolsShellBridgeToolNameHint } from '@/agent/transport/utils/happierToolsShellBridgeToolNameHint';
@@ -26,6 +27,10 @@ export type AcpTransportBehaviorDefinition = Pick<
   permissions?: AgentAcpRuntimeDefinition['permissions'];
   callbacks?: Pick<AcpRuntimeDefinition['callbacks'], 'toolNameResolver'>;
   sanitizeToolUpdateContent?: NonNullable<TransportHandler['sanitizeToolUpdateContent']>;
+  /** Exact resolved open-request keys, supplied by the host composition. */
+  mcpServerKeys?: ReadonlySet<string>;
+  /** Servers with a host-projected tool policy; the host retains their session grants. */
+  mcpToolPolicyServerKeys?: ReadonlySet<string>;
 }>;
 
 function readPositiveMs(value: unknown): number | undefined {
@@ -287,6 +292,13 @@ export function createAcpTransportHandlerFromDefinition(
       return base.extractToolNameFromId?.(toolCallId) ?? null;
     },
     determineToolName: (toolName, toolCallId, input, context) => {
+      if (definition.mcpServerKeys) {
+        if (parseMcpToolWireNameV1(toolName, definition.mcpServerKeys)) return toolName;
+        const metadata = input._acp;
+        const title = metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata) && 'title' in metadata
+          ? metadata.title : undefined;
+        if (typeof title === 'string' && parseMcpToolWireNameV1(title, definition.mcpServerKeys)) return title;
+      }
       const patterns = normalizeToolPatterns(definition);
       if (patterns.length === 0 && !definition.callbacks?.toolNameResolver) {
         return base.determineToolName?.(toolName, toolCallId, input, context) ?? toolName;
@@ -340,10 +352,18 @@ export function createAcpTransportHandlerFromDefinition(
     ...(promptLivenessMs !== undefined ? { getPromptLivenessTimeoutMs: () => promptLivenessMs } : {}),
     ...(postToolCallIdleMs !== undefined ? { getPostToolCallIdleTimeoutMs: () => postToolCallIdleMs } : {}),
     ...(idleWithoutAssistantMessageMs !== undefined ? { getIdleWithoutAssistantMessageTimeoutMs: () => idleWithoutAssistantMessageMs } : {}),
-    pickPermissionOptionId: (options, decision, context) => (
-      resolvePermissionOptionOverride(definition, options, decision)
-      ?? baseHandler.pickPermissionOptionId?.(options, decision, context)
-    ),
+    pickPermissionOptionId: (options, decision, context) => {
+      if (definition.mcpToolPolicyServerKeys && context
+        && parseMcpToolWireNameV1(context.toolName, definition.mcpToolPolicyServerKeys)
+        && ['approved', 'approved_for_session', 'approved_execpolicy_amendment'].includes(decision)) {
+        // A native persistent grant skips the host on later calls and cannot be revoked by
+        // a catalog Off edit. The canonical host already retains the session grant.
+        const once = options.filter(option => normalizePermissionOptionKind(option.kind) === 'allow_once');
+        return pickPermissionOptionId(once, 'approved');
+      }
+      return resolvePermissionOptionOverride(definition, options, decision)
+        ?? baseHandler.pickPermissionOptionId?.(options, decision, context);
+    },
     ...(definition.sanitizeToolUpdateContent
       ? { sanitizeToolUpdateContent: definition.sanitizeToolUpdateContent }
       : {}),

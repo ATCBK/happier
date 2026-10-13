@@ -60,7 +60,10 @@ export function createAcpBackendFromDefinition(params: Readonly<{
         definition: params.definition,
         permissionHandler: params.permissionHandler,
       }),
-      transportHandler: createAcpTransportHandlerFromDefinition(params.definition),
+      transportHandler: createAcpTransportHandlerFromDefinition({
+        ...params.definition,
+        mcpServerKeys: new Set(Object.keys(mcpServers ?? {})),
+      }),
       ...(params.definition.modelConfigOptionId
         ? { modelConfigOptionId: params.definition.modelConfigOptionId }
         : {}),

@@ -25,6 +25,8 @@ export type HostSessionRuntimeFactoryResult<TNativeRuntime extends RuntimeTurnOp
   runtimeDescriptorV1?: RuntimeDescriptorV1 | null;
   /** Live capability facts supplied by the concrete Agent Session runtime. */
   runtimeCapabilities?: AgentAuthoredSessionRuntimeCapabilities | null;
+  /** Per-open fact supplied by the Agent's concrete launch path. */
+  skillsDelivered?: boolean;
   /** Exact non-secret facts admitted while the runtime was constructed. */
   admittedProviderBindingHandoff?: ProviderBindingLaunchHandoffV1 | null;
 }>;
@@ -38,6 +40,7 @@ export function resolveHostSessionRuntimeFactoryResult<TNativeRuntime extends Ru
   configuration: AgentSessionConfigurationSnapshot | null;
   runtimeDescriptorV1: RuntimeDescriptorV1 | null;
   runtimeCapabilities: AgentAuthoredSessionRuntimeCapabilities | null;
+  skillsDelivered: boolean | undefined;
   admittedProviderBindingHandoff: ProviderBindingLaunchHandoffV1 | null;
 }> {
   if (!createdRuntime || typeof createdRuntime !== 'object' || !('operations' in createdRuntime)) {
@@ -53,6 +56,7 @@ export function resolveHostSessionRuntimeFactoryResult<TNativeRuntime extends Ru
     configuration: createdRuntime.configuration ?? null,
     runtimeDescriptorV1: createdRuntime.runtimeDescriptorV1 ?? null,
     runtimeCapabilities: createdRuntime.runtimeCapabilities ?? null,
+    skillsDelivered: createdRuntime.skillsDelivered,
     admittedProviderBindingHandoff:
       createdRuntime.admittedProviderBindingHandoff ?? null,
   };

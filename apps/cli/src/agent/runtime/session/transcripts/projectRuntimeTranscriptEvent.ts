@@ -1,11 +1,16 @@
 import { isForegroundTurnRuntimeTranscriptEvent, isSessionScopedRuntimeTranscriptEvent } from '../events/runtimeTranscriptScope';
 import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
-import { UsageMcpBindingUsageSchema, type UsageMcpBindingIdentity } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
+import { UsageMcpBindingUsageSchema } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
 import { buildSessionTranscriptMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { SessionTranscriptObservationProvenanceV1, ToolNormalizationProtocol, TurnChangeSet } from '@happier-dev/protocol';
 
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
+import { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
+import { recordDaemonSkillUse } from '@/daemon/controlClient';
+import type { SkillUsageAccount } from '@/prompts/skills/store/skillUsage';
+import { configuration } from '@/configuration';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
 import type { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedToolTurnChangeTracker';
 import type { NormalizedToolChangeResult } from '@/agent/tools/diff/normalizedToolChangeTypes';
@@ -99,6 +104,7 @@ export type RuntimeTranscriptProjectionResult =
       | 'tool-progress'
       | 'tool-call'
       | 'mcp-tool-usage'
+      | 'skill-usage'
       | 'tool-result'
       | 'file-edit'
       | 'turn-complete'
@@ -165,6 +171,45 @@ function buildRuntimeToolLocalId(event: Readonly<{
     toolCallId: event.toolCallId,
   });
   return kind === 'tool-call' ? identity.callLocalId : identity.resultLocalId;
+}
+
+/** Live host projection retains only foreground calls awaiting a durable result. */
+export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscriptEvent {
+  const pendingCalls = new Map<string, Readonly<{ sessionId: string; turnId: string; toolCallId: string }>>();
+  return async (params) => {
+    const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
+    if (!parsed.success || parsed.data.sessionId !== params.session.sessionId) {
+      return await projectRuntimeTranscriptEvent(params);
+    }
+    const event = parsed.data;
+    if (event.kind === 'turn-cancelled' || event.kind === 'turn-failed' || event.kind === 'turn-complete') {
+      for (const [identity, call] of pendingCalls) {
+        if (call.sessionId !== event.sessionId || call.turnId !== event.turnId) continue;
+        // A terminal turn settles the transcript wait, not the external effect.
+        // Later native results keep the same projection identity; the existing
+        // transcript transport owns revision arbitration.
+        const settlement = await projectRuntimeTranscriptEvent({ ...params, event: {
+          kind: 'tool-result', sessionId: call.sessionId, turnId: call.turnId,
+          toolCallId: call.toolCallId, sequence: event.sequence, emittedAtMs: event.emittedAtMs,
+          isError: true,
+          output: {
+            status: event.kind === 'turn-cancelled' ? 'cancelled' : 'failed',
+            error: 'The turn ended before a tool result was received. The operation may have taken effect.',
+          },
+        } });
+        if (settlement.projected) pendingCalls.delete(identity);
+      }
+    }
+    const result = await projectRuntimeTranscriptEvent(params);
+    if (result.projected && event.kind === 'tool-call' && isForegroundTurnRuntimeTranscriptEvent(event)) {
+      pendingCalls.set(buildRuntimeToolLocalId(event, 'tool-call'), {
+        sessionId: event.sessionId, turnId: event.turnId, toolCallId: event.toolCallId,
+      });
+    } else if (result.projected && event.kind === 'tool-result' && isForegroundTurnRuntimeTranscriptEvent(event)) {
+      pendingCalls.delete(buildRuntimeToolLocalId(event, 'tool-call'));
+    }
+    return result;
+  };
 }
 
 function buildRuntimeFileEditLocalId(event: Readonly<{
@@ -456,7 +501,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   normalizedToolTurnChangeTracker?: NormalizedToolTurnChangeTracker;
   toolNormalizationProtocol?: ToolNormalizationProtocol;
   event: unknown;
-  mcpBindingIdentities?: Readonly<Record<string, UsageMcpBindingIdentity>>;
+  mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;
+  skillDelivery?: AgentSessionSkillDelivery;
+  usageAccount?: SkillUsageAccount;
 }>): Promise<RuntimeTranscriptProjectionResult> {
   const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
   if (!parsed.success) {
@@ -466,10 +513,21 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   if (event.sessionId !== params.session.sessionId) {
     return { projected: false, reason: 'session_mismatch' };
   }
+  if (event.kind === 'skill-usage') {
+    if (!params.usageAccount) return { projected: false, reason: 'unsupported_event' };
+    const skillIds = [...new Set(event.skills.flatMap(skill => {
+      const id = resolveHappierSkillIdentity(skill, params.skillDelivery, configuration.happyHomeDir);
+      return id === null ? [] : [id];
+    }))];
+    if (!skillIds.length) return { projected: false, reason: 'unsupported_event' };
+    try { await recordDaemonSkillUse({ skillIds, account: params.usageAccount }); }
+    catch { return { projected: false, reason: 'unsupported_event' }; }
+    return { projected: true, kind: event.kind };
+  }
   if (event.kind === 'mcp-tool-usage') {
     if (!params.provider) return { projected: false, reason: 'unsupported_event' };
     const bindings = event.servers.flatMap(server => {
-      const identity = params.mcpBindingIdentities?.[server.serverName];
+      const identity = params.mcpServerIdentities?.[server.serverName]?.usage;
       return identity ? [{ ...identity, toolCallCount: server.toolCallCount, schemaBytes: server.schemaBytes }] : [];
     });
     if (!bindings.length) return { projected: false, reason: 'unsupported_event' };

@@ -11,6 +11,7 @@ import type {
 } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import type {
     ExecutionRunHostRunScopeBinding,
+    CreateCliExecutionRunBackendParams,
     NativeAgentSessionInteractionHostBinding,
     ResolvedCliEngineRegistry,
 } from '@/agent/runtime/registry/engineRegistryTypes';
@@ -185,12 +186,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     prepareManagedEndpoint?: DirectManagedProviderEndpointPreparer;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{
-        secretReferenceOverlay?: SecretReferenceOverlayV1;
-        mcpServerCatalog?: boolean;
-        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
-        signal?: AbortSignal;
-    }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+    resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>): LazyExecutionRunRuntimeShellConfig {
     let resolvedBackendPromise: Promise<ExecutionRunHostRuntime> | null = null;
     let activeConnectedServicesEnv: Awaited<ReturnType<typeof resolveExecutionRunConnectedServicesEnv>> = null;
@@ -406,16 +402,47 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     values: Object.values(secretReferenceEnvironment),
                 });
             }
-            const isolationUnsetEnvKeys = normalizeUnsetEnvKeys([
+            let isolationUnsetEnvKeys = normalizeUnsetEnvKeys([
                 ...(connectedServicesEnv?.unsetEnvKeys ?? []),
                 ...(providerLaunch?.unsetEnvKeys ?? []),
             ]);
-            const isolationEnv = stripUnsetEnvironmentVariables({
+            let isolationEnv = stripUnsetEnvironmentVariables({
                 ...(pluginIsolationBundle?.env ?? {}),
                 ...(connectedServicesEnv?.env ?? {}),
                 ...(providerLaunch?.environment ?? {}),
                 ...secretReferenceEnvironment,
             }, isolationUnsetEnvKeys);
+            const prepareRuntimeFailureRecovery: NonNullable<CreateCliExecutionRunBackendParams['prepareRuntimeFailureRecovery']> = async input => {
+                const incumbent = connectedServicesEnv;
+                if (!incumbent) return { status: 'failed' };
+                const result = await incumbent.recoverRuntimeFailure(input);
+                input.signal.throwIfAborted();
+                if (result.status !== 'continue') return { status: 'failed' };
+                return {
+                    status: 'continue',
+                    input: result.input,
+                    async prepareResume() {
+                        if (result.rematerialize) {
+                            // Preserve the checkpoint in place; releasing the
+                            // incumbent first would remove native resume state.
+                            const next = await incumbent.rematerializeForRecovery(input.providerSessionId);
+                            connectedServicesEnv = next;
+                            activeConnectedServicesEnv = next;
+                            isolationUnsetEnvKeys = normalizeUnsetEnvKeys([
+                                ...(next.unsetEnvKeys ?? []), ...(providerLaunch?.unsetEnvKeys ?? []),
+                            ]);
+                            isolationEnv = stripUnsetEnvironmentVariables({
+                                ...(pluginIsolationBundle?.env ?? {}), ...next.env,
+                                ...(providerLaunch?.environment ?? {}), ...secretReferenceEnvironment,
+                            }, isolationUnsetEnvKeys);
+                            input.signal.throwIfAborted();
+                            await opts.onConnectedServicesRegistration?.(next.registration);
+                        }
+                        input.signal.throwIfAborted();
+                        return { values: isolationEnv, unset: isolationUnsetEnvKeys };
+                    },
+                };
+            };
             const runtimeOpts = {
                 cwd: opts.cwd,
                 scope: opts.scope,
@@ -468,15 +495,17 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 ...(opts.happierSessionId ? { happierSessionId: opts.happierSessionId } : {}),
                 ...(opts.sessionInteractionHost ? { sessionInteractionHost: opts.sessionInteractionHost } : {}),
                 ...(opts.sessionOwnedRunScope ? { sessionOwnedRunScope: opts.sessionOwnedRunScope } : {}),
-                ...(connectedServicesEnv ? { connectedServiceRuntimeAuthRefresh: connectedServicesEnv.refreshRuntimeAuth } : {}),
+                ...(connectedServicesEnv ? {
+                    connectedServiceRuntimeAuthRefresh: (...args: Parameters<NonNullable<CreateCliExecutionRunBackendParams['connectedServiceRuntimeAuthRefresh']>>) => connectedServicesEnv!.refreshRuntimeAuth(...args),
+                    prepareRuntimeFailureRecovery,
+                    connectedServiceRuntimeTurnCompleted: () => connectedServicesEnv!.completeRuntimeTurn(),
+                } : {}),
                 ...(Object.keys(isolationEnv).length > 0
                     || isolationUnsetEnvKeys.length > 0
                     ? {
-                        isolation: {
-                            env: isolationEnv,
-                            ...(isolationUnsetEnvKeys.length > 0
-                                ? { unsetEnvKeys: isolationUnsetEnvKeys }
-                                : {}),
+                        get isolation() {
+                            return { env: isolationEnv,
+                                ...(isolationUnsetEnvKeys.length > 0 ? { unsetEnvKeys: isolationUnsetEnvKeys } : {}) };
                         },
                     }
                     : {}),
@@ -552,7 +581,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 )
                 : withProviderCleanup;
             return connectedServicesEnv
-                ? withExecutionRunHostRuntimeCleanup(withSecretReferenceCleanup, connectedServicesEnv.cleanup)
+                ? withExecutionRunHostRuntimeCleanup(withSecretReferenceCleanup, async () => await connectedServicesEnv?.cleanup())
                 : withSecretReferenceCleanup;
         })();
         return await resolvedBackendPromise;
@@ -613,12 +642,7 @@ export function createExecutionRunRuntime(opts: Readonly<{
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     prepareManagedEndpoint?: DirectManagedProviderEndpointPreparer;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{
-        secretReferenceOverlay?: SecretReferenceOverlayV1;
-        mcpServerCatalog?: boolean;
-        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
-        signal?: AbortSignal;
-    }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+    resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>): ExecutionRunHostRuntime {
     const resolvedBackendTarget = resolveExecutionRunCompatBackendTarget(opts.backendTarget);
     const backendId = String(opts.backendId ?? '').trim();

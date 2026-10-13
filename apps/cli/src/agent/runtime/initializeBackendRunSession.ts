@@ -6,6 +6,7 @@ import { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessi
 import { createBaseSessionForAttach } from '@/agent/runtime/createBaseSessionForAttach'
 import {
   applyStartupMetadataUpdateToSession,
+  prepareSessionStackSkillMigration,
   type SessionModeOverride,
   type ModelOverride,
   type PermissionModeOverride,
@@ -36,6 +37,7 @@ import { PluginTerminalHostError } from '@/plugins/runtime/context/errors'
 import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1'
 
 export interface InitializeBackendRunSessionOptions {
+  credentials?: import('@/persistence').StoredCredentials
   api: Pick<ApiClient, 'getOrCreateSession' | 'sessionSyncClient'>
   sessionTag: string
   organizationPlacement?: import('@happier-dev/protocol').SessionOrganizationPlacementV1
@@ -371,8 +373,15 @@ export async function initializeBackendRunSession(
           if (preservesRetainedTerminal) delete startupMetadata.terminal
         }
         const startupNowMs = nowFn()
+        const preparedStackSkills = opts.credentials ? await prepareSessionStackSkillMigration(snapshot,
+          { credentials: opts.credentials, signal: opts.signal }) : undefined
+        const stackSkillMigration = preparedStackSkills?.status === 'ready' ? preparedStackSkills.migration : undefined
+        const startupSelectionMetadata = stackSkillMigration ? mergeSessionMetadataForStartup({
+          current: snapshot, next: startupMetadata, nowMs: startupNowMs, mode: 'attach', stackSkillMigration,
+          appliedCapabilitySelection: 'preserved_process',
+        }) : snapshot
         const appliedCapabilitySelection = preservesRetainedTerminal ? 'preserved_process' as const
-          : readSessionCapabilitySelectionFromMetadataV1(snapshot)
+          : readSessionCapabilitySelectionFromMetadataV1(startupSelectionMetadata)
         daemonReportMetadata = mergeSessionMetadataForStartup({
           current: normalizeLegacySessionModeMetadataCompat(snapshot),
           next: normalizeLegacySessionModeMetadataCompat(startupMetadata),
@@ -383,6 +392,7 @@ export async function initializeBackendRunSession(
           metadataKeysToUnsetOnAttach: opts.metadataKeysToUnsetOnAttach,
           attachMetadataIdentityPolicy,
           appliedCapabilitySelection,
+          stackSkillMigration,
           mode: 'attach',
         })
         await applyAttachStartupMetadataUpdateWithRetry({
@@ -401,6 +411,7 @@ export async function initializeBackendRunSession(
               metadataKeysToUnsetOnAttach: opts.metadataKeysToUnsetOnAttach,
               attachMetadataIdentityPolicy,
               appliedCapabilitySelection,
+              stackSkillMigration,
               mode: 'attach',
             })
           },
@@ -492,6 +503,12 @@ export async function initializeBackendRunSession(
   }
 
   throwIfAborted()
+  const preparedBirthSkills = opts.credentials ? await prepareSessionStackSkillMigration(opts.metadata,
+    { credentials: opts.credentials, signal: opts.signal }) : undefined
+  const birthSkillMigration = preparedBirthSkills?.status === 'ready' ? preparedBirthSkills.migration : undefined
+  const birthMetadata = birthSkillMigration ? mergeSessionMetadataForStartup({
+    current: opts.metadata, next: opts.metadata, nowMs: nowFn(), mode: 'start', stackSkillMigration: birthSkillMigration,
+  }) : opts.metadata
   let response: Awaited<ReturnType<ApiClient['getOrCreateSession']>>
   try {
     const reportsTo = opts.reportsTo ?? readSessionCreateReportsToFromEnv();
@@ -501,8 +518,8 @@ export async function initializeBackendRunSession(
       ...(reportsTo !== undefined ? { reportsTo } : {}),
       tag: opts.sessionTag,
       metadata: initialSessionRolesV1
-        ? { ...opts.metadata, work: { ...opts.metadata.work, sessionRolesV1: initialSessionRolesV1 } }
-        : opts.metadata,
+        ? { ...birthMetadata, work: { ...birthMetadata.work, sessionRolesV1: initialSessionRolesV1 } }
+        : birthMetadata,
       state: opts.state,
       ...(opts.initialAccess !== undefined ? { initialAccess: opts.initialAccess } : {}),
       ...(opts.primaryTeamId !== undefined ? { primaryTeamId: opts.primaryTeamId } : {}),
@@ -553,7 +570,7 @@ export async function initializeBackendRunSession(
     await runStartupSideEffects(
       sessionToUse,
       sessionId,
-      opts.metadata,
+      birthMetadata,
       'await',
       requireDaemonAck,
       response.sessionCreationOutcome,

@@ -6,11 +6,25 @@ import { join } from 'node:path';
 import { createConfiguredAcpBackend } from './createConfiguredAcpBackend';
 
 describe('createConfiguredAcpBackend', () => {
-  it('launches a command package runner through managed pnpm', async () => {
+  it.runIf(process.platform !== 'win32')('starts a command package through managed pnpm and the selected runtime with no system Node', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-acp-package-runner-'));
     try {
       const pnpm = join(root, 'pnpm');
-      await writeFile(pnpm, '#!/bin/sh\nexit 0\n');
+      const agent = join(root, 'agent.cjs');
+      await writeFile(agent, `#!/usr/bin/env node\nconst readline = require('node:readline');
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  const result = request.method === 'initialize' ? {
+    protocolVersion: request.params.protocolVersion, agentCapabilities: {}, authMethods: [],
+  } : { sessionId: 'managed-runtime-session' };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
+});\n`);
+      await chmod(agent, 0o755);
+      await writeFile(pnpm, `#!${process.execPath}\nconst { spawn } = require('node:child_process');
+if (process.argv[2] !== 'dlx') process.exit(2);
+const child = spawn(${JSON.stringify(agent)}, [], { stdio: 'inherit', env: process.env });
+child.on('exit', code => process.exit(code ?? 1));\n`);
       await chmod(pnpm, 0o755);
       const backend = await createConfiguredAcpBackend({
         cwd: root,
@@ -19,11 +33,11 @@ describe('createConfiguredAcpBackend', () => {
           launch: { kind: 'command', command: 'npx', args: ['-y', 'acme-agent@1.2.3', '--acp'] }, env: {},
           capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' },
         },
-        launchEnv: {}, env: { HAPPIER_PNPM_BIN: pnpm, PATH: '' },
+        launchEnv: { PATH: root }, env: { HAPPIER_PNPM_BIN: pnpm, PATH: '', HAPPIER_HOME_DIR: root, HAPPIER_JS_RUNTIME_PATH: process.execPath },
       });
-      const options = (backend as unknown as { options: { command: string; args: readonly string[] } }).options;
-      expect(options.command).toBe(pnpm);
-      expect(options.args).toEqual(['dlx', 'acme-agent@1.2.3', '--acp']);
+      try {
+        await expect(backend.startSession()).resolves.toMatchObject({ sessionId: 'managed-runtime-session' });
+      } finally { await backend.dispose(); }
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it('launches an account-configured ACP backend through its configured executable', async () => {

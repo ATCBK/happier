@@ -8,7 +8,7 @@ import { createSessionPromptPlanResolver } from './sessionPromptPlan';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { resolveSessionNativeToolDescriptors } from '@/agent/tools/happierTools/resolveSessionNativeToolBridge';
 import { shouldDenyAgentSessionTitleToolCall } from '@/agent/permissions/codingPromptTitlePermission';
-import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionClientFixture, createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -16,6 +16,8 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { TranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applyInitialSessionCreationFactsToMetadata } from '@/agent/runtime/createSessionMetadata';
 import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1,
@@ -49,10 +51,42 @@ function createProjectedIdentityTestMetadata(params: Parameters<typeof projectSe
 describe('session prompt-plan producer', () => {
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
+  it('prepares a usable turn and commits a private-safe typed notice when optional library context is unavailable', async () => {
+    const events: unknown[] = [];
+    let required = false;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/encryption')
+        return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      return { status: 503, data: { error: 'unavailable' } };
+    });
+    const resolve = createSessionPromptPlanResolver({
+      opts: { credentials: { token: 'optional-context-token', encryption: null } },
+      session: { ...createApiSessionClientFixture(), sessionId: 'optional-context-session', getMetadataSnapshot: () => createTestMetadata({ work: {
+        memoryEnabled: true, promptStack: [{ id: 'private-entry', ref: { kind: 'doc', artifactId: 'private-document' },
+          enabled: true, required, placement: 'system_append' }] } }),
+        enqueueSessionEventCommitted: async (event: unknown) => {
+          events.push(event); return { persisted: true as const, delivered: false as const };
+        } },
+      agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
+      readNativeSessionId: () => 'native', daemonBridge,
+    });
+    const result = await resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true });
+    expect(result.text).toContain('Required base instructions');
+    expect(result.admittedEntries).toMatchObject([{ outcome: 'unavailable', reason: 'unavailable' }]);
+    const record = TranscriptRawRecordV1Schema.parse({ role: 'agent', content: { type: 'event', id: 'notice', data: events[0] } });
+    expect(readSessionCapabilityNoticeV1(record.content.type === 'event' ? record.content.data : null)).toEqual({
+      v: 1, items: [{ kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' }],
+    });
+    expect(JSON.stringify(events)).not.toMatch(/private-entry|private-document|optional-context-token/);
+    required = true;
+    await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ reason: 'unavailable' });
+    expect(events).toHaveLength(1);
+  });
+
   it('keeps opaque plan evidence scoped to the prepared Session and withdraws it with the current Profile', async () => {
     let metadata = createTestMetadata();
     const params = { opts: { credentials: { token: 'context-token', encryption: null } },
-      session: { sessionId: 'composition-session', getMetadataSnapshot: () => metadata },
+      session: { ...createApiSessionClientFixture(), sessionId: 'composition-session', getMetadataSnapshot: () => metadata },
       agentId: 'codex', machineId: 'test-machine', directory: '/private/repo',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge };
     const resolve = createSessionPromptPlanResolver(params);
@@ -85,7 +119,7 @@ describe('session prompt-plan producer', () => {
       opts: { credentials: { token: 'creation-context-token', encryption: null }, agentSessionStartupInstructionsV1: {
         v: 1 as const, id: 'caller.startup', revision: 9, instructions: 'Original caller instructions',
       } },
-      session: { sessionId: 'created-bot', getMetadataSnapshot: () => metadata },
+      session: { ...createApiSessionClientFixture(), sessionId: 'created-bot', getMetadataSnapshot: () => metadata },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => nativeSessionId, daemonBridge,
     };
@@ -121,7 +155,7 @@ describe('session prompt-plan producer', () => {
       sharedMetadata: projectSessionSharedMetadataV1({ metadata: { bot: { kind: 'bot' } } }) });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'promotion-context-token', encryption: null } },
-      session: { sessionId: 'promoted-session', getMetadataSnapshot: () => metadata },
+      session: { ...createApiSessionClientFixture(), sessionId: 'promoted-session', getMetadataSnapshot: () => metadata },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -153,7 +187,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -171,7 +205,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -203,7 +237,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true,
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true,
         promptStack: [{ id: 'current', ref: { kind: 'doc', artifactId: 'current' }, enabled: true, placement: 'system_append' }] } }) },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
@@ -238,7 +272,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId: 'focused' }) },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId: 'focused' }) },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -266,7 +300,7 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token, encryption: null } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: metadata },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: metadata },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -308,10 +342,11 @@ describe('session prompt-plan producer', () => {
         ? { status: 200, data: row } : { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected HTTP path: ${path}`);
     });
-    const settings = accountSettingsParse({ profiles: source === 'owned' ? [{ artifactId: 'published-profile' }] : [] });
+    const rawSettings = { profiles: source === 'owned' ? [{ artifactId: 'published-profile' }] : [] };
+    const settings = accountSettingsParse(rawSettings);
     const credentials = { token: 'published-profile-test-token', encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
-    setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: { profiles: settings.profiles }, scopeKey,
+    setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings, scopeKey,
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] }, profileCatalog: {
         status: 'ready', authority: 'inactive', source: 'legacy', records: [], diagnostics: [], referenceGuardRevision: 'absent',
@@ -392,14 +427,21 @@ describe('session prompt-plan producer', () => {
       };
       return { status: 200, data: path === '/v1/artifacts' ? [row] : row };
     });
-    const resolve = createSessionPromptPlanResolver({
-      opts: { credentials: { token: 'test-token', encryption: null },
-        accountSettingsContext: { source: 'cache', settingsVersion: 1, loadedAtMs: 1,
-          settingsSecretsReadKeys: [], whenRefreshed: null, settings: accountSettingsParse({ promptStacksV1: {
+    const credentials = { token: 'test-token', encryption: null };
+    const rawSettings = { promptStacksV1: {
           v: 1, surfaces: { coding: [{ id: 'stack-entry', ref: { kind: 'doc', artifactId: 'stack-doc' },
             enabled: true, placement: 'system_append', editPolicy: 'user_only' }], voice: [], profilesById: {} },
-        } }) } },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => null },
+    } };
+    const settings = accountSettingsParse(rawSettings);
+    const scopeKey = resolveAccountSettingsScopeKey(credentials);
+    setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings, scopeKey,
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    const resolve = createSessionPromptPlanResolver({
+      opts: { credentials,
+        accountSettingsContext: { source: 'network', scopeKey, settingsVersion: 1, loadedAtMs: 1,
+          settingsSecretsReadKeys: [], whenRefreshed: null, settings } },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => null },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native-conversation',
       daemonBridge,
@@ -441,7 +483,7 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'fresh-instructions-token', encryption: null } },
-      session: { sessionId: 'fresh-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true, promptStack: entries } }) },
+      session: { ...createApiSessionClientFixture(), sessionId: 'fresh-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true, promptStack: entries } }) },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -473,7 +515,7 @@ describe('session prompt-plan producer', () => {
           v: 1, id: 'voice.caller', revision: 9, instructions: 'Caller startup guidance',
         },
       },
-      session: { sessionId: 'test-session', getMetadataSnapshot: () => null },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => null },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native-conversation',

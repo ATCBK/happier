@@ -1,16 +1,24 @@
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
 import type { AgentSessionStartupInstructionsV1, SessionRolePromptContextV1, CodingPromptBehaviorV1 } from '@happier-dev/protocol';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { HostSessionRuntimeRunOptions } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
+import { renderSkillIndexV1 } from '@happier-dev/protocol/prompts/library/skills/skillIndexV1';
+import type { SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { resolvePluginPromptAssetBlocks, resolvePluginToolPromptContributions } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import { resolveEffectiveCodingPromptPlan } from './resolveEffectiveCodingPrompt';
 import { prepareSessionPromptStackInputs } from './sessionPromptStack';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PromptStackAdmittedEntryV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { createPromptCompositionScope, type PromptPlanComposition } from '../promptComposition';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { configuration } from '@/configuration';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, SessionCapabilityNoticeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { logger } from '@/ui/logger';
 
 type SessionPromptPlanResolveArgs = Readonly<{
   baseOverride?: string | null;
@@ -25,6 +33,8 @@ export type SessionPromptPlanResolver = {
   (args: SessionPromptPlanResolveArgs & Readonly<{ includeAdmittedInventory: true }>): Promise<SessionPromptPlanWithAdmittedInventory>;
   (args?: SessionPromptPlanResolveArgs): Promise<string>;
 } & Readonly<{
+  /** Refuses a withdrawn plan independently of whether its instruction text is empty. */
+  assertPreparedPlanCurrent?: () => void;
   /** Current full-plan identity, retained by this producer across native runtime replacement. */
   readStartupInstructions?: () => AgentSessionStartupInstructionsV1 | null;
   /** Policy from the same current prepared plan, unavailable after a failed preparation. */
@@ -35,28 +45,39 @@ export type SessionPromptPlanResolver = {
 /** One full-plan producer for native startup and immediately-before-dispatch revisions. */
 export function createSessionPromptPlanResolver(params: Readonly<{
   opts: HostSessionRuntimeRunOptions;
-  session: Pick<ApiSessionClient, 'sessionId' | 'getMetadataSnapshot'>;
+  session: Pick<ApiSessionClient, 'sessionId' | 'getMetadataSnapshot' | 'enqueueSessionEventCommitted'>;
   agentId: string;
   machineId: string;
   directory: string;
+  serverId?: string;
   memoryRecallGuidanceEnabled: boolean;
   readNativeSessionId: () => string | null;
+  readSessionSkills?: () => Readonly<{ plan: SessionSkillPlanV1; indexItems: readonly SkillLibraryItemV1[] }> | null;
   resolveRoleContext?: (signal?: AbortSignal) => Promise<SessionRolePromptContextV1 | null>;
   daemonBridge?: DaemonAgentRuntimeTurnContributionsBridge;
+  /** Captures fresh material from the same admitted Home/Account for one preparation. */
+  readOperationContext?: () => SavedSecretOperationContextV1 | undefined;
 }>): SessionPromptPlanResolver {
   const toolDelivery = resolveAgentToolsDelivery(params.agentId);
   let resolvedText: string | null = null;
+  let optionalLibraryUnavailable = false;
   let revision = params.opts.agentSessionStartupInstructionsV1?.revision ?? 1;
   let startupInstructions: AgentSessionStartupInstructionsV1 | null = null;
   const compositionScope = createPromptCompositionScope();
   let composition: PromptPlanComposition | null = null;
   let preparedBehavior: Readonly<{ accountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot>; settings: unknown;
-    profileId: string | null; behavior: CodingPromptBehaviorV1 }> | null = null;
+    profileId: string | null; behavior: CodingPromptBehaviorV1; operationContext?: SavedSecretOperationContextV1;
+    activeAccountSnapshot: ReturnType<typeof getActiveAccountSettingsSnapshot> }> | null = null;
   const accountScopeKey = params.opts.accountSettingsContext?.scopeKey;
   const accountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const accountContext = {
     scopeKey: accountScopeKey ?? null, lifetimeToken: accountLifetimeToken,
   };
+  const initialAccount = getActiveAccountSettingsSnapshot();
+  const initialSources = accountScopeKey && initialAccount?.scopeKey === accountScopeKey
+    ? readAccountPromptStackSources(initialAccount, { surface: 'coding' }) : null;
+  let knownAccountEntries: readonly PromptStackEntryV1[] | undefined = initialSources?.status === 'ready' ? initialSources.accountEntries : undefined;
+  const serverId = params.serverId ?? params.opts.credentials?.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
   async function resolve(args: SessionPromptPlanResolveArgs & Readonly<{ includeAdmittedInventory: true }>): Promise<SessionPromptPlanWithAdmittedInventory>;
   async function resolve(args?: SessionPromptPlanResolveArgs): Promise<string>;
   async function resolve({ baseOverride, excludePluginIds, includeAdmittedInventory, signal = new AbortController().signal }:
@@ -64,6 +85,8 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     preparedBehavior = null;
     composition = null;
     signal.throwIfAborted();
+    const operationContext = params.readOperationContext?.();
+    const activeAccountSnapshot = getActiveAccountSettingsSnapshot();
     const executionRunsFeatureEnabled = resolveCliFeatureDecision({
       featureId: 'execution.runs', env: process.env,
     }).state === 'enabled';
@@ -72,21 +95,30 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       sessionId: params.session.sessionId, machineId: params.machineId,
       featureIds, ...(excludePluginIds ? { excludePluginIds } : {}), signal,
     };
+    let optionalPromptAssetsUnavailable = false;
     const promptContributions = params.daemonBridge
       ? await params.daemonBridge.resolvePrompt(scope)
       : {
-          promptAssetBlocks: await resolvePluginPromptAssetBlocks({ ...scope, agentId: params.agentId }),
+          promptAssetBlocks: await resolvePluginPromptAssetBlocks({ ...scope, agentId: params.agentId,
+            onOptionalUnavailable: () => { optionalPromptAssetsUnavailable = true; } }),
+          optionalPromptAssetsUnavailable,
           toolPromptContributions: await resolvePluginToolPromptContributions(
             excludePluginIds ? { excludePluginIds } : undefined,
           ),
         };
     const preparedStack = await prepareSessionPromptStackInputs({
       credentials: params.opts.credentials, metadata: params.session.getMetadataSnapshot(), sessionId: params.session.sessionId,
-      machineId: params.machineId, directory: params.directory, signal,
+      machineId: params.machineId, directory: params.directory, signal, serverId,
+      operationContext,
+      allowOptionalAccountLibrary: true, knownAccountEntries,
       accountContext: { ...accountContext, settings: params.opts.accountSettingsContext?.settings ?? null },
     });
-    const { accountSnapshot: currentAccount, assertCurrentAccount, ...stackInputs } = preparedStack;
+    const { accountSnapshot: currentAccount, assertCurrentAccount, optionalAccountLibraryUnavailable, ...stackInputs } = preparedStack;
+    if (!optionalAccountLibraryUnavailable && stackInputs.accountEntries !== undefined) knownAccountEntries = stackInputs.accountEntries;
     const { settings, profileId } = stackInputs;
+    const skills = params.readSessionSkills?.();
+    const skillIndex = skills?.plan.plan === 'index' && toolDelivery !== 'unsupported'
+      ? renderSkillIndexV1(skills.indexItems, params.session.sessionId) : '';
     const plan = await resolveEffectiveCodingPromptPlan({
       ...stackInputs,
       compositionScope,
@@ -103,18 +135,45 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       memoryMachineId: params.machineId,
       memoryRecallGuidanceEnabled: params.memoryRecallGuidanceEnabled,
       toolPromptContributions: promptContributions.toolPromptContributions,
-      promptAssetBlocks: promptContributions.promptAssetBlocks,
-    }).catch((error: unknown) => {
+      promptAssetBlocks: skillIndex ? [...promptContributions.promptAssetBlocks,
+        { id: 'skills.index', scope: 'user_prompt', text: skillIndex }] : promptContributions.promptAssetBlocks,
+    }).catch(async (error: unknown) => {
       signal.throwIfAborted();
       // Failed preparation can carry private admission facts from the retired Account.
       assertCurrentAccount();
+      if (operationContext && !await operationContext.isCurrent()) {
+        throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
+      }
       throw error;
     });
     signal.throwIfAborted();
     // A document response may outlive the Account admission that requested it.
     assertCurrentAccount();
+    if (operationContext && !await operationContext.isCurrent()) {
+      throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
+    }
+    const unavailable = promptContributions.optionalPromptAssetsUnavailable === true
+      || optionalAccountLibraryUnavailable !== undefined
+      || plan.admittedEntries.some(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
+    if (unavailable && !optionalLibraryUnavailable) {
+      const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [
+        { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
+      ] });
+      await params.session.enqueueSessionEventCommitted({ type: 'message',
+        message: 'Prompt library unavailable. Continuing without optional prompts.',
+        [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
+      }).catch(() => logger.warn('[prompts] Session capability notice could not be committed'));
+      signal.throwIfAborted();
+      assertCurrentAccount();
+      if (operationContext && !await operationContext.isCurrent()) {
+        throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
+      }
+    }
+    optionalLibraryUnavailable = unavailable;
     const text = plan.text.trim().normalize('NFC');
-    preparedBehavior = { accountSnapshot: currentAccount, settings, profileId, behavior: plan.codingPromptBehavior };
+    preparedBehavior = { accountSnapshot: currentAccount, settings, profileId, behavior: plan.codingPromptBehavior, operationContext,
+      activeAccountSnapshot: operationContext ? activeAccountSnapshot : getActiveAccountSettingsSnapshot() };
+    assertPreparedPlanCurrent();
     composition = plan.composition;
     if (text !== resolvedText) {
       if (resolvedText !== null) revision += 1;
@@ -126,12 +185,23 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     return includeAdmittedInventory ? { text, admittedEntries: plan.admittedEntries } : text;
   }
   const isPreparedPlanCurrent = () => preparedBehavior !== null
-    && (!accountScopeKey || (preparedBehavior.accountSnapshot === getActiveAccountSettingsSnapshot()
+    && (!accountScopeKey || (preparedBehavior.activeAccountSnapshot === getActiveAccountSettingsSnapshot()
+      && (preparedBehavior.operationContext
+      ? preparedBehavior.accountSnapshot === preparedBehavior.operationContext.readSnapshot()
+      : preparedBehavior.accountSnapshot === getActiveAccountSettingsSnapshot())
       && getActiveAccountSettingsSnapshotLifetimeToken() === accountLifetimeToken))
-    && preparedBehavior.settings === (accountScopeKey ? getActiveAccountSettingsSnapshot()?.settings : params.opts.accountSettingsContext?.settings ?? null)
+    && preparedBehavior.settings === (preparedBehavior.operationContext ? preparedBehavior.operationContext.readSnapshot()?.settings
+      : accountScopeKey ? getActiveAccountSettingsSnapshot()?.settings : params.opts.accountSettingsContext?.settings ?? null)
     && preparedBehavior.profileId === (params.session.getMetadataSnapshot()?.profileId ?? null);
-  return Object.assign(resolve, { readStartupInstructions: () => !accountScopeKey
-      || isActiveAccountSettingsSnapshotLifetimeCurrent({ scopeKey: accountScopeKey, lifetimeToken: accountLifetimeToken })
+  const assertPreparedPlanCurrent = () => {
+    if (!isPreparedPlanCurrent()) {
+      throw Object.assign(new Error('context_source_unavailable'), {
+        code: 'context_source_unavailable', status: 'preparation_pending', reason: 'prepared-plan-withdrawn',
+      });
+    }
+  };
+  return Object.assign(resolve, { assertPreparedPlanCurrent, readStartupInstructions: () => isPreparedPlanCurrent()
+      && (!accountScopeKey || isActiveAccountSettingsSnapshotLifetimeCurrent({ scopeKey: accountScopeKey, lifetimeToken: accountLifetimeToken }))
       ? startupInstructions : null,
     readCodingPromptBehavior: () => isPreparedPlanCurrent() ? preparedBehavior?.behavior ?? null : null,
     readComposition: () => isPreparedPlanCurrent() ? composition : null });

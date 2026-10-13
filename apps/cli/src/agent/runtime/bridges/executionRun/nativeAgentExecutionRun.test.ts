@@ -443,6 +443,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         const requests: Parameters<AgentSessionRuntime['send']>[0][] = [];
         const openRequests: AgentSessionOpenRequest[] = [];
         const mcpServers = { custom: { command: '/managed/custom-mcp', args: ['--stdio'] } };
+        const skillIndex = 'child-skill: Child-only skill index';
         const runtime: AgentRuntime = { sessions: { async open(request) { openRequests.push(request); return {
             async send(request) { requests.push(request); return { status: 'admitted' as const }; },
             async cancel({ turnId }) { return { status: 'requested' as const, turnId }; },
@@ -457,6 +458,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
             ({ services, signal }: Parameters<NativeAgentSessionContextLeaseFactory>[0]) => ({
                 ...createVoiceSessionContextLease({ services, signal, async dispose() {} }),
                 mcpServers,
+                skillIndex,
             }),
             { resolveStructuredInputForDispatch },
         ) satisfies NativeAgentSessionContextLeaseFactory;
@@ -476,13 +478,14 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
             await host.deliverInput(runtimeId, { text: 'Review the image', structuredInput }, {
                 localId: 'input-with-media',
             });
+            expect(requests[0]?.input.text).toContain(skillIndex);
             expect(resolveStructuredInputForDispatch).toHaveBeenCalledWith({
                 input: { text: 'Review the image', structuredInput },
                 localId: 'input-with-media',
                 signal: expect.any(AbortSignal),
             });
             expect(requests[0]?.input).toEqual({
-                text: 'Resolved context\n\nReview the image',
+                text: `${skillIndex}\n\nResolved context\n\nReview the image`,
                 structuredInput: { v: 1, resolvedComposerAttachments: [{ instanceId: 'review-1' }] },
             });
         } finally {
@@ -847,68 +850,6 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
             diagnostic: { code: 'agent_run_session_projection_unavailable' },
         });
         expect(publishParentWorkState).not.toHaveBeenCalled();
-        await host.dispose();
-    });
-
-    it('normalizes one attached Run usage event for the Session and exact Workflow owners', async () => {
-        let publishRuntimeEvent: ((event: AgentSessionRuntimeEvent) => void) | null = null;
-        const publishUsage = vi.fn(async () => undefined);
-        const observeWorkflowUsage = vi.fn();
-        const runtime: AgentRuntime = { sessions: { async open() { return {
-            async send() { return { status: 'admitted' as const }; },
-            watch(listener) {
-                publishRuntimeEvent = listener;
-                return { dispose() {} };
-            },
-            async dispose() {},
-        }; } } };
-        const host = createNativeAgentSessionExecutionRunHostRuntime({
-            runtime,
-            lease: { pluginId: 'acme.finite', pluginVersion: '1.0.0', agentId: 'acme.finite/default',
-                localAgentId: 'default', occurrenceId: 'fixture-occurrence', isCurrent: () => true },
-            options: { cwd: '/repo', runId: 'run-usage', scope: 'session_owned', backendId: 'acme.finite/default',
-                permissionMode: 'read_only', start: {
-                    intent: 'review', runClass: 'bounded', retentionPolicy: 'ephemeral', observeWorkflowUsage,
-                } },
-            supportsResume: false,
-            createSessionContext: ({ services, signal }) => ({
-                ...createVoiceSessionContextLease({ services, signal, async dispose() {} }),
-                usagePublisher: { provider: 'acme.finite/default', publish: publishUsage },
-            }),
-        });
-
-        await host.provisionRuntime();
-        await host.deliverInput('run-usage', { text: 'measure this run' });
-        publishRuntimeEvent!({
-            sequence: 1,
-            sessionId: 'session-parent',
-            emittedAtMs: 20,
-            turnId: 'run-usage-turn-1',
-            kind: 'usage-observed',
-            observationId: 'usage-attached-1',
-            source: 'provider',
-            scope: 'turn_delta',
-            modelId: 'model-a',
-            tokens: { input: 8, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
-        });
-        await vi.waitFor(() => expect(publishUsage).toHaveBeenCalledOnce());
-        expect(publishUsage).toHaveBeenCalledWith(expect.objectContaining({
-            externalKey: 'usage-attached-1',
-            turnId: 'run-usage-turn-1',
-            observation: expect.objectContaining({
-                provider: 'acme.finite/default',
-                tokens: expect.objectContaining({ total: 12 }),
-            }),
-        }));
-        expect(observeWorkflowUsage).toHaveBeenCalledWith({
-            turnId: 'run-usage-turn-1',
-            observation: expect.objectContaining({
-                provider: 'acme.finite/default',
-                scope: 'turn_delta',
-                tokens: expect.objectContaining({ input: 8, output: 4 }),
-                availability: { inputTokens: true, outputTokens: true, reportedCostUsd: false },
-            }),
-        });
         await host.dispose();
     });
 

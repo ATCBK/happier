@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { prepareNativeSessionMcpConfig } from '../nativeSessionMcpConfig';
+import { prepareNativeSessionConfig } from '../nativeSessionConfig';
 
 const DECLARATION: PluginAgentAcpNativeSessionMcpConfigV2 = {
   configRootEnvKey: { posix: 'XDG_CONFIG_HOME', win32: 'APPDATA' },
@@ -33,7 +33,7 @@ describe('native session MCP config root', () => {
     await writeFile(join(sourceRoot, 'devin', 'settings.json'), '{"saved":true}');
     const envKey = platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME';
 
-    const delivery = await prepareNativeSessionMcpConfig({
+    const delivery = await prepareNativeSessionConfig({
       declaration: DECLARATION, cwd: home, env: { HOME: home, [envKey]: sourceRoot }, platform,
       mcpServers: { happier: { command: '/happier/server' } },
     });

@@ -124,7 +124,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
 
         if (!params.onAcceptedTurnLifecycle) {
             try {
-                const persistence = Promise.resolve(enqueue(mutation))
+                const persistence = Promise.resolve(enqueue.call(params.session, mutation))
                     .then(async () => {
                         if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
                     }, () => undefined);
@@ -143,7 +143,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                 if (!markerPublished) return;
                 turnsWithMarkerButNoAcceptedBegin.add(acceptedLifecycle.turnId);
                 try {
-                    await enqueue(mutation);
+                    await enqueue.call(params.session, mutation);
                     turnsWithMarkerButNoAcceptedBegin.delete(acceptedLifecycle.turnId);
                 } catch {
                     // The durable marker remains exact exit authority. Do not allow later rows or
@@ -157,7 +157,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
             }
             let admission: void | Readonly<{ terminalStatusOverride: 'failed' }>;
             try {
-                admission = await enqueue(mutation);
+                admission = await enqueue.call(params.session, mutation);
             } catch {
                 return;
             }

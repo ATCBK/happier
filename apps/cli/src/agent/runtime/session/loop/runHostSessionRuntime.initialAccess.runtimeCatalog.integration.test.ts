@@ -68,6 +68,7 @@ it.each([
   });
   const options = buildPluginHostSessionRuntimeOptions(buildPluginSessionBindingInput({
     credentials: { token: 'token', encryption: null },
+    backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
     directory: home, startedBy: partition.startedBy,
     resume: partition.resume,
     initialAccess: await consumeSessionInitialAccessFile(partition.initialAccessFilePath!),

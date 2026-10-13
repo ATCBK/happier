@@ -17,7 +17,9 @@ describe('permissionTaxonomy', () => {
     }
     expect(isSharedPermissionSafeToolName('mcp__happier__action_execute')).toBe(true);
     expect(isSharedPermissionSafeToolName('mcp__other__session_title_set')).toBe(false);
-    for (const name of listHappierToolAutoApprovedNameSpellingsV1()) expect(isSharedPermissionSafeToolName(name), name).toBe(true);
+    for (const prefix of ['', 'mcp__happier__', 'mcp__happy__', 'happier__', 'happy__', 'happier_', 'happy_']) {
+      for (const name of listHappierToolAutoApprovedNameSpellingsV1(prefix)) expect(isSharedPermissionSafeToolName(name), name).toBe(true);
+    }
   });
   it('recognizes shared safe tools without substring collisions', () => {
     expect(isSharedPermissionSafeToolName('think')).toBe(true);

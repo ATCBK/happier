@@ -214,12 +214,7 @@ type ExecutionRunRuntimeCreateOptions = Readonly<{
   onConnectedServicesRegistration?: (registration: ExecutionRunConnectedServicesLaunchV1) => void | Promise<void>;
   machineId?: string;
   resolveProvidersFeatureEnabled?: () => boolean | Promise<boolean>;
-  resolveAccountSettingsSnapshot?: (input?: Readonly<{
-    secretReferenceOverlay?: SecretReferenceOverlayV1;
-    mcpServerCatalog?: boolean;
-    savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
-    signal?: AbortSignal;
-  }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+  resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>;
 
 function isExecutionRunProfileCatalogResolution(
@@ -339,12 +334,7 @@ export type ExecutionRunHostBridgeOptions = Readonly<{
   }>) => Promise<Readonly<{ current: boolean }>>;
   machineId?: string;
   resolveProvidersFeatureEnabled?: () => boolean | Promise<boolean>;
-  resolveAccountSettingsSnapshot?: (input?: Readonly<{
-    secretReferenceOverlay?: SecretReferenceOverlayV1;
-    mcpServerCatalog?: boolean;
-    savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
-    signal?: AbortSignal;
-  }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+  resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>;
 
 /**

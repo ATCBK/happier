@@ -118,6 +118,9 @@ export function createCatalogHostSessionRuntimePlan<
         if (isHostSessionRuntimeFactoryResult(createdNativeRuntime)) {
           return {
             operations: createdNativeRuntime.operations,
+            ...(createdNativeRuntime.skillsDelivered !== undefined
+              ? { skillsDelivered: createdNativeRuntime.skillsDelivered }
+              : {}),
             nativeRuntime: createdNativeRuntime.nativeRuntime ?? null,
             ...(createdNativeRuntime.terminalRemoteModeLoop
               ? {

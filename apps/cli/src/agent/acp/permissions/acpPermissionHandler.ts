@@ -1,6 +1,5 @@
 import type {
   SessionPermissionFollowUpPromptIntent as SessionPermissionFollowUpPromptIntentV1,
-  SessionPermissionPersistAllowRule as SessionPermissionPersistAllowRuleV1,
 } from '@happier-dev/plugin-sdk/sessions';
 import type { SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
 
@@ -8,7 +7,6 @@ export type AcpPermissionDecisionResult = Readonly<{
   decision: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
   rationale?: string;
   followUpPrompt?: SessionPermissionFollowUpPromptIntentV1;
-  persistAllowRule?: SessionPermissionPersistAllowRuleV1;
 }>;
 
 /**
@@ -18,6 +16,11 @@ export type AcpPermissionDecisionResult = Readonly<{
 export type AcpPermissionCausalAuthority = SessionInputCausalPermissionAuthorityV1;
 
 export type AcpPermissionCallContext = Readonly<{
+  /** Host-only child Run policy input; never an admitted user-input authority. */
+  mcpToolPolicy?: Readonly<{
+    permissionMode: string;
+    readContext: () => import('@/mcp/runtime/resolveMcpToolIdentity').McpToolPolicyContext | null;
+  }>;
   origin?: 'host_acp_fs_write';
   /** Request lifetime is independent of the causal turn's permission authority. */
   lifetime?: 'turn' | 'occurrence';

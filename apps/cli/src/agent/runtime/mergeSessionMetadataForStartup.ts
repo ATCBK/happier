@@ -15,8 +15,12 @@ import {
     clearModelIntentSessionMetadata,
     clearPermissionModeIntentSessionMetadata,
 } from '@happier-dev/agents/session/state/metadataWriters';
-import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMarkersForStartupV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
-import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMarkersForStartupV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import type { SessionCapabilitySelectionV1, SessionSkillSelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { SessionSkillSelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { convertStackSkillEntriesV1 } from '@happier-dev/protocol/prompts/library/skills/convertStackSkillEntriesV1';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { SessionPromptStackV1StoredSchema, SessionDisabledInheritedEntryIdsV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionModelSelectionResolutionError } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderBoundModelRef, SessionModelSelectionIntentV1, SessionAttachMetadataIdentityPolicy } from '@happier-dev/protocol';
@@ -35,6 +39,36 @@ export type PermissionModeOverride = {
 };
 
 export type StartupMergeMode = 'start' | 'attach';
+
+/** Artifact-authority classification captured by the startup preparation. */
+export type SessionStackSkillMigration = Readonly<{
+    skillIds: ReadonlySet<string>;
+    disabledInheritedEntries?: readonly PromptStackEntryV1[];
+}>;
+
+/** The single additive selection calculation serves startup writes and private Run preparation. */
+export function resolveSessionStackSkillSelectionForMigration(metadata: unknown, migration: SessionStackSkillMigration):
+    Readonly<{ status: 'unchanged' }> | Readonly<{ status: 'updated'; selection: SessionSkillSelectionV1; promptStack: readonly PromptStackEntryV1[] }>
+    | Readonly<{ status: 'unavailable' }> {
+    const record = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {};
+    const work = Reflect.get(record, 'work');
+    const workRecord = work && typeof work === 'object' && !Array.isArray(work) ? work : {};
+    const entries = SessionPromptStackV1StoredSchema.safeParse(Reflect.get(workRecord, 'promptStack') ?? []);
+    const disabled = SessionDisabledInheritedEntryIdsV1Schema.safeParse(Reflect.get(workRecord, 'disabledInheritedEntryIds') ?? []);
+    if (!disabled.success) return { status: 'unavailable' };
+    const converted = convertStackSkillEntriesV1(entries.success ? entries.data : [], { kind: 'session' }, {
+        skillIds: migration.skillIds, disabledInheritedEntries: migration.disabledInheritedEntries ?? [],
+        disabledInheritedEntryIds: disabled.data,
+    });
+    if (converted.skillIds.length === 0 && converted.excludedSkillIds.length === 0) return { status: 'unchanged' };
+    const selection = SessionSkillSelectionV1Schema.safeParse(Reflect.get(record, 'skillSelectionV1') ?? {});
+    if (!selection.success) return converted.excludedSkillIds.length > 0
+        ? { status: 'unavailable' } : { status: 'unchanged' };
+    const excluded = new Set([...selection.data.forceExcludeSkillIds, ...converted.excludedSkillIds]);
+    return { status: 'updated', promptStack: converted.remainingEntries, selection: { ...selection.data,
+        forceIncludeSkillIds: [...new Set([...selection.data.forceIncludeSkillIds, ...converted.skillIds])]
+            .filter(id => !excluded.has(id)), forceExcludeSkillIds: [...excluded] } };
+}
 
 function shouldPreserveCurrentIdentityOnAttach(
     policy: SessionAttachMetadataIdentityPolicy | null | undefined,
@@ -332,6 +366,7 @@ export function mergeSessionMetadataForStartup(opts: {
     metadataKeysToUnsetOnAttach?: readonly string[] | null;
     attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy | null;
     appliedCapabilitySelection?: SessionCapabilitySelectionV1 | 'preserved_process';
+    stackSkillMigration?: SessionStackSkillMigration;
     mode?: StartupMergeMode;
 }): Metadata {
     const mode: StartupMergeMode = opts.mode ?? 'start';
@@ -488,6 +523,21 @@ export function mergeSessionMetadataForStartup(opts: {
         }
     }
     if (capabilitySelection) Object.assign(merged, capabilitySelection);
+    if (opts.stackSkillMigration && merged.work) {
+        const currentSelection: unknown = Reflect.get(opts.current, 'skillSelectionV1');
+        const selectionSource = currentSelection !== undefined ? currentSelection
+            : mode === 'start' ? Reflect.get(opts.next, 'skillSelectionV1') : undefined;
+        const selection = resolveSessionStackSkillSelectionForMigration({ work: merged.work, skillSelectionV1: selectionSource },
+            opts.stackSkillMigration);
+        // Malformed desired selection cannot authorize a migration write.
+        if (selection.status === 'updated') {
+            merged = { ...merged, work: { ...merged.work, promptStack: [...selection.promptStack] } };
+            merged = writeSessionCapabilitySelectionToMetadataV1(merged, { skills: selection.selection }, {
+                sessionActive: opts.appliedCapabilitySelection === 'preserved_process'
+                    || mode === 'attach' && opts.appliedCapabilitySelection === undefined,
+            });
+        }
+    }
     merged = resolveSelectionRestartMarkersForStartupV1({ current: merged,
         applied: opts.appliedCapabilitySelection ?? (mode === 'attach' ? 'preserved_process'
             : readSessionCapabilitySelectionFromMetadataV1(merged)),

@@ -1,6 +1,5 @@
 import type {
   SessionPermissionFollowUpPromptIntentV1,
-  SessionPermissionPersistAllowRuleV1,
 } from '@happier-dev/agents';
 import type { PluginAgentAcpMcpInputPolicyV2 } from '@happier-dev/protocol';
 export type HostAcpMcpInputPolicy = Readonly<PluginAgentAcpMcpInputPolicyV2>;
@@ -139,7 +138,6 @@ export type HostAcpTier2PermissionDecisionResult = Readonly<{
   kind: 'allow' | 'deny' | 'defer';
   rationale?: string;
   followUpPrompt?: SessionPermissionFollowUpPromptIntentV1;
-  persistAllowRule?: SessionPermissionPersistAllowRuleV1;
 }>;
 
 type HostAcpTier2ArgvBuilder = (params: Readonly<{

@@ -3,8 +3,79 @@ import { describe, expect, it } from 'vitest';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import { mergeSessionMetadataForStartup } from './mergeSessionMetadataForStartup';
+import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
+import { readCapabilityLaunchRestartFromMetadataV1, resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 describe('mergeSessionMetadataForStartup', () => {
+    it('uses the current terminal launch instead of retained daemon eligibility on manual attach', () => {
+        const sessionRunnerRuntimeV1 = SessionRunnerRuntimeStateV1Schema.parse({
+            v: 1, sessionId: 'session', observedAtMs: 1,
+            runner: { entrypointSource: 'process_command', startedBy: 'daemon', startingMode: 'remote' },
+            daemon: { currentEntrypointSource: 'launch_spec' }, versionState: 'current', statusSource: 'daemon_tracking',
+            plannedRestart: { supported: true, eligible: true, disabledReason: null },
+        });
+        const merged = mergeSessionMetadataForStartup({
+            current: createTestMetadata({ startedBy: 'daemon', sessionRunnerRuntimeV1 }),
+            next: createTestMetadata({ startedBy: 'terminal' }), mode: 'attach', nowMs: 2,
+        });
+        expect(merged.startedBy).toBe('terminal');
+        expect(merged.sessionRunnerRuntimeV1).toBe(sessionRunnerRuntimeV1);
+        expect(resolveCapabilityApplyTimingV1({ kind: 'mcp_server', sessionRunning: true,
+            agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+            launchRestart: readCapabilityLaunchRestartFromMetadataV1(merged),
+        })).toEqual({ t: 'restart_to_apply', restartBy: 'terminal' });
+        expect(readCapabilityLaunchRestartFromMetadataV1({ sessionRunnerRuntimeV1 })).toBe('automatic');
+    });
+    it('migrates Session skill context and disabled inherited entries without overriding explicit exclusions', () => {
+        const entry = (id: string, artifactId: string) => ({ id, ref: { kind: 'bundle' as const, artifactId }, enabled: true,
+            placement: 'system_append' as const });
+        const current = createTestMetadata({ work: { promptStack: [entry('skill', 'skill-a'), entry('generic', 'generic-a')],
+            disabledInheritedEntryIds: ['inherited-skill', 'inherited-doc'] },
+            skillSelectionV1: { v: 1, forceIncludeSkillIds: ['existing'], forceExcludeSkillIds: ['skill-a'], excludeNativeSkillNames: ['native'] } });
+        const args = { current, next: createTestMetadata(), nowMs: 100, mode: 'attach' as const,
+            stackSkillMigration: { skillIds: new Set(['skill-a', 'inherited-a']),
+                disabledInheritedEntries: [entry('inherited-skill', 'inherited-a')] } };
+        const merged = mergeSessionMetadataForStartup(args);
+        expect(merged.work?.promptStack).toEqual(current.work?.promptStack?.map(entry => entry.id === 'skill'
+            ? { ...entry, skillMigrationV1: true } : entry));
+        expect(merged.work?.disabledInheritedEntryIds).toEqual(['inherited-skill', 'inherited-doc']);
+        expect(merged.skillSelectionV1).toEqual({ v: 1, forceIncludeSkillIds: ['existing'],
+            forceExcludeSkillIds: ['skill-a', 'inherited-a'], excludeNativeSkillNames: ['native'] });
+        const owner = createSessionOwnerMetadataV1({ metadata: merged });
+        expect(owner.ok).toBe(true);
+        if (!owner.ok) throw new Error(owner.unsupportedFields.join(','));
+        const consumed = SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata);
+        expect(consumed.runtime?.skillSelectionV1).toEqual(merged.skillSelectionV1);
+        expect(consumed.work?.promptStack).toEqual(merged.work?.promptStack);
+        expect(mergeSessionMetadataForStartup({ ...args, current: merged, nowMs: 101 }).work).toEqual(merged.work);
+        expect(mergeSessionMetadataForStartup({ ...args, current: merged }).skillSelectionV1).toEqual(merged.skillSelectionV1);
+        expect(mergeSessionMetadataForStartup({ ...args, stackSkillMigration: undefined }).work).toBe(current.work);
+        const malformed = { ...current, skillSelectionV1: { v: 1, forceIncludeSkillIds: 'unreadable' } } as unknown as typeof current;
+        expect(mergeSessionMetadataForStartup({ ...args, current: malformed }).work).toBe(current.work);
+        expect(merged.skillSelectionRestartRequiredV1).toBeDefined();
+        expect(mergeSessionMetadataForStartup({ ...args, appliedCapabilitySelection: { skills: merged.skillSelectionV1 } }))
+            .not.toHaveProperty('skillSelectionRestartRequiredV1');
+    });
+    it('does not re-include a migrated Session skill after removal without an exclusion', () => {
+        const current = createTestMetadata({ work: { promptStack: [{ id: 'legacy-skill', enabled: true,
+            placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'skill-a' } }] } });
+        const args = { current, next: createTestMetadata(), nowMs: 100, mode: 'attach' as const,
+            stackSkillMigration: { skillIds: new Set(['skill-a']) } };
+        const migrated = mergeSessionMetadataForStartup(args);
+        expect(migrated.skillSelectionV1?.forceIncludeSkillIds).toEqual(['skill-a']);
+        let removed: typeof migrated = { ...migrated, skillSelectionV1: { v: 1 as const, forceIncludeSkillIds: [],
+            forceExcludeSkillIds: [], excludeNativeSkillNames: [] } };
+        for (let pass = 0; pass < 2; pass++) {
+            removed = mergeSessionMetadataForStartup({ ...args, current: removed });
+            expect(removed.skillSelectionV1?.forceIncludeSkillIds).toEqual([]);
+            expect(removed.skillSelectionV1?.forceExcludeSkillIds).toEqual([]);
+            const owner = createSessionOwnerMetadataV1({ metadata: removed });
+            if (!owner.ok) throw new Error(owner.unsupportedFields.join(','));
+            expect(SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata).work?.promptStack)
+                .toEqual(removed.work?.promptStack);
+        }
+    });
     it.each([
         { work: { memoryEnabled: true }, bot: { kind: 'bot' as const }, createdAsBot: true as const },
         { work: { memoryEnabled: false }, bot: undefined, createdAsBot: true as const },

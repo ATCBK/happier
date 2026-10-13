@@ -17,6 +17,7 @@ import {
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionPermissionApprovalReviewerClaimV1Schema, SessionPermissionAccountUserDecisionActorV1Schema, SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionIdempotencyKeyV1Schema, SessionPermissionSourceRefV1Schema, SessionPermissionSourceRevisionOrEpochV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountSettings, SessionPermissionApprovalReviewerClaimV1, SessionPermissionAccountUserDecisionActorV1, SessionPermissionExternalHumanDecisionActorV1 } from '@happier-dev/protocol';
 import {
@@ -193,6 +194,7 @@ export type AgentStateOutstandingRequest = Readonly<{
     toolName: string;
     toolInput: unknown;
     createdAt: number;
+    mcpTool?: ResolvedMcpToolIdentityV1;
     /** Exact host turn that owns a source-mediated pending permission. */
     turnId?: string;
     kind?: string;
@@ -236,6 +238,7 @@ type AgentStateRequestPublication = Readonly<{
     toolName: string;
     toolInput: unknown;
     createdAt: number;
+    mcpTool?: import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1').ResolvedMcpToolIdentityV1;
     turnId?: string;
     kind?: string;
     source?: string;
@@ -1196,6 +1199,7 @@ type AgentStateRequestMetadata = Readonly<{
     sidechainId?: string;
     permissionSuggestions?: readonly unknown[];
     owner?: PermissionRequestOwner;
+    mcpTool?: ResolvedMcpToolIdentityV1;
 }>;
 
 type AgentStateUpdateWithResponseDispatch = Readonly<{
@@ -1213,6 +1217,7 @@ function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadat
         ? [...record.permissionSuggestions]
         : undefined;
     const owner = normalizePermissionRequestOwner(record.owner, 'stored');
+    const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(record.mcpTool);
     return {
         ...(typeof record.source === 'string' ? { source: record.source } : {}),
         ...(turnId.success ? { turnId: turnId.data } : {}),
@@ -1221,6 +1226,7 @@ function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadat
         ...(typeof record.sidechainId === 'string' ? { sidechainId: record.sidechainId } : {}),
         ...(permissionSuggestions ? { permissionSuggestions } : {}),
         ...(owner ? { owner } : {}),
+        ...(mcpTool.success ? { mcpTool: mcpTool.data } : {}),
     };
 }
 
@@ -1233,9 +1239,12 @@ function applyAgentStateRequestMetadata(
         sidechainId?: string | null;
         permissionSuggestions?: readonly unknown[] | null;
         owner?: PermissionRequestOwner | null;
+        mcpTool?: ResolvedMcpToolIdentityV1;
     }>,
 ): void {
     const turnId = TurnIdSchema.safeParse(metadata.turnId);
+    const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(metadata.mcpTool);
+    if (mcpTool.success) entry.mcpTool = mcpTool.data;
     if (turnId.success) {
         entry.turnId = turnId.data;
     }

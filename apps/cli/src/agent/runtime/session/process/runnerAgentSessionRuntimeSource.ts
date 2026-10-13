@@ -568,6 +568,15 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
                 }
                 return claimed.identity.sourceCustody;
             },
+            get immutableGenerationId() {
+                if (!claimed) {
+                    throw createRunnerSourceUnavailableError(
+                        'Runner Agent canonical session authority has not been claimed',
+                    );
+                }
+                const custody = claimed.identity.sourceCustody;
+                return custody.kind === 'managed' ? custody.immutableGenerationId : null;
+            },
             get runtimeAuthority() {
                 return claimed?.identity.runtimeAuthority
                     ?? descriptor.runtimeAuthority;

@@ -458,6 +458,9 @@ export function classifyPrimarySessionRuntimeIssue(
   const promptPreparationCode = teamCredentialDenial ? null
     : input.error instanceof PromptStackPreparationError
       ? input.error.cause instanceof HomeTargetResolutionError ? input.error.cause.code : input.error.code
+    : input.cause === 'session_error' && errorCode.kind === 'string'
+      && (errorCode.value === 'context_source_unavailable' || errorCode.value === 'role_overrides_unavailable'
+        || errorCode.value === 'role_source_incomplete') ? 'preparation_pending'
     : declaredSource === 'dependency_failure' && errorCode.kind === 'string'
       && (errorCode.value === 'preparation_pending' || errorCode.value === 'attachment_unavailable'
         || errorCode.value === 'profile_missing' || errorCode.value === 'invalid_target'

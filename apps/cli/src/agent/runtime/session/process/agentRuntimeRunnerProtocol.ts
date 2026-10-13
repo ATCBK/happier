@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 } from '@happier-dev/protocol/runtime/agentSessionLimitsV1';
 import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
+import { AgentSessionSkillDeliveryV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
+import { McpToolLaunchPoliciesV1Schema } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import { AgentSessionProviderBindingV1Schema } from '@happier-dev/protocol/providers/sessions/agentSessionProviderBindingV1';
 import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { ComposerInstanceIdSchema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
@@ -253,6 +255,7 @@ const AgentRuntimeDaemonCompositionInstructionsV1Schema = lazyZodSchema(() => z.
 export const AgentRuntimeDaemonTurnContributionsResultV1Schema = lazyZodSchema(() => z.union([
   z.object({
     kind: z.literal('prompt'),
+    optionalPromptAssetsUnavailable: z.boolean().optional(),
     promptAssetBlocks:
       z.array(AgentRuntimeDaemonPromptBlockV1Schema).max(256),
     toolPromptContributions: z.array(
@@ -442,6 +445,7 @@ export type AgentRuntimeDaemonModelTransitionAuthorizationResultV1 =
 
 const McpLaunchConfigSchema = lazyZodSchema(() => z.object({
   command: BoundedPathSchema,
+  enabledTools: z.array(z.string()).optional(),
   args: z.array(z.string().max(32_768)).max(1_024).optional(),
   env: z.record(
     z.string().max(256),
@@ -470,41 +474,47 @@ const AgentSessionOpenBaseSchema = lazyZodSchema(() => z.object({
   connectedAccounts: z.array(ConnectedAccountSchema).max(256).optional(),
   mcpServers:
     z.record(BoundedIdSchema, McpLaunchConfigSchema).optional(),
+  mcpToolPolicy: McpToolLaunchPoliciesV1Schema.optional(),
   providerBinding: AgentSessionProviderBindingV1Schema.optional(),
   stateSharing: ConnectedServicesProviderStateSharingPolicyV1Schema.optional(),
 }));
 
 export const AgentRuntimeDaemonSessionOpenRequestV1Schema =
-  lazyZodSchema(() => z.discriminatedUnion('kind', [
-    AgentSessionOpenBaseSchema.extend({
-      kind: z.literal('create'),
-      startupInstructions:
-        AgentSessionStartupInstructionsV1Schema.optional(),
-    }).strict(),
-    AgentSessionOpenBaseSchema.extend({
-      kind: z.literal('resume'),
-      providerSessionId: BoundedIdSchema,
-      strictNativeResumeIdentity: z.literal(true).optional(),
-      startupInstructions:
-        AgentSessionStartupInstructionsV1Schema.optional(),
-    }).strict(),
-    AgentSessionOpenBaseSchema.extend({
-      kind: z.literal('fork'),
-      source: z.object({
-        sessionId: asHostProtocolZod(SessionIdSchema),
-        providerSessionId: BoundedIdSchema,
-        cwd: BoundedPathSchema,
-        target: z.object({
-          turnId: BoundedIdSchema,
-          providerCheckpoint: AgentSessionProviderCheckpointV1Schema,
-        }).strict().optional(),
+  lazyZodSchema(() => {
+    const requestBase = AgentSessionOpenBaseSchema.extend({
+      skills: AgentSessionSkillDeliveryV1Schema.optional(),
+    });
+    return z.discriminatedUnion('kind', [
+      requestBase.extend({
+        kind: z.literal('create'),
+        startupInstructions:
+          AgentSessionStartupInstructionsV1Schema.optional(),
       }).strict(),
-    }).strict(),
-  ]));
+      requestBase.extend({
+        kind: z.literal('resume'),
+        providerSessionId: BoundedIdSchema,
+        strictNativeResumeIdentity: z.literal(true).optional(),
+        startupInstructions:
+          AgentSessionStartupInstructionsV1Schema.optional(),
+      }).strict(),
+      requestBase.extend({
+        kind: z.literal('fork'),
+        source: z.object({
+          sessionId: asHostProtocolZod(SessionIdSchema),
+          providerSessionId: BoundedIdSchema,
+          cwd: BoundedPathSchema,
+          target: z.object({
+            turnId: BoundedIdSchema,
+            providerCheckpoint: AgentSessionProviderCheckpointV1Schema,
+          }).strict().optional(),
+        }).strict(),
+      }).strict(),
+    ]);
+  });
 
 /**
- * Durable runner-open evidence deliberately excludes transient startup text
- * and native-resume identity. The marker owns the retained identity; the
+ * Durable runner-open evidence deliberately excludes transient skill delivery,
+ * startup text and native-resume identity. The marker owns the retained identity; the
  * provider receives those facts only during the one open attempt.
  */
 export const AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema =
@@ -537,7 +547,8 @@ export type AgentRuntimeDaemonSessionOpenAttestationRequestV1 = z.infer<
 export function projectAgentRuntimeDaemonSessionOpenAttestationRequestV1(
   request: unknown,
 ): AgentRuntimeDaemonSessionOpenAttestationRequestV1 {
-  const parsed = AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(request);
+  const { skills: _skills, ...parsed } =
+    AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(request);
   if (parsed.kind === 'fork') {
     return AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema.parse(
       parsed,

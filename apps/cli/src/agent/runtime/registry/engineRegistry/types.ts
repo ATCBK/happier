@@ -74,6 +74,7 @@ export type RunnerAgentSessionRuntimeSource = Readonly<{
         backendId: string;
         occurrenceId: string;
         sourceCustody: PluginSourceCustodyV1;
+        immutableGenerationId?: string | null;
         runtimeAuthority?: PluginRuntimeAuthoritySnapshotV1;
         isCurrent(): boolean;
     }>;

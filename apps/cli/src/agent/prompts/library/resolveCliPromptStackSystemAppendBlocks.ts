@@ -12,10 +12,11 @@ import {
   createCredentialedAccountArtifactStore,
   ArtifactEncryptionMaterialUnavailableError,
 } from '@/api/artifacts/accountArtifactStore';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import {
   readStoredCredentialsForServerId,
+  sameStoredCredentials,
   type StoredCredentials,
 } from '@/persistence';
 import { resolveCliHomeTarget, resolveCurrentCliHomeTarget } from '@/server/homeTarget';
@@ -23,6 +24,7 @@ import { getServerProfile } from '@/server/serverProfiles';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { logger } from '@/ui/logger';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 const promptReadErrorCodes = new Set([
   'artifact_read_unavailable', 'artifact_read_invalid', 'artifact_encryption_material_unavailable',
@@ -37,6 +39,7 @@ export type CliPromptLibraryArtifactReaderOptions = Readonly<{
   credentials?: StoredCredentials | null;
   serverId?: string | null;
   signal?: AbortSignal;
+  operationContext?: SavedSecretOperationContextV1;
 }>;
 export type CliPromptStackSystemAppendInput = Omit<
   PromptStackSystemAppendInputV1,
@@ -52,12 +55,19 @@ export async function withCliPromptLibraryArtifactReader<T>(
   options?: CliPromptLibraryArtifactReaderOptions,
 ): Promise<T> {
   const activeServerId = configuration.activeServerId;
+  const activeServerHttpBaseUrl = resolveServerHttpBaseUrl();
   const defaultServerId = options?.serverId?.trim() || options?.credentials?.requesterSessionCredentialScope?.serverId || activeServerId;
   const resolveTarget = (serverId: string) => serverId === activeServerId
     ? resolveCurrentCliHomeTarget()
     : resolveCliHomeTarget({ kind: 'saved_profile', profileRef: serverId });
   let boundProfileId: Promise<string | null> | undefined;
   const resolveBoundProfileId = () => boundProfileId ??= resolveTarget(defaultServerId).then((target) => target.profileId);
+  const assertOperationCurrent = async () => {
+    options?.signal?.throwIfAborted();
+    const operation = options?.operationContext;
+    if (operation && (!options?.credentials || !sameStoredCredentials(operation.credentials, options.credentials)
+      || !await operation.isCurrent())) throw new ArtifactEncryptionMaterialUnavailableError();
+  };
   const stores = new Map<
     string,
     Promise<
@@ -84,6 +94,21 @@ export async function withCliPromptLibraryArtifactReader<T>(
     let pending = stores.get(serverId);
     if (!pending) {
       pending = (async () => {
+        const operation = options?.operationContext;
+        if (operation) {
+          await assertOperationCurrent();
+          if (serverId !== defaultServerId) {
+            const target = await resolveTarget(serverId);
+            if (!target.profileId || target.profileId !== await resolveBoundProfileId()) {
+              throw new ArtifactEncryptionMaterialUnavailableError();
+            }
+          }
+          // The captured invocation owns transport and Account credentials. Saved
+          // profiles only resolve same-Home aliases; they never supply private material.
+          return { serverId, serverUrl: operation.serverHttpBaseUrl,
+            accountId: readAccountIdFromToken(operation.credentials.token),
+            store: createCredentialedAccountArtifactStore(operation.credentials) };
+        }
         const requesterScope = options?.credentials?.requesterSessionCredentialScope;
         if (requesterScope) {
           if (serverId !== requesterScope.serverId) throw new ArtifactEncryptionMaterialUnavailableError();
@@ -106,7 +131,9 @@ export async function withCliPromptLibraryArtifactReader<T>(
         options?.signal?.throwIfAborted();
         return {
           serverId: profileId,
-          serverUrl: target.applicationUrl,
+          // Saved profiles establish Home/Account identity. The current Home's
+          // admitted invocation/runtime route is owned by session transport.
+          serverUrl: profileId === activeServerId ? activeServerHttpBaseUrl : target.applicationUrl,
           accountId: credentials ? readAccountIdFromToken(credentials.token) : null,
           store: credentials ? createCredentialedAccountArtifactStore(credentials) : null,
         };
@@ -118,7 +145,12 @@ export async function withCliPromptLibraryArtifactReader<T>(
   const storeFor = (ref: PromptArtifactRefV1) => storeForHome(ref.serverId?.trim() || defaultServerId);
   const read = async <T>(operation: 'scope' | 'artifact' | 'header', ref: PromptArtifactRefV1 | undefined,
     load: () => Promise<T>): Promise<T> => {
-    try { return await load(); }
+    try {
+      await assertOperationCurrent();
+      const result = await load();
+      await assertOperationCurrent();
+      return result;
+    }
     catch (error) {
       options?.signal?.throwIfAborted();
       const code: unknown = error && typeof error === 'object'
@@ -204,15 +236,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
 export async function resolveCliPromptStackSystemAppendBlocks(
   args: CliPromptStackSystemAppendInput,
 ): Promise<PromptStackSystemAppendResultV1> {
-  const settings =
-    args.settings &&
-    typeof args.settings === 'object' &&
-    !Array.isArray(args.settings)
-      ? args.settings
-      : {};
-  const promptStacksV1 = PromptStacksV1Schema.parse(
-    args.promptStacksV1 ?? Reflect.get(settings, 'promptStacksV1'),
-  );
+  const promptStacksV1 = PromptStacksV1Schema.parse(args.promptStacksV1);
   const resolve = async (reader: CliPromptLibraryArtifactReader) =>
     resolvePromptStackSystemAppendBlocksV1({
       ...args,

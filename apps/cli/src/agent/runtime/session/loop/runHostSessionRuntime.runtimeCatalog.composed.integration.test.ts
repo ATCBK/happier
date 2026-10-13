@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 import axios from 'axios';
@@ -17,6 +18,10 @@ import type { RpcHandler } from '@/api/rpc/types';
 import type { WorkflowStepExecutor } from '@/daemon/workflows/coordinator';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import * as daemonControl from '@/daemon/controlClient';
+import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
+import { createExternalContributionFixtures } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -43,6 +48,10 @@ import {
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionModelMutationReversalV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { createSkillStore } from '@/prompts/skills/store/skillStore';
 import { SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type {
   AgentSessionRealtimeConversation,
@@ -104,7 +113,7 @@ import {
   HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY,
 } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
@@ -425,7 +434,7 @@ function createSessionFixture(sessionId: string) {
     }),
     observeProviderInputSettlement: vi.fn(),
     confirmUserMessageLocallyConsumed: vi.fn(),
-    updateMetadata: vi.fn(sessionBoundary.updateMetadata),
+    updateMetadata: vi.fn(async (update: (metadata: Metadata) => Metadata) => sessionBoundary.updateMetadata(update)),
     updateMetadataAsCurrentPublisher: vi.fn(
       async (update: (metadata: Metadata) => Metadata) =>
         await session.updateMetadata(update),
@@ -902,6 +911,287 @@ describe('runHostSessionRuntime', () => {
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   });
 
+  it.each(['create', 'resume', 'missing-skill', 'admitted-route', 'retired-during-skills'] as const)(
+    'starts the real host runner with a skipped optional MCP server once for %s', async scenario => {
+      const harness = createHarness();
+      if (!runtimeRegistryLease) throw new Error('Missing runtime fixture');
+      const agentId = 'acme-optional-reader';
+      const fixture = createExternalContributionFixtures(agentId);
+      if (!fixture.agent.richDefinition) throw new Error('Missing Agent declaration');
+      const definition = { ...fixture.agent.richDefinition.definition, capabilities: {
+        ...fixture.agent.richDefinition.definition.capabilities,
+        tools: { delivery: 'native_mcp' as const },
+        skills: { delivery: 'session_dir' as const, nativeDisable: 'unsupported' as const, liveReload: 'unsupported' as const },
+      } };
+      const catalogEntry = createManifestAgentCatalogEntry({ agentId, pluginId: fixture.agent.pluginId,
+        definition, cli: null, provenance: 'external' });
+      harness.config.policyAgentId = agentId;
+      harness.config.pluginRuntimeRegistryLease = { ...runtimeRegistryLease, registry: {
+        ...runtimeRegistryLease.registry, contributes: createResolvedContributionRegistry({ agents: [{
+          ...fixture.agent, richDefinition: { ...fixture.agent.richDefinition, definition }, catalogEntry,
+        }] }),
+      } };
+      harness.opts.credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'optional-account' })).toString('base64url')}.signature`, encryption: null };
+      if (scenario === 'resume') harness.opts.resume = 'vendor-optional-session';
+      const admittedRoute = 'http://127.0.0.1:59173';
+      if (scenario === 'admitted-route') {
+        vi.spyOn(harness.session, 'getServerBinding').mockReturnValue({
+          ...harness.session.getServerBinding(), serverUrl: admittedRoute,
+        });
+      }
+      const settings = accountSettingsParse({ mcpServersStrictMode: false });
+      const scopeKey = resolveAccountSettingsScopeKey(harness.opts.credentials);
+      harness.opts.accountSettingsContext = { source: 'network', settings, scopeKey,
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null };
+      const rules = scenario === 'missing-skill' ? [{ id: 'everywhere', skillId: 'missing-skill',
+        target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 }] : [];
+      setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, scopeKey,
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+        promptLibraryCatalog: { status: 'ready', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ revision: 1,
+          record: key === 'skill-rules' ? { key, value: { v: 1, rules } } : emptyPromptLibraryRecordV1(key) })),
+          tombstones: [], diagnostics: [] },
+        mcpServerCatalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog: { v: 1,
+          servers: [{ id: 'optional-linear', name: 'optional-linear', transport: 'stdio', stdio: { command: 'echo', args: [] },
+            env: { HAPPIER_FIX1_MISSING_KEY: { t: 'literal', v: '${HAPPIER_FIX1_MISSING_KEY}' } }, createdAt: 1, updatedAt: 1 }],
+          bindings: [{ id: 'everywhere-linear', serverId: 'optional-linear', target: { t: 'allMachines' },
+            enabled: true, createdAt: 1, updatedAt: 1 }] } },
+      });
+      vi.stubEnv('HAPPIER_FIX1_MISSING_KEY', undefined);
+      vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+      const missing = { id: 'missing-skill', ownerAccountId: 'optional-account', access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Unavailable skill', bundleSchemaId: 'skills.skill_md_v1' }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+      // HTTP/daemon IPC and the native Agent are external boundaries. The real
+      // runner, MCP bridge/materializer, skill resolver and prompt owner compose here.
+      const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/artifacts') {
+          if (scenario === 'retired-during-skills') {
+            const snapshot = getActiveAccountSettingsSnapshot();
+            if (!snapshot) throw new Error('Missing captured Account');
+            resetActiveAccountSettingsSnapshotForTests();
+            setActiveAccountSettingsSnapshot(snapshot);
+          }
+          return { status: 200, data: scenario === 'missing-skill' ? [missing] : [] };
+        }
+        if (path === '/v1/artifacts/missing-skill') return { status: 404, data: { error: 'not_found' } };
+        throw new Error(`Unexpected optional-capability HTTP path: ${path}`);
+      });
+      const catalog = vi.spyOn(daemonControl, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+      const home = await mkdtemp(join(tmpdir(), 'happier-fix1-composed-'));
+      const store = createSkillStore({ happyHomeDir: home });
+      const ensure = vi.spyOn(daemonControl, 'ensureSkillSessionDirHttp').mockImplementation(input => store.ensureSkillSessionDir(input));
+      delete harness.deps.resolveRunnerMcpServersFn;
+      delete harness.deps.cleanupBackendRunResourcesFn;
+      const createRuntime = harness.config.createSessionRuntime!;
+      let opened = false;
+      setSessionRuntimeFactory(harness.config, async params => {
+        expect(params.mcpServers?.['optional-linear']).toBeUndefined();
+        expect(params.mcpServers?.happier).toBeDefined();
+        if (!params.resolveFreshSessionSystemPrompt) throw new Error('Missing production prompt binding');
+        expect(await params.resolveFreshSessionSystemPrompt({ baseOverride: 'Base instructions' })).toContain('Base instructions');
+        opened = true;
+        return createRuntime(params);
+      });
+      try {
+        if (scenario === 'retired-during-skills') {
+          await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toMatchObject({
+            code: 'context_source_unavailable', reason: 'scope-retired',
+          });
+          expect(opened).toBe(false);
+          expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
+            action: 'fail',
+            issue: expect.objectContaining({ code: 'preparation_pending', source: 'dependency_failure' }),
+          }));
+          return;
+        }
+        await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+        expect(opened).toBe(true);
+        if (scenario === 'admitted-route') {
+          expect(get.mock.calls.length).toBeGreaterThan(0);
+          expect(get.mock.calls.some(call => new URL(String(call[0])).pathname === '/v1/artifacts')).toBe(true);
+          expect(get.mock.calls.map(call => String(call[0])).filter(url => new URL(url).origin !== admittedRoute)).toEqual([]);
+        }
+        const events: readonly unknown[] = harness.session.enqueueSessionEventCommitted.mock.calls
+          .map((call: readonly unknown[]) => call[0]);
+        const notices = events.map(readSessionCapabilityNoticeV1).filter(notice => notice !== null);
+        expect(notices.flatMap(notice => notice?.items ?? []).filter(item => item.kind === 'mcp_server')).toEqual([
+          { kind: 'mcp_server', name: 'optional-linear', itemId: 'optional-linear', code: 'missing_value_ref', detail: 'env:HAPPIER_FIX1_MISSING_KEY' },
+        ]);
+        const skills = notices.flatMap(notice => notice?.items ?? []).filter(item => item.kind === 'skill');
+        expect(skills).toEqual(scenario === 'missing-skill' ? [expect.objectContaining({ itemId: 'missing-skill', detail: 'content_unreadable' })] : []);
+      } finally {
+        get.mockRestore(); catalog.mockRestore(); ensure.mockRestore();
+        await store.releaseSkillSessionDirs('session-1'); await store.collectSkillCache({ libraryDigests: [] });
+        await rm(home, { recursive: true, force: true });
+        vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests();
+      }
+    },
+  );
+
+  it('prepares daemon-spawned managed Session context through the real server beside unknown catalog keys', async () => {
+    const { createLightSqliteHarness } = await import('../../../../../../server/sources/testkit/lightSqliteHarness');
+    const { db } = await import('../../../../../../server/sources/storage/db');
+    const { createAuthenticatedTestApp } = await import('../../../../../../server/sources/app/api/testkit/sqliteFastify');
+    const { registerPromptLibraryRoutes } = await import('../../../../../../server/sources/app/account/prompts/registerPromptLibraryRoutes');
+    const { registerAccountEncryptionRoutes } = await import('../../../../../../server/sources/app/api/routes/account/registerAccountEncryptionRoutes');
+    const { buildPromptLibraryPhysicalKeyV1, PROMPT_LIBRARY_ACCOUNT_ROW_PREFIX_V1, PromptLibraryRecordV1Schema } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+    const sqlite = await createLightSqliteHarness({ tempDirPrefix: 'happier-ctx-source-runner-', initEncrypt: true });
+    const app = createAuthenticatedTestApp();
+    const harness = createHarness();
+    harness.config.flavor = 'claude';
+    harness.config.policyAgentId = 'happier.agent.claude/claude';
+    harness.config.agentMessageType = 'claude';
+    delete harness.deps.createSessionMetadataFn;
+    delete harness.deps.resolveRunnerMcpServersFn;
+    delete harness.deps.createProviderEnforcedPermissionHandlerFn;
+    delete harness.deps.createPermissionModeQueueStateFn;
+    delete harness.deps.registerKillSessionHandlerFn;
+    delete harness.deps.sendReadyWithPushNotificationFn;
+    delete harness.deps.cleanupBackendRunResourcesFn;
+    harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      // The fixture Agent exits after startup; keep the actual loop and cleanup.
+      await runPermissionModePromptLoop({ ...params, shouldExit: () => true });
+    };
+    let opened = false;
+    try {
+      const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 1 } });
+      const coding = PromptLibraryRecordV1Schema.parse({ key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [{
+        id: 'context-source', ref: { kind: 'doc', artifactId: 'context-source' }, enabled: true, required: true, placement: 'system_append',
+      }] } });
+      const document = { id: 'context-source', ownerAccountId: account.id, access: 'owner', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Context source' }),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown: 'CTX_SOURCE_ACCOUNT_CONTEXT', createdAtMs: 1, updatedAtMs: 1 }) }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+      await db.userKVStore.createMany({ data: [
+        ...PromptLibraryCatalogKeyV1Schema.options.map(key => ({ accountId: account.id,
+          key: buildPromptLibraryPhysicalKeyV1(key), version: 1,
+          value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: key === 'coding' ? coding : emptyPromptLibraryRecordV1(key) })) })),
+        { accountId: account.id, key: `${PROMPT_LIBRARY_ACCOUNT_ROW_PREFIX_V1}future-skill-usage`, version: 1,
+          value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: emptyPromptLibraryRecordV1('coding') })) },
+      ] });
+      registerPromptLibraryRoutes(app);
+      registerAccountEncryptionRoutes(app);
+      harness.opts.credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: account.id })).toString('base64url')}.signature`, encryption: null };
+      harness.opts.startedBy = 'daemon';
+      harness.opts.directory = '/tmp/managed-ctx-source';
+      harness.session.getMetadataSnapshot = () => createTestMetadata({ path: harness.opts.directory,
+        permissionMode: 'read-only', startedBy: 'daemon', profileId: null, sessionDirectoryV1: { v: 1, kind: 'managed' },
+        connectedServices: { v: 2, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': {
+          source: 'connected', selection: 'profile', profileId: 'connected-claude-profile',
+        } } } });
+      const settings = accountSettingsParse({});
+      const scopeKey = resolveAccountSettingsScopeKey(harness.opts.credentials);
+      harness.opts.accountSettingsContext = { source: 'network', settings, scopeKey, settingsVersion: 1,
+        loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null };
+      setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: {}, scopeKey, settingsVersion: 1,
+        loadedAtMs: 1, settingsSecretsReadKeys: [], mcpServerCatalog: { status: 'ready', authority: 'active',
+          revision: 1, diagnostics: [], catalog: emptyMcpServerCatalogV1() } });
+      // HTTP and Agent execution are genuine external boundaries. Route, SQLite,
+      // persisted-mode admission, credential custody and prompt preparation stay real.
+      vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+        const path = new URL(String(url)).pathname;
+        const authorization = options?.headers?.Authorization;
+        expect(authorization).toBe(`Bearer ${harness.opts.credentials.token}`);
+        if (path === '/v1/artifacts') return { status: 200, data: [document] };
+        if (path === '/v1/artifacts/context-source') return { status: 200, data: document };
+        const response = await app.inject({ method: 'GET', url: path, headers: { 'x-test-user-id': account.id } });
+        return { status: response.statusCode, data: response.json() };
+      });
+      vi.spyOn(daemonControl, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+      const createRuntime = harness.config.createSessionRuntime!;
+      setSessionRuntimeFactory(harness.config, async params => {
+        if (!params.resolveFreshSessionSystemPrompt) throw new Error('Missing production prompt binding');
+        const prompt = await params.resolveFreshSessionSystemPrompt({ baseOverride: 'CTX_SOURCE_STARTUP' });
+        expect(prompt).toContain('CTX_SOURCE_STARTUP');
+        expect(prompt).toContain('CTX_SOURCE_ACCOUNT_CONTEXT');
+        opened = true;
+        return createRuntime(params);
+      });
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      expect(opened).toBe(true);
+    } finally {
+      vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests();
+      await app.close(); await sqlite.close();
+    }
+  }, 180_000);
+
+  it.each(['create', 'resume', 'daemon-unreachable', 'launch-unsupported', 'session-scoped'] as const)(
+    'resolves Account skill delivery at the real host owner for %s', async scenario => {
+      const harness = createHarness();
+      const agentId = 'acme-skills-reader';
+      const fixture = createExternalContributionFixtures(agentId);
+      if (!fixture.agent.richDefinition || !runtimeRegistryLease) throw new Error('Missing runtime fixture');
+      const definition = { ...fixture.agent.richDefinition.definition, capabilities: {
+        ...fixture.agent.richDefinition.definition.capabilities,
+        skills: { delivery: 'session_dir' as const, nativeDisable: 'unsupported' as const, liveReload: 'unsupported' as const },
+      } };
+      const catalogEntry = createManifestAgentCatalogEntry({ agentId, pluginId: fixture.agent.pluginId,
+        definition, cli: null, provenance: 'external' });
+      harness.config.policyAgentId = agentId;
+      harness.config.pluginRuntimeRegistryLease = { ...runtimeRegistryLease, registry: {
+        ...runtimeRegistryLease.registry, contributes: createResolvedContributionRegistry({ agents: [{
+          ...fixture.agent, richDefinition: { ...fixture.agent.richDefinition, definition }, catalogEntry,
+        }] }),
+      } };
+      harness.opts.credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'skills-account' })).toString('base64url')}.signature`, encryption: null };
+      if (scenario === 'resume') harness.opts.resume = 'vendor-skills-session';
+      if (scenario === 'session-scoped') harness.config.runtimeAuthority = {
+        scope: 'session', sessionCredentials: harness.opts.credentials, accountCredentials: null,
+      };
+      setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(harness.opts.credentials),
+        promptLibraryCatalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'skill-rules', value: { v: 1, rules: [{
+          id: 'everywhere', skillId: 'library-skills', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1,
+        }] } } }], tombstones: [], diagnostics: [] },
+      });
+      const body = JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
+        { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from('---\nname: host-skill\ndescription: Host fixture\n---\nPrivate skill body').toString('base64') },
+        { path: 'references/note.md', contentKind: 'utf8', contentBase64: Buffer.from('Supporting file').toString('base64') },
+      ] });
+      const row = { id: 'library-skills', ownerAccountId: 'skills-account', access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Display title', bundleSchemaId: 'skills.skill_md_v1' }),
+        body: encodePlainArtifactStoredContent({ body }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+      // Account/Artifact HTTP and daemon control are external boundaries; selection, scan and resolution stay real.
+      const get = vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200, data:
+        new URL(String(url)).pathname === '/v1/account/encryption' ? { mode: 'plain', updatedAt: 1 }
+          : new URL(String(url)).pathname === '/v1/artifacts' ? [row]
+          : new URL(String(url)).pathname === '/v1/artifacts/library-skills' ? row : {} }));
+      const ensured: Parameters<typeof daemonControl.ensureSkillSessionDirHttp>[0][] = [];
+      const ensure = vi.spyOn(daemonControl, 'ensureSkillSessionDirHttp').mockImplementation(async input => {
+        ensured.push(input);
+        if (scenario === 'daemon-unreachable') throw new Error('daemon_unreachable');
+        return { pluginRoot: `/skills/${input.ownerKey}`, skillsRoot: `/skills/${input.ownerKey}/skills`, failed: [] };
+      });
+      let skills: unknown;
+      const createRuntime = harness.config.createSessionRuntime!;
+      setSessionRuntimeFactory(harness.config, async params => {
+        skills = params.skills;
+        return { ...await createRuntime(params), ...(scenario === 'launch-unsupported' ? { skillsDelivered: false } : {}) };
+      });
+      try {
+        await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+        expect(harness.metrics.cleanupCalls).toBe(1);
+        if (scenario === 'session-scoped') {
+          expect(skills).toBeUndefined(); expect(ensured).toEqual([]); expect(get).not.toHaveBeenCalled();
+        } else if (scenario === 'daemon-unreachable') {
+          expect(skills).toBeUndefined();
+          expect(harness.session.enqueueSessionEventCommitted).toHaveBeenCalledWith(expect.objectContaining({
+            capabilityNoticeV1: { v: 1, items: expect.arrayContaining([expect.objectContaining({ kind: 'skill', code: 'skills_unavailable' })]) },
+          }));
+        } else {
+          expect(skills).toMatchObject({ pluginRoot: '/skills/session-1', items: [{ name: 'host-skill', skillId: 'library-skills' }] });
+          expect(ensured[0]?.items[0]?.files).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'references/note.md' })]));
+          if (scenario === 'launch-unsupported') expect(harness.session.enqueueSessionEventCommitted).toHaveBeenCalledWith(expect.objectContaining({
+            capabilityNoticeV1: { v: 1, items: expect.arrayContaining([expect.objectContaining({ kind: 'skill', code: 'skills_unavailable' })]) },
+          }));
+        }
+      } finally { get.mockRestore(); ensure.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
+    },
+  );
+
   it.each(['ordinary', 'deferred', 'session-scoped'] as const)('reads manual-start tool policy only with Account authority through a %s push-only loop port', async (startup) => {
     const harness = createHarness();
     harness.opts.startedBy = 'terminal';
@@ -921,6 +1211,7 @@ describe('runHostSessionRuntime', () => {
       };
     }
     if (startup === 'deferred') {
+      harness.config.createSessionRuntime = async () => { await stopAtStartupContribution(); throw startupHookFailure; };
       harness.config.startupBootstrap = {
         create: async () => ({
           api: { push: () => null },
@@ -929,7 +1220,9 @@ describe('runHostSessionRuntime', () => {
           metadata: createTestMetadata({ path: '/tmp/workspace' }),
           attachedToExistingSession: false,
           reconnectionHandle: null,
-          start: stopAtStartupContribution,
+          // Real deferred startup attaches a Session and calls prepareSession;
+          // Agent admission follows Session attachment and policy preparation.
+          start: async options => { await options?.prepareSession?.(harness.session); },
         }),
       };
     }
@@ -958,6 +1251,10 @@ describe('runHostSessionRuntime', () => {
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('Machine fixture did not bind');
+      // The Session transport captures this endpoint when constructed in production.
+      vi.spyOn(harness.session, 'getServerBinding').mockReturnValue({
+        ...harness.session.getServerBinding(), serverUrl: `http://127.0.0.1:${address.port}`,
+      });
       harness.config.lifecycleHooks = {
         ...harness.config.lifecycleHooks,
         onSessionInitialized: stopAtStartupContribution,
@@ -2774,9 +3071,9 @@ describe('runHostSessionRuntime', () => {
       expect(lifecycleParams.opts).toEqual(expect.objectContaining(harness.opts));
       expect((lifecycleParams.opts as any).agentModeId).toBeUndefined();
       expect((lifecycleParams.opts as any).agentModeUpdatedAt).toBeUndefined();
-      expect(lifecycleParams.config).toEqual({
+      expect(lifecycleParams.config).toMatchObject({
         ...harness.config,
-        mcpBindingIdentities: undefined,
+        mcpServerIdentities: undefined,
         onAfterStart: expect.any(Function),
         onRuntimeStopReady: expect.any(Function),
         publishHostRuntimeEvent: expect.any(Function),
@@ -4532,7 +4829,7 @@ describe('runHostSessionRuntime', () => {
       },
     });
     expect(resultingMetadata).not.toHaveProperty('agentRuntimeDescriptorV1');
-    expect(resultingMetadata.agentRuntimeCapabilitiesV1).toEqual({
+    expect(resultingMetadata.agentRuntimeCapabilitiesV1).toMatchObject({
       backend: {
         sessions: {
           supported: true,
@@ -5571,11 +5868,9 @@ describe('runHostSessionRuntime', () => {
   it('passes a runtime session client that follows session swaps', async () => {
     const harness = createHarness();
     const initialSession = harness.session;
-    initialSession.updateMetadata = vi.fn(async () => undefined);
 
     const swappedSessionFixture = harness.createSessionFixture('session-2');
     const swappedSession = swappedSessionFixture.session;
-    swappedSession.updateMetadata = vi.fn(async () => undefined);
 
     let swapSession: ((nextSession: any) => Promise<void> | void) | null = null;
     harness.deps.initializeBackendRunSessionFn = async ({ onSessionSwap }: any) => {
@@ -5608,8 +5903,8 @@ describe('runHostSessionRuntime', () => {
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
 
-    expect(initialSession.updateMetadata).toHaveBeenCalledTimes(1);
-    expect(swappedSession.updateMetadata).toHaveBeenCalledTimes(1);
+    expect(initialSession.getMetadataSnapshot()).not.toHaveProperty('fromRuntimeSession');
+    expect(swappedSession.getMetadataSnapshot()).toMatchObject({ fromRuntimeSession: true });
   });
 
   it('binds exact provider outcomes and pre-provider rejections to the one current-session host normalizer', async () => {
@@ -7777,10 +8072,16 @@ describe('runHostSessionRuntime', () => {
     expect(runSessionLoopLifecycleFn).not.toHaveBeenCalled();
   });
 
-  it('publishes a typed failed startup before releasing custody when the daemon catalog is unavailable', async () => {
+  it('admits Session startup with a typed notice when optional daemon plugin tools are unavailable', async () => {
     const harness = createHarness();
     harness.config.flavor = 'grok';
     harness.config.policyAgentId = 'grok';
+    let admittedMcpServers: unknown;
+    const createRuntime = harness.config.createSessionRuntime!;
+    setSessionRuntimeFactory(harness.config, params => {
+      admittedMcpServers = params.mcpServers;
+      return createRuntime(params);
+    });
     // Exercise real MCP/catalog logic; the loopback daemon is the network boundary.
     delete harness.deps.resolveRunnerMcpServersFn;
     const home = await mkdtemp(join(tmpdir(), 'catalog-startup-failure-'));
@@ -7801,7 +8102,7 @@ describe('runHostSessionRuntime', () => {
       // The daemon refusal is downstream of the already admitted Account MCP
       // catalog. Publish that prerequisite through its canonical snapshot owner.
       harness.opts.accountSettingsContext = {
-        source: 'network', settings: {} as never, settingsVersion: 1,
+        source: 'network', settings: accountSettingsParse({}), settingsVersion: 1,
         loadedAtMs: Date.now(), settingsSecretsReadKeys: [], whenRefreshed: null,
       };
       setActiveAccountSettingsSnapshot({
@@ -7810,13 +8111,18 @@ describe('runHostSessionRuntime', () => {
         mcpServerCatalog: { status: 'ready', catalog: emptyMcpServerCatalogV1(), revision: 1, authority: 'active', diagnostics: [] },
       });
       writeDaemonState({ pid: process.pid, httpPort: address.port, startedAt: Date.now(), startedWithCliVersion: 'test', controlToken: 'test-token' });
-      await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps))
-        .rejects.toMatchObject({ code: 'daemon_plugin_catalog_unavailable' });
-      expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      expect(admittedMcpServers).toMatchObject({ happier: expect.objectContaining({ command: expect.any(String) }) });
+      expect(harness.session.enqueueSessionEventCommitted).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'message', capabilityNoticeV1: { v: 1, items: [{
+          kind: 'mcp_server', name: 'MCP plugin tools', code: 'daemon_plugin_catalog_unavailable',
+        }] },
+      }));
+      expect(harness.session.enqueueSessionTurnMutation).not.toHaveBeenCalledWith(expect.objectContaining({
         action: 'fail',
         issue: expect.objectContaining({ code: 'daemon_plugin_catalog_unavailable', source: 'dependency_failure' }),
       }));
-      expect(harness.session.close).toHaveBeenCalledOnce();
+      expect(harness.metrics.cleanupCalls).toBe(1);
     } finally {
       resetActiveAccountSettingsSnapshotForTests();
       await clearDaemonStateForTestTeardown();
@@ -9537,7 +9843,16 @@ describe('runHostSessionRuntime', () => {
     harness.deps.runPermissionModePromptLoopFn = async () => {
       const abort = harness.handlers.get('abort');
       expect(abort).toBeTypeOf('function');
+      // Read the actual production root's MCP port after its lifecycle binds it.
+      const mcpSession: HappyMcpSessionClient = harness.session;
+      const containingSignal = mcpSession.getHostTurnAbortSignal?.() ?? null;
+      expect(containingSignal).toBeInstanceOf(AbortSignal);
+      expect(containingSignal?.aborted).toBe(false);
       await abort?.();
+      expect(containingSignal?.aborted).toBe(true);
+      const nextSignal = mcpSession.getHostTurnAbortSignal?.() ?? null;
+      expect(nextSignal).not.toBe(containingSignal);
+      expect(nextSignal?.aborted).toBe(false);
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);

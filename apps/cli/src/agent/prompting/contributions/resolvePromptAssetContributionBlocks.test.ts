@@ -81,6 +81,7 @@ describe('resolvePromptAssetContributionBlocks', () => {
 
     await expect(resolvePromptAssetContributionBlocks({
       agent: { pluginId: 'acme.agent', localId: 'worker' },
+      selectedAsset: { pluginId: 'acme.prompts', localId: 'instructions' },
       contributions: [{
         ...base,
         definition: {

@@ -44,6 +44,21 @@ function savedSecret(encryptedValue: SavedSecret['encryptedValue']): SavedSecret
 
 describe('materializeConfiguredAcpEnvironment', () => {
   it.each([
+    ['secret-acp', 'repair_required'], ['happier:shared-secret:v1:resource_1', 'deleted'],
+  ] as const)('keeps ACP template secret authority and typed failure for %s', (secretId, status) => {
+    const definition = backend(secretId);
+    expect(() => materializeConfiguredAcpEnvironment({
+      backend: { ...definition, env: { ACP_TOKEN: { t: 'template', template: 'Bearer {key}',
+        vars: { key: { t: 'savedSecret', secretId } },
+      } } },
+      accountSettings: { secrets: [savedSecret({ _isSecretValue: true, value: 'personal-acp-token' })] },
+      credentials: { token: 'plain-account', encryption: null }, processEnv: {},
+      savedSecretResources: [{ resourceId: 'resource_1', ownerAccountId: 'owner', displayName: 'key', kind: 'token',
+        encryptionMode: 'plain', revision: 1, materialStatus: 'deleted', storedContent: null }],
+    })).toThrow(expect.objectContaining({ code: 'saved_secret_resolution_failed', status, reference: secretId,
+      consumer: 'acp', field: 'env:ACP_TOKEN' }));
+  });
+  it.each([
     ['temporarily_unavailable', 'happier:shared-secret:v1:resource_1', 'temporarily_unavailable'],
     ['forbidden', 'happier:shared-secret:v1:resource_1', 'access_removed'],
     ['repair_required', 'happier:shared-secret:v1:resource_1', 'update_required'],
@@ -105,8 +120,8 @@ describe('materializeConfiguredAcpEnvironment', () => {
     })).toThrow(expect.objectContaining({ code: 'saved_secret_resolution_failed', status: 'repair_required', consumer: 'acp' }));
   });
 
-  it('materializes a shared Saved Secret through the configured ACP launch owner', () => {
-    const resourceId = 'shared-acp-resource';
+  it('materializes a private personal resource through the configured ACP launch owner', () => {
+    const resourceId = 'private-acp-resource';
     const secretId = formatSharedSavedSecretRefV1(resourceId);
 
     expect(materializeConfiguredAcpEnvironment({
@@ -122,6 +137,8 @@ describe('materializeConfiguredAcpEnvironment', () => {
         encryptionMode: 'plain',
         revision: 4,
         materialStatus: 'ready',
+        relationship: 'owner',
+        capabilities: { use: true },
         storedContent: sealSavedSecretResourceStoredContentV1({
           resourceId,
           mode: 'plain',

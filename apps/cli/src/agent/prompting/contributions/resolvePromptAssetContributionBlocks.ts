@@ -17,6 +17,11 @@ export type PromptAssetAvailabilityDecision = Readonly<{
   enabled: boolean;
 }>;
 
+export type OptionalPromptAssetUnavailable = Readonly<{
+  status: 'unavailable';
+  reason: 'policy_unavailable' | 'policy_denied' | 'resource_unavailable';
+}>;
+
 type PromptAssetAvailability = NonNullable<PluginPromptAssetContributionV1['availability']>;
 type PromptAssetReference = PluginPromptAssetContributionV1['resource'];
 
@@ -83,6 +88,7 @@ function compareContributions(
 export async function resolvePromptAssetContributionBlocks(params: Readonly<{
   agent: QualifiedReference;
   selectedAsset?: QualifiedReference;
+  onOptionalUnavailable?: (fact: OptionalPromptAssetUnavailable) => void;
   contributions: readonly PromptAssetContributionOwner[];
   readResourceText(request: Readonly<{
     pluginId: string;
@@ -136,51 +142,64 @@ export async function resolvePromptAssetContributionBlocks(params: Readonly<{
 
   const blocks: PromptBlockV1[] = [];
   for (const contribution of applicable) {
-    const availability = contribution.definition.availability;
-    if (availability) {
-      if (!params.evaluateAvailability) {
-        throw new PluginPromptAssetConsumerError(
-          'PLUGIN_PROMPT_ASSET_POLICY_UNAVAILABLE',
-          'Prompt asset availability cannot be evaluated by the shared policy owner',
-        );
+    try {
+      const availability = contribution.definition.availability;
+      if (availability) {
+        if (!params.evaluateAvailability) {
+          throw new PluginPromptAssetConsumerError(
+            'PLUGIN_PROMPT_ASSET_POLICY_UNAVAILABLE',
+            'Prompt asset availability cannot be evaluated by the shared policy owner',
+          );
+        }
+        const decision = params.evaluateAvailability(availability, {
+          pluginId: contribution.pluginId,
+          occurrenceId: contribution.occurrenceId,
+          promptAssetLocalId: contribution.definition.id,
+          agent: params.agent,
+        });
+        if (!decision.applicable) continue;
+        if (!decision.enabled) {
+          throw new PluginPromptAssetConsumerError(
+            'PLUGIN_PROMPT_ASSET_POLICY_DENIED',
+            'Prompt asset is disabled by current policy',
+          );
+        }
       }
-      const decision = params.evaluateAvailability(availability, {
+
+      const resource = qualifyReference(contribution.pluginId, contribution.definition.resource);
+      const text = await params.readResourceText({
         pluginId: contribution.pluginId,
+        resourcePluginId: resource.pluginId,
+        resourceLocalId: resource.localId,
         occurrenceId: contribution.occurrenceId,
         promptAssetLocalId: contribution.definition.id,
-        agent: params.agent,
       });
-      if (!decision.applicable) continue;
-      if (!decision.enabled) {
+      if (!text.trim()) {
         throw new PluginPromptAssetConsumerError(
-          'PLUGIN_PROMPT_ASSET_POLICY_DENIED',
-          'Prompt asset is disabled by current policy',
+          'PLUGIN_PROMPT_ASSET_RESOURCE_INVALID',
+          'Prompt asset resource is empty',
         );
       }
+      blocks.push(Object.freeze({
+        id: `plugin_prompt_asset.${qualifiedKey({
+          pluginId: contribution.pluginId,
+          localId: contribution.definition.id,
+        })}`,
+        scope: blockScope(contribution.definition.kind),
+        text,
+      }));
+    } catch (error) {
+      if (selectedAssetKey !== null) throw error;
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      const reason = code === 'PLUGIN_PROMPT_ASSET_POLICY_UNAVAILABLE' ? 'policy_unavailable'
+        : code === 'PLUGIN_PROMPT_ASSET_POLICY_DENIED' ? 'policy_denied'
+        : code === 'plugin_resource_missing' ? 'resource_unavailable'
+        : null;
+      // A missing optional augmentation is not admission to stale, malformed,
+      // cancelled or integrity-invalid Resource content.
+      if (!reason) throw error;
+      params.onOptionalUnavailable?.({ status: 'unavailable', reason });
     }
-
-    const resource = qualifyReference(contribution.pluginId, contribution.definition.resource);
-    const text = await params.readResourceText({
-      pluginId: contribution.pluginId,
-      resourcePluginId: resource.pluginId,
-      resourceLocalId: resource.localId,
-      occurrenceId: contribution.occurrenceId,
-      promptAssetLocalId: contribution.definition.id,
-    });
-    if (!text.trim()) {
-      throw new PluginPromptAssetConsumerError(
-        'PLUGIN_PROMPT_ASSET_RESOURCE_INVALID',
-        'Prompt asset resource is empty',
-      );
-    }
-    blocks.push(Object.freeze({
-      id: `plugin_prompt_asset.${qualifiedKey({
-        pluginId: contribution.pluginId,
-        localId: contribution.definition.id,
-      })}`,
-      scope: blockScope(contribution.definition.kind),
-      text,
-    }));
   }
 
   return Object.freeze(blocks);

@@ -51,6 +51,7 @@ function buildConfiguredDefinitionInit(params: Readonly<{
         kind: 'executable',
         command: params.launch.command,
         args: [...params.launch.args],
+        ...(params.launch.runtimeEnv ? { env: params.launch.runtimeEnv } : {}),
       },
     },
     launchEnv: { ...params.launch.env, ...params.launchEnv },

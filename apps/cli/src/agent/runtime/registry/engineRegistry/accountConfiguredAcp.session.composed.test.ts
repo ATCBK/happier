@@ -286,7 +286,7 @@ describe('Account-configured ACP composed Session journey', () => {
     vi.unstubAllEnvs();
   });
 
-  it('refuses foreign Account managed first-use from the captured authenticated admission', async () => {
+  it('refuses managed first-use without captured authenticated Machine admission', async () => {
     await withTempDir('happier-acp-foreign-managed-', async dir => {
       setConfiguredAcpAccountSettings('/tmp/unused.mjs');
       vi.stubEnv('HAPPIER_HOME_DIR', dir);
@@ -300,7 +300,6 @@ describe('Account-configured ACP composed Session journey', () => {
         })) } } };
       const context = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
         serverHttpBaseUrl: resolveServerHttpBaseUrl(), isCurrent: async () => true,
-        machineAdmission: { actorAccountId: 'foreign-account', custodianAccountId: 'custodian-account' },
       });
       const launch = await resolveAccountConfiguredAcpLaunch(BACKEND_ID, context);
       await expect(launch.resolveHostLaunch({ cwd: dir })).rejects.toMatchObject({
@@ -428,6 +427,7 @@ describe('Account-configured ACP composed Session journey', () => {
 
   it('re-resolves configured launches after a catalog-only update through the retained registry', async () => {
     await withTempDir('happier-configured-acp-catalog-update-', async (dir) => {
+    vi.stubEnv('HAPPIER_TEST_CONFIGURED_REGION', 'eu');
     setConfiguredAcpAccountSettings(writeConfiguredAcpAgentScript(dir, 'first-acp.mjs'));
     const params = await createContributedRegistryParams();
     const registry = await resolveCliEngineRegistry(params);
@@ -437,14 +437,25 @@ describe('Account-configured ACP composed Session journey', () => {
     if (active.acpCatalog?.status !== 'ready') throw new Error('Missing test catalog');
     commitActiveAcpCatalog({ scopeKey: active.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
       catalog: { status: 'ready', revision: 5, record: { ...active.acpCatalog.record,
-        definitions: active.acpCatalog.record.definitions.map(definition => ({ ...definition, launch: { kind: 'command', command: process.execPath, args: [changedScript] } })) } } });
+        definitions: active.acpCatalog.record.definitions.map(definition => ({ ...definition,
+          launch: { kind: 'command', command: process.execPath, args: [changedScript] },
+          env: {
+            CONFIGURED_ACP_LITERAL: { t: 'literal', v: '${HAPPIER_TEST_CONFIGURED_REGION}' },
+            CONFIGURED_ACP_SECRET: { t: 'template', template: '{region}:Bearer {key}', vars: {
+              region: { t: 'literal', v: '${HAPPIER_TEST_CONFIGURED_REGION}' },
+              key: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('acp-secret-resource') },
+            } },
+          },
+        })) } } });
     const second = await registry.resolveForBackendId(params.backendId);
     expect(second?.engineAdapter).not.toBe(first?.engineAdapter);
     expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(1);
     const runtime = createComposedRuntime(second, dir);
     try {
       await runtime.provisionRuntime();
-      expect(readObserved(dir).scriptPath).toBe(changedScript);
+      expect(readObserved(dir)).toMatchObject({ scriptPath: changedScript, env: {
+        CONFIGURED_ACP_LITERAL: 'eu', CONFIGURED_ACP_SECRET: 'eu:Bearer plain-runtime-secret',
+      } });
     } finally { await runtime.dispose(); }
     await expectAcpChildExited(readObserved(dir).pid);
     });
@@ -605,9 +616,16 @@ describe('Account-configured ACP composed Session journey', () => {
     });
   }, 40_000);
 
-  it('refuses a configured launch after Home revokes its shared credential without a local notification', async () => {
+  it('refuses a configured launch after Home revokes its template credential without a local notification', async () => {
     await withTempDir('happier-configured-acp-revoked-launch-', async (dir) => {
       setConfiguredAcpAccountSettings(writeConfiguredAcpAgentScript(dir));
+      const catalog = getActiveAccountSettingsSnapshot()!.acpCatalog;
+      if (catalog?.status !== 'ready') throw new Error('Expected ready configured catalog');
+      catalog.record.definitions[0]!.env = { CONFIGURED_ACP_SECRET: {
+        t: 'template', template: 'Bearer {key}', vars: {
+          key: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('acp-secret-resource') },
+        },
+      } };
       const runtime = createComposedRuntime(await resolveContributedConfiguredRuntime(BACKEND_ID), dir);
       const active = getActiveAccountSettingsSnapshot()!;
       const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();

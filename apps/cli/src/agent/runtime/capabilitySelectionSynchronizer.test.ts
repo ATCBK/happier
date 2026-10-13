@@ -1,0 +1,226 @@
+import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AccountArtifact } from '@/api/artifacts/accountArtifactStore';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
+import { RestartSessionRunnerRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
+import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
+import { readCapabilitySelectionApplyV1, resolveSelectionRestartMarkersForStartupV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createCapabilitySelectionSynchronizer, type CapabilitySelectionSynchronizerInput } from './capabilitySelectionSynchronizer';
+
+function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 'restarted', sessionId: 'session' }],
+  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports'>> = {}) {
+  let metadata = createTestMetadata();
+  let settled = false;
+  let refusePublication = false;
+  let refuseNextPublication = false;
+  const requests: RestartSessionRunnerRequestV1[] = [];
+  const sync = createCapabilitySelectionSynchronizer({
+    session: { sessionId: 'session', getMetadataSnapshot: () => metadata,
+      updateMetadataAsCurrentPublisher: async update => {
+        if (refusePublication || refuseNextPublication) { refuseNextPublication = false; throw new Error('metadata transport unavailable'); }
+        metadata = update(metadata);
+      } },
+    agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+    isStarted: () => true, isSettled: () => settled,
+    ...options,
+    requestRestart: async request => { requests.push(request); return results.shift() ?? { ok: true, status: 'restarted', sessionId: 'session' }; },
+  });
+  return { sync, requests, get metadata() { return metadata; }, settle: () => { settled = true; },
+    refusePublication: () => { refusePublication = true; },
+    refuseNextPublication: () => { refuseNextPublication = true; },
+    patch: (value: Partial<typeof metadata>) => { metadata = { ...metadata, ...value }; sync.syncFromMetadata(); },
+    changeSkills: (selection: NonNullable<typeof metadata.skillSelectionV1>) => {
+      metadata = writeSessionCapabilitySelectionToMetadataV1(metadata, { skills: selection }, { sessionActive: true }); sync.syncFromMetadata();
+    },
+    change: (id: string) => { metadata = writeSessionCapabilitySelectionToMetadataV1(metadata,
+      { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [id] } }, { sessionActive: true }); sync.syncFromMetadata(); },
+  };
+}
+
+describe('capability selection settled-turn apply', () => {
+  it.each([
+    [{ startedBy: 'terminal' }, 'terminal'],
+    [{ terminal: { mode: 'windows_console' } }, 'user'],
+  ] as const)('keeps known launch restriction %j pending without automatic daemon restart', async (metadata, restartBy) => {
+    const f = fixture();
+    f.patch(metadata); f.change('server'); f.settle();
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([]);
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: { reason: 'restart_to_apply', restartBy } });
+    expect(f.metadata.mcpSelectionRestartRequiredV1).toBeDefined();
+  });
+  it.each(['applied', 'restart_required', 'advancing', 'ack_failed'] as const)('uses the real skill reapply owner after settlement and handles native %s', async nativeOutcome => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-impl-p2c-u6-skills-'));
+    await mkdir(join(home, 'project'));
+    const { createSkillStore } = await import('@/prompts/skills/store/skillStore');
+    const store = createSkillStore({ happyHomeDir: join(home, 'happier') });
+    const artifact: AccountArtifact = {
+      artifactId: 'library', ownerAccountId: 'account', access: 'owner',
+      revision: { headerVersion: 1, bodyVersion: 1 }, seq: 1, createdAt: 1, updatedAt: 1,
+      header: { v: 1, kind: 'prompt_bundle.v2', title: 'sample', bundleSchemaId: 'skills.skill_md_v1' },
+      body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
+        { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from('---\nname: sample\ndescription: Useful\n---\nBody').toString('base64') },
+      ] }),
+    };
+    let reloads = 0;
+    let appliedItems: readonly unknown[] | null = null;
+    let f: ReturnType<typeof fixture>;
+    try {
+      f = fixture(undefined, { agent: { vendorResume: 'supported', skillsLiveReload: 'supported' },
+        skillsRunner: {
+          readInput: () => ({ ownerKey: 'session', agentId: 'fixture', machineId: 'machine', directory: join(home, 'project'), home,
+            credentials: { token: 'test', encryption: null }, sessionMetadata: f.metadata, agentHasActionChannel: true,
+            contributes: { catalogEntriesById: { fixture: { skills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'supported' } } } },
+            accountSnapshot: { source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+              promptLibraryCatalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'skill-rules', value: { v: 1, rules: [] } } }], tombstones: [], diagnostics: [] } },
+          }),
+          runtime: { refreshSkills: async ({ skills }) => {
+            reloads++;
+            if (nativeOutcome === 'applied') expect(skills.items).toEqual([expect.objectContaining({ name: 'sample' })]);
+            else expect(skills.items).toEqual([]);
+            if (nativeOutcome === 'advancing' && reloads === 1) {
+              f.changeSkills({ v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: ['second-change'], excludeNativeSkillNames: [] });
+            }
+            if (nativeOutcome === 'ack_failed') f.refuseNextPublication();
+            return nativeOutcome !== 'restart_required' ? { kind: 'applied' } : { kind: 'restart_required', reason: 'native_launch_owned' };
+          } },
+          onApplied: result => { appliedItems = result.delivery?.items ?? null; },
+        },
+        skillsTransports: { artifacts: { list: async () => ({ items: nativeOutcome === 'applied' ? [artifact] : [], coverage: 'complete' }), read: async () => artifact },
+          ensureSessionDir: input => store.ensureSkillSessionDir(input) },
+      });
+      f.changeSkills({ v: 1, forceIncludeSkillIds: nativeOutcome === 'applied' ? ['library'] : [], forceExcludeSkillIds: nativeOutcome === 'applied' ? [] : ['library'], excludeNativeSkillNames: [] });
+      await f.sync.flushAfterSettledTurn(); expect(reloads).toBe(0);
+      f.settle(); await f.sync.flushAfterSettledTurn();
+      if (nativeOutcome === 'advancing') await expect.poll(() => reloads).toBe(2);
+      else expect(reloads).toBe(1);
+      if (nativeOutcome === 'ack_failed') {
+        expect(appliedItems).toEqual([]); expect(f.requests).toEqual([]);
+        expect(f.metadata.skillSelectionRestartRequiredV1).toBeDefined();
+        expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ skills: { reason: 'apply_failed' } });
+        await f.sync.flushAfterSettledTurn(); expect(reloads).toBe(1);
+      } else if (nativeOutcome !== 'restart_required') {
+        if (nativeOutcome === 'advancing') await expect.poll(() => f.metadata.skillSelectionRestartRequiredV1).toBeUndefined();
+        expect(appliedItems).toEqual(nativeOutcome === 'applied' ? [expect.objectContaining({ name: 'sample' })] : []); expect(f.requests).toEqual([]);
+        expect(f.metadata.skillSelectionRestartRequiredV1).toBeUndefined();
+      } else {
+        expect(appliedItems).toBeNull(); expect(f.requests).toHaveLength(1);
+        expect(f.metadata.skillSelectionRestartRequiredV1).toBeDefined();
+      }
+    } finally {
+      await store.releaseSkillSessionDirs('session'); await store.collectSkillCache({ libraryDigests: [] });
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+  it('coalesces MCP changes during a turn into one forced current-runner restart at settlement', async () => {
+    const f = fixture();
+    f.change('first'); f.change('second');
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([]);
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([{ sessionId: 'session', mode: 'force_current_cli', reason: 'capability_selection_change' }]);
+    expect(RestartSessionRunnerRequestV1Schema.safeParse(f.requests[0]).success).toBe(true);
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('retries a busy answer only at a later settled-turn boundary', async () => {
+    const f = fixture([{ ok: false, status: 'busy', sessionId: 'session', reasonCode: 'turn_in_progress' }]);
+    f.change('server'); f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+    f.sync.syncFromMetadata(); await Promise.resolve();
+    expect(f.requests).toHaveLength(1);
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(2);
+  });
+
+  it('does not retry busy when two host wake paths report the same settled turn', async () => {
+    const f = fixture([{ ok: false, status: 'busy', sessionId: 'session', reasonCode: 'approval_pending' }]);
+    f.change('server'); f.settle(); await f.sync.flushAfterSettledTurn('turn-one');
+    await f.sync.flushAfterSettledTurn('turn-one');
+    expect(f.requests).toHaveLength(1);
+    await f.sync.flushAfterSettledTurn('turn-two');
+    expect(f.requests).toHaveLength(2);
+  });
+
+  it('does not retry a missing resume snapshot and leaves the desired marker intact', async () => {
+    const f = fixture([{ ok: false, status: 'missing_resume_snapshot', sessionId: 'session', reasonCode: 'missing_resume_identity' }]);
+    f.change('server'); f.settle(); await f.sync.flushAfterSettledTurn();
+    await f.sync.flushAfterSettledTurn(); f.sync.syncFromMetadata();
+    expect(f.requests).toHaveLength(1);
+    expect(f.metadata.mcpSelectionRestartRequiredV1).toBeDefined();
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: { reason: 'missing_resume_snapshot' } });
+  });
+
+  it('preserves pending policy without failing the settled turn when refusal status publication is unavailable', async () => {
+    const f = fixture([{ ok: false, status: 'missing_resume_snapshot', sessionId: 'session', reasonCode: 'missing_resume_identity' }]);
+    f.change('server'); f.settle(); f.refusePublication();
+    await expect(f.sync.flushAfterSettledTurn()).resolves.toBeUndefined();
+    await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+    expect(f.metadata.mcpSelectionRestartRequiredV1).toBeDefined();
+  });
+
+  it.each(['windows_hosted_runner', 'not_daemon_started', 'not_remote_started'] as const)(
+    'keeps %s saved for explicit restart without automatic attempts', async refused => {
+      const f = fixture();
+      f.patch({ sessionRunnerRuntimeV1: SessionRunnerRuntimeStateV1Schema.parse({
+        v: 1, sessionId: 'session', observedAtMs: 1, versionState: 'current', statusSource: 'daemon_tracking',
+        runner: { entrypointSource: 'launch_spec', startedBy: refused === 'not_daemon_started' ? 'local' : 'daemon', startingMode: 'remote' },
+        daemon: { currentEntrypointSource: 'launch_spec' },
+        plannedRestart: { supported: true, eligible: false, disabledReason: refused },
+      }) });
+      f.change('server'); f.settle(); await f.sync.flushAfterSettledTurn();
+      await f.sync.flushAfterSettledTurn(); f.sync.syncFromMetadata();
+      expect(f.requests).toEqual([]);
+      expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: {
+        reason: 'restart_to_apply', restartBy: refused === 'windows_hosted_runner' ? 'user' : 'terminal',
+      } });
+      const resumed = resolveSelectionRestartMarkersForStartupV1({ current: f.metadata, applied: {
+        mcp: f.metadata.mcpSelectionV1!,
+      } });
+      expect(resumed.mcpSelectionRestartRequiredV1).toBeUndefined();
+      expect(readCapabilitySelectionApplyV1(resumed)).toEqual({});
+    });
+
+  it('restarts a native skill toggle even when library skills support live reload', async () => {
+    const f = fixture(undefined, { agent: { vendorResume: 'supported', skillsLiveReload: 'supported' },
+      skillsRunner: { readInput: () => { throw new Error('native skills must not reapply'); }, runtime: {}, onApplied: () => {} } });
+    f.changeSkills({ v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native'] });
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+    expect(f.metadata.skillSelectionRestartRequiredV1).toBeDefined();
+  });
+
+  it('does not start a fresh conversation for an Agent without resume', async () => {
+    const f = fixture(undefined, { agent: { vendorResume: 'unsupported', skillsLiveReload: 'unsupported' } });
+    f.change('server'); f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toEqual([]);
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: { reason: 'new_sessions_only' } });
+  });
+
+  it('consumes the exact released 0.2 selection and applied marker patch at the same settled boundary', async () => {
+    const f = fixture();
+    // ../0.2 cd2bb4d853, UI sessionMcpSelectionPublish.ts: preserved applied baseline + desired policy.
+    const appliedSelection = { v: 1 as const, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] };
+    f.patch({ mcpSelectionV1: { ...appliedSelection, forceExcludeServerIds: ['linear'] },
+      mcpSelectionRestartRequiredV1: { v: 1, appliedSelection } });
+    await f.sync.flushAfterSettledTurn(); expect(f.requests).toEqual([]);
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests[0]).toMatchObject({ reason: 'capability_selection_change', mode: 'force_current_cli' });
+  });
+
+  it('detects desired policy saved without an active heartbeat marker and keeps refused apply visible after reconnect', async () => {
+    const f = fixture([{ ok: false, status: 'missing_resume_snapshot', sessionId: 'session', reasonCode: 'missing_resume_identity' }]);
+    f.patch({ mcpSelectionV1: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['offline-edit'] } });
+    expect(f.metadata.mcpSelectionRestartRequiredV1).toBeUndefined();
+    f.settle(); await f.sync.flushAfterSettledTurn();
+    expect(f.requests).toHaveLength(1);
+    expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: { reason: 'missing_resume_snapshot' } });
+    expect(f.metadata.mcpSelectionRestartRequiredV1?.appliedSelection.forceExcludeServerIds).toEqual([]);
+  });
+});

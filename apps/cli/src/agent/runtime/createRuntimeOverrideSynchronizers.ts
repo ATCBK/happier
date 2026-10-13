@@ -10,6 +10,7 @@ import { createSessionModeOverrideSynchronizer } from './sessionModeOverrideSync
 import { createModelTransitionMetadataObserver } from './modelTransitionMetadataObserver';
 import { resolvePermissionIntentFromMetadataSnapshot } from './permissions/modeFromMetadata';
 import type { RuntimeTurnOperations } from './turns/runtimeTurnOperations';
+import { createCapabilitySelectionSynchronizer, type CapabilitySelectionSynchronizerInput } from './capabilitySelectionSynchronizer';
 
 export type RuntimeOverrideTarget = Readonly<{
   setSessionMode: (modeId: string) => Promise<RuntimeConfigUpdateOutcomeV1 | void>;
@@ -24,6 +25,7 @@ export type RuntimeOverrideTarget = Readonly<{
 export type RuntimeOverrideSynchronizers = Readonly<{
   syncFromMetadata: () => void;
   flushPendingAfterStart: () => Promise<void>;
+  flushAfterSettledTurn?: (turnId?: string) => Promise<void>;
 }>;
 
 /** The host loop's single adapter from runtime operations to metadata overrides. */
@@ -121,7 +123,9 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
   session: { getMetadataSnapshot: () => import('@/api/types').Metadata | null };
   runtime: RuntimeOverrideTarget;
   isStarted: () => boolean;
+  capabilitySelection?: CapabilitySelectionSynchronizerInput;
 }>): RuntimeOverrideSynchronizers {
+  const capabilitySync = params.capabilitySelection ? createCapabilitySelectionSynchronizer(params.capabilitySelection) : null;
   const modeSync = createSessionModeOverrideSynchronizer({
     session: params.session,
     runtime: params.runtime,
@@ -151,6 +155,7 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
     await permissionModeSync.flushPendingAfterStart();
     await modelSync.flushPendingAfterStart();
     await configOptionSync.flushPendingAfterStart();
+    await capabilitySync?.flushBeforeTurn();
   };
 
   const runOrderedSyncPass = async (): Promise<void> => {
@@ -182,6 +187,7 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
 
   return {
     syncFromMetadata: () => {
+      capabilitySync?.syncFromMetadata();
       modelSync.syncFromMetadata();
       requestOrderedSync();
     },
@@ -191,5 +197,6 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
       }
       await flushPendingInOrder();
     },
+    flushAfterSettledTurn: async (turnId) => { await capabilitySync?.flushAfterSettledTurn(turnId); },
   };
 }

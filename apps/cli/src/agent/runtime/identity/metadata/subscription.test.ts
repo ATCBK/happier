@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { Metadata } from '@/api/types';
@@ -7,6 +8,8 @@ import type {
   RuntimeTurnMessageHandler,
 } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { NormalizedRuntimeIdentityPublicationV1 } from '@/agent/runtime/events/createNormalizedRuntimeEventWriter';
+import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { readSessionCapabilityAgentFactsV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 import { subscribeSessionRuntimePublicationToMetadata } from './subscription';
 
@@ -78,6 +81,49 @@ function createHarness(options?: Readonly<{ providerSessionId?: string | null }>
 }
 
 describe('subscribeSessionRuntimePublicationToMetadata', () => {
+  it('contains a refused capability metadata transport publication and accepts a later native publication', async () => {
+    const harness = createHarness();
+    let metadata = createRuntimePublicationMetadata();
+    let refused = false;
+    const session = { ...harness.session, updateMetadata: async (updater: (metadata: Metadata) => Metadata) => {
+      if (!refused) { refused = true; throw new Error('metadata transport refused'); }
+      metadata = updater(metadata);
+    } };
+    const unhandled: unknown[] = [];
+    const observeUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on('unhandledRejection', observeUnhandled);
+    const facts = { vendorResume: 'unsupported', skillsLiveReload: 'supported' } as const;
+    const unsubscribe = subscribeSessionRuntimePublicationToMetadata({ session,
+      sessionState: harness.sessionState, runtime: harness.runtime as never, capabilitySelection: facts });
+    try {
+      await setImmediate();
+      harness.publish({ fact: 'runtimeCapabilities', value: { localControl: { supported: false } } });
+      await setImmediate();
+      expect(readSessionCapabilityAgentFactsV1(metadata)).toEqual(facts);
+      expect(unhandled).toEqual([]);
+    } finally { unsubscribe(); process.off('unhandledRejection', observeUnhandled); }
+  });
+  it('keeps host-resolved capability apply facts through native capability publications and strict owner envelopes', async () => {
+    const harness = createHarness();
+    const updates: RuntimePublicationMetadata[] = [];
+    let metadata = createRuntimePublicationMetadata();
+    harness.session.updateMetadata.mockImplementation(async updater => { metadata = updater(metadata); updates.push(metadata); });
+    const facts = { vendorResume: 'unsupported', skillsLiveReload: 'supported' } as const;
+    const unsubscribe = subscribeSessionRuntimePublicationToMetadata({
+      session: harness.session, sessionState: harness.sessionState, runtime: harness.runtime as never,
+      capabilitySelection: facts,
+    });
+    harness.publish({ fact: 'runtimeCapabilities', value: { localControl: { supported: false },
+      capabilitySelection: { vendorResume: 'supported', skillsLiveReload: 'unsupported' } } });
+    await Promise.resolve();
+    expect(readSessionCapabilityAgentFactsV1(metadata)).toEqual(facts);
+    expect(metadata.agentRuntimeCapabilitiesV1).toMatchObject({ localControl: { supported: false } });
+    const owner = createSessionOwnerMetadataV1({ metadata });
+    if (!owner.ok) throw new Error(`Published capability facts rejected: ${JSON.stringify(owner)}`);
+    expect(SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata)).toEqual(owner.ownerMetadata);
+    expect(updates.length).toBeGreaterThan(0);
+    unsubscribe();
+  });
   it('publishes the runtime provider session identity through the declared vendor metadata field', () => {
     const harness = createHarness({ providerSessionId: 'grok-provider-session-1' });
     subscribeSessionRuntimePublicationToMetadata({
