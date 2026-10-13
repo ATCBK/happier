@@ -357,4 +357,23 @@ describe('SessionBoardSurface near-viewport body window', () => {
         });
         expect(mountedBodyItemIds(screen)).toContain('note-8');
     });
+    it('fits a card to a pane too narrow for columns instead of sizing the grid to its content', async () => {
+        const screen = await renderScreen(<Harness layout="grid" width="medium" present={itemIds(2)} />);
+        const styleOf = () => nodeByTestId(screen, 'session-board-placement-note-0')?.props.style as
+            Readonly<{ width?: number; flexBasis?: string }> | undefined;
+
+        await act(async () => {
+            publishLayout(screen, 'session-board-items', { x: 0, y: 0, width: 300, height: 600 });
+        });
+        // A single-column tier fills its row: a wide card (a chart) must not size the wrapping grid past the pane.
+        expect(styleOf()).toMatchObject({ flexBasis: '100%' });
+        expect(styleOf()?.width).toBeUndefined();
+
+        await act(async () => {
+            publishLayout(screen, 'session-board-items', { x: 0, y: 0, width: 1200, height: 600 });
+        });
+        // Wide enough for columns, the card keeps its measured span.
+        expect(styleOf()?.width).toBeGreaterThan(0);
+        expect(styleOf()?.flexBasis).toBeUndefined();
+    });
 });
