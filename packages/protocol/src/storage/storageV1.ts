@@ -77,6 +77,9 @@ export const DiskScanStateV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['running', 'complete', 'cancelled', 'interrupted', 'failed']),
   progress: z.object({ sizedBytes: bytes(), usedBytes: bytes(), items: z.number().int().nonnegative(), currentPath: z.string().optional(), stuckSinceMs: time().optional() }),
   startedAt: time(), finishedAt: time().optional(), previousScanAt: time().optional(),
+  // Read-only observation of local Time Machine snapshots on the scanned APFS volume.
+  // Missing means unobserved; it never contributes bytes or authorizes cleanup.
+  apfsLocalSnapshotCount: z.number().int().nonnegative().optional(),
   unreadable: z.object({
     counts: z.object({ permission: z.number().int().nonnegative(), os_private: z.number().int().nonnegative(), timeout: z.number().int().nonnegative(), io: z.number().int().nonnegative() }),
     examples: z.array(z.object({ path: z.string(), reason: z.string() })),
@@ -136,6 +139,8 @@ export type MachineStorageProtectedRemoveInputV1 = z.infer<typeof MachineStorage
 
 export const HappierStorageSummaryV1Schema = lazyZodSchema(() => z.object({
   revision: revision(), sizedAt: time(),
+  // Daemon-qualified folder entry points, consumed by the ordinary scanner.
+  scanShortcuts: z.array(z.strictObject({ kind: z.enum(['downloads', 'cache']), path: z.string().min(1) })).optional(),
   volumes: z.array(z.object({ volume: StorageVolumeRefV1Schema, totalBytes: bytes(), freeBytes: bytes(), happierBytes: bytes(), pileBytes: bytes(), trashBytes: bytes(),
     // Sampled by the vitals capacity owner; presentation only, never free-now or cleanup budget.
     availableIncludingPurgeableBytes: bytes().optional(),
