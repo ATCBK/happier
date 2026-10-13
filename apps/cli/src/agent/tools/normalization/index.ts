@@ -286,7 +286,7 @@ export function canonicalizeToolNameV2(opts: {
     // Tasks / notebooks.
     // Claude emits TaskCreate/TaskList/TaskUpdate; keep them unified for rendering.
     if (lower === 'task' || lower.startsWith('task')) return 'SubAgent';
-    if (name === 'Agent') return 'SubAgent';
+    if (name === 'Agent' || lower === 'subagent') return 'SubAgent';
     if (lower === 'todowrite') return 'TodoWrite';
     if (lower === 'todoread') return 'TodoRead';
 
