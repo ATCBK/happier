@@ -19,8 +19,38 @@ import { createLocalServicesDaemonRuntimeActionExecutor } from '../../actions/ru
 import { createLocalServicesDaemonFeatureGate } from '../../featureGate';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import type { LocalServiceInventorySnapshotV1 } from '@happier-dev/protocol/local/services/inventory/v1';
 
-// Only OS process files are substituted; platform scanning, census, normalization,
+// CLI imports Socket.IO before the UI reader. Install the canonical external
+// transport first; both packages retain their real RPC and Account owners.
+vi.mock('socket.io-client', async (importOriginal) => {
+    const path = new URL('../../../../../../../ui/sources/dev/testkit/harness/serverAccountConnectionHarness.ts', import.meta.url).href;
+    const boundary = await import(path);
+    return boundary.createSocketIoClientBoundary(importOriginal);
+});
+
+// Runtime URLs keep UI aliases out of CLI compilation, as in the composed Voice
+// suite. Reuse UI's native/storage boundaries and their registered cleanup.
+const uiSource = new URL('../../../../../../../ui/sources/', import.meta.url);
+await import(new URL('dev/vitestSetup.ts', uiSource).href);
+const rpcBoundary: Readonly<{ installSessionActionRpcBoundary(respond: (request: SocketRpcRequestPayload) => Promise<unknown>): unknown }> =
+    await import(new URL('dev/testkit/harness/sessionActionRpcBoundary.ts', uiSource).href);
+const machineFixtures: Readonly<{ createPlainMachineRowFixture(input: Readonly<{ id: string; accountId: string }>): unknown }> =
+    await import(new URL('dev/testkit/fixtures/machineFixtures.ts', uiSource).href);
+const homesBoundary: Readonly<{ serveAccountHomes(input: Readonly<{
+    homes: readonly Readonly<{ key: string; serverUrl: string; accountId: string }>[];
+    route(request: Readonly<{ path: string; accountId: string | null }>): Response | undefined;
+}>): Promise<Readonly<{ homes: Record<string, Readonly<{ id: string }>>; dispose(): void }>> }> =
+    await import(new URL('dev/testkit/harness/actionHomesHttpHarness.ts', uiSource).href);
+let dispatchMachineRpc: (request: SocketRpcRequestPayload) => Promise<unknown>;
+rpcBoundary.installSessionActionRpcBoundary(request => dispatchMachineRpc(request));
+const uiReader: Readonly<{ fetchLocalServiceInventorySnapshotViaMachineRpc(input: Readonly<{
+    machineId: string; serverId: string; refresh?: boolean;
+}>): Promise<Readonly<{ ok: true; snapshot: LocalServiceInventorySnapshotV1 }> | Readonly<{ ok: false; reason: string }>> }> =
+    await import(new URL('sync/domains/local/services/inventory/machineRpc.ts', uiSource).href);
+
+// Procfs is the collector's OS boundary. Platform scanning, census, normalization,
 // registry/routes and strict RPC projection all use their production implementations.
 vi.mock('node:fs/promises', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -104,6 +134,33 @@ describe('Linux inventory scan to Inventory V1 RPC', () => {
             const rpc = new RpcHandlerManager({ scopePrefix: workspace.machineId, encryptionMode: 'plain', logger() {} });
             registerDaemonLocalServicesMachineRpcHandlers(rpc, { accountId: 'account-a', machineId: workspace.machineId,
                 serverId: workspace.serverId, localServicesInventory: runtime.inventoryRoutes, localServicesLauncher: runtime.launcherRoutes });
+            dispatchMachineRpc = request => {
+                expect(request.method.startsWith(`${workspace.machineId}:`)).toBe(true);
+                return rpc.invokeLocal(request.method.slice(`${workspace.machineId}:`.length), request.params);
+            };
+            const homes = await homesBoundary.serveAccountHomes({
+                homes: [{ key: workspace.serverId, serverUrl: 'https://inventory-wire.example.test', accountId: 'account-a' }],
+                route: request => {
+                    if (request.path === `/v1/machines/${workspace.machineId}`) {
+                        expect(request.accountId).toBe('account-a');
+                        return Response.json({ machine: machineFixtures.createPlainMachineRowFixture({ id: workspace.machineId, accountId: 'account-a' }) });
+                    }
+                    return undefined;
+                },
+            });
+            try {
+                for (const refresh of [false, true]) {
+                    const consumed = await uiReader.fetchLocalServiceInventorySnapshotViaMachineRpc({
+                        machineId: workspace.machineId, serverId: homes.homes[workspace.serverId]!.id, refresh,
+                    });
+                    expect(consumed).toMatchObject({ ok: true, snapshot: { machineId: workspace.machineId,
+                        entries: [expect.objectContaining({ port: 5173,
+                            provenance: expect.objectContaining({ workspace: { id: workspace.id, path: workspace.rootPath, association: 'cwd_containment' } }),
+                        })] } });
+                    if (!consumed.ok) throw new Error(`UI inventory reader rejected daemon output: ${consumed.reason}`);
+                    expect(consumed.snapshot.entries[0]).not.toHaveProperty('establishedConnections');
+                }
+            } finally { homes.dispose(); }
             for (const method of [RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
                 RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH, RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH]) {
                 const response = await rpc.invokeLocal(method, { machineId: workspace.machineId,

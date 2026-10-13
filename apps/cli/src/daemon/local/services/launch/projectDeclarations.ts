@@ -143,7 +143,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             if (signal.aborted) throw new ServiceStartRefusal('cancelled');
         };
         await assertCurrent();
-        let association = await resolveProjectSetupAcceptedWorkspace({ address: request.workspace, ...projectRuntimeAccountRowsInput(runtime, 'localServices.launcher.start'),
+        let association = await resolveProjectSetupAcceptedWorkspace({ address: request.workspace, ...projectRuntimeAccountRowsInput(runtime),
             serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
         await assertCurrent();
         if (request.declaration.workspaceRefId !== association.workspace.id || request.workspaceId && request.workspaceId !== association.workspace.id) throw new ServiceStartRefusal('wrong_workspace');
@@ -192,7 +192,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 placementEffectDigest: digest({ placement: placement.placement, choice }), serviceEffectDigest: digest(serviceEffect) };
             if (!afterCopy) return worker;
             association = await resolveProjectSetupAcceptedWorkspace({ address: { serverId: basis.target.serverId, machineId: basis.target.machineId,
-                workspaceId: basis.target.id, rootPath: basis.target.rootPath }, ...projectRuntimeAccountRowsInput(runtime, 'localServices.launcher.start'),
+                workspaceId: basis.target.id, rootPath: basis.target.rootPath }, ...projectRuntimeAccountRowsInput(runtime),
                 serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
             await assertCurrent();
         } else {
@@ -203,7 +203,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const secretEnvironment = await resolveProjectRequesterSecretEnvironment(runtime, undefined, signal);
         const preparation: ProjectSetupPreparationInput = { workspace: association.workspace, projectAssociation: association,
             approvalContext: context,
-            requester: { ...projectRuntimeAccountRowsInput(runtime, 'localServices.launcher.start'), serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup',
+            requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup',
             platform: platformFor(runtime),
             nativeIo: runtime.nativeIo, signal,
             retainNativeInvocation: production => nativeCustody ? nativeCustody.retain(production) : nativeInvocations.add(production),
@@ -374,7 +374,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         try {
             const current = await review(nativeInvocations, request, ingress, context, false, executeCanonicalAction);
             const settings = readProjectActionApprovalSettings(current.kind === 'target' ? current.preparation : {
-                approvalContext: context, requester: { ...projectRuntimeAccountRowsInput(current.runtime, actionId), serverHttpBaseUrl: current.runtime.serverHttpBaseUrl },
+                approvalContext: context, requester: { ...projectRuntimeAccountRowsInput(current.runtime), serverHttpBaseUrl: current.runtime.serverHttpBaseUrl },
                 secretEnvironment: current.runtime.secretEnvironment,
             });
             if (request.expectedEffectDigest !== undefined ? request.expectedEffectDigest !== current.reviewedEffectDigest
@@ -578,7 +578,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         if (!selected.ok) return { status: 'denied', reasonCode: selected.reasonCode,
             ...(selected.reviewedEffect !== undefined ? { reviewedEffect: selected.reviewedEffect } : {}),
             ...(selected.reviewedEffectDigest ? { reviewedEffectDigest: selected.reviewedEffectDigest } : {}) };
-        // Start's required-result Action preparation completes its independent approval before
+        // Start's required-result Action preparation settles its independent approval policy before
         // disruption. Its one-shot invocation still revalidates current admission when run.
         const prepared = await execution.prepareStartAction({ ...start, expectedEffectDigest: selected.declaration.reviewedEffectDigest }, execution.actionContext);
         if (prepared.kind === 'ready') {

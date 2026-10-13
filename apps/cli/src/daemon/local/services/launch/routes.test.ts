@@ -46,25 +46,9 @@ describe('createLocalServiceLauncherRoutes', () => {
         expect(result.reasonCode).toBe('launcher_target_unknown');
         expect(result.snapshot.sessionId).toBe('session-a');
         expect(result.snapshot.targets.map(target => target.cwd)).toEqual(['/repo/a']);
+        await expect(routes.getSnapshot({ scope: 'workspace', workspaceRoot: '/repo/a', sessionId: 'session-a' }))
+            .resolves.toMatchObject({ v: 1, machineId: 'machine-a', sessionId: 'session-a', targets: result.snapshot.targets });
     });
-    it('serves the daemon launcher feed snapshot without rebuilding it at the route boundary', async () => {
-        const snapshot = {
-            v: 1 as const,
-            machineId: 'machine-a',
-            sessionId: 'session-a',
-            updatedAt: 3_000,
-            targets: [],
-        };
-        const feed = {
-            getSnapshot: vi.fn(async () => snapshot),
-        };
-
-        const routes = createLocalServiceLauncherRoutes({ feed });
-
-        await expect(routes.getSnapshot()).resolves.toEqual(snapshot);
-        expect(feed.getSnapshot).toHaveBeenCalledTimes(1);
-    });
-
     it('starts a retained managed declaration and returns the post-start launcher snapshot', async () => {
         const serviceKey = JSON.stringify(['acme.preview', 'preview-web', 'session-a', 'web']);
         const declaration = { targetId: `managed:${serviceKey}`, serviceKey } satisfies StartDeclarationFixture;

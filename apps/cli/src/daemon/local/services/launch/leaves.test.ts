@@ -13,6 +13,7 @@ import { createLocalServiceLauncherFeed } from './feed';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { createLocalServicesDaemonFeatureGate } from '../featureGate';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '../actions/runtimeActionExecutor';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 const MACHINE_ID = 'machine-a';
 
@@ -95,7 +96,7 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         });
     });
 
-    it('registerPreview binds the canonical feed listener and Session through private registration', async () => {
+    it('dispatches launcher Register, Open and Clear through the real feed, preview and history owners', async () => {
         const inventoryRegistry = createLocalServiceInventoryRegistry();
         inventoryRegistry.replaceSnapshot({
             v: 1, machineId: MACHINE_ID, generatedAt: 1_000, refreshState: 'idle', diagnostics: [],
@@ -126,18 +127,27 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         const feed = createLocalServiceLauncherFeed({ machineId: MACHINE_ID, inventoryRegistry, previewRegistry });
         const target = (await feed.getSnapshot()).targets.find(candidate => candidate.sourceClass?.kind === 'inventory_entry');
         if (!target) throw new Error('Expected canonical inventory launch target');
+        const history = createLocalServiceLauncherHistoryStore();
         const routes = createLocalServiceLauncherLeafRoutes({
             machineId: MACHINE_ID,
             feed,
             previewRoutes,
-            history: createLocalServiceLauncherHistoryStore(),
+            history,
         });
-
-        const result = await routes.registerPreview({
-            machineId: MACHINE_ID,
-            targetId: target.id,
-            sessionId: 'session-1',
+        const features = FeaturesResponseSchema.parse({ features: {
+            localServices: { enabled: true, inventory: { enabled: true }, launcher: { enabled: true }, preview: { enabled: true } },
+            browser: { enabled: true, viewTargets: { enabled: true } },
+        }, capabilities: {} });
+        const featureGate = createLocalServicesDaemonFeatureGate({ env: {},
+            resolveServerFeaturesSnapshot: () => ({ status: 'ready', features }),
         });
+        await featureGate.refresh();
+        const execute = createLocalServicesDaemonRuntimeActionExecutor({ featureGate, routes: {
+            launcherRoutes: { getSnapshot: feed.getSnapshot, leaves: routes },
+        } });
+        const input = { machineId: MACHINE_ID, targetId: target.id, sessionId: 'session-1' };
+        const result = await execute({ actionId: 'localServices.launcher.registerPreview', input, context: {} });
+        assertActionOutputContract('localServices.launcher.registerPreview', result);
 
         const snapshot = await previewRoutes.getSnapshot();
         expect(snapshot.previews).toHaveLength(1);
@@ -149,7 +159,20 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         });
         expect(preview.accessUrl).toBe('https://private.example.test/?previewToken=admission');
         expect(result).toMatchObject({ status: 'registered', targetId: target.id, previewId: preview.previewId });
-        expect(result.browserTarget).toEqual(preview.resource.browserTarget);
+        expect(result).toMatchObject({ browserTarget: preview.resource.browserTarget });
+        const openable = (await feed.getSnapshot()).targets.find(candidate => candidate.id === target.id);
+        expect(openable?.browserTarget).toBeDefined();
+        const opened = await execute({ actionId: 'localServices.launcher.openPreview', input, context: {} });
+        assertActionOutputContract('localServices.launcher.openPreview', opened);
+        expect(opened).toMatchObject({ status: 'opened', targetId: target.id, browserTarget: openable?.browserTarget });
+        expect(history.list()).toEqual([target.id]);
+        const cleared = await execute({ actionId: 'localServices.launcher.history.clear',
+            input: { machineId: MACHINE_ID }, context: {} });
+        assertActionOutputContract('localServices.launcher.history.clear', cleared);
+        expect(cleared).toMatchObject({ cleared: 1 });
+        expect(history.list()).toEqual([]);
+        expect((await previewRoutes.getSnapshot()).previews).toEqual(snapshot.previews);
+        expect(inventoryRegistry.getSnapshot().entries).toMatchObject([{ id: 'entry-vite:authority', state: 'listening' }]);
     });
 
     it('clearHistory dismisses recents without changing the observed running service or its preview', async () => {

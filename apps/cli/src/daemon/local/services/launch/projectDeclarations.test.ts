@@ -974,13 +974,12 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         const request = { ...sourceRequest, ...(scenario === 'saved' ? {} : { choice }) };
         const context = { surface: 'cli' as const, authority: 'present_user' as const,
             presentUserConfirmation: { actionId: 'localServices.launcher.start' as const }, actionRequestId: 'pool-native-start' };
-        const review = await executor.execute('localServices.launcher.start', request, context);
-        expect(review, JSON.stringify(review, null, 2)).toMatchObject({ ok: true, result: { status: 'denied', reasonCode: 'project_service_effect_review_required' } });
-        if (!review.ok || !review.result || typeof review.result !== 'object' || !('reviewedEffectDigest' in review.result)
-            || typeof review.result.reviewedEffectDigest !== 'string') throw new Error('Expected current pool SOURCE effect review');
+        // Explicit human confirmation satisfies the invocation's changeable
+        // approval default. Pool custody still has to hold after the copy.
         expect(h.copies()).toBe(0);
+        expect(h.owner.listProjectServices()).toEqual([]);
         if (scenario === 'withdrawn_after_copy') h.afterCopy(() => { members = members.filter(member => member.machineId !== h.targetWorkspace.machineId); });
-        const started = await executor.execute('localServices.launcher.start', { ...request, expectedEffectDigest: review.result.reviewedEffectDigest }, context);
+        const started = await executor.execute('localServices.launcher.start', request, context);
         expect(started).toMatchObject({ ok: true, result: scenario === 'withdrawn_after_copy'
             ? { status: 'denied', reasonCode: 'target_not_local' }
             : { status: 'succeeded', currentTarget: { machineId: h.targetWorkspace.machineId, workspaceId: h.targetWorkspace.id } } });
