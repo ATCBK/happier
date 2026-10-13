@@ -34,6 +34,7 @@ import type {
 import { arePaneStateJsonValuesEqual } from './paneStateStructuralEquality';
 import { readSessionTerminalWorkspace, reduceSessionTerminalWorkspace, type SessionTerminalWorkspaceCommand } from '@/components/sessions/terminal/sessionTerminalWorkspace';
 import { resolveTerminalDetailsInstanceId } from '@/components/terminal/terminalDetailsTabModel';
+import { SESSION_BOARD_DESTINATION } from '@/components/sessions/board/sessionBoardDestination';
 import {
     areSelectedPaneDestinationsEqual,
     createBuiltinPaneDestination,
@@ -541,11 +542,17 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
             }));
         }
         case 'openDetailsTab':
-            return updateScopeDetails(state, action.scopeId, (details) => {
-                const opened = applyOpenDetailsTab(details, { tab: action.tab, openAs: action.openAs });
+            return upsertScope(state, action.scopeId, (prev) => {
+                const opened = applyOpenDetailsTab(prev.details, { tab: action.tab, openAs: action.openAs });
                 const origin = action.origin === 'main' || action.origin === 'side' ? action.origin : null;
-                if (!origin || opened.openedFrom === origin) return opened;
-                return { ...opened, openedFrom: origin };
+                const details = !origin || opened.openedFrom === origin ? opened : { ...opened, openedFrom: origin };
+                // All Board openers share this semantic handoff. Keep retained
+                // sidebar state, but release its visible copy once Details opens.
+                const right = action.tab.kind === 'board' && prev.right.isOpen
+                    && prev.right.selectedDestination?.kind === 'builtin'
+                    && prev.right.selectedDestination.id === SESSION_BOARD_DESTINATION.id
+                    ? { ...prev.right, isOpen: false } : prev.right;
+                return details === prev.details && right === prev.right ? prev : { ...prev, details, right };
             });
         case 'replaceDetailsTab':
             return updateScopeDetails(state, action.scopeId, (details) => (

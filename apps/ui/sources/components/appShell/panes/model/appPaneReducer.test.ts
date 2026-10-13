@@ -3,6 +3,7 @@ import { appPaneReduce, createAppPaneState } from './appPaneReducer';
 import { buildDetailsWorkspaceStateView } from '../details/workspace/detailsWorkspaceSelectors';
 import { SessionTerminalWorkspaceV1Schema } from '@happier-dev/protocol/terminal';
 import { readSessionTerminalWorkspace } from '@/components/sessions/terminal/sessionTerminalWorkspace';
+import { createSessionBoardDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 function createFileTab(path: string) {
     return { key: `file:${path}`, kind: 'file', title: path.split('/').at(-1) ?? path, resource: { path } };
@@ -33,6 +34,18 @@ function getDetailsView(state: ReturnType<typeof createAppPaneState>, scopeId: s
 }
 
 describe('appPaneReduce', () => {
+    it('hands the sidebar Board to its Details tab without closing a different sidebar destination', () => {
+        const scopeId = 'session:board-handoff';
+        for (const tabId of ['board', 'git']) {
+            let state = appPaneReduce(createAppPaneState({ maxScopesInMemory: 3 }), { type: 'openRight', scopeId, tabId });
+            const rightState = state.scopes[scopeId].right;
+            state = appPaneReduce(state, { type: 'openDetailsTab', scopeId, tab: createSessionBoardDetailsTab(), openAs: 'pinned' });
+            expect(state.scopes[scopeId].details.isOpen).toBe(true);
+            expect(state.scopes[scopeId].right.isOpen).toBe(tabId !== 'board');
+            expect(state.scopes[scopeId].right.tabState).toBe(rightState.tabState);
+        }
+    });
+
     it('applies a right-pane default only when activation creates the scope', () => {
         const scopeId = 'project:fresh';
         const activation = { type: 'activateScope' as const, scopeId,
