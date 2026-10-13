@@ -5,6 +5,7 @@ import type {
 import type { PluginUiChannelV1 } from '@happier-dev/protocol/plugins/ui';
 import * as React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -18,6 +19,19 @@ import type {
 } from '@/sync/domains/plugins/ui/projection';
 import { selectRenderablePluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import type { PluginSurfaceHostActionExecute } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
+
+const stylesheet = StyleSheet.create(() => ({
+    // A sibling of the Browser shell, whose own box is `flex: 1; min-height: 0`. Unbounded, a tall
+    // plugin panel takes the whole column, the shell collapses to zero height and its toolbar and
+    // diagnostics drawer overflow underneath this later-painted region, which then catches every
+    // pointer press meant for them. A bounded region shares the column and scrolls inside itself.
+    region: {
+        flexGrow: 1,
+        flexBasis: 0,
+        minHeight: 0,
+        overflow: 'hidden',
+    },
+}));
 
 export function BrowserPluginSurfacePlacements(props: Readonly<{
     focusedTarget?: BrowserViewTargetV1 | null;
@@ -76,6 +90,7 @@ export function BrowserPluginSurfacePlacements(props: Readonly<{
             {browserPanelPlacements.map((placement) => (
                 <View
                     key={placement.id}
+                    style={stylesheet.region}
                     testID={`${props.testID ?? 'browser-surface'}-plugin-placement-${placement.id}`}
                 >
                     <PluginSurfacePlacementHost

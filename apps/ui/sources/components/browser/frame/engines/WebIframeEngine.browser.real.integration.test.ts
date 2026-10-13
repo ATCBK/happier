@@ -6,9 +6,10 @@ import { createWorkspaceBrowserServer } from '@/dev/testkit/render/workspaceBrow
 import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../../../../../../packages/tests/src/testkit/uiE2e/browserDiagnostics';
 
 type HarnessWindow = Window & { hostedFrameHarness: {
-    mount: (body: string, network: 'none' | 'open', networkOrigins?: string[]) => void;
+    mount: (body: string, network: 'none' | 'open', networkOrigins?: string[], generatedSdk?: boolean) => void;
     events: string[];
     activations: boolean[];
+    rejections: string[];
     push: (message: unknown) => void;
 } };
 
@@ -31,6 +32,63 @@ afterAll(async () => {
 });
 
 describe('caller-authored hosted frame requests in Chromium', () => {
+    it('admits the generated SDK ready object across the trusted shell into the strict host bridge', async () => {
+        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
+        try {
+            const page = await browser.newPage();
+            await page.goto(origin);
+            await page.addScriptTag({ url: `${origin}/bundle.js` });
+            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.mount('<p>SDK guest</p>', 'none', undefined, true));
+            await page.waitForFunction(() => {
+                const harness = (window as HarnessWindow).hostedFrameHarness;
+                return harness.events.includes('ready') || harness.rejections.length > 0;
+            });
+            expect(await page.evaluate(() => ({
+                ready: (window as HarnessWindow).hostedFrameHarness.events.includes('ready'),
+                rejections: (window as HarnessWindow).hostedFrameHarness.rejections,
+            }))).toEqual({ ready: true, rejections: [] });
+        } finally { await browser.close(); }
+    });
+
+    it('keeps non-JSON port payloads and mismatched identities refused after native realm rehoming', async () => {
+        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
+        try {
+            const page = await browser.newPage();
+            const pageErrors: string[] = [];
+            page.on('pageerror', error => pageErrors.push(error.message));
+            await page.goto(origin);
+            await page.addScriptTag({ url: `${origin}/bundle.js` });
+            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.mount(`<script>
+                const channel = new MessageChannel();
+                const envelope = {version:1,identity:{instanceId:'browser-visual',mountNonce:'browser-nonce'},sequence:0,kind:'ready',payload:null};
+                channel.port1.onmessage = event => {
+                    if (event.data.requestSequence === 99) document.body.dataset.barrier = 'ack';
+                };
+                parent.postMessage(envelope, '*', [channel.port2]);
+                const cycle = {}; cycle.self = cycle;
+                for (const payload of [new Date(), new Map([['key','value']]), NaN, Infinity, [1,,3], cycle]) {
+                    channel.port1.postMessage({...envelope, sequence:1, payload});
+                }
+                channel.port1.postMessage({...envelope, identity:{...envelope.identity,mountNonce:'wrong'}, payload:{ready:true}});
+                channel.port1.postMessage({...envelope, kind:'heightChanged', payload:{height:100}});
+                const unsupportedChannel = new MessageChannel();
+                channel.port1.postMessage({...envelope, payload:{port:unsupportedChannel.port1}}, [unsupportedChannel.port1]);
+                channel.port1.postMessage({...envelope, sequence:99, payload:{nested:[{ready:true}]}});
+            </script>`, 'none'));
+            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.events.includes('ready'));
+            const guest = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame())!;
+            await guest.waitForFunction(() => document.body.dataset.barrier === 'ack');
+            expect(await page.evaluate(() => ({
+                readyCount: (window as HarnessWindow).hostedFrameHarness.events.filter(kind => kind === 'ready').length,
+                rejections: (window as HarnessWindow).hostedFrameHarness.rejections,
+            }))).toEqual({
+                readyCount: 2,
+                rejections: [...Array<string>(6).fill('invalid_message'), 'identity_mismatch', 'message_kind_denied'],
+            });
+            expect(pageErrors).toEqual([]);
+        } finally { await browser.close(); }
+    });
+
     it('does not lend an app control activation to a guest in an inactive shell', async () => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
         try {

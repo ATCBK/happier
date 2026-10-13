@@ -3,6 +3,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { buildArtifactHtmlDocumentV1 } from '@happier-dev/protocol/artifacts/artifactHtmlDocumentV1';
+import { HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT } from '@happier-dev/plugin-sdk/host/ui';
 import { validatePluginHostedWebBridgeMessage } from '../../../plugins/hostedWeb/bridge';
 import { WebIframeEngine } from './WebIframeEngine';
 import type { BrowserFrameMessageReceipt } from '../types';
@@ -10,6 +11,7 @@ import type { BrowserFrameMessageReceipt } from '../types';
 const root = createRoot(document.getElementById('root')!);
 const events: string[] = [];
 const activations: boolean[] = [];
+const rejections: string[] = [];
 const identity = { instanceId: 'browser-visual', mountNonce: 'browser-nonce' };
 let sendHost: ((message: unknown) => void) | null = null;
 const bridge = {
@@ -19,7 +21,7 @@ const bridge = {
             message: event.data, origin: event.origin, expectedOrigin: 'null', identity,
             allowedMessageKinds: new Set(['ready']),
         });
-        if (!result.ok) return;
+        if (!result.ok) { rejections.push(result.code); return; }
         const envelope = result.envelope;
         events.push(envelope.kind);
         activations.push(receipt.consumeTransientActivation());
@@ -31,11 +33,16 @@ const bridge = {
     },
 };
 
-function mount(body: string, network: 'none' | 'open', networkOrigins?: string[]) {
+function mount(body: string, network: 'none' | 'open', networkOrigins?: string[], generatedSdk = false) {
     events.length = 0;
     activations.length = 0;
+    rejections.length = 0;
     const html = buildArtifactHtmlDocumentV1(artifactHtmlBundleFromBodyV1(body), {
         requestedCapabilities: networkOrigins ? { networkOrigins } : { network },
+        ...(generatedSdk ? {
+            bootstrapConfig: { identity, hostOrigin: location.origin, frameOrigin: 'null' },
+            guestBootstrapScript: HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT,
+        } : {}),
     });
     root.render(<WebIframeEngine title="Authored visual" testID="guest" html={html}
         sandbox="allow-scripts" revokeOnUnexpectedNavigation webMessageBridge={bridge}
@@ -43,4 +50,4 @@ function mount(body: string, network: 'none' | 'open', networkOrigins?: string[]
         onUnexpectedNavigation={() => events.push('retired')} />);
 }
 
-Object.assign(globalThis, { hostedFrameHarness: { mount, events, activations, push: (message: unknown) => sendHost?.(message) } });
+Object.assign(globalThis, { hostedFrameHarness: { mount, events, activations, rejections, push: (message: unknown) => sendHost?.(message) } });

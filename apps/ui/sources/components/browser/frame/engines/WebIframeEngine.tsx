@@ -583,6 +583,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         let active = true;
         let documentPort: MessagePort | null = null;
         let transientActivationConsumed = false;
+        const messageWindow = iframeRef.current?.ownerDocument?.defaultView ?? window;
 
         const createMessageReceipt = (): BrowserFrameMessageReceipt => {
             const iframe = iframeRef.current;
@@ -630,7 +631,15 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         };
         bridgeSendRef.current = send;
 
-        const dispatch = (data: unknown, origin: string, expectedSource: WindowProxy): void => {
+        const dispatch = (receivedEvent: MessageEvent, origin: string, expectedSource: WindowProxy): void => {
+            let data: unknown = receivedEvent.data;
+            if (messageWindow !== window && receivedEvent.isTrusted) {
+                // The browser cloned into the shell realm, but the strict host
+                // consumer belongs to the app realm. Rehome native deliveries
+                // without coercing non-JSON values or touching their authority.
+                try { data = window.structuredClone(data); }
+                catch { return; }
+            }
             const event = { data, origin, source: expectedSource } as MessageEvent;
             const receipt = createMessageReceipt();
             const bridge = webMessageBridgeRef.current;
@@ -652,17 +661,16 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
                 documentPort = transferredPort;
                 documentPort.onmessage = (portEvent) => {
                     if (!active || bridgeDocumentRetiredRef.current) return;
-                    dispatch(portEvent.data, event.origin, expectedSource);
+                    dispatch(portEvent, event.origin, expectedSource);
                 };
                 documentPort.start();
             }
-            dispatch(event.data, event.origin, expectedSource);
+            dispatch(event, event.origin, expectedSource);
         };
 
         // A contained guest addresses its trusted transport shell as parent.
         // Subscribe there directly, preserving the browser's real source and
         // origin instead of relaying messages through another authority.
-        const messageWindow = iframeRef.current?.ownerDocument?.defaultView ?? window;
         messageWindow.addEventListener('message', listener);
         return () => {
             active = false;

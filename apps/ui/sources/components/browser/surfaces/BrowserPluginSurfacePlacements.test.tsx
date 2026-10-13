@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { StyleSheet } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -299,6 +300,23 @@ describe('BrowserPluginSurfacePlacements', () => {
             () => ({ ok: true, result: { state: 'available' } }), async ({ screen }) => {
                 expect(screen.findByTestId('plugin-hosted-web-frame')).toBeNull();
             }, { projection: gatedProjection, isFeatureEnabled: () => false });
+    });
+
+    it('keeps a browser-panel placement in a bounded region so it cannot paint over the Browser chrome', async () => {
+        await withBrowserPanelHarness(
+            () => ({ ok: true, result: { state: 'available' } }),
+            async ({ screen }) => {
+                const region = screen.findByTestId(
+                    'browser-surface-plugin-placement-surfacePlacement:acme.browser:hosted-panel',
+                );
+                expect(region).toBeTruthy();
+                // A sibling of the shell with unbounded height starves the shell's `flex: 1` box to
+                // zero: the shell chrome then overflows underneath this later-painted region and
+                // every pointer press lands on the plugin instead of the toolbar/drawer controls.
+                const style = StyleSheet.flatten(region?.props.style) ?? {};
+                expect(style).toMatchObject({ flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' });
+            },
+        );
     });
 
     it('keeps a loaded browser-panel surface non-interactive while the endpoint is offline', async () => {
