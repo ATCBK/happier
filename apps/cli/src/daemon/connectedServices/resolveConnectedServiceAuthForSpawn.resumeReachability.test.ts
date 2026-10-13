@@ -202,7 +202,7 @@ describe('resolveConnectedServiceAuthForSpawn post-materialization resume reacha
         });
         return { auth, result };
       };
-      expect((await resolveLaunch()).result).toMatchObject({ ok: false, errorCode: 'SPAWN_VALIDATION_FAILED' });
+      expect((await resolveLaunch()).result).toMatchObject({ ok: false, errorCode: 'existing_session_state_unavailable' });
       expect(await pathExists(targetPath)).toBe(false);
       await mkdir(join(targetCodexHome, 'sessions'), { recursive: true });
       await writeFile(targetPath, 'already-synced transcript\n');
