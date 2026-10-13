@@ -262,6 +262,17 @@ export function createCommandRegistry(dependencies: RegistryDependencies): Comma
         readDesktopWindowState(context.window)
     ));
 
+    registry.set('desktop_set_window_title', (args, context: CommandContext) => {
+        if (typeof args.title !== 'string') {
+            throw new Error('desktop_set_window_title requires a title');
+        }
+        if (!context.window) {
+            throw new Error('desktop_set_window_title requires an available window');
+        }
+        context.window.setTitle(args.title);
+        return null;
+    });
+
     registry.set('desktop_minimize_window', (_args, context: CommandContext) => {
         if (!context.window) return false;
         context.window.minimize();

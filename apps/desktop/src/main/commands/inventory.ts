@@ -34,6 +34,7 @@ export const TAURI_DESKTOP_COMMANDS = [
     'respond_system_task_prompt',
     'desktop_get_window_chrome_policy',
     'desktop_get_window_state',
+    'desktop_set_window_title',
     'desktop_minimize_window',
     'desktop_toggle_window_maximize',
     'desktop_close_window',
