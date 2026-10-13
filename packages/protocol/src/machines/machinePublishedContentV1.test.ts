@@ -15,6 +15,15 @@ const metadata = {
 const readiness = { engine: { state: 'ready' }, carrier: { state: 'ready' } };
 
 describe('whole Machine publication', () => {
+  it('publishes only installed Agent identities and their observation time', () => {
+    const agentInventory = { checkedAt: 20, installedAgentIds: ['codex', 'claude'] };
+    expect(isMachinePublishedContentSafeV1({ metadata: { ...metadata, agentInventory }, daemonState: null })).toBe(true);
+    expect(parseMachinePublishedMetadataV1({ ...metadata, agentInventory })).toMatchObject({ agentInventory });
+    expect(isMachinePublishedContentSafeV1({ metadata: { ...metadata,
+      agentInventory: { ...agentInventory, resolvedPath: '/private/codex' } }, daemonState: null })).toBe(false);
+    expect(StoredMachinePublishedMetadataV1Schema.parse({ ...metadata,
+      agentInventory: { checkedAt: 'broken', installedAgentIds: ['codex'] } })).toEqual(metadata);
+  });
   it('admits first-read unavailable resources without inventing host facts, but requires host facts while reporting', () => {
     const unavailable = { v: 1, vitals: { state: 'unavailable', since: 20, reason: 'helper_missing' },
       attention: { level: 'calm', reasons: [] } };

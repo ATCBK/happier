@@ -59,7 +59,8 @@ export const OwnerRowV1Schema = lazyZodSchema(() => z.strictObject({
   rowId: id(), owner: ProcessOwnerRefV1Schema, state: z.enum(['running', 'stopping', 'stopped']),
   totals: MachineProcessesTotalsV1Schema, members: z.array(ProcessRowV1Schema),
   requester: z.strictObject({ accountId: id(), displayName: z.string() }).optional(),
-  ceiling: z.strictObject({ limitBytes: bytes().positive(), throttleCount5m: z.number().int().nonnegative() }).optional(),
+  ceiling: z.strictObject({ limitBytes: bytes().positive(), usedBytes: bytes().optional(), observedAtMs: bytes().optional(),
+    throttleCount5m: z.number().int().nonnegative().optional() }).optional(),
 }));
 export type OwnerRowV1 = z.infer<typeof OwnerRowV1Schema>;
 export const LeftBehindRowV1Schema = lazyZodSchema(() => ProcessRowV1Schema.extend({
@@ -82,6 +83,8 @@ export const MachineProcessesAnswerV1Schema = lazyZodSchema(() => z.strictObject
   owners: z.array(OwnerRowV1Schema), leftBehind: z.array(LeftBehindRowV1Schema), notHappier: z.array(AppGroupRowV1Schema).optional(),
   otherPrincipals: z.strictObject({ count: z.number().int().nonnegative(), memoryBytes: bytes().nullable(), cpuPercent: bytes().max(100).optional(), names: z.array(z.string()) }).optional(),
   othersWork: z.strictObject({ count: z.number().int().nonnegative() }).optional(),
+  // Count only; unverifiable ownership never supplies a process Action target.
+  unverifiableCount: z.number().int().nonnegative().optional(),
   totals: z.strictObject({ happier: MachineProcessesTotalsV1Schema, leftBehind: MachineProcessesTotalsV1Schema }),
   history: z.record(id(), z.array(ProcessSampleV1Schema)).optional(),
 }));

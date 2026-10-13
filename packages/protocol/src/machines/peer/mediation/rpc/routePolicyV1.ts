@@ -259,7 +259,6 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS, 'Daemon-local model status read.'),
   directEphemeral(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG, 'Resolver-backed speech catalog read; SavedSecret material remains inside the daemon operation.'),
   directEphemeral(RPC_METHODS.DAEMON_EXTENSIONS_RELOAD_STATUS, 'Daemon-local extension reload status read.'),
-  directEphemeral(RPC_METHODS.DAEMON_MARKETPLACE_INDEX_QUERY, 'Daemon-local marketplace index query reads the current machine-owned source projection without server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET, 'Daemon-local npm registry profile read keeps private registry configuration inside the selected machine boundary.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_STATUS_GET, 'Daemon-local Agent session-hook status returns only portable installation state and diagnostics.'),
   directEphemeral(RPC_METHODS.DAEMON_PLUGIN_SETTINGS_GET, 'Daemon-local plugin settings read with no server persistence or cross-device fanout.'),
@@ -342,9 +341,7 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT, 'Daemon-local simulator preview snapshot read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_ACTION, 'Daemon-local simulator preview action dispatch with typed adapter validation and no durable server mutation.'),
   directEphemeral(RPC_METHODS.DAEMON_PROMPT_ASSETS_LIST_TYPES, 'Daemon-local prompt asset type catalog read.'),
-  directEphemeral(RPC_METHODS.DAEMON_PROMPT_REGISTRY_LIST_ADAPTERS, 'Daemon-local prompt registry adapter catalog read.'),
-  directEphemeral(RPC_METHODS.DAEMON_PROMPT_REGISTRY_LIST_SOURCES, 'Daemon-local prompt registry source catalog read.'),
-  directEphemeral(RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_GET, 'Daemon-local marketplace source registry read.'),
+  directEphemeral(RPC_METHODS.DAEMON_REGISTRIES_FETCH, 'Daemon registry fetch resolves Account sources without receiving credentials or source lists.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET, 'Daemon-local session-runner runtime status read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET, 'Daemon-local additive session-runner status read carrying only exact process-currentness evidence beside the unchanged V1 aggregate.'),
   directEphemeral(RPC_METHODS.SCM_BACKEND_DESCRIBE, 'Daemon-local source-control backend capability describe read.'),
@@ -536,8 +533,8 @@ const TRANSFER_CONTROL_METHODS = [
   RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_CHUNK,
   RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_ABORT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,
   RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
-  RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_CHUNK,
-  RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_REGISTRY_DOWNLOAD_ABORT,
+  RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_CHUNK,
+  RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_ABORT,
 ] as const;
 
 /** Daemon-local mutations a restricted Runner reaches with input authority. */
@@ -581,9 +578,8 @@ const LOCAL_MUTATION_METHODS = [
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM,
   RPC_METHODS.DAEMON_EXTENSIONS_RELOAD,
   RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE,
-  RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE,
-  RPC_METHODS.DAEMON_PROMPT_REGISTRY_INSTALL,
-  RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_MUTATE,
+  RPC_METHODS.SKILLS_MACHINE_INSTALL,
+  RPC_METHODS.SKILLS_MACHINE_UNINSTALL,
   RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
   RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN,
   RPC_METHODS.DAEMON_WORKSPACE_SYNC_PAUSE,
@@ -665,7 +661,7 @@ const AMBIGUOUS_READ_OR_EXTERNAL_METHODS = [
   RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY,
   RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS,
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREVIEW,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_DISCOVER,
+  RPC_METHODS.SKILLS_FOUND_LIST,
   RPC_METHODS.DAEMON_SERVER_WORK_STATUS,
   RPC_METHODS.DAEMON_SESSION_VENDOR_PLUGIN_CATALOG_LIST,
   RPC_METHODS.DAEMON_SESSION_SKILL_CATALOG_LIST,
@@ -781,7 +777,6 @@ const MACHINE_MANAGEMENT_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_DISABLE,
   RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_ENABLE,
   RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_UNINSTALL,
-  RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_MUTATE,
   RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_MUTATE,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_INSTALL,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LICENSE_ACCEPT,
@@ -791,6 +786,8 @@ const MACHINE_MANAGEMENT_METHODS = new Set<string>([
 ]);
 
 const MACHINE_CUSTODIAN_ONLY_METHODS = new Set<string>([
+  RPC_METHODS.SKILLS_MACHINE_INSTALL,
+  RPC_METHODS.SKILLS_MACHINE_UNINSTALL,
   RPC_METHODS.DAEMON_CONNECTED_SERVICE_POOL_SELECTION_GET,
   ...VOICE_CLIENT_CREDENTIAL_METHODS,
   RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS,
@@ -807,7 +804,6 @@ const MACHINE_CUSTODIAN_ONLY_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREVIEW,
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFIRM,
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM,
-  RPC_METHODS.DAEMON_MARKETPLACE_SOURCE_REGISTRY_GET,
   RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET,
   RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET,
   RPC_METHODS.DAEMON_MEMORY_SEARCH,
@@ -1034,6 +1030,16 @@ export function resolveMachineRpcExternalActionEffectV1(method: string,
   }
   const declared = resolveMachineRpcRoutePolicy(method).actionSpecId;
   if (declared) return declared;
+  if (method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT
+    || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK
+    || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE
+    || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT) {
+    // Found's byte transport spends its admitted root. Home still verifies the
+    // exact method/body signature, current selected installation and principal.
+    return binding && (binding.actionId === 'skills.found.read' || binding.actionId === 'skills.found.adopt')
+      && (binding.target.kind === 'session' || binding.target.machineId === binding.machineId)
+      ? binding.actionId : null;
+  }
   if (method === MANAGED_ACTIVITY_READ_RPC_METHOD || method === MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD) {
     // Private phases consume an accepted retained control root. Home proves
     // the exact guest/current row; this projection grants no guest authority.

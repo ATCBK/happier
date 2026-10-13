@@ -19,6 +19,40 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('spends only an exact Found root on the existing download transport', async () => {
+    const { resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    for (const actionId of ['skills.found.read', 'skills.found.adopt'] as const) {
+      const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-found', binding: {
+        accountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: 1 },
+        serverIdentityId: `srv_${'a'.repeat(32)}`, machineId: 'native', installationId: 'native-installation',
+        custodianAccountId: 'requester', actionId, requestId: 'found-request', requestEnvelopeDigest: 'b'.repeat(43),
+        target: { kind: 'machine', machineId: 'native' },
+      } }).binding;
+      for (const method of [RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK,
+        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT]) {
+        expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBe(actionId);
+        expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'session', sessionId: 'selected-session' } })).toBe(actionId);
+        expect(resolveMachineRpcExternalActionEffectV1(method)).toBeNull();
+        expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, actionId: 'skills.list' })).toBeNull();
+        expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'machine', machineId: 'another' } })).toBeNull();
+      }
+      expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, binding)).toBeNull();
+      expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, binding)).toBeNull();
+    }
+  });
+  it('admits machine skill installation only through its canonical server-required Action routes', async () => {
+    const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    for (const actionId of ['skills.machine.install', 'skills.machine.uninstall'] as const) {
+      const method = getActionSpec(actionId).bindings?.rpcMethod;
+      expect(method).toBeDefined();
+      if (!method) throw new Error('Machine skill Action requires its native route');
+      expect(resolveMachineRpcGovernance(method)).toEqual({ rpcClassification: 'action_spec_bound', actionSpecId: actionId });
+      expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({ routeClass: 'server_required',
+        serverRequiredReason: 'destructive_or_recovery_mutation', rpcClassification: 'action_spec_bound',
+        actionSpecId: actionId, sharedMachineAccess: 'custodian_only', commandReceiptRequired: false });
+      expect(resolveMachineRpcExternalActionEffectV1(method)).toBe(actionId);
+    }
+  });
   it('projects each public machine terminal Action through its existing server-required native route', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     for (const actionId of ['machines.terminal.open', 'machines.terminal.list', 'machines.terminal.read',
@@ -285,7 +319,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.STOP_DAEMON)).toMatchObject({ sharedMachineAccess: 'manage' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET)).toMatchObject({ sharedMachineAccess: 'manage' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD)).toMatchObject({ sharedMachineAccess: 'manage' });
-    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROMPT_REGISTRY_LIST_SOURCES)).toMatchObject({ sharedMachineAccess: 'use' });
+    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_REGISTRIES_FETCH)).toMatchObject({ sharedMachineAccess: 'use' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_MATERIALIZE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
@@ -978,7 +1012,6 @@ describe('MachineRpcRoutePolicyV1', () => {
     if ('importError' in protocol) throw protocol.importError;
 
     for (const method of [
-      RPC_METHODS.DAEMON_MARKETPLACE_INDEX_QUERY,
       RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET,
     ]) {
       expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({

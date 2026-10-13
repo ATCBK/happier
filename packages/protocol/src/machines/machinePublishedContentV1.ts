@@ -14,6 +14,12 @@ import { MachinePublishedResourceSummaryV1Schema } from './resources/machineReso
 import { ActivityDecisionV1Schema } from './managed/managedIntentV1.js';
 import { DevcontainerChildProjectionV1Schema, managedDevcontainerChildProjectionsEqualV1, type DevcontainerChildProjectionV1 } from './managed/devcontainerV1.js';
 
+/** Install facts only: paths, sign-in and launch admission remain private/demanded reads. */
+export const MachinePublishedAgentInventoryV1Schema = lazyZodSchema(() => z.object({
+  checkedAt: z.number().int().nonnegative(),
+  installedAgentIds: z.array(z.string().min(1)),
+}).strict());
+
 /** One share-wide projection: neither owner nor recipient receives private work here. */
 export const MachinePublishedMetadataV1Schema = lazyZodSchema(() => z.object({
   devcontainerChild: z.optional(DevcontainerChildProjectionV1Schema),
@@ -37,6 +43,7 @@ export const MachinePublishedMetadataV1Schema = lazyZodSchema(() => z.object({
   shutdownRequestedAt: z.number().optional(),
   shutdownSource: z.enum(['happy-app', 'happy-cli', 'os-signal', 'unknown']).optional(),
   cliUpdate: CliUpdateFactsSchema.optional(),
+  agentInventory: MachinePublishedAgentInventoryV1Schema.optional(),
 }).strict());
 
 export const MachinePublishedTransferListenerV1Schema = lazyZodSchema(() => z.object({
@@ -95,6 +102,7 @@ export const MachinePublishedDaemonStateV1Schema = lazyZodSchema(() => z.object(
 export const StoredMachinePublishedMetadataV1Schema = lazyZodSchema(() => createStoredReadSchema(MachinePublishedMetadataV1Schema).extend({
   // The released UI treats a malformed optional update projection as absent.
   cliUpdate: createStoredReadSchema(CliUpdateFactsSchema).optional().catch(undefined),
+  agentInventory: createStoredReadSchema(MachinePublishedAgentInventoryV1Schema).optional().catch(undefined),
 }));
 export const StoredMachinePublishedDaemonStateV1Schema = lazyZodSchema(() => createStoredReadSchema(MachinePublishedDaemonStateV1Schema).extend({
   // Optional service presentation failures cannot erase unrelated daemon facts.

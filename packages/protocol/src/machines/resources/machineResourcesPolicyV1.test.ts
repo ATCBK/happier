@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readMachineResourcesPolicyV1, mutateMachineResourcesPolicyV1, MachineResourcesPolicyPatchV1Schema } from './machineResourcesPolicyV1.js';
+import { readMachineResourcesPolicyV1, getMachineResourcesPolicyV1, mutateMachineResourcesPolicyV1, MachineResourcesPolicyPatchV1Schema } from './machineResourcesPolicyV1.js';
+import { MACHINE_RESOURCES_ACTION_SPECS } from '../../actions/specs/machineResources.js';
+import type { MachineMetadataFieldPortV1 } from '../machineMetadataFieldV1.js';
 
 describe('machine resources policy', () => {
   it('persists the browser admission override through the existing policy Action input and writer', async () => {
@@ -159,13 +161,39 @@ describe('machine resources policy', () => {
     expect(MachineResourcesPolicyPatchV1Schema.safeParse({ processes: { allProcessesVisible: 'true' } }).success).toBe(false);
   });
 
-  it('defaults keep awake On and persists Off through the same resources policy writer', async () => {
-    expect(readMachineResourcesPolicyV1({})).toMatchObject({ status: 'ready', policy: { guard: { keepAwake: 'on' } } });
-    const result = await mutateMachineResourcesPolicyV1({ expectedRevision: 1, patch: { guard: { keepAwake: 'off' } } }, {
-      read: async () => ({ status: 'ready', metadata: { host: 'worker' }, metadataVersion: 1 }),
-      compareAndSwap: async ({ metadata }) => ({ status: 'applied', metadata, metadataVersion: 2 }),
-    });
-    expect(result).toMatchObject({ status: 'applied', policy: { guard: { keepAwake: 'off' } }, revision: 2 });
+  it('round-trips canonical policy writes through persisted metadata and the strict Action consumers', async () => {
+    const [getSpec, setSpec] = MACHINE_RESOURCES_ACTION_SPECS;
+    let metadata: Record<string, unknown> = { host: 'worker' };
+    let metadataVersion = 1;
+    // The metadata transport is the boundary; the policy writer and readers remain real.
+    const port: MachineMetadataFieldPortV1 = {
+      read: async () => ({ status: 'ready', metadata, metadataVersion }),
+      compareAndSwap: async request => {
+        metadata = JSON.parse(JSON.stringify(request.metadata));
+        metadataVersion++;
+        return { status: 'applied', metadata, metadataVersion };
+      },
+    };
+    const initial = await getMachineResourcesPolicyV1(port);
+    expect(getSpec.outputSchema.parse(initial)).toEqual(initial);
+    expect(initial).toMatchObject({ status: 'ready', source: 'default', revision: 1, policy: { guard: { keepAwake: 'on' } } });
+    const { machineId: _machineId, ...mutation } = setSpec.inputSchema.parse({ machineId: 'machine', expectedRevision: 1,
+      patch: { guard: { keepAwake: 'off' }, processes: { browserMaxConcurrent: 7 }, storage: { trashEmptyAfterDays: null } } });
+    const result = await mutateMachineResourcesPolicyV1(mutation, port);
+    expect(setSpec.outputSchema.parse(result)).toEqual(result);
+    expect(result).toMatchObject({ status: 'applied', revision: 2, policy: { guard: { keepAwake: 'off' },
+      processes: { browserMaxConcurrent: 7 }, storage: { trashEmptyAfterDays: null } } });
+    expect(metadata.host).toBe('worker');
+    const read = await getMachineResourcesPolicyV1(port);
+    expect(getSpec.outputSchema.parse(read)).toEqual(read);
+    expect(read).toMatchObject({ status: 'ready', source: 'stored', revision: 2 });
+    if (result.status !== 'applied' || read.status !== 'ready') throw new Error('Expected the persisted policy to be readable');
+    expect(read.policy).toEqual(result.policy);
+    expect(readMachineResourcesPolicyV1(metadata)).toEqual({ status: 'ready', source: 'stored', policy: result.policy });
+    const unchanged = await mutateMachineResourcesPolicyV1({ ...mutation, expectedRevision: 2 }, port);
+    expect(setSpec.outputSchema.parse(unchanged)).toEqual({ status: 'unchanged', policy: read.policy, revision: 2 });
+    const conflict = await mutateMachineResourcesPolicyV1(mutation, port);
+    expect(setSpec.outputSchema.parse(conflict)).toEqual({ status: 'conflict', policy: read.policy, revision: 2 });
   });
   it('defaults absent sections and drops unknown stored fields without tolerating malformed known values', () => {
     const read = readMachineResourcesPolicyV1({ resourcesPolicyV1: { v: 1, alerts: { cpu: { abovePct: 83, future: true } }, future: {} } });
