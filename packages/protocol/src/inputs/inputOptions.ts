@@ -16,6 +16,7 @@ import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 import { parseInputTypeOptionsSourceId } from './inputTypes.js';
 import { resolveInputTypeOptions, narrowInputFieldOptions } from './inputTypeRuntime.js';
 import type { InputOption, InputFieldHint } from './inputFields.js';
+import type { InputOptionsConsumerV1 } from './inputOptionsConsumer.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
@@ -214,6 +215,7 @@ export async function resolveInputOptions(params: Readonly<{
   actionId: ActionId | null;
   optionsSourceId: string;
   input: Record<string, unknown>;
+  consumer?: InputOptionsConsumerV1;
   includeSpawnModelCatalog?: boolean;
   readFailure: (result: unknown) => Extract<ActionExecuteResult, { ok: false }> | null;
   resolveSessionId: (input: unknown, ctx: ActionExecutorContext) => string | null;
@@ -322,33 +324,50 @@ export async function resolveInputOptions(params: Readonly<{
     const executor = createActionExecutor(deps);
     const groups: Record<'needsYou' | 'working' | 'recent', InputOption[]> = { needsYou: [], working: [], recent: [] };
     const groupLabels = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
-    let cursor: string | undefined;
-    do {
-      ctx.signal?.throwIfAborted();
-      const result = await executor.execute('session.list', { view: 'awareness', query: {
-        v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
-        audiences: [], tagIds: [], includeAttention: false,
-        ...(cursor ? { cursor } : {}),
-      } }, ctx);
-      if (!result.ok) return result;
-      const page = parseSessionAwarenessListResultV1(result.result);
-      if (!page || (page.hasNext && !page.nextCursor)) {
-        return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
-      }
-      for (const session of page.sessions) {
-        const readable = isSessionAwarenessContentReadableV1(session.encryption);
-        const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
-        groups[group].push({
-          value: VoiceTrackedSessionAddressV1Schema.parse({ serverId: sessionServerId, sessionId: session.sessionId }),
-          label: readable ? session.title ?? session.sessionId : session.sessionId,
-          description: groupLabels[group],
-          ...(!readable ? { disabled: true } : {}),
-        });
-      }
-      cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
-    } while (cursor);
+    const consumer = params.consumer;
+    const project = consumer?.kind === 'widget' && consumer.surface.owner.kind === 'project'
+      ? { serverId: consumer.surface.serverId, projectKey: consumer.surface.owner.projectId }
+      : undefined;
+    // Project membership belongs to session.list's admitted metadata/workspace owner.
+    // Read it through that owner, then order the same Home corpus without narrowing it.
+    const projectSessionIds = new Set<string>();
+    for (const projectFilter of project ? [project, undefined] : [undefined]) {
+      let cursor: string | undefined;
+      do {
+        ctx.signal?.throwIfAborted();
+        const result = await executor.execute('session.list', { view: 'awareness', ...(projectFilter ? { project: projectFilter } : {}), query: {
+          v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
+          audiences: [], tagIds: [], includeAttention: false,
+          ...(cursor ? { cursor } : {}),
+        } }, ctx);
+        if (!result.ok) return result;
+        const page = parseSessionAwarenessListResultV1(result.result);
+        if (!page || (page.hasNext && !page.nextCursor)) {
+          return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+        }
+        for (const session of page.sessions) {
+          if (projectFilter) {
+            projectSessionIds.add(session.sessionId);
+            continue;
+          }
+          const readable = isSessionAwarenessContentReadableV1(session.encryption);
+          const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
+          groups[group].push({
+            value: VoiceTrackedSessionAddressV1Schema.parse({ serverId: sessionServerId, sessionId: session.sessionId }),
+            label: readable ? session.title ?? session.sessionId : session.sessionId,
+            description: groupLabels[group],
+            ...(!readable ? { disabled: true } : {}),
+          });
+        }
+        cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
+      } while (cursor);
+    }
     ctx.signal?.throwIfAborted();
-    return { ok: true, result: [...groups.needsYou, ...groups.working, ...groups.recent] };
+    const options = [...groups.needsYou, ...groups.working, ...groups.recent];
+    const belongsToProject = (option: InputOption) => projectSessionIds.has(VoiceTrackedSessionAddressV1Schema.parse(option.value).sessionId);
+    return { ok: true, result: project
+      ? [...options.filter(belongsToProject), ...options.filter(option => !belongsToProject(option))]
+      : options };
   }
 
   if (optionsSourceId === 'workflows.references.available') {
