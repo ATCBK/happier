@@ -91,17 +91,21 @@ export function groupReachRulesV1(rules: ReachRulesV1): Readonly<{ base: 'on' | 
   // Reach predicates contain only a machine, a project, or a machine/root pair.
   // Pairwise place intersections witness every possible broader decision at a
   // rule's place, including restoring project/workspace rules and Agent exceptions.
-  const effective = normalized.filter(rule => {
-    if (rule === base) return true;
-    const without = normalized.filter(candidate => candidate !== rule);
-    return normalized.some(candidate => {
+  let effective = [...normalized];
+  for (const rule of normalized) {
+    if (rule === base) continue;
+    const without = effective.filter(candidate => candidate !== rule);
+    const changesDecision = effective.some(candidate => {
       if (candidate.agentId !== undefined && candidate.agentId !== rule.agentId) return false;
       return ([null, 'win32', 'posix'] as const).some(platform => {
         const context = intersectionContext(rule, candidate, platform);
-        return context !== null && resolveReachV1(normalized, context).enabled !== resolveReachV1(without, context).enabled;
+        return context !== null && resolveReachV1(effective, context).enabled !== resolveReachV1(without, context).enabled;
       });
     });
-  });
+    // Two rules may each restore the same decision. Test removal against the
+    // remaining chain so their individual redundancy cannot discard both.
+    if (!changesDecision) effective = without;
+  }
   const group = (items: readonly ReachRuleV1[]) => ({ turnedOnIn: items.filter(rule => rule.target.t !== 'allMachines' && rule.enabled),
     except: items.filter(rule => rule.target.t !== 'allMachines' && !rule.enabled) });
   const general = group(effective.filter(rule => rule.agentId === undefined));

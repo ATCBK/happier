@@ -20,11 +20,22 @@ export const SessionSkillSelectionRestartRequiredAuthoringV1Schema = lazyZodSche
 export const SessionSkillSelectionRestartRequiredV1Schema = createStoredReadSchema(SessionSkillSelectionRestartRequiredAuthoringV1Schema);
 export type SessionSkillSelectionRestartRequiredV1 = z.infer<typeof SessionSkillSelectionRestartRequiredV1Schema>;
 
+const CapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => z.object({
+  reason: z.string().min(1), restartBy: z.enum(['user', 'terminal']).optional(),
+}).strict());
+/** Status projection only. Desired policy and applied baselines stay in their existing keys. */
+export const CapabilitySelectionApplyAuthoringV1Schema = lazyZodSchema(() => z.object({
+  mcp: CapabilitySelectionApplyReasonV1Schema.optional(), skills: CapabilitySelectionApplyReasonV1Schema.optional(),
+}).strict());
+export const CapabilitySelectionApplyV1Schema = createStoredReadSchema(CapabilitySelectionApplyAuthoringV1Schema);
+export type CapabilitySelectionApplyV1 = z.infer<typeof CapabilitySelectionApplyV1Schema>;
+
 export type SessionCapabilityMetadataV1 = Readonly<{
   mcpSelectionV1?: SessionCapabilitySelectionV1['mcp'];
   skillSelectionV1?: SessionCapabilitySelectionV1['skills'];
   mcpSelectionRestartRequiredV1?: SessionMcpSelectionRestartRequiredV1;
   skillSelectionRestartRequiredV1?: SessionSkillSelectionRestartRequiredV1;
+  capabilitySelectionApplyV1?: CapabilitySelectionApplyV1;
 }>;
 
 function metadataRecord(metadata: unknown): Readonly<Record<string, unknown>> {
@@ -61,6 +72,29 @@ export function readPendingCapabilityApplyV1(metadata: unknown): Readonly<{ mcp:
   };
 }
 
+export function readCapabilitySelectionApplyV1(metadata: unknown): CapabilitySelectionApplyV1 {
+  const parsed = CapabilitySelectionApplyV1Schema.safeParse(metadataRecord(metadata).capabilitySelectionApplyV1);
+  const pending = readPendingCapabilityApplyV1(metadata);
+  return parsed.success ? { ...(pending.mcp && parsed.data.mcp ? { mcp: parsed.data.mcp } : {}),
+    ...(pending.skills && parsed.data.skills ? { skills: parsed.data.skills } : {}) } : {};
+}
+
+export function writeCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
+  next: CapabilitySelectionApplyV1): TMetadata & SessionCapabilityMetadataV1 {
+  const parsed = CapabilitySelectionApplyAuthoringV1Schema.parse(next);
+  const result: TMetadata & { -readonly [K in keyof SessionCapabilityMetadataV1]: SessionCapabilityMetadataV1[K] } = { ...metadata };
+  if (parsed.mcp || parsed.skills) result.capabilitySelectionApplyV1 = parsed;
+  else delete result.capabilitySelectionApplyV1;
+  return result;
+}
+
+export function clearCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
+  kind: 'mcp' | 'skills'): TMetadata & SessionCapabilityMetadataV1 {
+  const status = readCapabilitySelectionApplyV1(metadata);
+  delete status[kind];
+  return writeCapabilitySelectionApplyV1(metadata, status);
+}
+
 /** Desired selections and their applied baselines have one metadata writer. */
 export function writeSessionCapabilitySelectionToMetadataV1<TMetadata extends object>(
   metadata: TMetadata,
@@ -82,7 +116,10 @@ export function writeSessionCapabilitySelectionToMetadataV1<TMetadata extends ob
       result.skillSelectionRestartRequiredV1 = { v: 1, appliedSelection: applied.skills };
     } else delete result.skillSelectionRestartRequiredV1;
   }
-  return result;
+  return writeCapabilitySelectionApplyV1(result, {
+    ...(selection.mcp === undefined ? { mcp: readCapabilitySelectionApplyV1(result).mcp } : {}),
+    ...(selection.skills === undefined ? { skills: readCapabilitySelectionApplyV1(result).skills } : {}),
+  });
 }
 
 /** An attach to a preserved Agent process cannot acknowledge a launch-owned change. */
@@ -103,5 +140,5 @@ export function resolveSelectionRestartMarkersForStartupV1<TMetadata extends obj
       delete result.skillSelectionRestartRequiredV1;
     } else result.skillSelectionRestartRequiredV1 = { v: 1, appliedSelection: applied.skills };
   }
-  return result;
+  return writeCapabilitySelectionApplyV1(result, readCapabilitySelectionApplyV1(result));
 }

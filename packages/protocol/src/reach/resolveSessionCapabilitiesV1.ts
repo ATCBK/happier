@@ -1,4 +1,4 @@
-import type { McpServersSettingsV1, McpServerCatalogEntryV1 } from '../mcp/servers/settingsV1.js';
+import type { McpServersSettingsV1, McpServerCatalogEntryV1, McpPluginItemV1 } from '../mcp/servers/settingsV1.js';
 import { resolveMcpServerConfigForContextV1 } from '../mcp/servers/resolveMcpServerConfigForContextV1.js';
 import { SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
 import type { SkillRuleV1 } from './reachRuleV1.js';
@@ -7,19 +7,23 @@ import { applySessionSelectionV1, SessionSkillSelectionV1Schema, type SessionCap
 
 export type CapabilityItemStateV1 = Readonly<{ kind: 'mcp_server' | 'skill'; id: string; name: string; title?: string;
   selected: boolean; selectable: boolean; reason: CapabilitySelectionReasonV1; decidedBy: ReachDecisionV1['decidedBy']; sessionOverride: 'added' | 'removed' | null }>;
-export type CapabilityMcpItemStateV1 = CapabilityItemStateV1 & Readonly<{ source: 'catalog'; effectiveConfig: McpServerCatalogEntryV1 }>;
+export type CapabilityMcpItemStateV1 = CapabilityItemStateV1 & Readonly<{ source: 'catalog' | 'plugin'; effectiveConfig: McpServerCatalogEntryV1 }>;
 export type ResolveSessionCapabilitiesV1Result = Readonly<{ mcp: Readonly<{ strictMode: boolean; items: readonly CapabilityMcpItemStateV1[] }>;
   skills: Readonly<{ items: readonly CapabilityItemStateV1[]; excludeNativeSkillNames: readonly string[] }> }>;
 
 export function resolveSessionCapabilitiesV1(input: Readonly<{ context: ReachContextV1; mcp: McpServersSettingsV1 | null;
+  mcpPluginItems?: readonly McpPluginItemV1[];
   skills: Readonly<{ items: readonly { skillId: string; name: string }[]; rules: readonly SkillRuleV1[] }> | null;
   selection: SessionCapabilitySelectionV1; agentAcceptsUserMcp: boolean }>): ResolveSessionCapabilitiesV1Result {
   const mcpSelection = SessionMcpSelectionV1Schema.parse(input.selection.mcp ?? {});
   const skillSelection = SessionSkillSelectionV1Schema.parse(input.selection.skills ?? {});
   const mcpIncludes = new Set(mcpSelection.forceIncludeServerIds), mcpExcludes = new Set(mcpSelection.forceExcludeServerIds);
   const skillIncludes = new Set(skillSelection.forceIncludeSkillIds), skillExcludes = new Set(skillSelection.forceExcludeSkillIds);
-  return { mcp: { strictMode: input.mcp?.strictMode ?? false, items: (input.mcp?.servers ?? []).map(server => {
-    const rules = input.mcp!.bindings.filter(rule => rule.serverId === server.id);
+  const mcpItems = [
+    ...(input.mcp?.servers ?? []).map(config => ({ config, rules: input.mcp!.bindings.filter(rule => rule.serverId === config.id), source: 'catalog' as const })),
+    ...(input.mcpPluginItems ?? []).map(item => ({ config: item.config, rules: item.rules, source: 'plugin' as const })),
+  ];
+  return { mcp: { strictMode: input.mcp?.strictMode ?? false, items: mcpItems.map(({ config: server, rules, source }) => {
     const reach = resolveReachV1(rules, input.context);
     const forceIncluded = mcpIncludes.has(server.id), forceExcluded = mcpExcludes.has(server.id);
     const selectable = input.agentAcceptsUserMcp && (reach.decidedBy !== null || isReachPortableV1(rules.filter(rule => rule.agentId === undefined || rule.agentId === input.context.agentId)));
@@ -27,7 +31,7 @@ export function resolveSessionCapabilitiesV1(input: Readonly<{ context: ReachCon
     return { kind: 'mcp_server', id: server.id, name: server.name, ...(server.title ? { title: server.title } : {}),
       ...applied, ...(!input.agentAcceptsUserMcp ? { selected: false, reason: 'agent_unsupported' as const } : {}), selectable,
       decidedBy: reach.decidedBy, sessionOverride: forceExcluded ? 'removed' : forceIncluded ? 'added' : null,
-      source: 'catalog', effectiveConfig: resolveMcpServerConfigForContextV1(server, input.context),
+      source, effectiveConfig: source === 'plugin' ? server : resolveMcpServerConfigForContextV1(server, input.context),
     };
   }) }, skills: { items: (input.skills?.items ?? []).map(item => {
     const reach = resolveReachV1(input.skills!.rules.filter(rule => rule.skillId === item.skillId), input.context);

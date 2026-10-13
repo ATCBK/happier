@@ -16,6 +16,36 @@ export const SessionCapabilitySelectionAuthoringV1Schema = lazyZodSchema(() => z
 }).strict());
 export const SessionCapabilitySelectionV1Schema = createStoredReadSchema(SessionCapabilitySelectionAuthoringV1Schema);
 export type SessionCapabilitySelectionV1 = z.infer<typeof SessionCapabilitySelectionV1Schema>;
+export type SessionCapabilityKindV1 = 'skill' | 'mcp_server' | 'native_skill';
+export type SessionCapabilityOverrideV1 = 'on' | 'off' | 'inherit';
+
+export function readSessionCapabilityOverrideV1(selection: SessionCapabilitySelectionV1,
+  kind: SessionCapabilityKindV1, id: string): SessionCapabilityOverrideV1 {
+  if (kind === 'native_skill') return selection.skills?.excludeNativeSkillNames.includes(id) ? 'off' : 'inherit';
+  const excludes = kind === 'mcp_server' ? selection.mcp?.forceExcludeServerIds : selection.skills?.forceExcludeSkillIds;
+  const includes = kind === 'mcp_server' ? selection.mcp?.forceIncludeServerIds : selection.skills?.forceIncludeSkillIds;
+  return excludes?.includes(id) ? 'off' : includes?.includes(id) ? 'on' : 'inherit';
+}
+
+/** One item writer for drafts, optimistic projections and the Account metadata Action. */
+export function setSessionCapabilitySelectionItemV1(selection: SessionCapabilitySelectionV1,
+  kind: SessionCapabilityKindV1, id: string, state: SessionCapabilityOverrideV1): SessionCapabilitySelectionV1 {
+  const normalized = SessionCapabilitySelectionAuthoringV1Schema.parse(selection);
+  if (kind === 'mcp_server') {
+    const mcp = SessionMcpSelectionV1Schema.parse(normalized.mcp ?? {});
+    return { ...normalized, mcp: { ...mcp,
+      forceIncludeServerIds: [...mcp.forceIncludeServerIds.filter(value => value !== id), ...(state === 'on' ? [id] : [])],
+      forceExcludeServerIds: [...mcp.forceExcludeServerIds.filter(value => value !== id), ...(state === 'off' ? [id] : [])],
+    } };
+  }
+  const skills = SessionSkillSelectionV1Schema.parse(normalized.skills ?? {});
+  return { ...normalized, skills: kind === 'native_skill' ? { ...skills,
+    excludeNativeSkillNames: [...skills.excludeNativeSkillNames.filter(value => value !== id), ...(state === 'off' ? [id] : [])],
+  } : { ...skills,
+    forceIncludeSkillIds: [...skills.forceIncludeSkillIds.filter(value => value !== id), ...(state === 'on' ? [id] : [])],
+    forceExcludeSkillIds: [...skills.forceExcludeSkillIds.filter(value => value !== id), ...(state === 'off' ? [id] : [])],
+  } };
+}
 /** The sole ingress fold for the released MCP-only carrier spelling. */
 export function readCapabilitySelectionCarrierV1(raw: unknown): SessionCapabilitySelectionV1 | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;

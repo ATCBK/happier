@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { SessionCapabilitySelectionAuthoringV1Schema } from './sessionCapabilitySelectionV1.js';
+import {
+    createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1,
+    sealSessionOwnerMetadataEnvelopeV1, openSessionOwnerMetadataEnvelopeV1,
+    SessionOwnerMetadataV1Schema, SessionOwnerMetadataEnvelopeV1Schema, SessionSharedMetadataV1Schema,
+    projectSessionSharedMetadataV1, projectSessionOwnerCompatibilityViewV1,
+} from '../sessions/metadata/sessionMetadataEnvelopesV1.js';
 import {
     readAppliedSessionCapabilitySelectionFromMetadataV1,
     readPendingCapabilityApplyV1,
     readSessionCapabilitySelectionFromMetadataV1,
     resolveSelectionRestartMarkersForStartupV1,
+    writeCapabilitySelectionApplyV1,
     writeSessionCapabilitySelectionToMetadataV1,
 } from './sessionCapabilityMetadataV1.js';
 
@@ -12,6 +20,48 @@ const skills = { v: 1 as const, forceIncludeSkillIds: [], forceExcludeSkillIds: 
 const next = { mcp: { ...mcp, forceIncludeServerIds: ['linear'] }, skills: { ...skills, forceIncludeSkillIds: ['lint'] } };
 
 describe('session capability metadata codec', () => {
+    it('clears only the edited or acknowledged kind of apply refusal without changing desired policy', () => {
+        const pending = { ...writeSessionCapabilitySelectionToMetadataV1({ path: '/project' }, next, { sessionActive: true }),
+            capabilitySelectionApplyV1: { mcp: { reason: 'restart_to_apply', restartBy: 'terminal' as const },
+                skills: { reason: 'missing_resume_snapshot' } } };
+        const edited = writeSessionCapabilitySelectionToMetadataV1(pending, { skills }, { sessionActive: true });
+        expect(edited.capabilitySelectionApplyV1).toEqual({ mcp: pending.capabilitySelectionApplyV1.mcp });
+        const resumed = resolveSelectionRestartMarkersForStartupV1({ current: pending, applied: { mcp: next.mcp } });
+        expect(resumed.capabilitySelectionApplyV1).toEqual({ skills: pending.capabilitySelectionApplyV1.skills });
+        expect(readSessionCapabilitySelectionFromMetadataV1(resumed)).toEqual(next);
+    });
+    it.each(['plain', 'e2ee'] as const)('delivers the metadata writer output through strict %s owner envelopes without disclosing selections in shared metadata', mode => {
+        const selection = SessionCapabilitySelectionAuthoringV1Schema.parse({
+            mcp: { forceIncludeServerIds: ['linear', 'linear'], forceExcludeServerIds: ['disabled'] },
+            skills: { forceIncludeSkillIds: ['lint', 'lint'], excludeNativeSkillNames: ['native'] },
+        });
+        const pending = writeCapabilitySelectionApplyV1(writeSessionCapabilitySelectionToMetadataV1({ path: '/project' }, selection, { sessionActive: true }),
+            { mcp: { reason: 'restart_to_apply', restartBy: 'user' }, skills: { reason: 'missing_resume_snapshot' } });
+        const owner = createSessionOwnerMetadataV1({ metadata: pending });
+        if (!owner.ok) throw new Error(`Metadata writer output was rejected: ${JSON.stringify(owner)}`);
+        expect(SessionOwnerMetadataV1Schema.parse(owner.ownerMetadata)).toEqual(owner.ownerMetadata);
+        const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(17) };
+        const envelope = mode === 'plain' ? createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata)
+            : sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: owner.ownerMetadata, material,
+                randomBytes: length => new Uint8Array(length).fill(7) });
+        expect(SessionOwnerMetadataEnvelopeV1Schema.parse(envelope)).toEqual(envelope);
+        const opened = openSessionOwnerMetadataEnvelopeV1({ accountMode: mode, envelope, material: mode === 'plain' ? null : material });
+        if (!opened.ok) throw new Error('Produced owner envelope failed to open');
+        const shared = SessionSharedMetadataV1Schema.parse(projectSessionSharedMetadataV1({ metadata: pending }));
+        expect(shared).not.toHaveProperty('mcpSelectionV1');
+        expect(shared).not.toHaveProperty('skillSelectionV1');
+        expect(shared).not.toHaveProperty('capabilitySelectionApplyV1');
+        const consumed = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: shared, ownerMetadata: opened.ownerMetadata });
+        expect(readSessionCapabilitySelectionFromMetadataV1(consumed)).toEqual(selection);
+        expect(readPendingCapabilityApplyV1(consumed)).toEqual({ mcp: true, skills: true });
+        expect(readAppliedSessionCapabilitySelectionFromMetadataV1(consumed)).toEqual({ mcp, skills });
+        expect(consumed.capabilitySelectionApplyV1).toEqual(pending.capabilitySelectionApplyV1);
+        const resumed = resolveSelectionRestartMarkersForStartupV1({ current: consumed, applied: selection });
+        expect(readPendingCapabilityApplyV1(resumed)).toEqual({ mcp: false, skills: false });
+        expect(SessionOwnerMetadataV1Schema.safeParse({ ...owner.ownerMetadata, unexpectedWireField: true }).success).toBe(false);
+        expect(openSessionOwnerMetadataEnvelopeV1({ accountMode: mode === 'plain' ? 'e2ee' : 'plain', envelope, material }).ok).toBe(false);
+    });
+
     it('reads the predecessor MCP metadata shape and round-trips its released keys', () => {
         // ../0.2 at cd2bb4d853: mcpServers/sessionSelectionV1.ts and UI sessionMcpSelectionPublish.ts.
         const previous = { path: '/project', mcpSelectionV1: mcp };
