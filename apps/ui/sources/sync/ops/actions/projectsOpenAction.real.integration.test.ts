@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { io, type Socket } from 'socket.io-client';
 import { callSocketRpc } from '@happier-dev/sync-client';
 import { decodeBase64 } from '@happier-dev/protocol';
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { ExternalActionDaemonDispatchRequestSchema, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { OpenProjectInputV1Schema, OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
@@ -33,6 +34,7 @@ import { db } from '../../../../../server/sources/storage/db';
 import { getOrCreateServerIdentityId, initializeServerIdentityCache } from '../../../../../server/sources/app/serverIdentity/serverIdentity';
 import { resolveMachineAdmission } from '../../../../../server/sources/app/machines/machineAccess';
 import { ApiClient } from '../../../../../cli/src/api/api';
+import { logger } from '../../../../../cli/src/ui/logger';
 import type { ApiMachineClient } from '../../../../../cli/src/api/apiMachine';
 import { createCurrentMachineExecutionOriginContextResolver } from '../../../../../cli/src/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { runWithServerHttpBaseUrl } from '../../../../../cli/src/api/client/serverHttpBaseUrl';
@@ -155,7 +157,10 @@ describe('recipient Project Open through the real UI, Home, installed daemon and
         const result = await createDefaultActionExecutor().execute('projects.open', input, {
             serverId: profile.id, expectedAccountId: requester.id, surface: 'ui', authority: 'present_user', actionRequestId: crypto.randomUUID(),
         });
-        expect(result, JSON.stringify({ result, receipts })).toMatchObject({ ok: true, result: { kind: 'opened', directory: root } });
+        logger.flushSync();
+        const diagnostics = redactBugReportSensitiveText(await readFile(logger.logFilePath, 'utf8'))
+            .split('\n').filter(line => line.includes('[Project root diagnostic]'));
+        expect(result, JSON.stringify({ result, receipts, diagnostics })).toMatchObject({ ok: true, result: { kind: 'opened', directory: root } });
         expect(carriedRequests).toHaveLength(1);
         expect(carriedRequests[0]).toMatchObject({ actionId: 'projects.open', principal: { accountId: requester.id }, envelope: { v: 1 } });
         if (carriedRequests[0]!.envelope.v === 1) expect(OpenProjectInputV1Schema.parse(carriedRequests[0]!.envelope.input).source)
