@@ -33,10 +33,6 @@ import {
   type StubReply,
 } from './testSupport.js';
 
-vi.mock('@happier-dev/plugin-sdk/actions', async () => (
-  import('../../../../../protocol/src/actions/externalActionApi.js')
-));
-
 const WORKSPACE_UUID = '{4b2f0e6c-8a71-4f2e-9d51-6c3b70a19d44}';
 const REPOSITORY_UUID = '{1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9}';
 const COLLISION_SCOPE = `bitbucket:${REPOSITORY_UUID}`;
