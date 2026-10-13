@@ -7,6 +7,7 @@ import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode
 import { checkSessionAccess, requireAccessLevel } from "@/app/share/accessControl";
 import { inTx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
+import { error as logError } from "@/utils/logging/log";
 import {
     isStoredContentKindAllowedForSessionByStoragePolicy,
     SessionSystemRecordKindSchema,
@@ -22,6 +23,26 @@ import {
 const SESSION_SYSTEM_RECORD_CURSOR_PREFIX = "v1";
 const SESSION_SYSTEM_RECORD_MAX_LIMIT = 500;
 const SESSION_SYSTEM_RECORD_DEFAULT_LIMIT = 100;
+
+function reportSystemRecordFailure(operation: "upsert" | "list" | "get" | "latest", error: unknown): void {
+    // Prisma messages, stacks and metadata can contain SQL, content or credentials. Only
+    // publish fixed exception categories and the documented Prisma code shape.
+    const knownErrorNames = [
+        "Error", "TypeError", "RangeError", "SyntaxError",
+        "PrismaClientKnownRequestError", "PrismaClientUnknownRequestError",
+        "PrismaClientInitializationError", "PrismaClientValidationError", "PrismaClientRustPanicError",
+        "TransactionAcquisitionUnavailableError", "TransactionDeadlineExceededError",
+    ];
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    logError({
+        module: "session-system-record-service",
+        operation,
+        prismaCode: typeof code === "string" && /^P\d{4}$/.test(code) ? code : null,
+        errorType: error instanceof Error
+            ? (knownErrorNames.includes(error.name) ? error.name : "Error")
+            : typeof error,
+    }, "Session system-record operation failed");
+}
 
 export type SessionSystemRecordNamespace = z.infer<typeof SessionSystemRecordNamespaceSchema>;
 export type SessionSystemRecordKind = z.infer<typeof SessionSystemRecordKindSchema>;
@@ -356,6 +377,7 @@ async function upsertSessionSystemRecordWithRetry(
         if (retryUniqueRace && isPrismaErrorCode(error, "P2002")) {
             return await upsertSessionSystemRecordWithRetry(params, false);
         }
+        reportSystemRecordFailure("upsert", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -416,7 +438,8 @@ export async function listSessionSystemRecords(
                 nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
             };
         });
-    } catch {
+    } catch (error) {
+        reportSystemRecordFailure("list", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -460,7 +483,8 @@ export async function getSessionSystemRecord(
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
         });
-    } catch {
+    } catch (error) {
+        reportSystemRecordFailure("get", error);
         return { ok: false, error: "internal" };
     }
 }
@@ -503,7 +527,8 @@ export async function getLatestSessionSystemRecord(
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
         });
-    } catch {
+    } catch (error) {
+        reportSystemRecordFailure("latest", error);
         return { ok: false, error: "internal" };
     }
 }
