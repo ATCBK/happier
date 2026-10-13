@@ -1260,7 +1260,7 @@ function resolveOrganizationPinnedSessionIdsForServer(state: SessionOrganization
         attentionStandingsBySessionKey: state.sessionOrganizationAttentionStandingsBySessionKey,
         orderEntriesByScopeKey: state.sessionOrganizationOrderEntriesByScopeKey,
         labelsByLabelKey: state.sessionOrganizationLabelsByLabelKey,
-    }, normalizedServerId).pinnedSessionIds];
+    }, normalizedServerId).orderedPinSessionIds];
 }
 
 type AckedOutboundUserMessageCommitInput = Readonly<{
@@ -1365,6 +1365,7 @@ class Sync {
       private sessionByIdHydrationInFlight = new Map<string, Readonly<{
           sessionId: string;
           promise: Promise<EnsureSessionVisibleForRouteResult>;
+          readSessionEncryption: () => ReturnType<Encryption['getSessionEncryption']>;
           invalidate(): void;
       }>>();
       private readonly hostedSystemSessionEnsurer = createHostedSystemSessionEnsurer({
@@ -2874,6 +2875,7 @@ class Sync {
         try {
             if (!isCurrent() || !areServerProfileIdentifiersEquivalent(authority.scope.serverId, sessionAddress.serverId)) return { status: 'forbidden' };
             if (!authority.context.credentials) return { status: 'forbidden' };
+            let readSessionEncryption = () => authority.context.encryption?.getSessionEncryption(sessionAddress.sessionId) ?? null;
             // Reuse the canonical exact-Session hydration and its in-flight
             // coalescer. Several record observers must not each perform another
             // full Session read merely to obtain mode/access/key context.
@@ -2883,6 +2885,7 @@ class Sync {
                 hydrateMessages: false,
                 authority,
                 scopeCurrentness: isCurrent,
+                onHydratedSessionReader: reader => { readSessionEncryption = reader; },
             });
             if (!isCurrent()) return { status: 'forbidden' };
             if (hydrated.kind === 'missing') return hydrated.cause === 'not_found' ? { status: 'not_found' } : { status: 'forbidden' };
@@ -2919,7 +2922,7 @@ class Sync {
                 if (current.encryptionMode !== 'e2ee') return null;
                 return {
                     mode: 'e2ee',
-                    encryption: authority.context.encryption?.getSessionEncryption(sessionAddress.sessionId) ?? null,
+                    encryption: readSessionEncryption(),
                 };
             };
             const contentContext = readContentContext();
@@ -3728,6 +3731,8 @@ class Sync {
                 authority?: ServerAccountRequestAuthority;
                 /** Exact captured Account-scope currentness for a qualified caller. */
                 scopeCurrentness?: () => boolean;
+                /** Exact record observers use the reader initialized by a coalesced hydration. */
+                onHydratedSessionReader?: (read: () => ReturnType<Encryption['getSessionEncryption']>) => void;
             }>,
         ): Promise<EnsureSessionVisibleForRouteResult> => {
             const normalized = String(sessionId ?? '').trim();
@@ -3819,11 +3824,16 @@ class Sync {
                     log.log(`[sessionHydrate] awaiting in-flight hydration for ${normalized}`);
                 }
                 const result = await existing.promise;
+                if (result.kind === 'available' && options?.scopeCurrentness?.() !== false) {
+                    options?.onHydratedSessionReader?.(existing.readSessionEncryption);
+                }
                 return options?.awaitMessageHydration === true ? finishMessageHydration(result) : result;
             }
 
             let hydrationCurrent = true;
             const hydrationEncryption = this.encryption;
+            const readerEncryption = options?.authority ? options.authority.context.encryption : hydrationEncryption;
+            const readSessionEncryption = () => readerEncryption?.getSessionEncryption(normalized) ?? null;
             const hydrationGeneration = this.serverScopeGeneration;
             const hasExplicitScopeCurrentness = options?.authority !== undefined
                 && options.scopeCurrentness !== undefined;
@@ -3928,6 +3938,7 @@ class Sync {
             const inFlightEntry = Object.freeze({
                 sessionId: normalized,
                 promise: inFlight,
+                readSessionEncryption,
                 invalidate: () => {
                     hydrationCurrent = false;
                 },
@@ -3940,6 +3951,9 @@ class Sync {
             });
 
             const result = await inFlight;
+            if (result.kind === 'available' && options?.scopeCurrentness?.() !== false) {
+                options?.onHydratedSessionReader?.(readSessionEncryption);
+            }
             return finishMessageHydration(result);
         }
 
@@ -6790,7 +6804,13 @@ class Sync {
         // concurrent-cache owner already applies before publishing a page.
         if (!result.current || !shouldContinue()) return;
         const fetchedSessionIdSet = new Set(result.sessionIds.filter((sessionId) => result.isSessionCurrent?.(sessionId) !== false));
-        const missingRequiredHydrationSessionIds = requiredHydrationSessionIds.filter(
+        // The overlapping organization refresh may discover pins that were
+        // absent from the warm snapshot used to prioritize the list read.
+        const settledRequiredHydrationSessionIds = Array.from(new Set([
+            ...requiredHydrationSessionIds,
+            ...(isAppend ? [] : resolveOrganizationPinnedSessionIdsForServer(storage.getState(), activeServerId)),
+        ]));
+        const missingRequiredHydrationSessionIds = settledRequiredHydrationSessionIds.filter(
             (sessionId) => result.isSessionCurrent?.(sessionId) !== false && !fetchedSessionIdSet.has(sessionId),
         );
         const activeCredentials = this.credentials;
@@ -8705,7 +8725,8 @@ class Sync {
     public mutateAccountSettingsOnce = async <T>(input: Readonly<{
         signal?: AbortSignal;
         expectedSettingsScope: AccountSettingsScope | null;
-        expectedSettingsVersion: number;
+        /** Null is admitted only for a rebasing intent; syncSettings reads its exact Home baseline. */
+        expectedSettingsVersion: number | null;
         rebaseOnConflict?: boolean;
         mutate: (
             raw: Readonly<Record<string, unknown>>,
@@ -12636,9 +12657,10 @@ class Sync {
         assertAuthorityCurrent();
 
         let session = storage.getState().sessions[input.sessionId] ?? null;
+        let readSessionEncryption = () => authority.context.encryption?.getSessionEncryption(input.sessionId) ?? null;
         let sessionEncryption = session?.encryptionMode === 'plain'
             ? null
-            : authority.context.encryption?.getSessionEncryption(input.sessionId) ?? null;
+            : readSessionEncryption();
         if (!session || (session.encryptionMode !== 'plain' && !sessionEncryption)) {
             const hydration = await this.ensureSessionVisibleForMessageRoute(
                 input.sessionId,
@@ -12646,6 +12668,7 @@ class Sync {
                     forceRefresh: true,
                     serverId: authority.scope.serverId,
                     authority,
+                    onHydratedSessionReader: reader => { readSessionEncryption = reader; },
                 },
             );
             assertAuthorityCurrent();
@@ -12658,7 +12681,7 @@ class Sync {
             session = storage.getState().sessions[input.sessionId] ?? null;
             sessionEncryption = session?.encryptionMode === 'plain'
                 ? null
-                : authority.context.encryption?.getSessionEncryption(input.sessionId) ?? null;
+                : readSessionEncryption();
         }
         if (!session) {
             throw new Error(`Session ${input.sessionId} not found`);

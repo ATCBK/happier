@@ -94,7 +94,7 @@ describe('sync.create initial awaits', () => {
         await syncSwitchServer(null);
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         apiSocket.disconnect();
-        network.dispose();
+        await network.dispose();
         vi.restoreAllMocks();
         vi.useRealTimers();
     });
@@ -161,11 +161,11 @@ describe('sync.create initial awaits', () => {
         const secretB = new Uint8Array(32).fill(8);
         const encryptionA = await Encryption.create(secretA);
         const encryptionB = await Encryption.create(secretB);
-        network.setAccount(home.serverUrl, 'account-a');
+        await network.setAccount(home.serverUrl, 'account-a');
         await finishInitialCreate({ token: createAccountTokenForTests('account-a'), secret: encodeBase64(secretA, 'base64url') });
         expect(getTrackingAnonymousUserId()).toBe(encryptionA.anonID);
 
-        network.setAccount(home.serverUrl, 'account-b');
+        await network.setAccount(home.serverUrl, 'account-b');
         await sync.switchServer({ token: createAccountTokenForTests('account-b'), secret: encodeBase64(secretB, 'base64url') });
 
         expect(getTrackingAnonymousUserId()).toBe(encryptionB.anonID);

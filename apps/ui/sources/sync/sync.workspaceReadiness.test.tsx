@@ -157,7 +157,7 @@ describe('Sync workspace readiness', () => {
             oldProfile.resolve();
             unsubscribe();
             await disconnectActiveServerConnection();
-            network.dispose();
+            await network.dispose();
             vi.restoreAllMocks();
         }
     }, 120_000);
@@ -325,7 +325,7 @@ describe('Sync workspace readiness', () => {
             await editor?.unmount();
             await inactiveEditor?.unmount();
             await bindings?.unmount();
-            network.dispose();
+            await network.dispose();
             vi.restoreAllMocks();
         }
     }, 120_000);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
@@ -266,6 +266,17 @@ describe('sync.sendMessage wake-after-send', () => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/auth/ping') return Response.json({});
+            if (path === '/v1/machines') {
+                const machines = Object.values(storage.getState().machines);
+                return Response.json((machines.length > 0 ? machines : [createMachine({ id: 'm1' })])
+                    .map(machine => ({
+                        ...createPlainMachineRowFixture({ id: machine.id, accountId: activeScope.accountId }),
+                        active: machine.active,
+                        activeAt: machine.activeAt,
+                        revokedAt: machine.revokedAt ?? null,
+                        replacedByMachineId: machine.replacedByMachineId ?? null,
+                    })));
+            }
             if (path.startsWith('/v1/machines/')) return Response.json({ machine: {
                 id: decodeURIComponent(path.slice('/v1/machines/'.length)),
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -470,7 +481,7 @@ describe('sync.sendMessage wake-after-send', () => {
         );
     });
 
-    it('threads exact Account authority and the addressed Session machine into post-commit wake', async () => {
+    it('threads exact Account authority into post-commit wake and rejects a replaced exact target', async () => {
         const sessionId = 's_exact_wake';
         const activeServerId = getActiveServerSnapshot().serverId;
         const exactSession: Session = {
@@ -484,7 +495,7 @@ describe('sync.sendMessage wake-after-send', () => {
             } as any,
         };
         storage.getState().applyMachines([
-            createMachine({ id: 'm-exact', active: false, replacedByMachineId: 'm-ambient' }),
+            createMachine({ id: 'm-exact', active: false }),
             createMachine({ id: 'm-ambient', active: true }),
         ], true);
         storage.getState().applySessions([exactSession]);
@@ -516,6 +527,20 @@ describe('sync.sendMessage wake-after-send', () => {
             token: `e30.${Buffer.from(JSON.stringify({ sub: accountLifetime!.scope.accountId })).toString('base64url')}.signature`,
             payload: expect.objectContaining({ sessionId, directory: '/exact/project' }),
         })));
+        const callsBeforeReplacement = machineRpcSpy.mock.calls.length;
+        storage.getState().applyMachines([
+            createMachine({ id: 'm-exact', active: false, replacedByMachineId: 'm-ambient' }),
+            createMachine({ id: 'm-ambient', active: true }),
+        ], true);
+        const { getPendingQueueWakeResumeOptions } = await import('./domains/pending/pendingQueueWake');
+        const { ensureSessionRuntimeForPendingInput } = await import('./ops/sessions');
+        const resumeOptions = getPendingQueueWakeResumeOptions({ sessionId, session: exactSession, resumeCapabilityOptions: {},
+            resumeTargetOverride: { machineId: 'm-exact', directory: '/exact/project' } });
+        if (!resumeOptions) throw new Error('Expected a resumable exact Session');
+        await expect(ensureSessionRuntimeForPendingInput({ ...resumeOptions,
+            serverId: activeServerId, accountLifetime: accountLifetime!,
+        })).resolves.toMatchObject({ type: 'error' });
+        expect(machineRpcSpy).toHaveBeenCalledTimes(callsBeforeReplacement);
         retireActiveServerAccountScopeLifetime();
     });
 

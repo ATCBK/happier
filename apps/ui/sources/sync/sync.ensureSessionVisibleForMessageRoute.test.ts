@@ -9,8 +9,17 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
 import 'fake-indexeddb/auto';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
+import { SessionBoardLayoutV1StoredSchema } from '@happier-dev/protocol/sessions/board/layout';
+import { openSessionSystemRecord } from './domains/sessionSystemRecords/codec';
 
 installDisconnectedServerSocketBoundary();
+
+// Static storage/runtime imports need the canonical Socket boundary during collection.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -134,7 +143,7 @@ async function applySelectedHomeForSessionListTest(credentials?: import('@/auth/
         credentials: appliedCredentials,
         request: (url, init) => runtimeFetchMock(String(url), init),
     });
-    vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
+    // Current restore harness uses real secure credential storage.
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch((url, init) => runtimeFetchMock(String(url), init));
     onTestFinished(connection.dispose);
@@ -173,6 +182,49 @@ async function createEncryptedSessionFixture(sessionId: string) {
 }
 
 describe('sync.ensureSessionVisibleForMessageRoute', () => {
+    it('opens encrypted System Records for both concurrent observers and again after route re-entry', async () => {
+        const sessionId = 'encrypted_board_reentry';
+        const home = await upsertServerProfile({ serverUrl: 'https://encrypted-board-reentry.test', name: 'Board re-entry' });
+        const fixture = await createEncryptedSessionFixture(sessionId);
+        await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, fixture.credentials);
+        const { sync } = await import('./sync');
+        const held = createDeferred<Response>();
+        let reads = 0;
+        runtimeFetchMock.mockImplementation(async (url: string) => {
+            const path = new URL(url).pathname;
+            if (path === '/v1/auth/ping') return Response.json({ success: true });
+            if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'e2ee', version: 1,
+                signingKeyFingerprint: 'fixture', contentKeyFingerprint: 'fixture', updatedAt: 1 });
+            if (path === `/v2/sessions/${sessionId}`) { reads += 1; return (await held.promise).clone(); }
+            return new Response(null, { status: 404 });
+        });
+        const payload = { v: 1, tabs: [] };
+        const writer = await Encryption.create(new Uint8Array(32).fill(7));
+        await writer.initializeSessions(new Map([[sessionId, fixture.dataKey]]));
+        const encrypted = await writer.getSessionEncryption(sessionId)!.encryptRaw(payload);
+        const record = SessionSystemRecordStoredSchema.parse({ id: 'layout',
+            address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' },
+            content: { t: 'encrypted', c: encrypted }, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+            createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z' });
+        const address = { serverId: home.id, sessionId };
+        const open = () => sync.withSessionSystemRecordRuntime(address, async runtime => {
+            return await openSessionSystemRecord({ record, address: record.address, context: runtime.readContentContext(),
+                decode: value => {
+                    const parsed = SessionBoardLayoutV1StoredSchema.safeParse(value);
+                    return parsed.success ? { status: 'ready', value: parsed.data } : { status: 'malformed' };
+                } });
+        });
+        const first = open();
+        const second = open();
+        await waitForAssertion(() => expect(reads).toBeGreaterThan(0));
+        held.resolve(Response.json({ session: { ...fixture.row,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], audienceContext: null,
+                capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) } } }));
+        expect(await Promise.all([first, second])).toEqual([{ status: 'ok', value: { status: 'ready', value: payload } },
+            { status: 'ok', value: { status: 'ready', value: payload } }]);
+        expect(await open()).toEqual({ status: 'ok', value: { status: 'ready', value: payload } });
+    });
+
     it.each(['current', 'retired'] as const)('upgrades offscreen legacy public-linked Sessions through the real tuple writer only for the %s Account lifetime', async (lifetime) => {
         const home = await upsertServerProfile({ serverUrl: 'https://owner-first-visit.example.test', name: 'First visit' });
         await setActiveServerId(home.id, { scope: 'device' });
@@ -1054,6 +1106,10 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         runtimeFetchMock.mockReset();
         runtimeFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
             const target = new URL(url);
+            if (target.pathname === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+                snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0, pins: [], folders: [],
+                    folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+            }));
             if (target.pathname === '/v1/auth/ping') return Response.json({ success: true });
             if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (target.pathname === '/v1/account/encryption/currentness') return Response.json({

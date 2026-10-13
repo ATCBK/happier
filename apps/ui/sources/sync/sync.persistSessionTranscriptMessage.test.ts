@@ -8,6 +8,10 @@ import { deriveAccountSigningPublicKey } from '@/auth/flows/challenge';
 
 installDisconnectedServerSocketBoundary();
 
+// Static Sync consumers need the canonical transport boundary during collection.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createSessionFixture } from '@/dev/testkit';
