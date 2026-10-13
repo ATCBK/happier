@@ -694,13 +694,8 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       signal: new AbortController().signal,
@@ -750,13 +745,8 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       signal: new AbortController().signal,
@@ -804,13 +794,8 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       signal: new AbortController().signal,
@@ -874,13 +859,8 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       signal: new AbortController().signal,
@@ -1315,11 +1295,10 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           // Persisted from a previous ElevenLabs account; the bound API key's
           // account has no such voice, so the agent write is already doomed.
           voiceId: NOT_OWNED_VOICE_ID,
-          modelId: null,
-          voiceSettings: { stability: null, similarityBoost: null, speed: null },
         },
       },
       signal: new AbortController().signal,
@@ -1394,9 +1373,8 @@ describe('ElevenLabs public account operations', () => {
           parameters: { type: 'object', properties: {} },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: { stability: null, similarityBoost: null, speed: null },
         },
       },
       signal: new AbortController().signal,
@@ -1425,13 +1403,8 @@ describe('ElevenLabs public account operations', () => {
           },
         }],
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_1',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       signal: new AbortController().signal,

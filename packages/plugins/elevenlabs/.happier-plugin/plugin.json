@@ -1,4 +1,8 @@
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [],
@@ -34,8 +38,16 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
@@ -60,6 +72,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Filled in when Happier creates your agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Create an agent, or enter its ID above.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier Voice agent",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Talk with ElevenLabs voices.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Account",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversation",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voice",
@@ -81,6 +94,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Заполняется, когда Happier создаёт вашего агента.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Создайте агента или введите его ID выше.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Голосовой агент Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Разговаривайте с голосами ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Аккаунт",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Разговор",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Голос",
@@ -102,6 +116,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Uzupełniane, gdy Happier tworzy Twojego agenta.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Utwórz agenta lub wpisz powyżej jego ID.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent głosowy Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Rozmawiaj głosami ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Konto",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Rozmowa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Głos",
@@ -123,6 +138,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Se rellena cuando Happier crea tu agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agente o introduce su ID arriba.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente de voz de Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Habla con las voces de ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Cuenta",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversación",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voz",
@@ -144,6 +160,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Renseigné lorsque Happier crée ton agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crée un agent ou saisis son identifiant ci-dessus.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent vocal Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parle avec les voix ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Compte",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversation",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voix",
@@ -165,6 +182,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Compilato quando Happier crea il tuo agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agente o inserisci il suo ID sopra.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente vocale Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parla con le voci di ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Account",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversazione",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voce",
@@ -186,6 +204,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Preenchido quando o Happier cria seu agente.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crie um agente ou informe seu ID acima.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agente de voz do Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Converse com as vozes da ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Conta",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Voz",
@@ -207,6 +226,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "S’emplena quan Happier crea el teu agent.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Crea un agent o introdueix-ne l’ID a sobre.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Agent de veu de Happier",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Parla amb les veus d’ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Compte",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Conversa",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Veu",
@@ -228,6 +248,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Wird ausgefüllt, wenn Happier deinen Agenten erstellt.",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "Erstelle einen Agenten oder gib oben seine ID ein.",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier-Sprachagent",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "Sprich mit den Stimmen von ElevenLabs.",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "Konto",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "Gespräch",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "Stimme",
@@ -249,6 +270,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 创建代理时会自动填写。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "创建代理，或在上方输入它的 ID。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier 语音代理",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "使用 ElevenLabs 语音交谈。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "账户",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "对话",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "声音",
@@ -270,6 +292,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 建立代理時會自動填入。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "建立代理，或在上方輸入它的 ID。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier 語音代理",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "使用 ElevenLabs 語音交談。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "帳戶",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "對話",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "聲音",
@@ -291,6 +314,7 @@
             "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happierがエージェントを作成すると入力されます。",
             "settingsVoice.realtimeProviders.elevenLabs.agentMissing": "エージェントを作成するか、上にIDを入力してください。",
             "settingsVoice.realtimeProviders.elevenLabs.agentTitle": "Happier音声エージェント",
+            "settingsVoice.realtimeProviders.elevenLabs.description": "ElevenLabs の声で会話できます。",
             "settingsVoice.realtimeProviders.elevenLabs.groups.account": "アカウント",
             "settingsVoice.realtimeProviders.elevenLabs.groups.conversation": "会話",
             "settingsVoice.realtimeProviders.elevenLabs.groups.voice": "音声",
@@ -1047,6 +1071,10 @@
               ]
             }
           ]
+        },
+        "description": {
+          "fallback": "Talk with ElevenLabs voices.",
+          "key": "settingsVoice.realtimeProviders.elevenLabs.description"
         },
         "id": "realtime-elevenlabs",
         "kind": "conversation",

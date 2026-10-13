@@ -23,6 +23,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'en',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Talk with ElevenLabs voices.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Account',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Filled in when Happier creates your agent.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Which ElevenLabs voice model speaks. Default suits most voices.",
@@ -44,6 +45,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'ru',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Разговаривайте с голосами ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Аккаунт',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Заполняется, когда Happier создаёт вашего агента.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Какая голосовая модель ElevenLabs говорит. По умолчанию подходит большинству голосов.",
@@ -65,6 +67,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'pl',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Rozmawiaj głosami ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Konto',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Uzupełniane, gdy Happier tworzy Twojego agenta.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Który model głosu ElevenLabs mówi. Domyślny pasuje do większości głosów.",
@@ -86,6 +89,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'es',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Habla con las voces de ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Cuenta',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Se rellena cuando Happier crea tu agente.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Qué modelo de voz de ElevenLabs habla. El predeterminado sirve para la mayoría de las voces.",
@@ -107,6 +111,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'fr',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Parle avec les voix ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Compte',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Renseigné lorsque Happier crée ton agent.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Le modèle vocal ElevenLabs qui parle. Le modèle par défaut convient à la plupart des voix.",
@@ -128,6 +133,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'it',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Parla con le voci di ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Account',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Compilato quando Happier crea il tuo agente.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Quale modello vocale ElevenLabs parla. Quello predefinito va bene per la maggior parte delle voci.",
@@ -149,6 +155,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'pt',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Converse com as vozes da ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Conta',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Preenchido quando o Happier cria seu agente.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Qual modelo de voz da ElevenLabs fala. O padrão atende à maioria das vozes.",
@@ -170,6 +177,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'ca',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Parla amb les veus d’ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Compte',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "S’emplena quan Happier crea el teu agent.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Quin model de veu d’ElevenLabs parla. El predeterminat s’adiu amb la majoria de veus.",
@@ -191,6 +199,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'de',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'Sprich mit den Stimmen von ElevenLabs.',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'Konto',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Wird ausgefüllt, wenn Happier deinen Agenten erstellt.",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "Welches ElevenLabs-Sprachmodell spricht. Standard passt für die meisten Stimmen.",
@@ -212,6 +221,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'zh-Hans',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': '使用 ElevenLabs 语音交谈。',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': '账户',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 创建代理时会自动填写。",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "选择说话的 ElevenLabs 语音模型。默认模型适合大多数声音。",
@@ -233,6 +243,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'zh-Hant',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': '使用 ElevenLabs 語音交談。',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': '帳戶',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happier 建立代理時會自動填入。",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "選擇說話的 ElevenLabs 語音模型。預設模型適合大多數聲音。",
@@ -254,6 +265,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
       {
         locale: 'ja',
         messages: {
+          'settingsVoice.realtimeProviders.elevenLabs.description': 'ElevenLabs の声で会話できます。',
           'settingsVoice.realtimeProviders.elevenLabs.groups.account': 'アカウント',
           "settingsVoice.realtimeProviders.elevenLabs.agentIdDescription": "Happierがエージェントを作成すると入力されます。",
           "settingsVoice.realtimeProviders.elevenLabs.modelDescription": "使用するElevenLabs音声モデル。既定のモデルはほとんどの声に適しています。",
@@ -278,6 +290,7 @@ export const ELEVENLABS_PLUGIN = definePlugin({
     [ELEVENLABS_VOICE_PROVIDER_CONTRIBUTION_ID]: {
       declaration: {
         title: 'ElevenLabs Voice',
+        description: { key: 'settingsVoice.realtimeProviders.elevenLabs.description', fallback: 'Talk with ElevenLabs voices.' },
         mark: { kind: 'icon', name: 'waveform' },
         kind: 'conversation',
         roles: ['conversation_stt', 'conversation_tts', 'realtime_conversation', 'turn_control'],

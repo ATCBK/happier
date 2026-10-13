@@ -236,11 +236,7 @@ describe('ElevenLabs public Voice provider leaf', () => {
 
     await expect(runtime.settingsActions?.execute({
       actionId: 'create-agent',
-      settings: {
-        billingMode: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.billingMode,
-        tts: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
-        agentId: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.agentId,
-      },
+      settings: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
     }, actionContext)).resolves.toEqual({ patch: { agentId: 'agent-created' } });
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       operationId: 'create-agent',
@@ -631,16 +627,12 @@ describe('ElevenLabs public Voice provider leaf', () => {
         welcome: { enabled: true, mode: 'immediate', text: 'Bonjour, je vous écoute.' },
       },
       platform: 'web', providerConfig: {
+        ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
         billingMode: 'byo',
         agentId: 'agent-1',
         tts: {
+          ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts,
           voiceId: 'voice_id_persisted_fixture',
-          modelId: null,
-          voiceSettings: {
-            stability: null,
-            similarityBoost: null,
-            speed: null,
-          },
         },
       },
       credentials: {
