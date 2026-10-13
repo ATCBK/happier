@@ -21,7 +21,7 @@ const { useSkillsFirstRun } = await import('@/components/settings/skills/firstRu
 const { useReachProjection } = await import('@/sync/domains/capabilities/reach/useReachProjection');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
-const { SkillFoundListResultV1Schema, SKILL_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
+const { SkillFoundListResultV1Schema, SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
 
 afterEach(() => {
     standardCleanup();
@@ -72,8 +72,9 @@ it('publishes the rail library and rules while native inventory is pending, then
         expect(libraryReads).toBe(readsBeforeMachine);
         const producer = SkillFoundListResultV1Schema.parse({ scannedAt: 123, roots: [], items: [] });
         deferred.resolve(producer);
-        expect(await scan).toMatchObject({ ok: true });
-        SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.found.list'].parse(producer);
+        const receipt = await scan;
+        expect(receipt).toMatchObject({ ok: true });
+        if (receipt.ok) SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1['skills.found.list'].parse(receipt.result);
     } finally {
         deferred.resolve(SkillFoundListResultV1Schema.parse({ scannedAt: 123, roots: [], items: [] }));
         await scan;
