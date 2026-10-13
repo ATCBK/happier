@@ -50,7 +50,7 @@ export function createCoalescedWorkflowActivityPublisher(params: Readonly<{
   const runPublishDrain = async (): Promise<void> => {
     if (disposed) return;
     if (pendingChangedRunIds.size === 0) return;
-    const now = Date.now();
+    const now = performance.now();
     const changedRunIds = [...pendingChangedRunIds].filter((runId) => isReady(runId, now));
     if (changedRunIds.length === 0) return;
     for (const runId of changedRunIds) pendingChangedRunIds.delete(runId);
@@ -115,7 +115,7 @@ export function createCoalescedWorkflowActivityPublisher(params: Readonly<{
       const attempts = retriesByRun.get(runId)?.attempts ?? 0;
       retriesByRun.set(runId, {
         attempts: attempts + 1,
-        nextAttemptAt: Date.now() + resolveSessionMutationRetryDelayMs(attempts),
+        nextAttemptAt: performance.now() + resolveSessionMutationRetryDelayMs(attempts),
       });
       pendingChangedRunIds.add(runId);
     }
@@ -130,13 +130,13 @@ export function createCoalescedWorkflowActivityPublisher(params: Readonly<{
     retryTimer = setTimeout(() => {
       retryTimer = null;
       scheduler.trigger();
-    }, Math.max(0, nextAttemptAt - Date.now()));
+    }, Math.max(0, nextAttemptAt - performance.now()));
   }
 
   function notify(observation: WorkflowActivityObservationLike): void {
     if (disposed) return;
     for (const runId of observation.changedRunIds) pendingChangedRunIds.add(runId);
-    if (![...pendingChangedRunIds].some((runId) => isReady(runId, Date.now()))) return;
+    if (![...pendingChangedRunIds].some((runId) => isReady(runId, performance.now()))) return;
 
     const immediate =
       observation.startedRunIds.length > 0

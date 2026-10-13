@@ -22,6 +22,24 @@ function harness() {
 }
 
 describe('createClaudeProviderRuntimeActivityAdapter', () => {
+    it('publishes settled inventory from the native stopped-child response while preserving another active child', async () => {
+        const { adapter, reports, markUnknown } = harness();
+        await adapter.activateObservation('observer-installed');
+        for (const taskId of ['stopped-child', 'sibling']) {
+            await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId }, evidence: 'live' });
+        }
+        const response = { success: false, message: "Agent stopped-child was stopped by the user and won't be resumed. Treat its work as cancelled; only launch a new agent if the user explicitly asks." };
+        const activity = readClaudeProviderTaskActivity({ type: 'user', sessionId: 's1', toolUseResult: response,
+            message: { content: [{ type: 'tool_result', tool_use_id: 'send', content: JSON.stringify(response) }] } });
+        expect(activity?.type).toBe('terminal');
+        if (!activity) throw new Error('Expected native cancellation activity');
+        await adapter.observeActivity({ activity, evidence: 'live' });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+        await adapter.observeActivity({ activity: { type: 'terminal', sessionId: 's1', taskId: 'sibling' }, evidence: 'live' });
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        expect(markUnknown).not.toHaveBeenCalled();
+    });
+
     it('publishes prelaunch inventory without installing the provider observer', async () => {
         const { adapter, reports } = harness();
 
