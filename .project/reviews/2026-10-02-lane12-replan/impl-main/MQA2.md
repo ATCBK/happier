@@ -463,3 +463,58 @@ NEEDS-MAIN: restore the existing `linux3` target sync (or explicitly authorize t
 - Residual risk: every Round 10b functional claim and every MV7/MV8/MV10 owed live pair remains unverified until the `linux3` browser prerequisite is restored.
 
 STATUS: BLOCKED
+
+## Round 10b continuation
+
+### Outcome
+
+Round 10b continuation reached the current borrowed source UI on nl3 and completed smoke, Machine replacement, the required provider fallback attempts, focused functional repair, and the available capture work. I reproduced a canonical composer-overlay defect: legacy extra chips such as Edit tags and Triggers rendered but could not open because the overlay controller incorrectly required an optional registry `controlId`. I added an owner-level RED test, removed that competing eligibility requirement, proved GREEN, and live-verified Edit tags, Triggers, and Workspace root after a full current-source reload. No visual styling was changed.
+
+The full round remains **BLOCKED** by the named foreign provider prerequisite. Fresh Claude session `cmv62a4uv04zumcoqlgvqspa9` disconnected before its first reply and left the prompt queued; `Send now` did not recover it. Codex was unavailable on the new Machine, and both the initial install and a retry after more than ten minutes terminated at `Try again`. Therefore no truthful Agent Action matrix, native approval effect, turn 2, stop/resume, armed MV6C state, or Action-backed mode/goal change could be produced.
+
+### Runtime and Machine evidence
+
+- Stack `agent-qa-l12-main` remained healthy and running throughout. Server selected/loaded identity: `d715fb4df513cba0`; daemon selected/loaded identity: `1ce3f605aef169ab`; borrowed UI/server probes returned HTTP 200.
+- Browser ran on nl3 against `http://happier-agent-qa-l12-main.localhost:19364/?server=http%3A%2F%2Fhappier-agent-qa-l12-main.localhost%3A3023&happier_hmr=0`. Authentication succeeded without disclosing the development key.
+- New daemon Machine: `NLDW3-5-36-33 · 58f6` (`58f6e63a-cd69-4302-83f1-325d10da7ec3`). The old local QA Machine `NLDW6-3-11-20 · 44bd` was forgotten through the normal Replace action in favor of `58f6`. Other offline Machines were not mutated because the UI did not identify them as this stack's Machines.
+- Smoke passed: authenticated Home rendered, `58f6` was online, a CPU tooltip hover and Home navigation did not crash, and UI/server probes were 200. Evidence: `live/mqa2-r10b-cont-smoke-home-1440-light.png`.
+
+### Scenario results
+
+| Item | Observed current-source result | Verdict |
+| --- | --- | --- |
+| 0. Smoke | UI/authentication, online Machine, tooltip, and Home all passed. | **PASS** |
+| 1. Approval + continuity | Fresh Claude disconnected before reply; queued `READY` prompt and `Send now` did not recover. No approval/effect, turn 2, or stop/resume was reachable. | **BLOCKED — known provider contract failure reproduced** |
+| 2. Agent matrix | Codex install failed twice, including the timed retry; the old Codex fixture was bound to an offline Machine. No Action or secret was issued. | **BLOCKED — no working Agent prerequisite** |
+| 3. Project Terminal | No working Agent/Project fixture could be established on `58f6`; Terminal was not invoked and no Happier defect is inferred. | **BLOCKED by fixture prerequisite** |
+| 4. Fresh Create default | Home proved `58f6` reachable, but the fresh Create selection itself was not completed. | **UNVERIFIED** |
+| 5. MV6C at 390 | No qualifying armed “Continue via…” session could be produced. | **BLOCKED by Agent prerequisite** |
+| 6. Reachability | No controlled failed-then-successful Machine request pair was produced. | **UNVERIFIED** |
+| 7. Local services | The canonical Project services empty state was not reached on a new `58f6` Project. | **UNVERIFIED** |
+| 8. Composer | Edit tags, Triggers, and Workspace root were live-verified after the owner fix. Provider status, keyboard rail navigation, and Action-backed mode/goal changes require a working session and remain blocked. | **PARTIAL — fixed legacy popovers; Agent-dependent rows blocked** |
+| 9. Idle | First 60 s daemon sample: PID `346634`, CPU peak `43.0%`, FDs `149..2416`; it overlapped active QA. After closing the picker and warming Home for 8 s, a separate 60 s sample measured CPU peak `42.7%`, FDs `146..1683`, and zero samples at or above 2,000, satisfying MFIX32's FD-burst discriminator. Browser Home/Projects/Action-detail comparison was not completed. | **PARTIAL — warmed daemon FD target passed** |
+
+### Functional fix and validation
+
+- Canonical owner: `useAgentInputSelectionOverlayController.ts`; callers supply `AgentInputExtraActionChip.controlId` optionally, while the owner alone decides whether a collapsed-extra overlay is supported and resolves its active descriptor.
+- RED: `opens a collapsed extra popover for legacy chips without a registry control id` failed because `activeSelectionOverlay` stayed `null` (1 failed, 8 passed).
+- GREEN: `./apps/stack/bin/hstack-exec --target=nl3 --cwd=apps/ui -- yarn exec vitest run --config vitest.config.ts sources/components/sessions/agentInput/selection/useAgentInputSelectionOverlayController.test.ts` passed 9/9 tests in one file.
+- Two earlier invocations from the repository root failed to resolve `@/dev/testkit`; these were harness-directory errors, not product failures. The corrected package-scoped command above is the deciding evidence.
+- The public UI typecheck was dispatched and retained for more than fifteen minutes, but never reached compilation because the remote workspace publication/dependency locks stayed occupied and repeatedly changed owners. I interrupted only this lane's waiting validation process (exit 130); no stack process was stopped. This unavailable package gate is reported rather than claimed.
+- Live current-source proof: Edit tags opened its searchable listbox; Triggers opened the New trigger editor; Workspace root opened its listbox. This checks neighboring legacy chips rather than only the test fixture.
+- Split-brain audit: no new renderer, registry, or consumer-owned fallback was added. The controller remains the only overlay-support/resolution owner; the fix removes its unsupported `controlId` requirement in both eligibility and active-descriptor lookup.
+
+### Capture evidence
+
+- MV10 exact after set: `mv10-after-{home,session,settings}-{1440,390}-{light,dark}.png`; hover set: `mv10-after-hover-{open-prompts,start-dictation,header}.png`; measured Home icon buttons were 24×24 at x=1208/1232, y=437 (`mv10-after-buttons.txt`).
+- MV8 available current states: `mv8-after-offline-queued-{1440,390}-{light,dark}.png`, `mv8-chips-edit-tags-1440-light.png`, `mv8-chips-triggers-1440-light.png`, and `mv8-chips-workspace-root-1440-light.png`. DOM probe found zero `button button`, `[role=button] button`, or `button [role=button]` matches.
+- MV7's full two-cause binding matrix, MV8's thinking/two-queued/pending/folded-offline and every picker/position matrix, and the non-Git Workspace-root absence case were not manufactured without their live fixtures. The capture-only rule was preserved; no surface appearance changed.
+
+### Adversarial closeout and residual risk
+
+- Alternative cause: the legacy chips' own descriptors were valid—the same live build opened all three immediately after removing the controller's ID gate. This rejects a tags-specific renderer or stale-build explanation.
+- Neighbor/blast-radius check: both descriptor forms used by the affected corridor were exercised (list-backed Workspace root/Edit tags and rendered Triggers). Registered chips that do have `controlId` retain the same owner path.
+- Environment gap: Claude's strict top-level `skills` rejection and Codex installation failure prevent every Agent-dependent conclusion. No success is inferred from existing sessions on other Machines.
+- Residual risk: the incomplete scenarios and capture matrices above remain open. The first non-idle FD sample exceeded the MFIX32 target; the warmed measurement below is the deciding idle evidence. No stack or daemon was restarted or stopped.
+
+STATUS: BLOCKED

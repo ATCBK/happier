@@ -1,0 +1,2 @@
+Open prompts: width=24 height=24 x=1208 y=437
+Start dictation: width=24 height=24 x=1232 y=437
