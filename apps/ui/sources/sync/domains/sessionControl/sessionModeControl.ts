@@ -1,7 +1,7 @@
 import type { AgentId } from '@/agents/catalog/catalog';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
-import { parsePermissionIntentAlias } from '@happier-dev/agents';
+import { getBuiltInAcpConfig, parsePermissionIntentAlias } from '@happier-dev/agents';
 import { resolveRequestedSessionModeId } from '@happier-dev/protocol';
 import { tLoose } from '@/text';
 
@@ -18,11 +18,27 @@ export type SessionModeOption = Readonly<{
     description?: string;
 }>;
 
+// The empty id uses the existing clear intent without hiding a provider's native Default.
+export function getSessionModePickerOptions(options: readonly SessionModeOption[], agentId: AgentId): readonly SessionModeOption[] {
+    const nativeOptions = Array.from(new Map(options.map((option) => [option.id, option])).values());
+    const hasNativeDefault = nativeOptions.some((option) => option.id === 'default');
+    if (hasNativeDefault && !getBuiltInAcpConfig(agentId)?.permissionModeMapping) return nativeOptions;
+    return [
+        {
+            id: hasNativeDefault ? '' : 'default',
+            name: tLoose(hasNativeDefault ? 'agentInput.permissionMode.usePermissionSetting' : 'common.default'),
+        },
+        ...nativeOptions,
+    ];
+}
+
 export type SessionModePickerControl = Readonly<{
+    agentId: AgentId;
     options: readonly SessionModeOption[];
     currentModeId: string;
     currentModeName: string;
     requestedModeId: string | null;
+    isExplicitOverride: boolean;
     requestedModeName: string | null;
     effectiveModeId: string;
     effectiveModeName: string;
@@ -82,10 +98,12 @@ function computeStaticSessionModePickerControl(params: {
     const isPending = false;
 
     return {
+        agentId: params.agentId,
         options,
         currentModeId,
         currentModeName,
         requestedModeId,
+        isExplicitOverride: modeOverride?.state === 'set',
         requestedModeName: requestedMode?.name ?? requestedModeId,
         effectiveModeId,
         effectiveModeName: effectiveMode?.name ?? effectiveModeId,
@@ -122,10 +140,12 @@ function computeDynamicSessionModePickerControlInternal(params: {
     const isPending = Boolean(requestedModeId && currentModeId && requestedModeId !== currentModeId);
 
     return {
+        agentId: params.agentId,
         options,
         currentModeId,
         currentModeName: currentMode?.name ?? currentModeId,
         requestedModeId,
+        isExplicitOverride: modeOverride?.state === 'set',
         requestedModeName: requestedMode?.name ?? requestedModeId,
         effectiveModeId,
         effectiveModeName: effectiveMode?.name ?? effectiveModeId,

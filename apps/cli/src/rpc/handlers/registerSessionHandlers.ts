@@ -273,6 +273,7 @@ export function registerSessionHandlers(
         accessPolicy?: FilesystemAccessPolicy;
         hasSessionAgentTransition?: () => boolean;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        getUsageLimitRecoveryCheckNow?: () => SessionRuntimeControls['checkUsageLimitRecoveryNow'];
         /** QAE-1: daemon-side propagation for successful wait-resume cancels. */
         notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{
             sessionId: string;
@@ -331,6 +332,7 @@ export function registerSessionHandlers(
         updateSessionMetadataWithResult: opts?.updateSessionMetadataWithResult ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
         notifyUsageLimitWaitResumeCancelled: opts?.notifyUsageLimitWaitResumeCancelled ?? null,
+        getUsageLimitRecoveryCheckNow: opts?.getUsageLimitRecoveryCheckNow,
     });
 
     return {
