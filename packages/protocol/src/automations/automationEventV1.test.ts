@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { QualifiedConnectedAccountRefJsonSchema } from '../connect/qualifiedConnectedAccountPersistence.js';
 
 import {
   readAccountScopedCiphertextKindByte,
@@ -338,23 +339,7 @@ describe('Automation event V1 contracts', () => {
   });
 
   it('declares a history-gap recovery Account binding only through one exact source-config ref', () => {
-    const qualifiedConnectedAccountRef = {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        service: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            pluginId: { type: 'string' },
-            localId: { type: 'string' },
-          },
-          required: ['pluginId', 'localId'],
-        },
-        accountId: { type: 'string' },
-      },
-      required: ['service', 'accountId'],
-    } as const satisfies PluginJsonSchemaV2;
+    const qualifiedConnectedAccountRef = QualifiedConnectedAccountRefJsonSchema;
     const source = {
       sourceContractVersion: 1,
       supportedObservationTransports: ['checkpointedPull'],
@@ -733,13 +718,11 @@ describe('Automation event V1 contracts', () => {
     }).success).toBe(false);
     expect(isAutomationEventSourcesListPageProgressingV1({
       kind: 'page',
-      revision: '7',
       definitions: [],
       nextCursor: 'page-2',
     })).toBe(false);
     expect(isAutomationEventSourcesListPageProgressingV1({
       kind: 'page',
-      revision: '7',
       definitions: [],
       nextCursor: null,
     })).toBe(true);
