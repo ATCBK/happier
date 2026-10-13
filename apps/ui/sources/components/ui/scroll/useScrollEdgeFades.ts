@@ -26,6 +26,12 @@ export type UseScrollEdgeFadesParams = Readonly<{
      * fades (e.g., bottom: true for lists that typically have more content below).
      */
     initialVisibility?: Partial<ScrollEdgeVisibility>;
+    /**
+     * Empty space the scroll content keeps after its last item (px). The trailing fade and
+     * `canScrollX`/`canScrollY` ignore it, so they clear once the last item is whole; the leading
+     * fade still follows the real scroll range, so a rail scrolled less than the inset keeps it.
+     */
+    contentEndInset?: number;
 }>;
 
 type Size = Readonly<{ width: number; height: number }>;
@@ -41,6 +47,7 @@ const defaultVisibility: ScrollEdgeVisibility = Object.freeze({
 export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
     const overflowThreshold = params.overflowThreshold ?? 1;
     const edgeThreshold = params.edgeThreshold ?? 1;
+    const endInset = params.contentEndInset ?? 0;
 
     const initialVisibility = React.useMemo<ScrollEdgeVisibility>(() => {
         return { ...defaultVisibility, ...params.initialVisibility };
@@ -70,20 +77,24 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
         const content = contentRef.current;
         const offset = offsetRef.current;
 
-        const canScrollX = content.width > viewport.width + overflowThreshold;
-        const canScrollY = content.height > viewport.height + overflowThreshold;
+        const itemsWidth = Math.max(0, content.width - endInset);
+        const itemsHeight = Math.max(0, content.height - endInset);
+        const canScrollX = itemsWidth > viewport.width + overflowThreshold;
+        const canScrollY = itemsHeight > viewport.height + overflowThreshold;
+        const scrolledX = content.width > viewport.width + overflowThreshold;
+        const scrolledY = content.height > viewport.height + overflowThreshold;
 
-        const top = enabled.top && canScrollY && offset.y > edgeThreshold;
+        const top = enabled.top && scrolledY && offset.y > edgeThreshold;
         const bottom =
             enabled.bottom &&
             canScrollY &&
-            (offset.y + viewport.height) < (content.height - edgeThreshold);
+            (offset.y + viewport.height) < (itemsHeight - edgeThreshold);
 
-        const left = enabled.left && canScrollX && offset.x > edgeThreshold;
+        const left = enabled.left && scrolledX && offset.x > edgeThreshold;
         const right =
             enabled.right &&
             canScrollX &&
-            (offset.x + viewport.width) < (content.width - edgeThreshold);
+            (offset.x + viewport.width) < (itemsWidth - edgeThreshold);
 
         const nextVisibility: ScrollEdgeVisibility = { top, bottom, left, right };
 
@@ -102,7 +113,7 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
             if (prev.x === canScrollX && prev.y === canScrollY) return prev;
             return { x: canScrollX, y: canScrollY };
         });
-    }, [edgeThreshold, enabled.bottom, enabled.left, enabled.right, enabled.top, overflowThreshold]);
+    }, [edgeThreshold, enabled.bottom, enabled.left, enabled.right, enabled.top, endInset, overflowThreshold]);
 
     const onViewportLayout = React.useCallback((e: LayoutChangeEvent) => {
         const width = e?.nativeEvent?.layout?.width ?? 0;

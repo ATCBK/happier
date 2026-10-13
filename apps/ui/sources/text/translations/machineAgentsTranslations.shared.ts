@@ -100,8 +100,10 @@ export type MachineAgentsTranslation = Readonly<{
     chooseAgent: string;
 
     blockNotInstalled: (params: Readonly<{ agent: string; machine: string }>) => string;
+    blockNotInstalledShort: (params: Readonly<{ agent: string }>) => string;
     blockSetUpToStart: string;
     blockSignedOut: (params: Readonly<{ agent: string; machine: string }>) => string;
+    blockSignedOutShort: (params: Readonly<{ agent: string }>) => string;
     spawnCliMissing: (params: Readonly<{ agent: string; machine: string }>) => string;
     spawnSignedOut: (params: Readonly<{ agent: string; machine: string }>) => string;
     draftKept: string;
@@ -212,8 +214,10 @@ export const en: MachineAgentsTranslation = {
     chooseAgent: 'Choose an agent',
 
     blockNotInstalled: ({ agent, machine }) => `${agent} isn’t on ${machine} yet.`,
+    blockNotInstalledShort: ({ agent }) => `${agent} isn’t set up.`,
     blockSetUpToStart: 'Set it up to start.',
     blockSignedOut: ({ agent, machine }) => `${agent} needs sign-in on ${machine}.`,
+    blockSignedOutShort: ({ agent }) => `${agent} needs sign-in.`,
     spawnCliMissing: ({ agent, machine }) => `${agent} isn’t installed on ${machine}.`,
     spawnSignedOut: ({ agent, machine }) => `${agent} is signed out on ${machine}.`,
     draftKept: 'Your message is kept.',

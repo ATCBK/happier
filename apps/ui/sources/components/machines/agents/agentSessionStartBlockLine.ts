@@ -36,10 +36,14 @@ export function resolveAgentSessionStartBlockLine(params: Readonly<{
     };
     const recovery = block === 'signedOut' ? params.connectedServicesRecoveryAction ?? null : null;
     return {
+        // The line says the cause once and short (it stays one line on a phone, where the machine chip sits
+        // right below it); which machine, and what to do about it, is its detail.
         text: block === 'notInstalled'
-            ? t('machineAgents.blockNotInstalled', { agent: agent.title, machine: params.machineName })
+            ? t('machineAgents.blockNotInstalledShort', { agent: agent.title })
+            : t('machineAgents.blockSignedOutShort', { agent: agent.title }),
+        detail: block === 'notInstalled'
+            ? `${t('machineAgents.blockNotInstalled', { agent: agent.title, machine: params.machineName })} ${t('machineAgents.blockSetUpToStart')}`
             : t('machineAgents.blockSignedOut', { agent: agent.title, machine: params.machineName }),
-        detail: block === 'notInstalled' ? t('machineAgents.blockSetUpToStart') : undefined,
         // A healthy connected account is one tap and immediate, so it leads; setting up or signing in
         // natively stays as the second way forward.
         action: recovery ?? setUp,

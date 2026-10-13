@@ -36,6 +36,8 @@ export function buildQualifiedConnectedAccountProfileOptionsByServiceId(params: 
     supportedServiceIds: ReadonlyArray<ConnectedAccountServiceKey>;
     labelsByKey: Record<string, string | undefined>;
     presentIdentity?: ConnectedAccountIdentityPresenter;
+    /** The service's display name, so an account with neither a name nor an email reads "<Service> account". */
+    resolveServiceTitle?: (serviceKey: ConnectedAccountServiceKey) => string;
 }>): Readonly<Record<string, ConnectedServicesProfileOption[]>> {
     const supported = new Set<string>(params.supportedServiceIds);
     const options: Record<string, ConnectedServicesProfileOption[]> = {};
@@ -44,7 +46,8 @@ export function buildQualifiedConnectedAccountProfileOptionsByServiceId(params: 
         if (!supported.has(serviceKey)) continue;
         const presentation = params.presentIdentity ? presentQualifiedConnectedAccountTarget({
             target: { kind: 'account', account: account.ref }, accounts: [account], groups: [],
-            labelsByKey: params.labelsByKey, serviceTitle: null, presentIdentity: params.presentIdentity,
+            labelsByKey: params.labelsByKey, serviceTitle: params.resolveServiceTitle?.(serviceKey) ?? null,
+            presentIdentity: params.presentIdentity,
         }) : null;
         const email = account.providerIdentity?.email ?? null;
         (options[serviceKey] ??= []).push({

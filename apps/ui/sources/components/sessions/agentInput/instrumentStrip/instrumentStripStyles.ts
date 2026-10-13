@@ -41,6 +41,15 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 0,
     },
+    /** The sentence of a line whose action is a name: the sentence keeps its width and the name gives way. */
+    connectionTextKept: {
+        flexShrink: 0,
+    },
+    /** A name-labelled action shrinks (its text ellipsizes) before the sentence does. */
+    connectionActionHost: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
     /** The tooltip host around a line that carries a detail: it shrinks like the text it wraps. */
     connectionTextHost: {
         flexShrink: 1,

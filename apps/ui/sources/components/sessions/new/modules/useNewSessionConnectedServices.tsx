@@ -189,6 +189,14 @@ export function useNewSessionConnectedServices(params: Readonly<{
     : targetServerId ? binding?.scope ?? null : undefined, selectConnectedMetadataLabels);
   const { present } = useConnectedAccountIdentityPrivacy();
   const connectedServicesRegistry = useProjectedConnectedServicesRegistry();
+  /** Public applied-descriptor title; neutral fallback for an unknown service. */
+  const resolveServiceTitle = React.useCallback((serviceId: string) => {
+    const service = parseQualifiedPluginContributionKey(serviceId);
+    return service
+      ? resolveQualifiedConnectedServiceRegistryDisplayName(connectedServicesRegistry, service, t)
+      : serviceId;
+  }, [connectedServicesRegistry]);
+
   const connectedServicesFeatureScope = React.useMemo<FeatureDecisionScopeParams | undefined>(() => {
     const trimmedTargetServerId = targetServerId?.trim() ?? '';
     if (!trimmedTargetServerId) return undefined;
@@ -218,10 +226,11 @@ export function useNewSessionConnectedServices(params: Readonly<{
         supportedServiceIds: supportedConnectedServiceIds,
         labelsByKey,
         presentIdentity: present,
+        resolveServiceTitle,
       }),
       connectedAccounts,
     })
-  ), [accountProfile?.connectedAccountsV4, connectedAccounts, labelsByKey, supportedConnectedServiceIds, present]);
+  ), [accountProfile?.connectedAccountsV4, connectedAccounts, labelsByKey, supportedConnectedServiceIds, present, resolveServiceTitle]);
 
   const connectedServiceAccountGroupOptionsByServiceId = React.useMemo(() => (
     buildQualifiedConnectedAccountGroupOptionsByServiceId({
@@ -401,14 +410,6 @@ export function useNewSessionConnectedServices(params: Readonly<{
       return { contextKey: authoredContextKey, bindings: next };
     });
   }, [agentOptionState, authoredContextKey, connectedServicesBindingsByServiceId, hasOptimisticBindings, coordinateTeamCredentialSelection, params.applyTeamCredentialPolicy, setAgentOptionStateForCurrentAgent]);
-
-  /** Public applied-descriptor title; neutral fallback for an unknown service. */
-  const resolveServiceTitle = React.useCallback((serviceId: string) => {
-    const service = parseQualifiedPluginContributionKey(serviceId);
-    return service
-      ? resolveQualifiedConnectedServiceRegistryDisplayName(connectedServicesRegistry, service, t)
-      : serviceId;
-  }, [connectedServicesRegistry]);
 
   const authLabel = React.useMemo(() => resolveConnectedServicesAuthLabel({
     supportedServiceIds: supportedConnectedServiceIds,
@@ -591,6 +592,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
       if (option) return {
         label: option.label ?? option.providerEmail ?? resolveServiceTitle(serviceId),
         testID: 'new-session-agent-blocker.connected',
+        truncates: true,
         onPress: () => { void setBindingForService(serviceId, { source: 'connected', selection: 'profile', profileId: option.profileId }); },
       };
     }

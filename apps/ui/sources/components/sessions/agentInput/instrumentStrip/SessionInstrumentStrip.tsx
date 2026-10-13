@@ -40,6 +40,8 @@ export type SessionInstrumentStripLineAction = Readonly<{
     onPress: () => void;
     disabled?: boolean;
     testID?: string;
+    /** The label is a name (an account's) that gives way first, with an ellipsis, so the line stays one line. */
+    truncates?: boolean;
 }>;
 
 export type SessionInstrumentStripConnectionStatus = Readonly<{
@@ -63,7 +65,8 @@ function wrapConnectionDetail(line: React.ReactElement, status: SessionInstrumen
     if (!status.detail) return line;
     return (
         <Tooltip testID="agent-input-connection-detail" label={status.detail}
-            accessibilityLabel={`${status.text}. ${status.detail}`} style={instrumentStripStyles.connectionTextHost}>
+            accessibilityLabel={`${status.text}. ${status.detail}`}
+            style={status.action?.truncates ? instrumentStripStyles.connectionTextKept : instrumentStripStyles.connectionTextHost}>
             {line}
         </Tooltip>
     );
@@ -323,8 +326,12 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
                     {wrapConnectionDetail(
                         <Text
                             testID="agent-input-connection-status-text"
-                            style={[instrumentStripStyles.connectionText, { color: props.connectionStatus.color }]}
-                            numberOfLines={props.connectionStatus.action ? 2 : 1}
+                            style={[
+                                instrumentStripStyles.connectionText,
+                                props.connectionStatus.action?.truncates ? instrumentStripStyles.connectionTextKept : null,
+                                { color: props.connectionStatus.color },
+                            ]}
+                            numberOfLines={props.connectionStatus.action && !props.connectionStatus.action.truncates ? 2 : 1}
                         >
                             {props.connectionStatus.text}
                             {props.connectionStatus.countdownTo !== undefined ? (
@@ -339,14 +346,16 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
                     )}
                     {/* The status line's one recovery ends its sentence (lab `b-ask E`), drawn by the shared text link. */}
                     {props.connectionStatus.action ? (
-                        <TextLinkButton
-                            testID={props.connectionStatus.action.testID ?? 'agent-input-connection-recovery'}
-                            tone="strong"
-                            size="meta"
-                            label={props.connectionStatus.action.label}
-                            onPress={props.connectionStatus.action.onPress}
-                            disabled={props.connectionStatus.action.disabled}
-                        />
+                        <View style={props.connectionStatus.action.truncates ? instrumentStripStyles.connectionActionHost : undefined}>
+                            <TextLinkButton
+                                testID={props.connectionStatus.action.testID ?? 'agent-input-connection-recovery'}
+                                tone="strong"
+                                size="meta"
+                                label={props.connectionStatus.action.label}
+                                onPress={props.connectionStatus.action.onPress}
+                                disabled={props.connectionStatus.action.disabled}
+                            />
+                        </View>
                     ) : null}
                     {props.connectionStatus.action && props.connectionStatus.secondaryAction ? (
                         <TextLinkButton

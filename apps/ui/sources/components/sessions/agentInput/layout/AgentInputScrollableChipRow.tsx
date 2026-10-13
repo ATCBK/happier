@@ -47,6 +47,7 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
         enabledEdges: { left: true, right: true },
         overflowThreshold: 8,
         edgeThreshold: 2,
+        contentEndInset: ACTION_BAR_SCROLL_END_GUTTER_WIDTH,
     });
     const scrollRef = React.useRef<any>(null);
 
@@ -69,10 +70,7 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
             nativeEvent: { layout: { x: 0, y: 0, width: clientWidth, height: clientHeight ?? 0 } },
         } as unknown as LayoutChangeEvent;
         fades.onViewportLayout(layoutEvent);
-        fades.onContentSizeChange(
-            Math.max(0, scrollWidth - ACTION_BAR_SCROLL_END_GUTTER_WIDTH),
-            clientHeight ?? 0,
-        );
+        fades.onContentSizeChange(scrollWidth, clientHeight ?? 0);
     }, [fades, getScrollNode]);
 
     const reportWebScroll = React.useCallback((nodeOverride?: any) => {
@@ -91,10 +89,7 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                 contentInset: { top: 0, left: 0, bottom: 0, right: 0 },
                 contentOffset: { x: scrollLeft, y: 0 },
                 layoutMeasurement: { width: clientWidth, height: clientHeight },
-                contentSize: {
-                    width: Math.max(0, scrollWidth - ACTION_BAR_SCROLL_END_GUTTER_WIDTH),
-                    height: clientHeight,
-                },
+                contentSize: { width: scrollWidth, height: clientHeight },
                 zoomScale: 1,
             },
         } as unknown as NativeSyntheticEvent<NativeScrollEvent>;
@@ -172,9 +167,11 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
         };
     }, [getScrollNode, reportWebScroll]);
 
-    const canScroll = fades.canScrollX;
-    const showFadeLeft = canScroll && fades.visibility.left;
-    const showFadeRight = canScroll && fades.visibility.right;
+    // The hook already ignores the end gutter for the trailing edge and follows the real scroll range
+    // for the leading one, so a rail scrolled by less than the gutter still fades its cut chip.
+    const showFadeLeft = fades.visibility.left;
+    const showFadeRight = fades.visibility.right;
+    const canScroll = fades.canScrollX || showFadeLeft || showFadeRight;
     const webEdgeMask = React.useMemo(
         () => resolveHorizontalScrollEdgeMaskStyle({ top: false, bottom: false, left: showFadeLeft, right: showFadeRight }, { fadeSize: 24 }),
         [showFadeLeft, showFadeRight],
@@ -236,31 +233,11 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                     reportWebScroll(node);
                 }}
                 onLayout={fades.onViewportLayout}
-                onContentSizeChange={(width: number, height: number) => {
-                    fades.onContentSizeChange(
-                        Math.max(0, width - ACTION_BAR_SCROLL_END_GUTTER_WIDTH),
-                        height,
-                    );
-                }}
+                onContentSizeChange={fades.onContentSizeChange}
                 onScroll={(event: any) => {
                     // Web reports its DOM scroll itself (`attachChipRailReveal`).
                     if (Platform.OS === 'web') return;
-                    const nativeEvent = event?.nativeEvent;
-                    const contentSizeWidth = nativeEvent?.contentSize?.width;
-                    if (typeof contentSizeWidth !== 'number') {
-                        fades.onScroll(event);
-                        return;
-                    }
-                    fades.onScroll({
-                        ...event,
-                        nativeEvent: {
-                            ...nativeEvent,
-                            contentSize: {
-                                ...nativeEvent.contentSize,
-                                width: Math.max(0, contentSizeWidth - ACTION_BAR_SCROLL_END_GUTTER_WIDTH),
-                            },
-                        },
-                    });
+                    fades.onScroll(event);
                 }}
                 scrollEventThrottle={16}
             >

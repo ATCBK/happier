@@ -55,14 +55,15 @@ describe('resolveAgentSessionStartBlockLine', () => {
         expect(openSetup).toHaveBeenCalledWith(signedOutAgent);
     });
 
-    it('states one short sentence naming the machine, with the longer reason as the detail, for a missing agent', () => {
+    it('says a short cause on the line and keeps the machine in the detail, for a signed-out and a missing agent', () => {
         const signedOut = resolveAgentSessionStartBlockLine({ agent: signedOutAgent, machineName: 'Devbox', onSetUp: vi.fn() });
-        expect(signedOut?.text).toContain('Devbox');
-        expect(signedOut?.detail).toBeUndefined();
+        expect(signedOut?.text).toContain('Claude');
+        expect(signedOut?.text).not.toContain('Devbox');
+        expect(signedOut?.detail).toContain('Devbox');
         const notInstalled = resolveAgentSessionStartBlockLine({ agent: notInstalledAgent, machineName: 'Devbox', onSetUp: vi.fn(),
             connectedServicesRecoveryAction: { label: 'Use Claude (work)', onPress: vi.fn() } });
-        expect(notInstalled?.text).toContain('Devbox');
-        expect(notInstalled?.detail).toEqual(expect.any(String));
+        expect(notInstalled?.text).not.toContain('Devbox');
+        expect(notInstalled?.detail).toContain('Devbox');
         // A connected account cannot install an agent: setup stays the only action.
         expect(notInstalled?.action.testID).toBe('new-session-agent-blocker.action');
         expect(notInstalled?.secondaryAction).toBeUndefined();

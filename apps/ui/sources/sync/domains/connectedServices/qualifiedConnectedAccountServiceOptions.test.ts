@@ -63,6 +63,23 @@ describe('buildQualifiedConnectedAccountProfileOptionsByServiceId privacy', () =
             expect.objectContaining({ profileId: 'backup', label: null, providerEmail: null }),
         ]);
     });
+
+    it('names an account with neither a name nor an email after its service, never a generic service', () => {
+        const service = { pluginId: 'acme.review', localId: 'reviewer-service' };
+        const account = {
+            ref: { service, accountId: 'backup' }, status: 'connected', authenticationModeId: 'oauth',
+            revisionSemantics: 'revisioned', credentialRevision: 'revision-1',
+            configurationReady: true, configurationRevision: null, scopes: [],
+        } satisfies QualifiedConnectedAccountProfileV4;
+        const options = buildQualifiedConnectedAccountProfileOptionsByServiceId({
+            accounts: [account], supportedServiceIds: [NOVEL_SERVICE_KEY], labelsByKey: {},
+            presentIdentity: (input) => presentConnectedAccountIdentity({
+                ...input, hidden: false, label: input.label ?? null, email: input.email ?? null, accountId: input.accountId ?? null,
+            }),
+            resolveServiceTitle: (serviceKey) => (serviceKey === NOVEL_SERVICE_KEY ? 'Reviewer' : serviceKey),
+        });
+        expect(options[NOVEL_SERVICE_KEY]?.[0]?.label).toBe('Reviewer account');
+    });
 });
 
 const CLAUDE_SUBSCRIPTION_TOKEN_ONLY_PURPOSE = [{
