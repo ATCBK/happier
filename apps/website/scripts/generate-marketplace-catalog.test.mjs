@@ -40,11 +40,24 @@ const VALID_ENTRY = {
   links: {},
 };
 
-async function writeSource(root, entries) {
+async function writeSource(root, entries, picks = []) {
   const { writeFile, mkdir } = await import('node:fs/promises');
   await mkdir(join(root, 'marketplace'), { recursive: true });
-  await writeFile(join(root, 'marketplace', 'catalog.source.json'), JSON.stringify({ entries }), 'utf8');
+  await writeFile(join(root, 'marketplace', 'catalog.source.json'), JSON.stringify({ entries, picks }), 'utf8');
 }
+
+test('emits validated curated registry pointers without copying their content', async () => {
+  const sourceDir = await mkdtemp(join(tmpdir(), 'happier-marketplace-picks-'));
+  const publicDir = join(sourceDir, 'public');
+  const picks = [{ kind: 'skill', format: 'git', sourceUrl: 'https://github.com/example/skills', itemId: '', path: 'review' }];
+  try {
+    await writeSource(sourceDir, [], picks);
+    const output = JSON.parse(await readFile(await generateMarketplaceCatalog({ publicDir, websiteRoot: sourceDir }), 'utf8'));
+    assert.deepEqual(MarketplaceIndexSourceSnapshotV1Schema.parse(output).picks, picks);
+    await writeSource(sourceDir, [], [{ ...picks[0], kind: 'plugin' }]);
+    await assert.rejects(() => generateMarketplaceCatalog({ publicDir, websiteRoot: sourceDir }));
+  } finally { await rm(sourceDir, { recursive: true, force: true }); }
+});
 
 test('emits a deterministic strict curated snapshot bound to the canonical source identity', async () => {
   const publicDir = await mkdtemp(join(tmpdir(), 'happier-marketplace-catalog-'));

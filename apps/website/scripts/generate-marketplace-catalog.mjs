@@ -55,6 +55,7 @@ export async function generateMarketplaceCatalog({
     },
     freshness: { state: 'fresh', fetchedAtMs: null },
     entries,
+    picks: source.picks ?? [],
     diagnostics: [],
   });
   const outputPath = join(publicDir, 'catalog.json');

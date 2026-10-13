@@ -1,4 +1,5 @@
 {
   "$comment": "Canonical editorial allowlist for the Happier curated marketplace catalog. It is intentionally empty until a plugin has a public exact npm release and an approved review. Future full snapshot entries must be projected from that release's canonical happier.marketplaceDiscovery and compatibility facts, then augmented here only with curation-owned publisher, review, category, media, link, and update-policy facts; do not hand-copy plugin manifest facts. The generator validates the committed exact snapshot offline and emits apps/website/public/catalog.json for https://marketplace.happier.dev/catalog.json.",
-  "entries": []
+  "entries": [],
+  "picks": []
 }
