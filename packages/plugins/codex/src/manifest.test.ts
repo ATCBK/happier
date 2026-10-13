@@ -15,6 +15,12 @@ import { CODEX_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js
 import { CODEX_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 
 describe('Codex plugin manifest', () => {
+  it('declares the plugin-cache skill pattern through canonical manifest ingestion', () => {
+    const result = ingestPluginManifestV2(PLUGIN_MANIFEST);
+    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
+    expect(result.manifest.contributes.agents[0]?.capabilities.skills?.nativeRoots?.plugin)
+      .toEqual([['.codex', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']]);
+  });
   it('declares detected native MCP servers as unloaded in Happier sessions', () => {
     expect(PLUGIN_MANIFEST.contributes.mcp.discoverySources).toEqual([
       expect.objectContaining({ id: 'config', loadedInHappierSessions: false }),

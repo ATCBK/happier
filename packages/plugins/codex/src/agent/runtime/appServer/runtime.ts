@@ -10,6 +10,9 @@ import type {
   AgentSessionRuntimeAuthIdentityResult,
   AgentSessionRuntimeContext,
   AgentSessionConfigurationSnapshot,
+  AgentSessionOpenRequest,
+  AgentSessionSkillDelivery,
+  AgentSessionRuntime,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
@@ -107,6 +110,7 @@ import {
 import {
   createCodexAppServerTurnFailure,
   readCodexAppServerTurnFailureDiagnostic,
+  sanitizeCodexAppServerRuntimeAuthClassification,
   isCodexAppServerRejectedStartModelEntitlementError,
   isCodexAppServerContextWindowExhaustedError,
   isCodexAppServerWorkspaceRoutingUnauthorizedError,
@@ -214,6 +218,8 @@ export type CodexAppServerRuntime = CodexAppServerSession & Readonly<{
   updateConfig: NonNullable<CodexAppServerSession['updateConfig']>;
   realtimeConversation: AgentSessionRealtimeConversation;
   prepareProviderCliAttach(): Promise<string>;
+  prepareSkillDelivery(): Promise<void>;
+  refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
   supportsInFlightSteer(): boolean;
   isTurnInFlight(): boolean;
   canSteerPrompt(): boolean;
@@ -256,8 +262,10 @@ type PendingTurn = {
   providerPrompt: PendingProviderPrompt | null;
   startUserMessageSeq: number | null;
   userMessageSeqs: number[];
+  reportedSkillNames?: Set<string>;
   interruptWhenProviderTurnIdArrives: boolean;
   providerOperationIdentity: CodexConnectedServiceRuntimeIdentity | null;
+  failureSettling?: boolean;
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
@@ -304,6 +312,8 @@ type CodexAppServerRuntimeParams = CodexAppServerRuntimeTarget & Readonly<{
   connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   processEnv?: Readonly<Record<string, string | undefined>>;
   mcpServers?: unknown;
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+  skills?: AgentSessionSkillDelivery;
   toolRestriction?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
   resolveCurrentPolicy?: () => CodexAppServerPolicy | null;
   observeGoal?: (payload: Readonly<{ kind: 'present'; goal: Readonly<Record<string, unknown>> }> | Readonly<{ kind: 'absent' }>) => void | Promise<void>;
@@ -862,6 +872,11 @@ function createCodexRuntimeEvent(
 export function createCodexAppServerRuntime(
   params: CodexAppServerRuntimeParams,
 ): CodexAppServerRuntime {
+  if (params.appServerTransport === 'daemonProxy' && Object.keys(params.mcpToolPolicy ?? {}).length > 0) {
+    throw new PluginError({ code: 'codex_mcp_tool_policy_unsupported_transport',
+      message: 'Codex daemon proxy cannot apply MCP tool filters to its already-running server.' });
+  }
+  const mcpServerKeys = assignInjectedServerKeys(Object.keys(normalizeMcpServers(params.mcpServers)));
   const runtimeTargetId = params.happierSessionId !== undefined
     ? params.happierSessionId
     : params.executionRunId;
@@ -869,6 +884,8 @@ export function createCodexAppServerRuntime(
     params.processEnv ?? params.host.baseProcessEnv;
   let clientPromise: Promise<DisposableCodexAppServerClient> | null = null;
   let client: DisposableCodexAppServerClient | null = null;
+  let currentSkills = params.skills;
+  let skillsDelivered = params.appServerTransport === 'daemonProxy' || params.skills ? false : undefined;
   let handleAsyncQuestionNotification: ((raw: unknown) => boolean) | null = null;
   let threadId: string | null = readExactCodexProviderSessionId(params.initialProviderSessionId);
   let currentModelId: string | null = trimStringValue(params.initialModelId);
@@ -965,6 +982,18 @@ export function createCodexAppServerRuntime(
   const publishRuntimeEvent = (event: CodexAppServerEventInput): void => {
     const payload = createCodexRuntimeEvent(params, event);
     for (const subscriber of runtimeSubscribers) subscriber(payload);
+  };
+
+  const publishSkillMentions = (turn: PendingTurn, input: readonly CodexAppServerTurnInputItem[]): void => {
+    const reported = turn.reportedSkillNames ??= new Set<string>();
+    const skills: Array<Readonly<{ name: string; path: string }>> = [];
+    for (const item of input) {
+      if (item.type !== 'skill' || reported.has(item.name)) continue;
+      reported.add(item.name);
+      skills.push({ name: item.name, path: item.path });
+    }
+    if (skills.length) publishRuntimeEvent({ kind: 'skill-usage', turnId: turn.sessionTurnId,
+      ...(turn.agentTurnId ? { agentTurnId: turn.agentTurnId } : {}), skills });
   };
 
   const buildTurnToolCallKey = (turnId: string, callId: string): string => `${turnId}:${callId}`;
@@ -1625,7 +1654,8 @@ export function createCodexAppServerRuntime(
     // exchange. Codex emits typed item notifications for user-facing tools;
     // projecting both surfaces leaks internal wrappers and duplicates results.
     if (method === 'rawResponseItem/completed') return false;
-    const projected = projectCodexAppServerToolEventsFromNotification({ method, notificationParams });
+    const projected = projectCodexAppServerToolEventsFromNotification({ method, notificationParams,
+      mcpServerKeys });
     const publishable = projected.filter(
       (event) => !publishedToolEventKeys.has(`${activeTurn.sessionTurnId}:${event.type}:${event.callId}`),
     );
@@ -1929,72 +1959,47 @@ export function createCodexAppServerRuntime(
     }, settleMs);
   };
 
-  const reportProviderRuntimeAuthFailureForRecovery = async (
-    error: Error,
-    quotaEvidence: Promise<void>,
-  ): Promise<void> => {
-    const classification = readJsonRecord(
-      (error as { runtimeAuthClassification?: unknown }).runtimeAuthClassification,
-    );
-    const kind = trimStringValue(classification?.kind);
-    if (!classification || (kind !== 'capacity' && kind !== 'usage_limit')) return;
-    if (!params.host.refreshRuntimeAuth) return;
-    await quotaEvidence;
-    await params.host.refreshRuntimeAuth({
-      serviceId: 'openai-codex',
-      targetId: runtimeTargetId,
-      classification,
-      reason: kind === 'usage_limit'
-        ? 'provider_session_usage_limit_failure'
-        : 'provider_session_capacity_failure',
-    }).catch((reportError: unknown) => {
-      params.host.logger.debug('Codex app-server runtime-auth recovery report failed', {
-        errorName: reportError instanceof Error ? reportError.name : typeof reportError,
-      });
-    });
-  };
-
   const failPendingTurn = (error: Error, diagnostic = readCodexAppServerTurnFailureDiagnostic(error)): void => {
     const activeTurn = pendingTurn;
-    if (!activeTurn) return;
+    if (!activeTurn || activeTurn.failureSettling) return;
+    activeTurn.failureSettling = true;
     if (activeTurn.agentTurnId) terminatedProviderTurnIds.add(activeTurn.agentTurnId);
     clearPendingTurnCompletionTimer();
     flushAssistantReasoningProjection('abort');
     settlePendingTurnAgentTurnIdObservation(activeTurn);
-    pendingTurn = null;
     clearPendingHappierTitleToolNamesForTurn(activeTurn.sessionTurnId);
     clearPendingProviderPrompt(activeTurn.providerPrompt);
     rejectPendingProviderAcceptancesForHostTurn(activeTurn.sessionTurnId, error);
-    setActive(false);
-    const quotaEvidence = publishImmediateProviderAccountUsageSnapshotForQuotaFailure(error);
-    terminalPendingTurnFailure = error;
     params.host.logger.warn('Codex app-server turn failed', {
       ...diagnostic,
       providerStartAcknowledged: activeTurn.providerStartAcknowledged,
     });
     const agentTurnId = activeTurn.agentTurnId;
-    publishRuntimeEvent({
-      kind: 'turn-failed',
-      turnId: activeTurn.sessionTurnId,
-      ...(agentTurnId ? { agentTurnId } : {}),
-      issue: buildCodexAppServerTurnFailureIssue(terminalPendingTurnFailure, activeTurn),
-    });
-    // Structured context rejection settles this input, while the native thread
-    // remains available for a distinct host-admitted turn.
-    if (!isCodexAppServerContextWindowExhaustedError(terminalPendingTurnFailure, { structuredOnly: true })) {
+    const settleFailure = (): void => {
+      if (pendingTurn !== activeTurn) return;
+      pendingTurn = null;
+      setActive(false);
+      terminalPendingTurnFailure = error;
+      const runtimeAuthClassification = sanitizeCodexAppServerRuntimeAuthClassification(
+        (error as { runtimeAuthClassification?: unknown }).runtimeAuthClassification,
+      );
       publishRuntimeEvent({
-        kind: 'backend-error',
-        error: {
-          code: CODEX_APP_SERVER_TURN_FAILURE_CODE,
-          message: CODEX_APP_SERVER_TURN_FAILURE_PREVIEW,
-        },
+        kind: 'turn-failed',
+        turnId: activeTurn.sessionTurnId,
+        ...(agentTurnId ? { agentTurnId } : {}),
+        issue: buildCodexAppServerTurnFailureIssue(terminalPendingTurnFailure, activeTurn),
+        ...(runtimeAuthClassification ? { runtimeAuthClassification } : {}),
       });
+      activeTurn.reject(error);
+    };
+    // The host's accepted-turn lifecycle owns recovery. Retain the failed native
+    // turn until its quota evidence settles, before either native failure surface
+    // can let that host dispose the provider or adopt another account.
+    if (isCodexRuntimeAuthQuotaFailure(error)) {
+      void publishImmediateProviderAccountUsageSnapshotForQuotaFailure(error).then(settleFailure);
+    } else {
+      settleFailure();
     }
-    void reportProviderRuntimeAuthFailureForRecovery(
-      terminalPendingTurnFailure,
-      quotaEvidence,
-    );
-    activeTurn.reject(error);
   };
 
   const handleTurnCompletedNotification = (notificationParams: unknown): void => {
@@ -2071,6 +2076,7 @@ export function createCodexAppServerRuntime(
         });
       },
       getThreadId: () => threadId,
+      mcpServerKeys,
     });
     nextClient.registerNotificationHandler('account/rateLimits/updated', (notificationParams) => {
       void recordProviderAccountUsageSnapshot(notificationParams, { operationIdentity: null });
@@ -2232,6 +2238,8 @@ export function createCodexAppServerRuntime(
         configOverrides: buildCodexAppServerConfigOverrides(normalizeMcpServers(params.mcpServers), {
           processEnv,
           ...params.toolRestriction,
+          mcpToolPolicy: params.mcpToolPolicy,
+          ...(params.appServerTransport !== 'daemonProxy' ? { skills: params.skills } : {}),
         }),
         disableUserMcpServers: true,
         toolRestrictionRequired: params.toolRestriction?.unlistedTools === 'deny',
@@ -2244,6 +2252,15 @@ export function createCodexAppServerRuntime(
         collaborationModeSelectionCache.clear();
         clientHasExternalAuthTokens = false;
         attachClientHandlers(createdClient);
+        if (currentSkills && params.appServerTransport !== 'daemonProxy') {
+          try {
+            await createdClient.request('skills/extraRoots/set', { extraRoots: [currentSkills.skillsRoot] });
+            skillsDelivered = true;
+          } catch (error) {
+            skillsDelivered = false;
+            params.host.logger.warn('Codex session-private skills were not delivered', buildCodexAppServerSafeErrorIdentity(error));
+          }
+        }
         try {
           if (activeChatGptAuthTokensRefreshSelection && params.host.refreshRuntimeAuth) {
             const authTokens = await readHostOwnedAuthTokens();
@@ -2738,6 +2755,7 @@ export function createCodexAppServerRuntime(
           agentTurnId,
         });
       }
+      publishSkillMentions(activeTurn, turnInput);
       replayDeferredTerminalNotification(activeTurn);
       clearPendingProviderPrompt(pendingProviderPrompt);
     } catch (error) {
@@ -2836,6 +2854,7 @@ export function createCodexAppServerRuntime(
       throw error;
     }
     await pendingProviderPrompt.providerAcceptance?.promise;
+    publishSkillMentions(activeTurn, steerInput);
     clearPendingProviderPrompt(pendingProviderPrompt);
     for (const seq of pendingProviderPrompt.userMessageSeqs) {
       appendRollbackUserMessageSeq(activeTurn, seq);
@@ -3225,6 +3244,19 @@ export function createCodexAppServerRuntime(
   const runtime: CodexAppServerRuntime = {
     realtimeConversation,
     prepareProviderCliAttach,
+    get skillsDelivered() { return skillsDelivered; },
+    async prepareSkillDelivery() { await ensureClient(); },
+    async refreshSkills(request, options) {
+      options?.signal?.throwIfAborted();
+      if (params.appServerTransport === 'daemonProxy') {
+        return { kind: 'restart_required', reason: 'launch_path_unsupported' };
+      }
+      const appServerClient = await ensureClient();
+      await appServerClient.request('skills/extraRoots/set', { extraRoots: [request.skills.skillsRoot] }, options);
+      currentSkills = request.skills;
+      skillsDelivered = true;
+      return { kind: 'applied' };
+    },
     identity: {
       read() {
         return { providerSessionId: publishedThreadId };

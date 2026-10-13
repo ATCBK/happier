@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'smol-toml';
 import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 
@@ -14,6 +14,50 @@ const skills: AgentSessionSkillDelivery = {
 };
 
 describe('Codex session-private skill delivery', () => {
+  it('keeps reload pending until the repeated extra-roots request is acknowledged', async () => {
+    let acknowledge!: () => void;
+    const acknowledgement = new Promise<void>(resolve => { acknowledge = resolve; });
+    await withCodexNativeAttachFixture(async ({ runtime, requests }) => {
+      await startCodexAppServerRuntime(runtime);
+      const session = createCodexNativeAppServerSessionRuntime(runtime, 'session-1');
+      const replacement = { ...skills, skillsRoot: '/happier/skills/sessions/session-1/replaced-skills' };
+      let settled = false;
+      const refresh = session.refreshSkills!({ skills: replacement }).then(result => { settled = true; return result; });
+      try {
+        await vi.waitFor(() => expect(requests.filter(({ method }) => method === 'skills/extraRoots/set')).toHaveLength(2));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        acknowledge();
+        expect(await refresh).toEqual({ kind: 'applied' });
+        expect(requests.filter(({ method }) => method === 'skills/extraRoots/set').at(-1)?.params)
+          .toEqual({ extraRoots: [replacement.skillsRoot] });
+        expect(requests.some(({ method }) => method === 'skills/config/write')).toBe(false);
+      } finally { acknowledge(); await refresh; await session.dispose(); }
+    }, { skills, beforeExtraRootsSetResponse: async ({ occurrence }) => {
+      if (occurrence > 1) await acknowledgement;
+    } });
+  });
+
+  it('cancels an unacknowledged reload without claiming it applied', async () => {
+    let acknowledge!: () => void;
+    const acknowledgement = new Promise<void>(resolve => { acknowledge = resolve; });
+    await withCodexNativeAttachFixture(async ({ runtime, requests }) => {
+      await startCodexAppServerRuntime(runtime);
+      const session = createCodexNativeAppServerSessionRuntime(runtime, 'session-1');
+      const abort = new AbortController();
+      const cancelled = new Error('cancel reload');
+      const refresh = session.refreshSkills!({ skills }, { signal: abort.signal });
+      const outcome = refresh.then(value => ({ kind: 'resolved', value }), error => ({ kind: 'rejected', error }));
+      try {
+        await vi.waitFor(() => expect(requests.filter(({ method }) => method === 'skills/extraRoots/set')).toHaveLength(2));
+        abort.abort(cancelled);
+        expect(await outcome).toMatchObject({ kind: 'rejected', error: { name: 'AbortError' } });
+      } finally { acknowledge(); await session.dispose(); }
+    }, { skills, beforeExtraRootsSetResponse: async ({ occurrence }) => {
+      if (occurrence > 1) await acknowledgement;
+    } });
+  });
+
   it('sets extra roots before starting the thread and repeats the set for library reload', async () => {
     await withCodexNativeAttachFixture(async ({ runtime, requests }) => {
       await startCodexAppServerRuntime(runtime);
@@ -70,9 +114,8 @@ describe('Codex session-private skill delivery', () => {
 
   it('keeps the session open when the Agent refuses the skills method', async () => {
     await withCodexNativeAttachFixture(async ({ runtime }) => {
-      await startCodexAppServerRuntime(runtime);
+      expect(await startCodexAppServerRuntime(runtime)).toBe('fresh-thread');
       expect(runtime.skillsDelivered).toBe(false);
-      expect(runtime.identity.read().providerSessionId).toBe('fresh-thread');
       await expect(runtime.refreshSkills?.({ skills })).rejects.toThrow();
     }, { skills, rejectExtraRootsSet: true });
   });

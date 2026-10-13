@@ -4,6 +4,26 @@ import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/
 import { buildCodexAppServerConfigOverrides } from './overrides';
 
 describe('buildCodexAppServerConfigOverrides', () => {
+    it('projects Off and deny through native filters and mediates Allow as prompt', () => {
+        const overrides = buildCodexAppServerConfigOverrides({
+            'linear__team': { command: 'bridge', enabledTools: ['read', 'write', 'inspect'] },
+            locked: { command: 'bridge' },
+            happier: { command: 'bridge' },
+        }, {
+            mcpToolPolicy: {
+                'linear__team': { unlisted: 'ask', tools: { read: 'allow', write: 'off', inspect: 'ask', 'tool.with.dot': 'deny' } },
+                locked: { unlisted: 'deny', tools: { approved: 'allow', blocked: 'deny' } },
+                happier: { unlisted: 'deny', tools: { change_title: 'off' } },
+            },
+        });
+        expect(overrides).toContain('mcp_servers.happier__linear_team.enabled_tools=["read","inspect"]');
+        expect(overrides).toContain('mcp_servers.happier__linear_team.disabled_tools=["write","tool.with.dot"]');
+        expect(overrides).toContain('mcp_servers.happier__linear_team.default_tools_approval_mode="prompt"');
+        expect(overrides).toContain('mcp_servers.happier__linear_team.tools."read".approval_mode="prompt"');
+        expect(overrides).toContain('mcp_servers.happier__locked.enabled_tools=["approved"]');
+        expect(overrides).not.toContain('mcp_servers.happier.disabled_tools=["change_title"]');
+        expect(overrides).not.toContain('mcp_servers.happier__linear_team.default_tools_approval_mode="approve"');
+    });
     it('removes native command, file, connector and delegation tools under an exclusive MCP recipe', () => {
         const overrides = buildCodexAppServerConfigOverrides({}, {
             unlistedTools: 'deny',

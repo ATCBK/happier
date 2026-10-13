@@ -109,6 +109,8 @@ const catalog: AgentSessionCatalogControl = {
           status: 'ok' as const,
           kind: 'skills' as const,
           items: result.skills.map((item) => ({
+            v: 1 as const,
+            origin: 'vendor' as const,
             id: item.id,
             name: item.name,
             displayName: item.displayName ?? item.name,

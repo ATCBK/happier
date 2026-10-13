@@ -47,7 +47,7 @@ export function resolveApprovalChoiceLabel(params: {
   logger: LoggerSubset;
 }): string | null {
   const outcome = decisionToApprovalOutcome(params.decision);
-  const choice = resolveCodexApprovalQuestionChoice({ questions: params.questions, outcome });
+  const choice = resolveCodexApprovalQuestionChoice({ questions: params.questions, outcome, allowSessionPersistence: false });
   if (!choice) {
     params.logger.debug('[Codex] request_user_input approval offers no option that can carry this decision; leaving it unanswered', {
       decision: params.decision,

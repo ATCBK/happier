@@ -8,6 +8,11 @@ import {
 } from './backend';
 
 describe('buildCodexNativeAcpRuntimeOptions', () => {
+  it('refuses MCP tool policy when ACP cannot apply the native knob', () => {
+    expect(() => buildCodexNativeAcpRuntimeOptions({ kind: 'create', sessionId: 'policy', cwd: '/workspace',
+      mcpToolPolicy: { docs: { unlisted: 'ask', tools: { write: 'off' } } },
+    })).toThrow(expect.objectContaining({ code: 'codex_mcp_tool_policy_unsupported_transport' }));
+  });
   it('refuses confinement before ACP launch when underlying native support cannot be established', () => {
     expect(() => buildCodexNativeAcpRuntimeOptions({
       kind: 'create', sessionId: 'restricted', cwd: '/workspace',

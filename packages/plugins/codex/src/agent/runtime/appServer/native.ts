@@ -15,6 +15,7 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue, PluginDiagnosticData } from '@happier-dev/plugin-sdk';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { isDeepStrictEqual } from 'node:util';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
   createAgentSessionPreAdmissionBuffer,
@@ -256,8 +257,8 @@ export function createCodexNativeAppServerRuntimeHost(params: Readonly<{
       },
     } : {}),
     refreshRuntimeAuth: async (request) => {
-      const auth = params.context.services.sessions.current?.auth;
-      if (!auth) throw new Error('Codex Session-handle runtime authentication is unavailable.');
+      const auth = params.context.session.services.auth;
+      if (!auth) throw new Error('Codex native runtime authentication is unavailable.');
       return await createNativeRuntimeAuthRefresh({
         auth, signal: params.context.signal,
       })(request);
@@ -454,6 +455,9 @@ function mapCodexAppServerEvent(event: CodexAppServerEvent): NativeSessionEventI
       };
     case 'turn-agent-id-observed':
       return { kind: 'turn-agent-id-observed', turnId: event.turnId, agentTurnId: event.agentTurnId };
+    case 'skill-usage':
+      return { kind: event.kind, turnId: event.turnId, skills: event.skills,
+        ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}) };
     case 'turn-complete':
       return {
         kind: 'turn-complete',
@@ -468,7 +472,8 @@ function mapCodexAppServerEvent(event: CodexAppServerEvent): NativeSessionEventI
         diagnostic: diagnostic(
           event.issue.code,
           event.issue.sanitizedPreview ?? event.issue.code,
-          { v: 1, source: event.issue.source },
+          { v: 1, source: event.issue.source,
+            ...(event.runtimeAuthClassification ? { runtimeAuthClassification: toJsonValue(event.runtimeAuthClassification) } : {}) },
         ),
       };
     case 'turn-cancelled':
@@ -597,12 +602,14 @@ export function createCodexNativeAppServerSessionRuntime(
   sessionId: string,
   realtimeConversation?: AgentSessionRealtimeConversation,
   onDispose?: () => void | Promise<void>,
+  initialMcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'],
 ): AgentSessionRuntime {
   return createCodexNativeAppServerConversationRuntime(
     appServer,
     { kind: 'session', sessionId },
     realtimeConversation,
     onDispose,
+    initialMcpToolPolicy,
   ) as AgentSessionRuntime;
 }
 
@@ -626,6 +633,7 @@ function createCodexNativeAppServerConversationRuntime(
     | Readonly<{ kind: 'execution_run'; executionRunId: string }>,
   realtimeConversation?: AgentSessionRealtimeConversation,
   onDispose?: () => void | Promise<void>,
+  initialMcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'],
 ): AgentSessionRuntime | AgentExecutionRunConversationRuntimeV1 {
   const listeners = new Set<(
     event: AgentSessionRuntimeEvent | NativeExecutionRunConversationEvent,
@@ -825,6 +833,10 @@ function createCodexNativeAppServerConversationRuntime(
       };
     },
     async updateConfiguration(request) {
+      if (request.mcpToolPolicy !== undefined && !isDeepStrictEqual(request.mcpToolPolicy, initialMcpToolPolicy ?? {})) {
+        return { status: 'unsupported', diagnostic: diagnostic('codex_mcp_tool_policy_restart_required',
+          'Codex MCP tool filters require an app-server restart.') };
+      }
       if (!appServer.updateConfig) {
         return {
           status: 'unsupported',
@@ -905,6 +917,8 @@ function createCodexNativeAppServerConversationRuntime(
   if (scope.kind === 'session') {
     return {
       ...nativeRuntime,
+      get skillsDelivered() { return appServer.skillsDelivered; },
+      ...(appServer.refreshSkills ? { refreshSkills: appServer.refreshSkills } : {}),
       watch(listener) {
         return nativeRuntime.watch((event) => listener(event as AgentSessionRuntimeEvent));
       },
@@ -969,7 +983,7 @@ export async function openCodexNativeAppServerSession(
       cwd: request.cwd,
       processEnv,
       signal: context.signal,
-      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, request.configuration),
+      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, { ...request.configuration, skills: request.skills, mcpToolPolicy: request.mcpToolPolicy }),
       disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
       toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
       toolRestrictionAllowedMcpServerKeys: [...assignInjectedServerKeys(Object.keys(request.mcpServers ?? {})).values()],
@@ -1021,6 +1035,8 @@ export async function openCodexNativeAppServerSession(
     ...(initialProviderBinding ? { initialProviderBinding } : {}),
     processEnv,
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
+    ...(request.mcpToolPolicy ? { mcpToolPolicy: request.mcpToolPolicy } : {}),
+    ...(request.skills ? { skills: request.skills } : {}),
     resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites, request.configuration?.unlistedTools),
     ...(goalProjection
       ? {
@@ -1035,6 +1051,7 @@ export async function openCodexNativeAppServerSession(
   });
   try {
     await applyCodexConfigurationOptions(runtime.updateConfig, request.configuration?.options ?? {});
+    if (request.skills && appServerTransport !== 'daemonProxy') await runtime.prepareSkillDelivery();
     if (providerSessionId || (request.kind !== 'fork' && request.startupInstructions)) {
       await startCodexAppServerRuntime(runtime, {
         ...(providerSessionId ? { resumeId: providerSessionId } : {}),
@@ -1055,9 +1072,12 @@ export async function openCodexNativeAppServerSession(
     runtime,
     request.sessionId,
     runtime.realtimeConversation,
+    undefined,
+    request.mcpToolPolicy,
   );
   return {
     ...sessionRuntime,
+    get skillsDelivered() { return runtime.skillsDelivered; },
     ...(sharedAppServer
       ? {
           async prepareTerminalPresentation() {
@@ -1124,7 +1144,7 @@ export async function openCodexNativeAppServerExecutionRunConversation(
       cwd: request.cwd,
       processEnv,
       signal: context.signal,
-      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, request.configuration),
+      configOverrides: buildCodexAppServerConfigOverrides(request.mcpServers ?? {}, { ...request.configuration, skills: request.skills, mcpToolPolicy: request.mcpToolPolicy }),
       disableUserMcpServers: request.configuration?.unlistedTools === 'deny',
       initializeRequestOptions: { signal: context.signal, timeoutMs: null },
       toolRestrictionRequired: request.configuration?.unlistedTools === 'deny',
@@ -1162,10 +1182,13 @@ export async function openCodexNativeAppServerExecutionRunConversation(
     ...(initialProviderBinding ? { initialProviderBinding } : {}),
     processEnv,
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
+    ...(request.mcpToolPolicy ? { mcpToolPolicy: request.mcpToolPolicy } : {}),
+    ...(request.skills ? { skills: request.skills } : {}),
     resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites, request.configuration?.unlistedTools),
   });
   try {
     await applyCodexConfigurationOptions(runtime.updateConfig, request.configuration?.options ?? {});
+    if (request.skills) await runtime.prepareSkillDelivery();
     if (providerSessionId) {
       await startCodexAppServerRuntime(runtime, {
         resumeId: providerSessionId,

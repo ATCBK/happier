@@ -1008,15 +1008,10 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
       signal: controller.signal,
       services: {
         logger: { debug: vi.fn() },
-        sessions: {
-          current: {
-            auth: { services: { refreshRuntimeAuth } },
-            media: { registerSourceRoot: vi.fn() },
-          },
-        },
+        sessions: { current: null },
         connectedAccounts: createConnectedAccountsFixture(),
       },
-      session: { id: 'session-1', services: { nativeHome: {
+      session: { id: 'session-1', services: { auth: { services: { refreshRuntimeAuth } }, nativeHome: {
         root: '/fixture', readFiles: async () => ({ 'auth.json': new TextEncoder().encode(JSON.stringify({
           auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'launch-A', account_id: 'account-A' },
         })) }),
@@ -1057,14 +1052,13 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
       signal: new AbortController().signal,
       services: {
         logger: { debug: vi.fn() },
-        sessions: { current: {
-          auth: { services: { refreshRuntimeAuth: async () => ({ status: 'refreshed',
-            result: { credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' } }) } },
-          media: { registerSourceRoot: vi.fn() },
-        } },
+        sessions: { current: null },
         connectedAccounts: createConnectedAccountsFixture(),
       },
-      session: { id: 'session-1', services: { nativeHome: {
+      session: { id: 'session-1', services: {
+        auth: { services: { refreshRuntimeAuth: async () => ({ status: 'refreshed',
+          result: { credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' } }) } },
+        nativeHome: {
         readFiles: async () => ({ 'auth.json': new TextEncoder().encode(JSON.stringify({
           auth_mode: 'chatgptAuthTokens', tokens: { access_token: 'launch-A', account_id: 'account-A' },
         })) }),
@@ -1335,6 +1329,17 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     expect(appServer.updateConfig).toHaveBeenNthCalledWith(4, {
       configOption: { id: 'service_tier', value: 'fast' },
     });
+  });
+
+  it('reports MCP policy replacement as unsupported rather than falsely applied', async () => {
+    const appServer = createAppServerSession();
+    const runtime = createCodexNativeAppServerSessionRuntime(appServer.runtime, 'session-1');
+    await expect(runtime.updateConfiguration?.({
+      mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+      permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+      mcpToolPolicy: { linear: { unlisted: 'ask', tools: { read: 'off' } } },
+    })).resolves.toMatchObject({ status: 'unsupported', diagnostic: { code: 'codex_mcp_tool_policy_restart_required' } });
+    await runtime.dispose();
   });
 
   it('preserves committed reasoning as reasoning', () => {

@@ -58,7 +58,7 @@ describe('createCodexRequestUserInputBridge', () => {
       }),
     });
 
-    expect(continueSession).toHaveBeenCalledWith('Approve this Session');
+    expect(continueSession).toHaveBeenCalledWith('Approve Once');
   });
 
   it('falls back to a valid option label when the expected approval label is missing', async () => {

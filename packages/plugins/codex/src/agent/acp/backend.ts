@@ -18,6 +18,10 @@ import {
 export function buildCodexNativeAcpRuntimeOptions(
   request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
 ): AgentAcpRuntimeOptions {
+  if (Object.keys(request.mcpToolPolicy ?? {}).length > 0) {
+    throw new PluginError({ code: 'codex_mcp_tool_policy_unsupported_transport',
+      message: 'Codex ACP cannot apply native MCP tool filters. Use App Server routing for this policy.' });
+  }
   if (request.configuration?.unlistedTools === 'deny') {
     throw new PluginError({
       code: 'codex_tool_restriction_unsupported_transport',

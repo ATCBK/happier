@@ -1267,9 +1267,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       });
       await expect(waitForCodexAppServerRuntimeTurnCompletion(core))
         .rejects.toThrow('Codex app-server turn failed.');
-      expect(events.filter((event) => event.kind === 'runtime-ended')).toHaveLength(
-        expectedCode === 'agent_context_window_exceeded' ? 0 : 1,
-      );
+      expect(events.filter((event) => event.kind === 'runtime-ended')).toHaveLength(0);
       expect(events.filter((event) => event.kind === 'turn-failed')).toEqual([
         expect.objectContaining({
           turnId: 'host-turn-original',
@@ -1409,6 +1407,9 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       turnId: 'codex-turn-private',
       agentTurnId: 'turn-1',
       emittedAtMs: expect.any(Number),
+      runtimeAuthClassification: expect.objectContaining({
+        kind: 'usage_limit', limitCategory: 'usage_limit', source: 'structured_provider_error',
+      }),
       issue: {
         v: 1,
         scope: 'primary_session',
@@ -1421,15 +1422,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
         sanitizedPreview: safeFailurePreview,
       },
     });
-    expect(events).toContainEqual({
-      kind: 'backend-error',
-      sessionId: 'session-1',
-      emittedAtMs: expect.any(Number),
-      error: {
-        code: 'codex_app_server_turn_failed',
-        message: safeFailurePreview,
-      },
-    });
+    expect(events.filter(event => event.kind === 'backend-error')).toHaveLength(0);
     expect(logger.debug).toHaveBeenCalledWith(
       'Codex app-server background turn completion failed',
       {
@@ -1451,7 +1444,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     expect(JSON.stringify(logger.debug.mock.calls)).not.toContain(hostileRateLimitsSentinel);
   });
 
-  it('reports one group-bound late usage-limit failure after terminal and quota evidence settlement', async () => {
+  it('publishes group-bound late usage-limit evidence before terminal without a competing recovery report', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-plugin-usage-limit-recovery-'));
     const settlementOrder: string[] = [];
     const evidenceRecords: unknown[] = [];
@@ -1522,21 +1515,29 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       });
 
       await runtime.send({ v: 1, text: 'late usage-limit prompt' }, { turnId: 'host-turn-1' });
+      const previousReads = clientState.requests.filter(({ method }) => method === 'account/rateLimits/read').length;
+      clientState.deferNextRateLimitsRead();
       emitNotification('turn/completed', failedUsageLimitTurn('turn-1'));
-      await expect(waitForCodexAppServerRuntimeTurnCompletion(runtime))
-        .rejects.toThrow('Codex app-server turn failed.');
+      let settled = false;
+      const completion = waitForCodexAppServerRuntimeTurnCompletion(runtime).catch(error => error).then(failure => {
+        settled = true;
+        return failure;
+      });
+      await vi.waitFor(() => expect(clientState.requests.filter(({ method }) => method === 'account/rateLimits/read').length)
+        .toBeGreaterThan(previousReads));
+      expect(settled).toBe(false);
+      expect(settlementOrder).toEqual([]);
+      clientState.resolveDeferredRateLimitsRead({ rateLimits: { primary: { used_percent: 100 } }, plan_type: 'pro' });
+      const failure = await completion;
+      expect(failure).toBeInstanceOf(Error);
       await waitForUsageRecordMatching(
         evidenceRecords,
         (record) => (record as { policyDisposition?: unknown }).policyDisposition === 'evidence_only',
       );
-      for (let attempt = 0; attempt < 20 && recoveryRequests.length === 0; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-
-      expect(recoveryRequests).toEqual([{
-        serviceId: 'openai-codex',
-        targetId: 'session-1',
-        classification: expect.objectContaining({
+      expect(recoveryRequests).toEqual([]);
+      expect(settlementOrder).toEqual(['evidence', 'terminal']);
+      expect(failure).toMatchObject({
+        runtimeAuthClassification: expect.objectContaining({
           kind: 'usage_limit',
           limitCategory: 'usage_limit',
           serviceId: 'openai-codex',
@@ -1546,9 +1547,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
           sourceProviderAccountId: 'acct_team',
           connectedServiceRecovery: 'available',
         }),
-        reason: 'provider_session_usage_limit_failure',
-      }]);
-      expect(settlementOrder).toEqual(['terminal', 'evidence', 'recovery']);
+      });
     } finally {
       await rm(codexHome, { recursive: true, force: true });
     }
@@ -2482,12 +2481,13 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     expect(clientState.requests.filter(({ method }) => method === 'thread/rollback')).toHaveLength(rollbackCallCount);
   });
 
-  it('reports terminal capacity failure once to host recovery without resubmitting the turn', async () => {
+  it.each(['session', 'execution_run'] as const)('publishes canonical $0 capacity evidence without a competing recovery report or prompt replay', async (scope) => {
     const refreshRuntimeAuth = vi.fn(async () => ({
       status: 'unavailable' as const,
       reason: 'runtime_auth_selection_unavailable',
     }));
     const runtime = createRuntime({
+      ...(scope === 'execution_run' ? { executionRunId: 'run-1' } : {}),
       ctx: {
         auth: {
           services: {
@@ -2498,8 +2498,14 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     });
     const events: CodexAppServerEvent[] = [];
     runtime.events.subscribe((event) => events.push(event));
+    const native = scope === 'session'
+      ? createCodexNativeAppServerSessionRuntime(runtime, 'session-1')
+      : createCodexNativeAppServerExecutionRunConversationRuntime(runtime, 'run-1');
+    const canonicalEvents: Array<AgentSessionRuntimeEvent | AgentExecutionRunConversationEventV1> = [];
+    native.watch((event: AgentSessionRuntimeEvent | AgentExecutionRunConversationEventV1) => canonicalEvents.push(event));
 
-    await runtime.send({ v: 1, text: 'original prompt' });
+    await native.send({ inputIds: ['capacity-input'], input: { text: 'original prompt' },
+      delivery: { kind: 'newTurn', turnId: 'capacity-turn' } });
     emitNotification(
       'turn/completed',
       failedCapacityTurn('turn-1', 'ORIGINAL_CAPACITY_FAILURE: Selected model is at capacity. Please try a different model.'),
@@ -2523,20 +2529,16 @@ describe('Codex app-server temporary recoverable turn failures', () => {
         limitCategory: 'capacity',
         quotaScope: 'provider',
       });
-    for (let attempt = 0; attempt < 20 && refreshRuntimeAuth.mock.calls.length === 0; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(refreshRuntimeAuth).toHaveBeenCalledWith(expect.objectContaining({
-      serviceId: 'openai-codex',
-      targetId: 'session-1',
-      reason: 'provider_session_capacity_failure',
-      classification: expect.objectContaining({
-        kind: 'capacity',
-        limitCategory: 'capacity',
-        quotaScope: 'provider',
+    expect(refreshRuntimeAuth).not.toHaveBeenCalled();
+    expect(canonicalEvents.filter(event => event.kind === 'runtime-ended')).toHaveLength(0);
+    expect(canonicalEvents).toContainEqual(expect.objectContaining({
+      kind: 'turn-failed', diagnostic: expect.objectContaining({
+        details: expect.objectContaining({ runtimeAuthClassification: expect.objectContaining({
+          kind: 'capacity', limitCategory: 'capacity', quotaScope: 'provider',
+        }) }),
       }),
     }));
-    expect(refreshRuntimeAuth).toHaveBeenCalledTimes(1);
+    await native.dispose();
   });
 
   it.each([
@@ -3642,6 +3644,39 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       });
       expect(JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct_current' } });
     } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('reads native reset credits without requesting connected-account refresh', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-native-credits-'));
+    const requests: unknown[] = [];
+    const refreshRuntimeAuth = vi.fn(async () => {
+      throw new Error('runtime_auth_selection_unavailable');
+    });
+    const runtime = createRuntime({
+      processEnv: { CODEX_HOME: codexHome },
+      ctx: {
+        auth: { services: { refreshRuntimeAuth } },
+        runtimeFetch: { request: async (request) => {
+          requests.push(request);
+          return { status: 200, finalUrl: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: {},
+            body: new TextEncoder().encode('{}') };
+        } },
+      },
+    });
+    try {
+      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: {
+        access_token: 'native-access', account_id: 'native-account',
+      } }));
+      await startCodexAppServerRuntime(runtime);
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(0));
+      expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ headers: expect.objectContaining({
+        Authorization: 'Bearer native-access', 'ChatGPT-Account-Id': 'native-account',
+      }) })]));
+      expect(refreshRuntimeAuth).not.toHaveBeenCalled();
+    } finally {
+      await runtime.dispose();
       await rm(codexHome, { recursive: true, force: true });
     }
   });

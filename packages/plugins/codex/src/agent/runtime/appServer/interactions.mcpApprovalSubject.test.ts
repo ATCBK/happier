@@ -107,7 +107,9 @@ function createFixture() {
 
 const stops: Array<() => void> = [];
 afterEach(() => { for (const stop of stops.splice(0)) stop(); });
-const approvedAnswer = { answers: { mcp_tool_call_approval_1: { answers: ['Approve this Session'] } } };
+// The host owns the Session grant. A native Session grant would skip the next
+// host lookup and keep running a tool after the catalog turns it Off.
+const approvedAnswer = { answers: { mcp_tool_call_approval_1: { answers: ['Approve Once'] } } };
 const deniedAnswer = { answers: { mcp_tool_call_approval_1: { answers: ['Deny'] } } };
 
 describe('Codex MCP approval subjects through real session grants', () => {

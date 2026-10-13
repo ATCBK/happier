@@ -2,15 +2,15 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { vi } from 'vitest';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type { AgentExecutionRunConversationRuntimeV1, AgentExecutionRunRuntimeContextV1, AgentSessionConfigurationSnapshot, AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { createCodexNativeAppServerClient } from './client.js';
-import { createCodexAppServerRuntime, startCodexAppServerRuntime } from './runtime.js';
+import { buildCodexAppServerArgs, createCodexNativeAppServerClient } from './client.js';
+import { createCodexAppServerRuntime, startCodexAppServerRuntime, type CodexAppServerRuntimeHost } from './runtime.js';
 import { openCodexNativeAppServerExecutionRunConversation, openCodexNativeAppServerSession } from './native.js';
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
+import { resolveCodexTerminalPermissionPolicy } from '../terminal/permissionPolicy.js';
 
 // The network fixture models pinned Codex 0.159.2's empty paginated rollout:
 // name/set supplies metadata; a full read persists it; native resume then works.
@@ -29,12 +29,23 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   longTemporaryDirectory?: boolean;
   toolRestriction?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
   mcpServers?: AgentSessionOpenRequest['mcpServers'];
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
+  permissionMode?: string;
+  interactions?: CodexAppServerRuntimeHost['ui'];
+  onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
+  turnIdForStart?: (occurrence: number) => string;
   nativeToolMode?: 'code_mode_only' | 'direct';
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
   processEnv?: Readonly<Record<string, string | undefined>>;
   skills?: AgentSessionOpenRequest['skills'];
   appServerTransport?: 'daemonProxy';
   rejectExtraRootsSet?: boolean;
+  beforeExtraRootsSetResponse?: (input: Readonly<{ occurrence: number; params: Record<string, unknown> }>) => Promise<void>;
+  directory?: string;
+  observer?: Readonly<{
+    recordAppServerRequest(method: string, params: unknown): void;
+    recordLaunch(input: Readonly<{ argv: readonly string[]; env?: Readonly<Record<string, string | undefined>> }>): void;
+  }>;
 } = {}) {
   // Unix IPC fixtures need short paths; TMPDIR is a genuine OS/environment boundary.
   const root = await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'ca-'));
@@ -54,21 +65,31 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   let materialized = false;
   let rejectRead = false;
   let resumeFailure: string | null = null;
-  const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => socket.on('message', (payload) => {
+  let extraRootsSetOccurrence = 0;
+  let turnStartOccurrence = 0;
+  const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => socket.on('message', async (payload) => {
     const message = JSON.parse(payload.toString()) as {
       id?: number; method: string; params?: Record<string, unknown>;
     };
-    if (message.id === undefined) return;
+    if (message.id === undefined || typeof message.method !== 'string') return;
     const params = message.params ?? {};
     requests.push({ method: message.method, params });
+    options.observer?.recordAppServerRequest(message.method, params);
+    if (message.method === 'skills/extraRoots/set') {
+      await options.beforeExtraRootsSetResponse?.({ occurrence: ++extraRootsSetOccurrence, params });
+    }
     let result: unknown = {};
     let error: unknown;
+    const turnId = message.method === 'turn/start'
+      ? options.turnIdForStart?.(++turnStartOccurrence) ?? 'fixture-turn' : 'fixture-turn';
     if (message.method === 'initialize') {
       result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
     } else if (message.method === 'config/read') {
       result = { config: { mcp_servers: options.mcpServers ? { happier__wilson: { enabled: true } } : {}, features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
     } else if (message.method === 'thread/start') {
       result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+    } else if (message.method === 'turn/start') {
+      result = { turn: { id: turnId, status: 'inProgress', items: [] } };
     } else if (message.method === 'thread/name/set') {
       named = true;
     } else if (message.method === 'thread/read') {
@@ -87,6 +108,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       error = { code: -32601, message: 'Method not found' };
     }
     socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
+    if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });
     if (message.method === 'thread/realtime/start') {
       socket.send(JSON.stringify({ method: 'thread/realtime/started', params: { threadId: 'fresh-thread', realtimeSessionId: null, version: 'v3' } }));
       socket.send(JSON.stringify({ method: 'thread/realtime/sdp', params: { threadId: 'fresh-thread', sdp: 'answer' } }));
@@ -102,19 +124,27 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' }, executablePath: '/fixture/codex' }) },
     run: async () => ({ stdout: new TextEncoder().encode(JSON.stringify({ models: [{ slug: 'fixture-model', tool_mode: options.nativeToolMode === 'direct' ? undefined : 'code_mode_only' }, { slug: 'direct-model' }] })), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false, termination: { requestedBy: { kind: 'none' }, observed: { kind: 'exit', exitCode: 0 } } }),
   } as unknown as ExecService;
-  const createClient = async (request?: { toolRestrictionRequired?: boolean; toolRestrictionAllowedMcpServerKeys?: readonly string[] }) => await createCodexNativeAppServerClient({
-    exec, processEnv: {}, toolRestrictionRequired: request?.toolRestrictionRequired, toolRestrictionAllowedMcpServerKeys: request?.toolRestrictionAllowedMcpServerKeys, transport: { kind: 'unixWebSocket', socketPath, realtimeConversationAdvertised: true },
-  });
+  const createClient = async (request?: { toolRestrictionRequired?: boolean; toolRestrictionAllowedMcpServerKeys?: readonly string[]; configOverrides?: readonly string[]; disableUserMcpServers?: boolean; processEnv?: Readonly<Record<string, string | undefined>> }) => {
+    // Observe the real config/argv owner at the process boundary; this fixture substitutes Unix transport for the process.
+    options.observer?.recordLaunch({ argv: buildCodexAppServerArgs({ ...request, env: request?.processEnv ?? {} }), env: request?.processEnv });
+    return await createCodexNativeAppServerClient({
+      exec, processEnv: {}, toolRestrictionRequired: request?.toolRestrictionRequired, toolRestrictionAllowedMcpServerKeys: request?.toolRestrictionAllowedMcpServerKeys, transport: { kind: 'unixWebSocket', socketPath, realtimeConversationAdvertised: true },
+    });
+  };
   const runtime = createCodexAppServerRuntime({
-    directory: root, happierSessionId: 'actual-happier-session',
+    directory: options.directory ?? root, happierSessionId: 'actual-happier-session',
     toolRestriction: options.toolRestriction,
     mcpServers: options.mcpServers,
+    mcpToolPolicy: options.mcpToolPolicy,
+    initialPermissionMode: options.permissionMode,
     initialProviderBinding: options.initialProviderBinding,
     processEnv: options.processEnv,
     skills: options.skills,
     appServerTransport: options.appServerTransport,
-    resolveCurrentPolicy: () => ({ approvalPolicy: 'never', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } }),
-    host: { baseProcessEnv: {}, logger: { debug: vi.fn(), warn: vi.fn() }, createClient },
+    resolveCurrentPolicy: () => options.permissionMode
+      ? resolveCodexTerminalPermissionPolicy(options.permissionMode)
+      : ({ approvalPolicy: 'never', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } }),
+    host: { baseProcessEnv: {}, logger: { debug() {}, warn() {} }, createClient, ui: options.interactions },
   });
   const opened: { session: AgentSessionRuntime | null } = { session: null };
   let openedRun: AgentExecutionRunConversationRuntimeV1 | null = null;
@@ -164,7 +194,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.
       const context = {
         signal: new AbortController().signal,
-        services: { exec: nativeExec, logger: { debug: vi.fn(), warn: vi.fn() }, sessions: {} },
+        services: { exec: nativeExec, logger: { debug() {}, warn() {} }, sessions: {} },
         session: { id: 'actual-happier-session', services: {} },
         ui: { title: { set: async () => undefined } },
       } as unknown as AgentSessionRuntimeContext;
@@ -186,13 +216,13 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     }, async openConfiguredRun() {
       const context = {
         signal: new AbortController().signal,
-        services: { exec: nativeExec, logger: { debug: vi.fn(), warn: vi.fn() } },
+        services: { exec: nativeExec, logger: { debug() {}, warn() {} } },
         executionRun: { id: 'skills-run-1', services: {} },
       } as unknown as AgentExecutionRunRuntimeContextV1;
       openedRun = await openCodexNativeAppServerExecutionRunConversation({
         kind: 'create', runId: 'skills-run-1', cwd: root,
         profile: { pluginId: 'happier.agent.codex', localId: 'codex' },
-        input: { kind: 'text', text: 'Use the review skill.' },
+        input: { text: 'Use the review skill.' },
         launchEnvironment: { values: { CODEX_HOME: root }, unset: ['CODEX_SQLITE_HOME', 'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'] },
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },

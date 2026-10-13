@@ -4,8 +4,10 @@ import type {
   AgentSessionConversationRollbackReconciliationResult,
   AgentSessionRuntimeAuthControl,
   AgentSessionRuntimeEvent,
+  AgentSessionRuntime,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionRuntimeIssueV1 } from '@happier-dev/plugin-sdk/sessions';
+import type { sanitizeCodexAppServerRuntimeAuthClassification } from './turns/failure.js';
 
 export type CodexAppServerRuntimeIssue = SessionRuntimeIssueV1;
 
@@ -38,6 +40,10 @@ type NativeUsageObservation = Omit<
 >;
 
 export type CodexAppServerEvent =
+  | (CodexAppServerTurnEventBase & Readonly<{
+      kind: 'skill-usage';
+      skills: Extract<AgentSessionRuntimeEvent, { kind: 'skill-usage' }>['skills'];
+    }>)
   | (CodexAppServerEventBase & Readonly<{
       kind: 'context-compaction'; compactionId: string; turnId?: string;
       phase: 'started' | 'completed'; trigger: 'unknown';
@@ -77,6 +83,7 @@ export type CodexAppServerEvent =
   | (CodexAppServerTurnEventBase & Readonly<{
       kind: 'turn-failed';
       issue: CodexAppServerRuntimeIssue;
+      runtimeAuthClassification?: ReturnType<typeof sanitizeCodexAppServerRuntimeAuthClassification>;
     }>)
   | (CodexAppServerTurnEventBase & Readonly<{
       kind: 'turn-cancelled';
@@ -191,6 +198,8 @@ export type CodexAppServerSession = Readonly<{
     configOption?: Readonly<Record<string, unknown>>;
   }>): Promise<void>;
   runtimeAuth?: AgentSessionRuntimeAuthControl;
+  skillsDelivered?: AgentSessionRuntime['skillsDelivered'];
+  refreshSkills?: AgentSessionRuntime['refreshSkills'];
   dispose(reason?: 'session_closed' | 'plugin_deactivated' | 'host_shutdown' | 'runtime_recovery'): Promise<void>;
   rollbackNativeConversation(
     request: AgentSessionConversationRollbackRequest,

@@ -57,6 +57,7 @@ const CODEX_RUNTIME_DESCRIPTOR_READER_PROJECTION = {
 
 export const AGENT_DEFINITION = Object.freeze({
   id: CODEX_AGENT_ID,
+  acpRegistryIds: ['codex-acp'] as const,
   core: {
     id: CODEX_AGENT_ID,
     cliSubcommand: 'codex',

@@ -12,6 +12,6 @@ export default defineConfig({
     ...resolveVitestWorkers(),
     environment: 'node',
     // The real host grant composition uses its source harness in the second lane.
-    exclude: [...configDefaults.exclude, '**/interactions.mcpApprovalSubject.test.ts'],
+    exclude: [...configDefaults.exclude, '**/interactions.mcpApprovalSubject.test.ts', '**/mcpToolPolicy.contract.test.ts'],
   },
 });

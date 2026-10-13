@@ -99,6 +99,41 @@
             ],
             "workspaceWrites": "deny"
           },
+          "skills": {
+            "delivery": "session_dir",
+            "liveReload": "supported",
+            "nativeDisable": "supported",
+            "nativeRoots": {
+              "plugin": [
+                [
+                  ".codex",
+                  "plugins",
+                  "cache",
+                  "*",
+                  "{plugin}",
+                  "*",
+                  "skills"
+                ]
+              ],
+              "project": [
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".agents",
+                  "skills"
+                ],
+                [
+                  ".codex",
+                  "skills"
+                ]
+              ]
+            },
+            "usageEvidence": "reported"
+          },
           "structuredOutput": {
             "formats": [
               "json"
@@ -112,6 +147,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "codex-acp"
+          ],
           "agentCliSystemTool": {
             "toolId": "codex-cli"
           },
@@ -430,6 +468,7 @@
           "defaultModeId": "oauth",
           "modes": [
             {
+              "callbackUrl": "http://localhost:1455/auth/callback",
               "id": "oauth",
               "kind": "oauthAuthorizationCode",
               "outcomeReconciliation": "none",
@@ -560,6 +599,7 @@
       "discoverySources": [
         {
           "id": "config",
+          "loadedInHappierSessions": false,
           "metadata": {
             "agentId": "codex"
           },
@@ -575,6 +615,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],
@@ -814,6 +855,10 @@
         "client": {
           "artifactId": "voice-runtime-web",
           "exportName": "activate"
+        },
+        "description": {
+          "fallback": "Speak directly with the active Codex agent session.",
+          "key": "settingsVoice.mode.codexRealtimeSubtitle"
         },
         "execution": {
           "agent": "codex",

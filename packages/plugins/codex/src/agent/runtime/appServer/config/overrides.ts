@@ -1,5 +1,5 @@
 import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
-import type { AgentSessionConfigurationSnapshot } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionConfigurationSnapshot, AgentSessionMcpToolPolicy, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
 import {
@@ -117,11 +117,17 @@ export function buildCodexAppServerConfigOverrides(
     mcpServers: Readonly<Record<string, CodexAppServerMcpServerConfig>>,
     options: Readonly<{
         processEnv?: Readonly<Record<string, string | undefined>>;
+        skills?: AgentSessionSkillDelivery;
+        mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
     }> & CodexToolRestrictionConfiguration = {},
 ): string[] {
     const serverNames = Object.keys(mcpServers);
     const injectedKeys = assignInjectedServerKeys(serverNames);
     const overrides = buildCodexUnlistedToolConfigOverrides(options);
+    if (options.skills?.nativeDisables.length) {
+        const disables = options.skills.nativeDisables.map(({ path }) => `{path=${quoteTomlString(path)},enabled=false}`);
+        overrides.push(`skills.config=[${disables.join(',')}]`);
+    }
 
     const hasFirstPartyHappierMcpServer = serverNames.some(isFirstPartyHappierMcpBridgeServerName);
     const happierMcpStartupTimeoutMs = readCodexAppServerStartupRpcTimeoutMs(options.processEnv ?? {});
@@ -151,8 +157,27 @@ export function buildCodexAppServerConfigOverrides(
             overrides.push(`mcp_servers.${injectedKey}.env=${serializeTomlInlineTable(config.env)}`);
         }
         overrides.push(`mcp_servers.${injectedKey}.enabled=true`);
-        if (config.enabledTools) {
-            overrides.push(`mcp_servers.${injectedKey}.enabled_tools=${serializeTomlStringArray(config.enabledTools)}`);
+        const policy = isFirstPartyHappierMcpBridgeServerName(serverName) ? undefined : options.mcpToolPolicy?.[serverName];
+        const disabledTools = policy ? Object.entries(policy.tools)
+            .filter(([, setting]) => setting === 'off' || setting === 'deny').map(([tool]) => tool) : [];
+        const enabledTools = config.enabledTools
+            ? config.enabledTools.filter(tool => !disabledTools.includes(tool))
+            : policy?.unlisted === 'deny' ? Object.entries(policy.tools)
+                .filter(([, setting]) => setting === 'ask' || setting === 'allow').map(([tool]) => tool) : undefined;
+        if (enabledTools) {
+            overrides.push(`mcp_servers.${injectedKey}.enabled_tools=${serializeTomlStringArray(enabledTools)}`);
+        }
+        if (policy) {
+            if (disabledTools.length) overrides.push(`mcp_servers.${injectedKey}.disabled_tools=${serializeTomlStringArray(disabledTools)}`);
+            // Native Runs have no live configuration setter. Even Allow must
+            // ask the existing host handler rather than bypass revocation.
+            overrides.push(`mcp_servers.${injectedKey}.default_tools_approval_mode=${quoteTomlString('prompt')}`);
+            for (const [tool, setting] of Object.entries(policy.tools)) {
+                if (setting === 'ask' || setting === 'allow') {
+                    overrides.push(`mcp_servers.${injectedKey}.tools.${quoteTomlString(tool)}.approval_mode=${quoteTomlString('prompt')}`);
+                }
+            }
+        } else if (config.enabledTools) {
             overrides.push(`mcp_servers.${injectedKey}.default_tools_approval_mode=${quoteTomlString('approve')}`);
         }
         if (isFirstPartyHappierMcpBridgeServerName(serverName)) {

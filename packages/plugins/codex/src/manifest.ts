@@ -241,6 +241,7 @@ export const CODEX_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
           agentCliSystemTool: { toolId: 'codex-cli' },
           resumeChecklist: { includeLoginStatus: true },
@@ -253,7 +254,14 @@ export const CODEX_PLUGIN = definePlugin({
           credentialKinds: ['oauth'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: {
+            delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'supported', usageEvidence: 'reported',
+            nativeRoots: {
+              user: [['.agents', 'skills'], ['.codex', 'skills']],
+              project: [['.agents', 'skills']],
+              plugin: [['.codex', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']],
+            },
+          },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
@@ -426,6 +434,7 @@ export const CODEX_PLUGIN = definePlugin({
     [CODEX_VOICE_PROVIDER_CONTRIBUTION_ID]: {
       declaration: {
         title: 'Codex Realtime Voice',
+        description: { key: 'settingsVoice.mode.codexRealtimeSubtitle', fallback: 'Speak directly with the active Codex agent session.' },
         mark: { kind: 'agent', agentId: 'codex' },
         kind: 'conversation',
         roles: [

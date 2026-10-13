@@ -301,6 +301,7 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
   sendUserMessage?: AsyncQuestionMessageSender;
   onAsyncQuestionDeliveryError?: (error: unknown) => void;
   getThreadId(): string | null;
+  mcpServerKeys?: ReadonlyMap<string, string>;
 }>): (raw: unknown) => boolean {
   type RequestMessage = Readonly<{ id?: unknown }>;
   type TrackedRequestHandler = (
@@ -321,11 +322,12 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
   for (const method of ['item/started', 'item/completed']) {
     params.client.registerNotificationHandler(method, (raw) => {
       if (!matchesCurrentThread(raw, params.getThreadId)) return;
-      for (const event of projectCodexAppServerToolEventsFromNotification({ method, notificationParams: raw })) {
+      for (const event of projectCodexAppServerToolEventsFromNotification({ method, notificationParams: raw, mcpServerKeys: params.mcpServerKeys })) {
         const key = toolItemKey(raw, event.callId);
         if (!key) continue;
         if (method === 'item/completed') mcpApprovalSubjectsByItem.delete(key);
         else if (event.type === 'tool-call' && event.name.startsWith('mcp__')) {
+          if (params.mcpServerKeys && ![...params.mcpServerKeys.keys()].some(server => event.name.startsWith(`mcp__${server}__`))) continue;
           mcpApprovalSubjectsByItem.set(key, event.name);
         }
       }
@@ -488,6 +490,9 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
         const choice = resolveCodexApprovalQuestionChoice({
           questions: raw.questions,
           outcome: approvalOutcome(result),
+          // Session persistence belongs to the host's grant owner. A native
+          // MCP grant skips future policy lookups and cannot honor live Off.
+          allowSessionPersistence: false,
         });
         return choice
           ? { answers: { [choice.questionId]: { answers: [choice.label] } } }

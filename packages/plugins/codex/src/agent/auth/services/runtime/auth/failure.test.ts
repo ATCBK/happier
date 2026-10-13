@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { classifyCodexConnectedServiceAuthFailure } from './failure.js';
 
 describe('classifyCodexConnectedServiceAuthFailure', () => {
+  it('normalizes native serverOverloaded evidence without relying on provider prose', () => {
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: { turn: { error: { codexErrorInfo: 'serverOverloaded', message: 'Request failed', retry_after_ms: 1500 } } },
+      serviceId: 'openai-codex', profileId: 'work', groupId: 'pool',
+    })).toMatchObject({ kind: 'capacity', limitCategory: 'capacity', quotaScope: 'provider', retryAfterMs: 1500 });
+  });
   it.each([
     "model 'gpt-6.1-sol' is not enabled in rustponsesapi",
     'The gpt-6.1-sol model is not available for your account.',

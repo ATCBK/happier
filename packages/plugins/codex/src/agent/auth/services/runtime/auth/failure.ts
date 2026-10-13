@@ -318,7 +318,9 @@ export function classifyCodexConnectedServiceAuthFailure(
   if (
     input.providerErrorPath
     && (
-      classifyProviderLimitEvidence(input.error).category === 'capacity'
+      classifyProviderLimitEvidence(codexErrorInfo === 'serverOverloaded'
+        ? { code: 'server_overloaded' }
+        : input.error).category === 'capacity'
       || /\bapplication\s+network\s+permission\s+was\s+revoked\b/iu.test(text)
     )
   ) {
@@ -326,6 +328,8 @@ export function classifyCodexConnectedServiceAuthFailure(
       kind: 'capacity',
       limitCategory: 'capacity',
       quotaScope: 'provider',
+      retryAfterMs: readRetryAfterMs(record),
+      resetsAtMs: readResetAtMs(record?.resetsAt ?? record?.resets_at),
       source: record ? 'structured_provider_error' : 'stable_provider_message',
     });
   }

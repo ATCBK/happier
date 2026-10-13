@@ -226,6 +226,7 @@ function findApprovalQuestion(questions: unknown): ApprovalQuestionCandidate | n
 export function resolveCodexApprovalQuestionChoice(params: Readonly<{
   questions: unknown;
   outcome: CodexApprovalOutcome;
+  allowSessionPersistence?: boolean;
 }>): CodexApprovalChoice | null {
   const question = findApprovalQuestion(params.questions);
   if (!question) return null;
@@ -238,6 +239,7 @@ export function resolveCodexApprovalQuestionChoice(params: Readonly<{
   const label = ((): string | null => {
     switch (params.outcome) {
       case 'approve_for_session':
+        if (params.allowSessionPersistence === false) return pick((entry) => positive(entry) && !sessionScoped(entry));
         // A narrower once-scoped grant is a safe downgrade when the question
         // offers no session-scoped option.
         return pick((entry) => positive(entry) && sessionScoped(entry))
@@ -245,7 +247,7 @@ export function resolveCodexApprovalQuestionChoice(params: Readonly<{
       case 'approve_once':
         // Never widen a once-scoped grant while a once-scoped option exists.
         return pick((entry) => positive(entry) && !sessionScoped(entry))
-          ?? pick(positive);
+          ?? (params.allowSessionPersistence === false ? null : pick(positive));
       case 'deny':
         return pick(negative) ?? pick(cancellation);
       case 'cancel':

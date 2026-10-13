@@ -224,7 +224,7 @@ function readFileChangeToolResult(item: Readonly<Record<string, unknown>>): Code
   };
 }
 
-export function projectCodexAppServerToolEventsFromNotification(params: Readonly<{
+function projectNativeCodexAppServerToolEvents(params: Readonly<{
   method: string;
   notificationParams: unknown;
 }>): CodexAppServerProjectedToolEvent[] {
@@ -284,4 +284,20 @@ export function projectCodexAppServerToolEventsFromNotification(params: Readonly
   }
 
   return [];
+}
+
+export function projectCodexAppServerToolEventsFromNotification(params: Readonly<{
+  method: string;
+  notificationParams: unknown;
+  /** Original SDK record key → native injected key, from the launch owner. */
+  mcpServerKeys?: ReadonlyMap<string, string>;
+}>): CodexAppServerProjectedToolEvent[] {
+  return projectNativeCodexAppServerToolEvents(params).map(event => {
+    if (event.type !== 'tool-call' || !event.name.startsWith('mcp__')) return event;
+    for (const [wireKey, nativeKey] of params.mcpServerKeys ?? []) {
+      const prefix = `mcp__${nativeKey}__`;
+      if (event.name.startsWith(prefix)) return { ...event, name: `mcp__${wireKey}__${event.name.slice(prefix.length)}` };
+    }
+    return event;
+  });
 }

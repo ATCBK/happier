@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { projectCodexAppServerToolEventsFromNotification } from './toolEvents.js';
 
 describe('projectCodexAppServerToolEventsFromNotification', () => {
+    it('restores exact SDK MCP wire keys after native key sanitization and collision suffixing', () => {
+        const mcpServerKeys = new Map([['first__team', 'happier__first_team'], ['first_team', 'happier__first_team_2']]);
+        for (const [wireKey, nativeKey] of mcpServerKeys) {
+            const events = projectCodexAppServerToolEventsFromNotification({ method: 'item/started', mcpServerKeys,
+                notificationParams: { item: { id: nativeKey, type: 'mcpToolCall', server: nativeKey, tool: 'tool__with__segments', arguments: {} } } });
+            expect(events[0]).toMatchObject({ name: `mcp__${wireKey}__tool__with__segments` });
+        }
+    });
   it('projects app-server command executions while preserving command context', () => {
     expect(projectCodexAppServerToolEventsFromNotification({
       method: 'item/started',
