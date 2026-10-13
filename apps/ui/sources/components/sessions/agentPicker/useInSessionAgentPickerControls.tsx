@@ -304,6 +304,8 @@ export type InSessionAgentPickerControls = Readonly<{
      */
     armedContinuationSubmissionIntent: ArmedAgentContinuation['intent'] | null;
     clearArmedContinuation: () => void;
+    /** Spends the matching live and persisted submission once canonical custody consumes it. */
+    clearArmedContinuationSubmissionIfCurrent: (submission: SessionArmedAgentContinuationSubmission) => boolean;
     /** Captures the exact canonical user-message request before transition dispatch. */
     recordArmedContinuationSubmission: (submission: SessionArmedAgentContinuationSubmission) => boolean;
     /**
@@ -604,6 +606,25 @@ export function useInSessionAgentPickerControls(
     const clearArmedContinuation = React.useCallback(() => {
         persistArmedContinuation(null);
     }, [persistArmedContinuation]);
+
+    // Custody spends both projections of the same submission, even before the
+    // target metadata arrives. Ordinary disarming retains submitted custody;
+    // this compare-clear is its sole spending owner and preserves a newer arm.
+    const clearArmedContinuationSubmissionIfCurrent = React.useCallback((
+        expected: SessionArmedAgentContinuationSubmission,
+    ): boolean => {
+        const persisted = draftSessionId === null
+            ? undefined
+            : readPersistedArmedContinuation(accountScope, draftSessionId);
+        const persistedMatches = persisted?.submission?.localId === expected.localId;
+        const liveMatches = armed?.submission?.localId === expected.localId;
+        if (!persistedMatches && !liveMatches) return false;
+        if (persistedMatches && draftSessionId !== null) {
+            clearPersistedArmedContinuation(accountScope, draftSessionId);
+        }
+        setArmed((current) => current?.submission?.localId === expected.localId ? null : current);
+        return true;
+    }, [accountScope, armed?.submission?.localId, draftSessionId]);
 
     // The submission identity for the armed choice, derived from the choice
     // itself rather than minted at whichever affordance established it.
@@ -995,6 +1016,7 @@ export function useInSessionAgentPickerControls(
         armedContinuationModelLabel: featureEnabled ? armed?.modelLabel ?? null : null,
         armedContinuationSubmission: submissionArm?.submission ?? null,
         armedContinuationSubmissionIntent: submissionArm?.intent ?? null,
+        clearArmedContinuationSubmissionIfCurrent,
         clearArmedContinuation,
         recordArmedContinuationSubmission,
         onAgentPickerIntent: signalAgentPickerIntent,
