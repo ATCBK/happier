@@ -36,10 +36,13 @@ export function resolveRequestedSessionModeIdForMetadata(
     return resolveRequestedSessionModeId(requestedModeId, control?.options ?? []);
 }
 
-function computeLegacyRequestedModeIdFromPermissionMode(metadata: Metadata | null | undefined): string | null {
-    const raw = typeof (metadata as any)?.permissionMode === 'string' ? String((metadata as any).permissionMode) : '';
+function computeLegacyRequestedModeIdFromPermissionMode(
+    metadata: Metadata | null | undefined,
+    options: readonly SessionModeOption[],
+): string | null {
+    const raw = typeof metadata?.permissionMode === 'string' ? metadata.permissionMode : '';
     const intent = raw ? parsePermissionIntentAlias(raw) : null;
-    return intent === 'plan' ? 'plan' : null;
+    return intent === 'plan' && options.some((option) => option.id === 'plan') ? 'plan' : null;
 }
 
 function computeStaticSessionModePickerControl(params: {
@@ -64,7 +67,7 @@ function computeStaticSessionModePickerControl(params: {
     if (!defaultOption) return null;
 
     const modeOverride = readSessionModeOverrideState(params.metadata);
-    const legacy = computeLegacyRequestedModeIdFromPermissionMode(params.metadata);
+    const legacy = computeLegacyRequestedModeIdFromPermissionMode(params.metadata, options);
     const requestedModeId = modeOverride
         ? (modeOverride.state === 'set' ? modeOverride.value : null)
         : legacy ?? null;
@@ -107,7 +110,7 @@ function computeDynamicSessionModePickerControlInternal(params: {
     if (!currentModeId) return null;
 
     const modeOverride = readSessionModeOverrideState(params.metadata);
-    const legacy = computeLegacyRequestedModeIdFromPermissionMode(params.metadata);
+    const legacy = computeLegacyRequestedModeIdFromPermissionMode(params.metadata, options);
     const requestedModeId = modeOverride
         ? (modeOverride.state === 'set' ? modeOverride.value : null)
         : legacy ?? null;
