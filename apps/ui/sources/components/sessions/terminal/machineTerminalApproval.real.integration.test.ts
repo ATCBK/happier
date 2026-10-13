@@ -402,11 +402,14 @@ describe('Machine terminal approval receipt across Home aliases (real SQLite)', 
             { ...uiContext, actionRequestId: crypto.randomUUID() });
         const decisionResult = decided.ok && decided.result && typeof decided.result === 'object' ? decided.result : null;
         const execution = decisionResult ? Reflect.get(decisionResult, 'execution') : null;
+        const executionError = execution && typeof execution === 'object' ? Reflect.get(execution, 'error') : null;
         // An approval may carry signed custody. Failure diagnostics project
         // only statuses/codes, never the retained authorization or bearer.
         const decisionSummary = { ok: decided.ok, status: decisionResult ? Reflect.get(decisionResult, 'status') : null,
             executionOk: execution && typeof execution === 'object' ? Reflect.get(execution, 'ok') : null,
             errorCode: decided.ok ? execution && typeof execution === 'object' ? Reflect.get(execution, 'errorCode') : null : decided.errorCode,
+            errorIdentity: ['server_scope_mismatch', 'RPC_FORBIDDEN', 'not_authenticated', 'invalid_action_output']
+                .find(code => typeof executionError === 'string' && executionError.includes(code)) ?? 'unclassified',
             physicalBirths: spawn.mock.calls.length,
             actionHttp,
             originSummary,
