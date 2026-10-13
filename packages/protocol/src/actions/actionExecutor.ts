@@ -222,6 +222,7 @@ export type ActionExecutorDeps = Readonly<{
     targetPath?: string;
     requestId?: string;
     targetSessionStorageMode?: 'direct' | 'persisted';
+    stateTransfer?: 'transfer' | 'existing';
     workspaceTransfer?: SessionHandoffWorkspaceTransfer;
     serverId?: string | null;
     signal?: AbortSignal;
@@ -2085,6 +2086,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               ? (parsed.data as any).targetSessionStorageMode
               : undefined;
           const targetPath = normalizeId((parsed.data as any).targetPath);
+          const stateTransfer = parsed.data.stateTransfer === 'existing' ? 'existing' : undefined;
           const workspaceTransferParsed = SessionHandoffWorkspaceTransferSchema.safeParse((parsed.data as any).workspaceTransfer);
           const workspaceTransfer = workspaceTransferParsed.success ? workspaceTransferParsed.data : undefined;
           const requestId = normalizeId(ctx.actionRequestId);
@@ -2094,10 +2096,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(targetPath ? { targetPath } : {}),
             ...(requestId ? { requestId } : {}),
             ...(targetSessionStorageMode ? { targetSessionStorageMode } : {}),
+            ...(stateTransfer ? { stateTransfer } : {}),
             ...(workspaceTransfer ? { workspaceTransfer } : {}),
             ...(serverId ? { serverId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
+          if (res && typeof res === 'object' && 'ok' in res && res.ok === false) {
+            const errorCode = 'errorCode' in res && typeof res.errorCode === 'string' ? res.errorCode : 'handoff_failed';
+            const error = 'error' in res && typeof res.error === 'string' ? res.error : 'Session handoff failed';
+            return { ok: false, errorCode, error };
+          }
           return { ok: true, result: res };
         }
 
