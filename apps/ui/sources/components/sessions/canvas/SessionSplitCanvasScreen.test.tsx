@@ -32,7 +32,7 @@ function createGroupProps(): GroupProps {
     state = runSessionSplitCanvasCommand(state, { type: 'openSession', sessionId: 'sess_b', leafId: state.focusedLeafId! });
     const leaf = findSessionLeafById(state, state.focusedLeafId)!;
     return { leaf, focused: true, visible: true, routeProps: { sessionId: 'sess_a', routeServerId: scope.serverId,
-        canvasKey: 'workspace-a', entityScope: scope, jumpToSeq: 42,
+        canvasKey: 'workspace-a', mountId: 'session-canvas:workspace-a', entityScope: scope, jumpToSeq: 42,
         routeHydrationState: { kind: 'available', sessionId: 'sess_a', serverId: scope.serverId } },
         runtime, isCurrent: () => true, requestTabAction: async () => ({ status: 'applied' }),
         executeDrop: async () => ({ status: 'applied' }),

@@ -28,6 +28,7 @@ import { resolveSessionCanvasEntityDrop } from './planSessionSplitCanvasDropActi
 import { useSessionSplitCanvasState } from './useSessionSplitCanvasState';
 import { describePaneDropDestination, presentPaneDropAdmission } from '@/components/appShell/splitCanvas/presentation/paneDropPresentation';
 import { createSessionCanvasDropScene, readSessionCanvasPaneTitle } from './sessionCanvasDropScene';
+import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 type SessionSplitCanvasScreenProps = Readonly<{
     sessionId: string;
@@ -36,6 +37,8 @@ type SessionSplitCanvasScreenProps = Readonly<{
     paneUrlState?: SessionPaneUrlState;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     routeHydrationState?: SessionRouteHydrationState | null;
+    surfaceFocused?: boolean;
+    surfaceVisible?: boolean;
 }>;
 const minimumLeafSize = () => WORKSPACE_VIEW_MINIMUM;
 // Destinations and files are accepted so the canvas can say why it will not take them: it renders
@@ -44,6 +47,7 @@ const acceptedKinds = ['session', 'workspace-tab', 'destination', 'repository-fi
 
 /** The mounted state belongs to the exact Account and workspace, rather than the route tab. */
 export function SessionSplitCanvasScreen(props: SessionSplitCanvasScreenProps) {
+    const instanceKey = useDestinationInstanceKey();
     const accountScope = useActiveServerAccountScope();
     const workspaceTarget = useSessionWorkspaceTarget(props.sessionId, props.routeServerId);
     const workspaceScope = resolveSessionSplitCanvasScope(workspaceTarget, { routeServerId: props.routeServerId });
@@ -54,15 +58,18 @@ export function SessionSplitCanvasScreen(props: SessionSplitCanvasScreenProps) {
         && workspaceScope.serverId === accountScope.serverId;
     const mountKey = qualified ? JSON.stringify([accountScope.serverId, accountScope.accountId, workspaceScope.workspaceCacheKey]) : null;
     const currentKey = React.useRef(mountKey);
-    currentKey.current = mountKey;
+    currentKey.current = props.surfaceVisible === false ? null : mountKey;
     const isCurrent = React.useCallback(() => currentKey.current === mountKey, [mountKey]);
-    if (!mountKey || !workspaceScope || !accountScope) return <SessionCanvasLeaf {...props} routeAnchor surfaceFocused surfaceVisible />;
+    if (!mountKey || !workspaceScope || !accountScope) return <SessionCanvasLeaf {...props}
+        routeAnchor={props.surfaceFocused !== false && props.surfaceVisible !== false} />;
     return <QualifiedSessionSplitCanvas key={mountKey} {...props} routeServerId={routeServerId} canvasKey={workspaceScope.workspaceCacheKey}
+        mountId={instanceKey ? JSON.stringify(['session-canvas', workspaceScope.workspaceCacheKey, instanceKey]) : `session-canvas:${workspaceScope.workspaceCacheKey}`}
         workspaceScope={workspaceScope} entityScope={accountScope} isCurrent={isCurrent} />;
 }
 
 function QualifiedSessionSplitCanvas(props: SessionSplitCanvasScreenProps & Readonly<{
     canvasKey: string;
+    mountId: string;
     workspaceScope: SessionSplitCanvasScope;
     entityScope: EntityDragScopeV1;
     isCurrent: () => boolean;
@@ -94,7 +101,11 @@ function QualifiedSessionSplitCanvas(props: SessionSplitCanvasScreenProps & Read
     }), [getState, handleDispatch, props.canvasKey, readCanvas, resolveWorkspaceScope]);
     const executeAction = React.useCallback((...args: Parameters<typeof actionAdapter>) => isCurrent()
         ? actionAdapter(...args) : { status: 'unavailable' as const }, [actionAdapter, isCurrent]);
-    const uiActionExecutor = React.useMemo(() => createDefaultActionExecutor(), []);
+    const uiActionExecutor = React.useMemo(() => createDefaultActionExecutor({
+        sessionCanvasAction: async request => request.signal?.aborted
+            ? { status: 'refused' as const, reason: 'cancelled' }
+            : executeAction(request.actionId, request.input),
+    }), [executeAction]);
     const requestTabAction = React.useCallback(async (actionId: SessionCanvasActionId, input: unknown): Promise<EntityDropOutcomeV1> => {
         const refuse = (code: string): EntityDropOutcomeV1 => ({ status: 'refused', reason: { code, message: t('entityDragDrop.reasons.generic') } });
         if (!isCurrent()) return refuse('canvas_unavailable');
@@ -124,14 +135,17 @@ function QualifiedSessionSplitCanvas(props: SessionSplitCanvasScreenProps & Read
         if (leafId) void requestTabAction('session.canvas.tabs.open', { scope: props.entityScope, canvasKey: props.canvasKey,
             sessionId: input.sessionId, leafId, placement: input.direction });
     }, [getState, requestTabAction, props.entityScope, props.canvasKey]);
-    React.useEffect(() => registerSessionSplitCanvasRuntime({
+    React.useEffect(() => {
+        if (props.surfaceFocused === false || props.surfaceVisible === false) return;
+        return registerSessionSplitCanvasRuntime({
         snapshot: { routeSessionId: props.sessionId, focusedSessionId, openSessionIds, scope: props.workspaceScope,
             entityScope: props.entityScope, canvasKey: props.canvasKey },
         controller: { focusSession, openSessionInSplit, executeAction },
-    }), [props.sessionId, focusedSessionId, openSessionIds, props.workspaceScope, props.entityScope, props.canvasKey, focusSession, openSessionInSplit, executeAction]);
+        });
+    }, [props.sessionId, props.surfaceFocused, props.surfaceVisible, focusedSessionId, openSessionIds, props.workspaceScope, props.entityScope, props.canvasKey, focusSession, openSessionInSplit, executeAction]);
 
     const entityDrop = React.useMemo(() => ({
-        runtime, id: `session-canvas:${props.canvasKey}`, scope: props.entityScope, acceptedKinds, isCurrent,
+        runtime, id: props.mountId, scope: props.entityScope, acceptedKinds, isCurrent,
         label: (target: Parameters<NonNullable<React.ComponentProps<typeof SplitCanvasHost>['entityDrop']>['resolve']>[0]['target']) =>
             describePaneDropDestination(target.placement, readSessionCanvasPaneTitle(getState(), target.leafId)),
         resolve: ({ item, target, availableSizePx, minimumExistingSizePx, declinedSplit }: Parameters<NonNullable<React.ComponentProps<typeof SplitCanvasHost>['entityDrop']>['resolve']>[0]) => {
@@ -141,9 +155,10 @@ function QualifiedSessionSplitCanvas(props: SessionSplitCanvasScreenProps & Read
                 ...(availableSizePx === undefined || minimumExistingSizePx === undefined ? {} : { measurement: { availableSizePx, minimumExistingSizePx } }),
             }), createSessionCanvasDropScene(current, { paneId: target.leafId, declinedSplit: Boolean(declinedSplit) }));
         }, execute: executeDrop,
-    }), [runtime, props.canvasKey, props.entityScope, props.workspaceScope, isCurrent, getState, resolveWorkspaceScope, executeDrop]);
+    }), [runtime, props.canvasKey, props.mountId, props.entityScope, props.workspaceScope, isCurrent, getState, resolveWorkspaceScope, executeDrop]);
     const renderLeafHeader = React.useCallback(({ leaf, isFocused }: Readonly<{ leaf: SplitCanvasLeafNode<SessionSplitCanvasLeafPayload>; isFocused: boolean }>) => (
-        <SessionCanvasTabGroup leaf={leaf} focused={isFocused} visible={!state.maximizedLeafId || state.maximizedLeafId === leaf.id}
+        <SessionCanvasTabGroup leaf={leaf} focused={props.surfaceFocused !== false && isFocused}
+            visible={props.surfaceVisible !== false && (!state.maximizedLeafId || state.maximizedLeafId === leaf.id)}
             routeProps={props} requestTabAction={requestTabAction} runtime={runtime} executeDrop={executeDrop} isCurrent={isCurrent}
             resolveDrop={(item, beforeTabId) => {
                 const current = getState();

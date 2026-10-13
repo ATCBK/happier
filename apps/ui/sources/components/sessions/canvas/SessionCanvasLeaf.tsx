@@ -37,7 +37,7 @@ type SessionCanvasLeafProps = Readonly<{
     nativeID?: string;
 }>;
 const acceptedKinds = ['session', 'workspace-tab', 'destination', 'repository-file'] as const;
-type SessionCanvasRouteProps = SessionCanvasLeafProps & Readonly<{ canvasKey: string; entityScope: EntityDragScopeV1 }>;
+type SessionCanvasRouteProps = SessionCanvasLeafProps & Readonly<{ canvasKey: string; mountId: string; entityScope: EntityDragScopeV1 }>;
 type RequestTabAction = (actionId: SessionCanvasActionId, input: unknown) => Promise<EntityDropOutcomeV1>;
 
 export function SessionCanvasLeaf(props: SessionCanvasLeafProps) {
@@ -108,11 +108,11 @@ export function SessionCanvasTabGroup(props: Readonly<{
     const presentations = useDestinationInstanceTabPresentations(titleEntries);
     const tabItems = group.tabIds.map((id, index) => ({ key: id, title: titles[index] ?? t('common.unavailable'),
         isPreview: tabs[id].preview, isPinned: tabs[id].pinned }));
-    const dropTargetIds = React.useMemo(() => [splitCanvasEntityTargetId(`session-canvas:${props.routeProps.canvasKey}`, props.leaf.id, 'center')],
-        [props.routeProps.canvasKey, props.leaf.id]);
+    const dropTargetIds = React.useMemo(() => [splitCanvasEntityTargetId(props.routeProps.mountId, props.leaf.id, 'center')],
+        [props.routeProps.mountId, props.leaf.id]);
     const dropCue = usePaneDropStripCue(props.runtime, { targetIds: dropTargetIds, tabIds: group.tabIds });
     const entityDragDrop: NonNullable<DocumentTabStripProps<DocumentTabItem>['entityDragDrop']> = {
-        runtime: props.runtime, id: `session-canvas-tabs:${props.routeProps.canvasKey}:${props.leaf.id}`,
+        runtime: props.runtime, id: `session-canvas-tabs:${props.routeProps.mountId}:${props.leaf.id}`,
         scope: props.routeProps.entityScope, acceptedKinds,
         isCurrent: () => props.visible && props.isCurrent(),
         getItem: tabId => tabs[tabId] ? { kind: 'workspace-tab', scope: tabs[tabId].scope, tabId } : null,
@@ -129,7 +129,8 @@ export function SessionCanvasTabGroup(props: Readonly<{
             renderLeadingIcon={(_tab, emphasized) => <Icon name="chat-circle" size={DETAILS_TAB_STRIP_METRICS.tabGlyphPx}
                 color={emphasized ? theme.colors.text.primary : theme.colors.text.secondary} />}
             dropSlot={dropCue.slot} dropRingTabKey={dropCue.pulseTabKey}
-            tabNativeId={id => `session-canvas-tab-${id}`} panelNativeId={id => `session-canvas-panel-${id}`}
+            tabNativeId={id => `session-canvas-tab-${props.routeProps.mountId}:${id}`}
+            panelNativeId={id => `session-canvas-panel-${props.routeProps.mountId}:${id}`}
             entityDragDrop={entityDragDrop} />
     </View>;
 }
@@ -149,8 +150,11 @@ export function createSessionCanvasRetainedContents(props: Readonly<{
             leafId: leaf.id,
             isActive: tabId === leaf.payload.group.activeTabId,
             render: ({ isFocused, isVisible }) => <SessionCanvasLeaf
-                sessionId={tab.address.sessionId} routeServerId={tab.address.serverId} nativeID={`session-canvas-panel-${tabId}`}
-                routeAnchor={routeAnchor} surfaceVisible={isVisible} surfaceFocused={isVisible && isFocused}
+                sessionId={tab.address.sessionId} routeServerId={tab.address.serverId}
+                nativeID={`session-canvas-panel-${props.routeProps.mountId}:${tabId}`}
+                routeAnchor={routeAnchor && props.routeProps.surfaceFocused !== false && props.routeProps.surfaceVisible !== false}
+                surfaceVisible={isVisible && props.routeProps.surfaceVisible !== false}
+                surfaceFocused={isVisible && isFocused && props.routeProps.surfaceFocused !== false}
                 jumpToSeq={routeAnchor ? props.routeProps.jumpToSeq : null}
                 paneUrlState={routeAnchor ? props.routeProps.paneUrlState : undefined}
                 initialAttachmentDrafts={routeAnchor ? props.routeProps.initialAttachmentDrafts : null}

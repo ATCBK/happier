@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { useDestinationParams, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { SessionView } from './SessionViewHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionSplitCanvasScreen } from '@/components/sessions/canvas/SessionSplitCanvasScreen';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
@@ -241,23 +240,15 @@ export function SessionDestinationBody() {
                     />
                 )
                 : (
-                    instanceKey ? <SessionView
-                        id={sessionId}
-                        routeServerId={routeServerId.trim() || undefined}
-                        jumpToSeq={jumpToSeq}
-                        paneUrlState={paneUrlState ?? undefined}
-                        initialAttachmentDrafts={recoverableAttachmentDrafts}
-                        routeHydrationState={routeHydrationState}
-                        surfaceFocusedOverride={focused}
-                        surfaceVisibleOverride={visible}
-                        routeAnchorOverride={focused && visible}
-                    /> : <SessionSplitCanvasScreen
+                    <SessionSplitCanvasScreen
                         sessionId={sessionId}
                         routeServerId={routeServerId.trim() || undefined}
                         jumpToSeq={jumpToSeq}
                         paneUrlState={paneUrlState ?? undefined}
                         initialAttachmentDrafts={recoverableAttachmentDrafts}
                         routeHydrationState={routeHydrationState}
+                        surfaceFocused={focused}
+                        surfaceVisible={visible}
                     />
                 )}
         </TranscriptSameSessionHandoffProvider>

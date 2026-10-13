@@ -595,6 +595,8 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
   onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>;
   /** Optional Session human-discussion family port bound by a mounted surface. */
   sessionDiscussionAction?: NonNullable<ActionExecutorDeps['sessionDiscussionAction']>;
+  /** Exact mounted canvas for local pane interactions; external callers use the focused publication. */
+  sessionCanvasAction?: NonNullable<ActionExecutorDeps['sessionCanvasAction']>;
   /**
    * The Home family port, bound by the caller to the exact Home and Account.
    * Without it, the shared executor rejects Home and Teams actions as unsupported.
@@ -1413,7 +1415,7 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
     } : {}),
 
     workspaceAction: invokeWorkspaceAction,
-    sessionCanvasAction: invokeSessionCanvasAction,
+    sessionCanvasAction: opts?.sessionCanvasAction ?? invokeSessionCanvasAction,
     workflowAuthoringAction: invokeWorkflowAuthoringAction,
     sessionOrganizationMove: async request => {
       if (!accountContext) return { status: 'unavailable' as const };
