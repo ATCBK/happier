@@ -291,49 +291,6 @@ describe('useAgentInputSelectionOverlayController', () => {
         await hook.unmount();
     });
 
-    it('opens a collapsed extra popover for legacy chips without a registry control id', async () => {
-        const extraActionChips: readonly AgentInputExtraActionChip[] = [{
-            key: 'organization-tags',
-            collapsedOptionsPopover: {
-                presentation: 'list',
-                title: 'Edit tags',
-                rootStep: {
-                    id: 'tags-root',
-                    title: 'Edit tags',
-                    sections: [],
-                },
-                onSelect: () => undefined,
-            },
-            render: () => null,
-        }];
-        const hook = await renderHook(() =>
-            useAgentInputSelectionOverlayController({
-                shouldRenderSessionModeChip: true,
-                canChangePermission: true,
-                hasMachinePopover: false,
-                hasPathPopover: false,
-                hasResumePopover: false,
-                hasProfilePopover: true,
-                hasEnvVarsPopover: true,
-                hasAgentPickerOptions: true,
-                extraActionChips,
-            }),
-        );
-
-        await act(async () => {
-            hook.getCurrent().openSelectionOverlay('collapsedExtra', 'chip', 'organization-tags');
-        });
-
-        expect(hook.getCurrent().activeSelectionOverlay).toEqual({
-            id: 'collapsedExtra',
-            anchor: 'chip',
-            chipKey: 'organization-tags',
-        });
-        expect(hook.getCurrent().activeExtraCollapsedPopoverChip?.key).toBe('organization-tags');
-
-        await hook.unmount();
-    });
-
     it('rejects malformed picker collapsed extra popovers that only provide a list root step', async () => {
         // Boundary fixture: models a dynamic descriptor that bypassed the
         // discriminated union before reaching the overlay controller.

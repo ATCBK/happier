@@ -73,6 +73,7 @@ function isSelectionOverlaySupported(
         case 'collapsedExtra':
             return (params.extraActionChips ?? []).some((chip) => (
                 chip.key === overlay.chipKey
+                && chip.controlId
                 && hasCollapsedExtraPopover(chip)
             ));
     }
@@ -140,6 +141,7 @@ export function useAgentInputSelectionOverlayController(params: Readonly<{
         return (
             (params.extraActionChips ?? []).find((chip) => (
                 chip.key === activeChipKey
+                && chip.controlId
                 && hasCollapsedExtraPopover(chip)
             )) ?? null
         );
