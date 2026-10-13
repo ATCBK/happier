@@ -215,7 +215,7 @@ on:
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
-  # Superseded PRs are disposable; push runs retain exact-SHA terminal evidence.
+  # Push runs retain the complete exact-SHA verdict; superseded PR runs may stop.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -224,17 +224,26 @@ env:
   HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
 
 jobs:
-  gate-packages:
-    name: Select affected gate packages
+  gate-prepare:
+    name: Gate — select and prepare shared workspace
     if: ${{ !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
     runs-on: ubuntu-latest
+    # Longest complete cold preparation: 44m52s; twice that duration rounded up.
+    # This is hang protection, not a performance target.
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
       packages: ${{ steps.select.outputs.packages }}
       unit_matrix: ${{ steps.select.outputs.unit_matrix }}
       server_db_contract: ${{ steps.select.outputs.server_db_contract }}
+      node_version: ${{ steps.toolchain.outputs.node_version }}
+    env:
+      # The artifact consumer needs the same mandatory web assets as its former install.
+      HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
     steps:
+      - name: Shared preparation hang protection
+        run: echo "The 90-minute hang guard is based on twice the longest complete 44m52s preparation."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
@@ -242,7 +251,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
-          cache: yarn
       - name: Select changed workspaces and their consumers
         id: select
         env:
@@ -255,20 +263,136 @@ jobs:
           fi
           packages="$(git diff --no-renames --name-only -z "$base" HEAD | node scripts/ci/selectAffectedGatePackages.mjs)"
           echo "Affected gate packages: $packages"
+      - name: Observe the shared toolchain
+        id: toolchain
+        run: echo "node_version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
       - name: Enable Corepack
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
-      - uses: ./.github/actions/install-yarn-dependencies
-      - name: Setup pinned Rust for compiler workspace preparation
+      - name: Install canonical frozen dependencies with the dependency-only cache
+        id: dependencies
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          cache-dependencies: 'true'
+      - name: Report the exact dependency cache result
+        run: echo "Exact dependency cache hit=${{ steps.dependencies.outputs.cache-hit }}; mandatory frozen install and postinstall completed. Cold and warm install durations are distinct measurements."
+      - name: Setup pinned Rust for shared native preparation
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.94.1
-      - name: Prepare the canonical Iroh native runtime before compiler workspace publication
+      - name: Prepare the canonical Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native build:native
+      - name: Prepare canonical compiler and unit workspace prerequisites
+        run: |
+          yarn -s prepare:typecheck:workspaces
+      - name: Prepare the canonical CLI runtime closure
+        # The root preparation has already published current plugin runtimes.
+        # Reuse the canonical currentness scan and finish physical runtime custody.
+        run: yarn workspace @happier-dev/cli build:shared --source-dev
+      - name: Load the prepared Iroh native runtime
+        run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
+      - name: Archive the current run's coherent preparation
+        run: |
+          set -euo pipefail
+          archive_paths="$RUNNER_TEMP/gate-prepared-paths"
+          archive_prunes=()
+          : > "$archive_paths"
+          # These are the canonical package/compiler, plugin publisher, native,
+          # unpacker and UI postinstall outputs; never archive a whole checkout.
+          for package in apps/* packages/* packages/plugins/*; do
+            [ -f "$package/package.json" ] || continue
+            for output in dist .happier-plugin; do
+              if [ -d "$package/$output" ]; then
+                printf '%s\0' "$package/$output" >> "$archive_paths"
+                archive_prunes+=(-path "$package/$output" -prune -o)
+              fi
+            done
+          done
+          for output in \
+            packages/iroh-native/native \
+            apps/server/generated/sqlite-client apps/server/generated/mysql-client \
+            apps/cli/tools/unpacked \
+            apps/ui/public/monaco apps/ui/public/vendor apps/ui/public/canvaskit.wasm \
+            apps/ui/public/happier-password-kdf-worker.js \
+            apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js \
+            packages/protocol/src/features/embeddedFeaturePolicies.generated.ts; do
+            if [ -e "$output" ]; then
+              printf '%s\0' "$output" >> "$archive_paths"
+              archive_prunes+=(-path "$output" -prune -o)
+            fi
+          done
+          for output in apps/cli/tools/archives/happier-cliproxyapi-managed-* apps/cli/tools/archives/checksums.runtime-assets.sha256 apps/ui/public/pierre-diff-worker*.js; do
+            [ ! -f "$output" ] || printf '%s\0' "$output" >> "$archive_paths"
+          done
+          # Nested dependencies are already inside the explicit prepared roots.
+          find node_modules apps packages "${archive_prunes[@]}" -type d -name node_modules -prune -print0 >> "$archive_paths"
+          test -f .project/tmp/cli-source-dev-shared-deps-sync.json
+          tar --create --file "$RUNNER_TEMP/gate-prepared-workspace.tar" \
+            --exclude='.env' --exclude='.env.*' --exclude='.happier' \
+            --exclude='.project' --null --files-from="$archive_paths"
+          # Only these canonical public build-state files cross the .project boundary.
+          tar --append --file "$RUNNER_TEMP/gate-prepared-workspace.tar" .project/tmp/cli-source-dev-shared-deps-sync.json
+          if [ -f apps/cli/.project/tmp/bundled-plugin-publication/failures.json ]; then
+            tar --append --file "$RUNNER_TEMP/gate-prepared-workspace.tar" apps/cli/.project/tmp/bundled-plugin-publication/failures.json
+          fi
+          ls -lh "$RUNNER_TEMP/gate-prepared-workspace.tar"
+      - name: Publish this run's prepared workspace
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gate-prepared-workspace
+          path: ${{ runner.temp }}/gate-prepared-workspace.tar
+          if-no-files-found: error
+          compression-level: 1
+          overwrite: true
+      - name: Upload shared preparation bundled-plugin diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gate-shared-preparation-bundled-plugin-publication-failures
+          path: apps/cli/.project/tmp/bundled-plugin-publication/failures.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+      - name: Report Gate job memory after termination
+        if: ${{ always() }}
+        run: |
+          echo "Gate job memory (whole runner service; not process-only RSS):"
+          free -h
+          cat /proc/self/cgroup
+          gate_cgroup_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
+          for observation in memory.events memory.max memory.peak memory.current; do
+            gate_observation_path="/sys/fs/cgroup$gate_cgroup_path/$observation"
+            echo "$gate_observation_path:"
+            if [ -r "$gate_observation_path" ]; then cat "$gate_observation_path"; else echo "Unavailable; no memory conclusion from missing telemetry."; fi
+          done
+
+  gate-compiler:
+    name: Gate — UI compiler diagnostics
+    needs: [gate-prepare]
+    runs-on: ubuntu-latest
+    # Successful compiler plus preparation: 42m33s; more than twice that sample.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Gate deadline — 90 minutes
+        run: echo "Gate compiler diagnostics have a 90-minute job timeout."
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ needs.gate-prepare.outputs.node_version }}
+      - name: Enable Corepack
+        run: corepack enable && corepack prepare yarn@1.22.22 --activate
+      - uses: ./.github/actions/install-yarn-dependencies
+        with:
+          prepared-artifact: gate-prepared-workspace
       - name: Check compiler diagnostics without governance or test phases
         id: gate-compiler
         env:
           # Each native project reports its own OS-measured peak resident memory.
           HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: "1"
+          HAPPIER_TYPECHECK_REPORT_DIR: ${{ runner.temp }}/gate-compiler-ui-reports
         run: |
           echo "GATE_COMPILER_STARTED_AT=$(date --utc --iso-8601=seconds)" >> "$GITHUB_ENV"
           compiler_cgroup_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
@@ -284,11 +408,14 @@ jobs:
           else
             echo "Current cgroup memory.events unavailable; kernel evidence remains necessary."
           fi
-          yarn -s typecheck:compiler
+          mkdir -p "$HAPPIER_TYPECHECK_REPORT_DIR"
+          if yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=ui; then package_status=0; else package_status=$?; fi
+          node scripts/ci/reportGateRegressions.mjs --kind=compiler --input="$HAPPIER_TYPECHECK_REPORT_DIR" \
+            --baseline=scripts/ci/gate-triage-baseline.json --package-status="$package_status"
       - name: Report host evidence after compiler termination
-        if: ${{ failure() && steps.gate-compiler.outcome == 'failure' }}
+        if: ${{ always() }}
         run: |
-          echo "Compiler host memory after failure:"
+          echo "Compiler host memory after termination:"
           free -h
           echo "Compiler host cgroup identity:"
           cat /proc/self/cgroup
@@ -308,67 +435,103 @@ jobs:
 
   gate-unit:
     name: Gate — ${{ matrix.package }} unit (${{ matrix.part }}/${{ matrix.parts }})
-    needs: [gate-packages]
-    if: ${{ needs.gate-packages.outputs.packages != '[]' }}
+    needs: [gate-prepare]
+    if: ${{ needs.gate-prepare.outputs.packages != '[]' }}
     runs-on: ubuntu-latest
+    # No complete eight-part unit duration exists yet. Use the platform job
+    # deadline until this run establishes a measured hang-protection baseline.
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.gate-packages.outputs.unit_matrix) }}
+      matrix: ${{ fromJSON(needs.gate-prepare.outputs.unit_matrix) }}
     env:
       HAPPIER_UI_VITEST_PART: ${{ matrix.part }}
       HAPPIER_UI_VITEST_PARTS: ${{ matrix.parts }}
+      # Four workers previously reached 14.6 GiB on the hosted 16 GiB machines.
+      HAPPIER_GATE_TRIAGE_ROOT: ${{ github.workspace }}
+      HAPPIER_GATE_TRIAGE_BASELINE: ${{ github.workspace }}/scripts/ci/gate-triage-baseline.json
     steps:
+      - name: Unit completion measurement
+        run: echo "All selected unit suites must reach a terminal result; no performance-target cutoff is imposed."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
-          cache: yarn
+          node-version: ${{ needs.gate-prepare.outputs.node_version }}
       - name: Enable Corepack
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
+      - name: Observe the Gate runner worker budget
+        id: gate-workers
+        run: |
+          if [ '${{ matrix.package }}' = ui ]; then gate_workers=2; else gate_workers="$(node -p 'require("node:os").availableParallelism()')"; fi
+          echo "workers=$gate_workers" >> "$GITHUB_OUTPUT"
+          echo "Gate worker budget: $gate_workers; UI uses two workers for the measured hosted memory boundary."
+          echo "Gate unit host memory before preparation:"
+          free -h
+          cat /proc/self/cgroup
       - uses: ./.github/actions/install-yarn-dependencies
-      - name: Setup pinned Rust for the CLI native runtime
-        if: ${{ matrix.package == 'cli' }}
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        id: gate-unit-install
         with:
-          toolchain: 1.94.1
-      - name: Prepare the canonical Iroh native runtime before CLI publication
-        if: ${{ matrix.package == 'cli' }}
-        run: yarn workspace @happier-dev/iroh-native build:native
-      - name: Prepare the canonical CLI unit runtime closure
-        if: ${{ matrix.package == 'cli' }}
-        run: yarn workspace @happier-dev/cli build:shared
+          prepared-artifact: gate-prepared-workspace
+      - name: Prepare Chromium for real UI geometry unit tests
+        if: ${{ contains(matrix.packages, 'ui') }}
+        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
       - name: Load the prepared Iroh native runtime
-        if: ${{ matrix.package == 'cli' }}
+        id: cli-native-load
+        if: ${{ contains(matrix.packages, 'cli') && steps.gate-unit-install.outcome == 'success' }}
+        continue-on-error: true
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Run affected package unit suite
+        if: ${{ !cancelled() && steps.gate-unit-install.outcome == 'success' }}
         env:
           GATE_PACKAGES: ${{ join(matrix.packages, ' ') }}
+          HAPPIER_UNIT_JSON_OUTPUT: ${{ runner.temp }}/gate-unit-${{ matrix.package }}-${{ matrix.part }}.json
+          GATE_VITEST_MAX_WORKERS: ${{ steps.gate-workers.outputs.workers }}
+          CLI_PREPARATION_OUTCOMES: ${{ steps.gate-unit-install.outcome }} ${{ steps.cli-native-load.outcome }}
         run: |
           set -euo pipefail
           gate_status=0
-          for gate_package in $GATE_PACKAGES; do
-            case "$gate_package" in
-              cli) yarn workspace @happier-dev/cli test:unit || gate_status=1 ;;
-              ui) yarn workspace @happier-dev/app test:unit || gate_status=1 ;;
-              server) yarn --cwd apps/server test:unit || gate_status=1 ;;
-              protocol) yarn workspace @happier-dev/protocol test || gate_status=1 ;;
-              plugins)
-                if ./apps/stack/bin/hstack-exec -- node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/plugins-channels @happier-dev/plugins-elevenlabs; then
-                  yarn test:plugin-workspaces || gate_status=1
-                else
+          if [ "$GATE_PACKAGES" = 'ui' ]; then
+            # Preserve the UI wrapper's existing file-partition selection.
+            HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn workspace @happier-dev/app test:unit \
+              --reporter=default --reporter="$GITHUB_WORKSPACE/scripts/ci/reportGateRegressions.mjs" || gate_status=1
+          else
+            gate_projects=()
+            for gate_package in $GATE_PACKAGES; do
+              if [ "$gate_package" = 'cli' ] && [ "$CLI_PREPARATION_OUTCOMES" != 'success success' ]; then
+                  echo "::error::CLI preparation failed or is unavailable: $CLI_PREPARATION_OUTCOMES"
                   gate_status=1
-                fi
-                ;;
-              *) echo "::error::Unknown gate package: $gate_package"; gate_status=1 ;;
-            esac
-          done
+              else
+                gate_projects+=("$gate_package")
+              fi
+            done
+            if [ "${#gate_projects[@]}" -gt 0 ]; then
+              if HAPPIER_VITEST_MAX_WORKERS="$GATE_VITEST_MAX_WORKERS" yarn test:gate-unit "${gate_projects[@]}"; then package_status=0; else package_status=$?; fi
+              node scripts/ci/reportGateRegressions.mjs --kind=unit --input="$HAPPIER_UNIT_JSON_OUTPUT" \
+                --baseline="$HAPPIER_GATE_TRIAGE_BASELINE" --package-status="$package_status" || gate_status=1
+            fi
+          fi
           exit "$gate_status"
+      - name: Report Gate unit runner memory after termination
+        if: ${{ always() }}
+        run: |
+          echo "Gate unit host memory after termination (whole runner service, not Vitest-only RSS):"
+          free -h
+          cat /proc/self/cgroup
+          unit_cgroup_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
+          for observation in memory.events memory.max memory.peak memory.current; do
+            unit_observation_path="/sys/fs/cgroup$unit_cgroup_path/$observation"
+            echo "$unit_observation_path:"
+            if [ -r "$unit_observation_path" ]; then
+              cat "$unit_observation_path"
+            else
+              echo "Unavailable at current cgroup; no conclusion from the missing observation."
+            fi
+          done
       - name: Upload CLI unit bundled-plugin preparation diagnostics
-        if: ${{ always() && matrix.package == 'cli' }}
+        if: ${{ always() && contains(matrix.packages, 'cli') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gate-cli-unit-bundled-plugin-publication-failures
@@ -378,35 +541,51 @@ jobs:
 
   gate-build-artifacts:
     name: Gate — build artifacts and staged import smoke
-    needs: [gate-packages]
+    needs: [gate-prepare]
     runs-on: ubuntu-latest
+    # Successful complete artifact job: 46m12s; twice that sample rounded up.
+    timeout-minutes: 95
     permissions:
       contents: read
     env:
       HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
     steps:
+      - name: Gate deadline — 95 minutes
+        run: echo "Gate artifacts and staged import smoke have a 95-minute job timeout."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22.x
-          cache: yarn
+          node-version: ${{ needs.gate-prepare.outputs.node_version }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: apps/stack/scripts/provision/.bun-version
       - name: Enable Corepack
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
       - uses: ./.github/actions/install-yarn-dependencies
+        with:
+          prepared-artifact: gate-prepared-workspace
       - name: Setup pinned Rust and the browser target
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.94.1
           targets: wasm32-unknown-unknown
-      - name: Prepare the canonical Iroh native runtime before CLI publication
-        run: yarn workspace @happier-dev/iroh-native build:native
+      - name: Check non-UI compiler projects from the shared preparation
+        env:
+          HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: "1"
+          HAPPIER_TYPECHECK_REPORT_DIR: ${{ runner.temp }}/gate-compiler-host-reports
+        # Divide the compiler owners across the two existing compiler/build jobs.
+        # Each native project is a separate process; neither job replays the suite.
+        run: |
+          mkdir -p "$HAPPIER_TYPECHECK_REPORT_DIR"
+          if yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=host; then package_status=0; else package_status=$?; fi
+          node scripts/ci/reportGateRegressions.mjs --kind=compiler --input="$HAPPIER_TYPECHECK_REPORT_DIR" \
+            --baseline=scripts/ci/gate-triage-baseline.json --package-status="$package_status"
       - name: Build the CLI distribution
-        run: yarn workspace @happier-dev/cli build
+        # This job has just checked and emitted the current CLI source graph.
+        # Consume those declarations without loading that graph a second time.
+        run: yarn workspace @happier-dev/cli build:prepared --prepared-declarations
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Probe the staged CLI runtime through its canonical owner
@@ -442,24 +621,41 @@ jobs:
             dist/release-assets/ui-web
           if-no-files-found: error
 
+      - name: Report Gate job memory after termination
+        if: ${{ always() }}
+        run: |
+          echo "Gate job memory (whole runner service; not process-only RSS):"
+          free -h
+          cat /proc/self/cgroup
+          gate_cgroup_path="$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)"
+          for observation in memory.events memory.max memory.peak memory.current; do
+            gate_observation_path="/sys/fs/cgroup$gate_cgroup_path/$observation"
+            echo "$gate_observation_path:"
+            if [ -r "$gate_observation_path" ]; then cat "$gate_observation_path"; else echo "Unavailable; no memory conclusion from missing telemetry."; fi
+          done
+
   gate:
     name: Gate
     if: ${{ always() && !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
-    needs: [gate-packages, gate-unit, gate-build-artifacts, server-db-contract]
+    needs: [gate-prepare, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract]
     runs-on: ubuntu-latest
+    # Normally terminating aggregate: 6s; twice that sample rounded up.
+    timeout-minutes: 1
     permissions:
       contents: read
     steps:
+      - name: Gate deadline — 1 minute
+        run: echo "Gate aggregation has a 1-minute job timeout."
       - name: Require every selected check to succeed
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           node --input-type=module <<'NODE'
           const needs = JSON.parse(process.env.NEEDS_JSON);
-          const noUnits = needs['gate-packages'].outputs.packages === '[]';
+          const noUnits = needs['gate-prepare'].outputs.packages === '[]';
           for (const [id, job] of Object.entries(needs)) {
             if (job.result === 'success' || (id === 'gate-unit' && noUnits && job.result === 'skipped')) continue;
-            if (id === 'server-db-contract' && needs['gate-packages'].outputs.server_db_contract === 'false' && job.result === 'skipped') continue;
+            if (id === 'server-db-contract' && needs['gate-prepare'].outputs.server_db_contract === 'false' && job.result === 'skipped') continue;
             console.error(`::error::${id}: ${job.result}`);
             process.exitCode = 1;
           }
@@ -1203,6 +1399,9 @@ jobs:
         continue-on-error: true
         run: yarn workspace @happier-dev/protocol test
 
+      - name: Prepare Chromium for real UI geometry unit tests
+        run: ./apps/stack/bin/hstack-exec -- yarn -s playwright install --with-deps chromium
+
       - name: Run unit tests
         id: unit-tests
         continue-on-error: true
@@ -1556,8 +1755,8 @@ jobs:
         run: yarn workspace @happier-dev/iroh-native test:home-iroh:docker
 
   server-db-contract:
-    if: ${{ !cancelled() && ((needs.trusted_ref_guard.result == 'success' && (!inputs.select_jobs_explicitly || inputs.run_server_db_contract)) || (needs.gate-packages.result == 'success' && needs.gate-packages.outputs.server_db_contract == 'true')) }}
-    needs: [trusted_ref_guard, gate-packages]
+    if: ${{ !cancelled() && ((needs.trusted_ref_guard.result == 'success' && (!inputs.select_jobs_explicitly || inputs.run_server_db_contract)) || (needs.gate-prepare.result == 'success' && needs.gate-prepare.outputs.server_db_contract == 'true')) }}
+    needs: [trusted_ref_guard, gate-prepare]
     name: Server DB Contract (Postgres + SQLite lineage)
     runs-on: ${{ needs.trusted_ref_guard.outputs.ubuntu_2204 || 'ubuntu-22.04' }}
     timeout-minutes: 25
@@ -1576,6 +1775,8 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
+      - name: Gate deadline — 25 minutes
+        run: echo "The selected Server DB contract retains its 25-minute job timeout."
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
