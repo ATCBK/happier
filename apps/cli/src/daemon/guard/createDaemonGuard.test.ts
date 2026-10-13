@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { MachineGuardPolicyV1Schema, type MachineGuardPolicyV1 } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import { MachineProcessesCleanUpInputV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { MachineGuardActivityEntryV1Schema, MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
+import { MachineGuardWatchResultV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 
 import { createManagedActivityInventory } from '../lifecycle/managedActivity';
 import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
@@ -322,6 +325,10 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         f.gone(); await f.drain(); f.available(180);
         await vi.advanceTimersByTimeAsync(60000); await f.drain();
         const activity = await f.guard.activityLog.list({ range: 'today' });
+        expect(MachineGuardActivityListV1Schema.parse(activity)).toEqual(activity);
+        const persisted = await readFile(join(directory, 'machine-guard', 'activity-2026-10-10.jsonl'), 'utf8');
+        const stored: unknown[] = persisted.trim().split('\n').map(line => JSON.parse(line));
+        expect(stored.map(row => MachineGuardActivityEntryV1Schema.parse(row))).toEqual(expect.arrayContaining(activity.entries));
         const effect = activity.entries.find(entry => entry.kind === 'closed_browser');
         expect(effect).toMatchObject({ outcome: 'done', freedBytes: 80 });
         expect(f.summary.getSummary()?.lastAutomaticAction).toMatchObject({ entryId: effect?.id, facts: { freedBytes: 80 } });
@@ -329,6 +336,8 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         expect(f.summary.getSummary()?.guard).not.toHaveProperty('episodeId');
         expect(new Set(f.intervals)).toEqual(new Set([60000]));
         const first = await f.guard.watch.watch({ machineId: target.machineId }, requester);
+        expect(MachineGuardWatchResultV1Schema.parse(first)).toEqual(first);
+        expect(MachinePublishedResourceSummaryV1Schema.parse(f.summary.getSummary())).toEqual(f.summary.getSummary());
         expect(first.changed).toBe(true); if (!first.changed) throw new Error('Initial Guard view missing');
         const parked = f.guard.watch.watch({ machineId: target.machineId, since: first.since }, requester);
         await f.drain();
