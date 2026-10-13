@@ -48,6 +48,23 @@ boundary. The primary-session classifier preserves it as `dependency_failure` wi
 `provider_cli_not_found` and the canonical remediation, without exposing raw paths or
 mistaking runner turn allocation for provider prompt acceptance.
 
+## Installer state home
+
+Both shell installers resolve the data home from an explicit `HAPPIER_HOME_DIR`,
+otherwise following `HAPPIER_INSTALL_DIR` or the default `.happier` directory.
+In current development source, the POSIX installer uses that same resolved home
+for daemon commands and shell startup-file exports, preserving an explicit data
+home when the binary install directory differs.
+
+In current development source, `install.ps1` persists its resolved state home as
+the user-scoped `HAPPIER_HOME_DIR` and applies it to the installer process before
+post-install CLI commands. The background service and new terminals therefore
+read the same credentials. An explicit `HAPPIER_HOME_DIR` selects the data home;
+otherwise it follows `HAPPIER_INSTALL_DIR`, falling back to `%USERPROFILE%\.happier`.
+The binary install directory can remain separate from an explicit data home.
+On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
+This does not copy or migrate credentials from a previous data home.
+
 ## Desktop-initiated CLI acquisition
 
 The desktop app acquires the Happier CLI itself; the user never runs an installer to connect the
