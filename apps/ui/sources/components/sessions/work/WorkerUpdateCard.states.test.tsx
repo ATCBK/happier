@@ -47,7 +47,7 @@ beforeEach(async () => { home = await serveSessionActionHome(); });
 afterEach(async () => {
     await screen?.unmount();
     screen = null;
-    home.dispose();
+    await home.dispose();
     act(() => storage.setState(initialState));
     sessionRpcTransport.mockClear();
 });

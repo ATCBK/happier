@@ -60,9 +60,9 @@ export type WorkflowRunItemProps = Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     sheet: { marginHorizontal: SESSION_LIST_SHEET_INSET_PX },
-    tail: { marginBottom: 12 },
-    context: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    status: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    tail: { marginBottom: theme.space.s12 },
+    context: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
+    status: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
     guide: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
 }));
 

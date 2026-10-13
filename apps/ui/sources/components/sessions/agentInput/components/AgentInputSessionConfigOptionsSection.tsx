@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -218,15 +219,15 @@ export function AgentInputSessionConfigOptionsSection(props: AgentInputSessionCo
 
 const styles = StyleSheet.create((theme) => ({
     section: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     optionDisabled: {
         opacity: 0.5,
     },
     optionRow: {
         borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s10,
         backgroundColor: theme.colors.surface.base,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -234,7 +235,7 @@ const styles = StyleSheet.create((theme) => ({
     booleanContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     optionContent: {
         flex: 1,
@@ -242,8 +243,7 @@ const styles = StyleSheet.create((theme) => ({
         gap: 3,
     },
     optionLabel: {
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     optionDescription: {
@@ -252,13 +252,13 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     switchWrap: {
-        paddingLeft: 8,
+        paddingLeft: theme.space.s8,
     },
     configCard: {
-        gap: 5,
+        gap: theme.space.s4,
         borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s10,
         backgroundColor: theme.colors.surface.base,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -266,22 +266,21 @@ const styles = StyleSheet.create((theme) => ({
     choiceRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
-        paddingTop: 2,
+        gap: theme.space.s6,
+        paddingTop: theme.space.s2,
     },
     group: {
-        gap: 4,
+        gap: theme.space.s4,
         width: '100%',
     },
     groupLabel: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     choicePill: {
         minHeight: 30,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 999,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -289,8 +288,7 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     choiceLabel: {
-        fontSize: 12,
-        fontWeight: '500',
+        ...Typography.variant('meta', 'medium'),
         color: theme.colors.text.secondary,
     },
     choiceLabelSelected: {

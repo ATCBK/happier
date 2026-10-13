@@ -96,9 +96,9 @@ export function projectSessionCollaborationAccessCard(input: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     block: {
-        marginHorizontal: 12,
-        marginTop: 12,
-        marginBottom: 12,
+        marginHorizontal: theme.space.s12,
+        marginTop: theme.space.s12,
+        marginBottom: theme.space.s12,
         borderRadius: 14,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
@@ -106,7 +106,7 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
         ...shadowLevelStyle(theme.colors.shadowLevels[1]),
     },
-    divider: { height: StyleSheet.hairlineWidth, marginLeft: 12, backgroundColor: theme.colors.border.default },
+    divider: { height: StyleSheet.hairlineWidth, marginLeft: theme.space.s12, backgroundColor: theme.colors.border.default },
     mark: {
         width: MARK_PX,
         height: MARK_PX,
@@ -118,7 +118,7 @@ const styles = StyleSheet.create((theme) => ({
         ...ITEM_TITLE_TEXT_METRICS.compact,
         color: theme.colors.text.primary,
     },
-    subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 5, minWidth: 0 },
+    subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, minWidth: 0 },
     subtitle: {
         ...Typography.default(),
         ...ITEM_SUBTITLE_TEXT_METRICS.compact,

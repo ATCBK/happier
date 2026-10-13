@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { Text, View } from 'react-native';
 import { act } from 'react-test-renderer';
@@ -10,9 +11,13 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
+import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 // Hoist the physical transport before cross-package imports can capture Socket.IO.
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -73,6 +78,20 @@ function OptionsProbe(props: Readonly<{ serverId: string; workflow: string; rest
     </View>;
 }
 
+function NativeSessionOptionsProbe(props: Readonly<{ serverId: string }>) {
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const definition = { kind: 'builtin' as const, id: 'local_services' };
+    const field = readBuiltinWidgetDescriptorV1(definition)!.inputs!.fields[0]!;
+    const consumer = { kind: 'widget' as const, surface: { serverId: props.serverId, accountId: 'viewer',
+        owner: { kind: 'project' as const, projectId: 'project' } }, definition };
+    const options = useInputFieldOptions({ serverId: props.serverId, enabled: !!binding, accountLifetime: binding,
+        requests: [{ field, consumer, draftInput: {} }] });
+    const state = options.state(field);
+    return <View testID="native-session.options" accessibilityLabel={state.status} accessibilityHint={state.errorCode}>
+        {state.options.map(option => <Text key={option.label}>{option.label}</Text>)}
+    </View>;
+}
+
 async function createTypedWorkflow(serverId: string, accountId: string, definitionId = '00000000-0000-4000-8000-000000000051') {
     const machine = createPlainMachineRowFixture({ id: 'controller-a', accountId });
     harness.answer(serverId, 'GET /v1/machines/controller-a', { body: { machine } });
@@ -93,6 +112,36 @@ function reply(label: string) {
 }
 
 describe('qualified input field options scope', () => {
+    it('offers an unopened Project session for Local services through the shared resolver and current Home HTTP reader', async () => {
+        const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://native-session-options.example',
+            accountId: 'viewer', currentAccount: true });
+        const session = V2SessionRecordSchema.parse({ id: 'unopened', seq: 1, createdAt: 1, updatedAt: 1,
+            active: true, activeAt: 1, encryptionMode: 'plain', metadataLayoutVersion: 0,
+            metadata: JSON.stringify({ path: '/repo', host: 'machine', summary: { text: 'Project session', updatedAt: 1 }, machineId: 'machine', projectId: 'project' }),
+            metadataVersion: 1, agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
+            responsibleAccountId: null, responsibleAccount: null,
+            viewer: { readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+                attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'none', source: 'none' } },
+        });
+        harness.answer(serverId, 'POST /v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
+            sessions: [session], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        }) });
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://native-session-options.example', accountId: 'viewer',
+            request: (url, init) => harness.request(url, init) });
+        installHomeGovernanceBoundaries(harness);
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(harness.request);
+        const screen = await renderScreen(<NativeSessionOptionsProbe serverId={serverId} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('native-session.options')?.props.accessibilityLabel).not.toBe('loading'));
+        expect({ status: screen.findByTestId('native-session.options')?.props.accessibilityLabel,
+            code: screen.findByTestId('native-session.options')?.props.accessibilityHint }).toEqual({ status: 'ready', code: undefined });
+        expect(screen.getTextContent()).toContain('Project session');
+        expect(rpc.read).not.toHaveBeenCalled();
+        await screen.unmount();
+        await connection.dispose();
+    });
     it('does not bypass serving type choices with authored static choices', async () => {
         const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://restricted-options.example',
             serverIdentityId: 'srv_restricted_options', accountId: 'compute-owner', currentAccount: true });

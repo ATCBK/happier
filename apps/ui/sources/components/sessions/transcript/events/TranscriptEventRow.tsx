@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -25,6 +26,8 @@ import type { TranscriptEventEmphasis } from './transcriptEventEmphasis';
 
 import { buildConnectedServiceAccountSwitchMessage } from './connectedServiceAccountSwitchMessage';
 import { describeSessionStopMarker } from './sessionStopMarker';
+import { describeCapabilityNotice, type CapabilityNoticePresentation } from './capabilityNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { readSessionStopTranscriptRecordV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import { useSessionStopRecord } from './useSessionStopRecord';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -32,7 +35,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 const STOP_MARKER_FRESH_MS = 30_000;
-import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
 
 const EVENT_ICON_SIZE = 18;
@@ -56,6 +59,25 @@ function SessionStopMarkerRow(props: Readonly<{ event: AgentEvent; sessionId?: s
         entering={FadeInUp.duration(motionTokens.guardMoment.markerRiseMs)
             .withInitialValues({ opacity: 0, transform: [{ translateY: motionTokens.guardMoment.markerRisePx }] })}>{content}</Animated.View>
         : <View style={style} testID="transcript-event-session-stop">{content}</View>;
+}
+
+/** Where the left-out item is fixed; quiet, since the line above already says what happened. */
+function CapabilityNoticeLink(props: Readonly<{ notice: CapabilityNoticePresentation }>) {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+    return (
+        <Pressable
+            testID="transcript-event-capability-notice-open"
+            accessibilityRole="link"
+            accessibilityLabel={props.notice.linkLabel}
+            onPress={() => router.push(props.notice.href as never)}
+            hitSlop={8}
+            style={({ pressed }) => [styles.noticeLink, { opacity: pressed ? motionTokens.press.opacitySubtle : 1 }]}
+        >
+            <Text style={[styles.detailText, { color: theme.colors.text.secondary }]}>{props.notice.linkLabel}</Text>
+            <Icon name="caret-right" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+        </Pressable>
+    );
 }
 
 function readEventRecord(event: AgentEvent): Record<string, unknown> {
@@ -329,11 +351,15 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     const labelsByKey = useConnectedMetadataCatalog(needsConnectedLabel
         ? props.serverId ? binding?.scope ?? null : undefined : null, selectConnectedMetadataLabels);
     const deemphasized = props.emphasis === 'deemphasized';
+    // Host accounting evidence is retained for Usage/Coach, not a conversation
+    // notification. Keep unknown event types on the visible fallback below.
+    if (props.event.type === 'mcp-binding-usage') return null;
     const eventColor = deemphasized ? theme.colors.text.tertiary : theme.colors.text.secondary;
     let iconName: IconName = 'info';
     let text = t('message.unknownEvent');
     let detailText: string | undefined;
     let testID: string | undefined;
+    let capabilityNotice: CapabilityNoticePresentation | null = null;
     const stopRecord = readSessionStopTranscriptRecordV1(props.event);
     const terminalComposerDraftBlocked = isTerminalComposerDraftBlockedEvent(props.event);
     const terminalComposerClearSessionId = typeof props.sessionId === 'string' ? props.sessionId.trim() : '';
@@ -388,6 +414,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         text = t('message.switchedToMode', { mode: props.event.mode });
     } else if (props.event.type === 'message') {
         iconName = 'info';
+        capabilityNotice = describeCapabilityNotice(props.event);
         // The Follow wake commits one fixed Protocol sentence as the persisted
         // event content so every host recognises it; the reader localizes it the
         // same way it localizes the blocked-draft notice. The stored marker stays
@@ -395,6 +422,11 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         text = props.event.message === SESSION_FOLLOW_WAKE_EVENT_MESSAGE
             ? t('session.follow.wakeEventExplanation')
             : props.event.message;
+        if (capabilityNotice) {
+            testID = 'transcript-event-capability-notice';
+            iconName = 'warning';
+            text = capabilityNotice.lines.join('\n');
+        }
     } else if (props.event.type === 'runtime-config-outcome') {
         testID = `transcript-event-runtime-config-outcome-${props.event.status}`;
         const pendingTiming = isPendingRuntimeConfigOutcomeTiming(props.event.timing);
@@ -526,6 +558,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                             {detailText}
                         </Text>
                     ) : null}
+                    {capabilityNotice ? <CapabilityNoticeLink notice={capabilityNotice} /> : null}
                     {showTerminalComposerClearAction ? (
                         <TerminalComposerClearEventAction
                             event={props.event}
@@ -551,20 +584,20 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        marginHorizontal: 16,
+        marginHorizontal: theme.space.s16,
         paddingBottom: 22,
         alignSelf: 'stretch',
     },
     row: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
         minWidth: 0,
     },
     textColumn: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     iconContainer: {
         width: EVENT_ICON_CONTAINER_SIZE,
@@ -574,9 +607,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     text: {
         color: theme.colors.text.secondary,
-        fontSize: 14,
-        lineHeight: 20,
-        fontWeight: '500',
+        ...Typography.variant('label'),
         flexShrink: 1,
     },
     stopMarkerText: {
@@ -588,7 +619,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     hostWake: {
         alignItems: 'center',
-        marginBottom: 10,
+        marginBottom: theme.space.s10,
     },
     hostWakeQuiet: {
         color: theme.colors.text.tertiary,
@@ -602,26 +633,29 @@ const styles = StyleSheet.create((theme) => ({
     },
     detailText: {
         color: theme.colors.text.tertiary,
-        fontSize: 12,
-        lineHeight: 16,
-        fontWeight: '400',
+        ...Typography.variant('meta'),
         flexShrink: 1,
     },
-    action: {
-        marginTop: 6,
+    noticeLink: {
         alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s2,
+        marginTop: theme.space.s2,
+    },
+    action: {
+        marginTop: theme.space.s6,
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
         minHeight: 24,
         borderWidth: 1,
         borderRadius: 6,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     actionText: {
-        fontSize: 12,
-        lineHeight: 16,
-        fontWeight: '700',
+        ...Typography.variant('meta', 'semiBold'),
     },
 }));

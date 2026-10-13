@@ -10,7 +10,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
@@ -23,63 +23,30 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
 let SERVER_ID: string;
 const SESSION_ID = 'sess_standing';
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const standingPath = `/v2/session-organization/attention-standings/${SESSION_ID}`;
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/ContextMenu', () => ({
-    ContextMenu: (props: any) => React.createElement('ContextMenu', props),
-}));
-
-vi.mock('react-native-gesture-handler', () => ({
-    Swipeable: (props: any) => React.createElement('Swipeable', props),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
-
-vi.mock('@/components/ui/status/StatusDot', () => ({
-    StatusDot: 'StatusDot',
-}));
-
-vi.mock('@/hooks/session/useNavigateToSession', () => ({
-    useNavigateToSession: () => vi.fn(),
-}));
-
-vi.mock('@/utils/platform/responsive', () => ({
-    useIsTablet: () => false,
-}));
-
-vi.mock('@/hooks/ui/useHappyAction', () => ({
-    useHappyAction: (fn: any) => [false, fn],
-}));
-
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ Platform: { OS: 'ios' } });
+    return createReactNativeWebMock({
+        Platform: { OS: 'ios' },
+        useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+    });
 });
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
-});
+
+const { ContextMenu } = await import('@/components/ui/forms/dropdown/ContextMenu');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 
 function createRenderableSession(): SessionListRenderableSession {
     return createSessionListRenderableSessionFixture({
@@ -136,30 +103,33 @@ async function renderRow(params: Readonly<{
         attentionStandingPolicy: params.attentionStandingPolicy,
     })[0];
     if (!rowViewModel) throw new Error('expected a row view model');
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://session-standing.test', { serverId: SERVER_ID });
 
     return renderScreen(
-        <SessionItem
-            session={session}
-            rowViewModel={rowViewModel}
-            serverId={SERVER_ID}
-            currentUserId="u1"
-            selected={false}
-            isFirst
-            isLast
-            isSingle
-            variant="default"
-            compact={false}
-        />,
+        <InjectedAuthProvider credentials={credentials}>
+            <SessionItem
+                session={session}
+                rowViewModel={rowViewModel}
+                serverId={SERVER_ID}
+                currentUserId="u1"
+                selected={false}
+                isFirst
+                isLast
+                isSingle
+                variant="default"
+                compact={false}
+            />
+        </InjectedAuthProvider>,
     );
 }
 
 type RenderedRow = Awaited<ReturnType<typeof renderRow>>;
 
 function findRowMenu(screen: RenderedRow) {
-    return screen.root.findAll((node: any) => node.type === 'ContextMenu').find((node: any) => (
+    return screen.root.findAll((node) => node.type === ContextMenu).find((node) => (
         Array.isArray(node.props?.items)
         && typeof node.props?.onSelect === 'function'
-        && node.props.items.some((entry: any) => typeof entry?.id === 'string' && entry.id.startsWith('ui.session.'))
+        && node.props.items.some((entry: { id?: unknown }) => typeof entry?.id === 'string' && entry.id.startsWith('ui.session.'))
     )) ?? null;
 }
 
@@ -234,6 +204,7 @@ describe('SessionItem attention standing action', () => {
         await act(async () => {
             await menu?.props.onSelect(SESSION_ACTION_SET_ATTENTION_STANDING_ID);
         });
+        await flushHookEffects({ cycles: 40 });
 
         expect(home.requestsFor(standingPath)).toMatchObject([
             { serverId: SERVER_ID, input: { standing: true } },

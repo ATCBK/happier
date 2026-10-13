@@ -6,6 +6,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/SessionHeaderSubagentsButton';
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
 import { SessionHeaderBrowserButton } from '@/components/sessions/actions/SessionHeaderBrowserButton';
+import { SessionHeaderComputerButton } from '@/components/sessions/actions/SessionHeaderComputerButton';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { SESSION_BOARD_DESTINATION } from '@/components/sessions/board/sessionBoardDestination';
@@ -177,6 +178,8 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         expect(rail).not.toContain(SessionHeaderSubagentsButton);
         expect(rail).not.toContain(SessionHeaderTerminalButton);
         expect(rail).toContain(SessionHeaderBrowserButton);
+        expect(rail).toContain(SessionHeaderComputerButton);
+        expect(rail.indexOf(SessionHeaderComputerButton)).toBeLessThan(rail.indexOf(SessionHeaderBrowserButton));
         const mobile = types(resolveSessionViewHeaderProps({ ...input, mobileTerminalTabAvailable: true }));
         expect(mobile).not.toContain(SessionHeaderTerminalButton);
         expect(mobile).toContain(SessionHeaderSubagentsButton);

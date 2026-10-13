@@ -20,7 +20,7 @@ export function UserMessageBubble(props: Readonly<{
     const style = {
         backgroundColor: glassSurfaceBackgroundColor(theme.colors.message.user.background, 'content', true),
         paddingHorizontal: 14,
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
         borderRadius: theme.parts.userBubble.radius,
         maxWidth: '100%' as const,
         ...(props.discarded ? { opacity: 0.65 } : null),

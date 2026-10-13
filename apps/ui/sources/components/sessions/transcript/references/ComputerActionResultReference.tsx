@@ -21,11 +21,11 @@ import { resolveTranscriptComputerActionReference, type TranscriptComputerAction
 
 const stylesheet = StyleSheet.create((theme) => ({
     ask: {
-        marginTop: theme.margins.xs,
+        marginTop: theme.space.s4,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
-        padding: 12,
+        gap: theme.space.s10,
+        padding: theme.space.s12,
         borderRadius: 12,
         borderCurve: 'continuous',
         backgroundColor: theme.colors.surface.inset,
@@ -33,7 +33,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     askText: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     askTitle: {
         ...Typography.rowTitle(),
@@ -45,22 +45,22 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     askActions: {
         flexDirection: 'row',
-        gap: 8,
-        marginTop: 8,
+        gap: theme.space.s8,
+        marginTop: theme.space.s8,
     },
     watch: {
-        paddingTop: theme.margins.xs,
+        paddingTop: theme.space.s4,
         flexDirection: 'row',
     },
     // The browser reference's row anatomy (`BrowserActionResultReference`): one line, then the picture.
     actionRoot: {
-        paddingTop: theme.margins.xs,
-        gap: theme.margins.xs,
+        paddingTop: theme.space.s4,
+        gap: theme.space.s4,
     },
     line: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minWidth: 0,
     },
     action: {
@@ -82,7 +82,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     shot: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
 }));
 

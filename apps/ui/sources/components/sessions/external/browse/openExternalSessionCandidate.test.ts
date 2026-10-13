@@ -1,27 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import { createActionExecutorBoundaryFixture, createDeferred } from '@/dev/testkit';
-import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import type { StorageState } from '@/sync/store/types';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createDeferred, createMachineFixture } from '@/dev/testkit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const boundary = vi.hoisted(() => ({ ensure: vi.fn(), alert: vi.fn() }));
-const runtime = vi.hoisted(() => ({ serverId: '' }));
-// Applied connection identity is a process/network boundary; Account fencing stays real.
-vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', () => ({
-    getAppliedActiveServerSnapshot: () => runtime,
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
-vi.mock('@/sync/ops/machineExternalSessions', () => ({ machineExternalSessionLinkEnsure: boundary.ensure }));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ spies: { alert: boundary.alert } }).module;
 });
 
-import { openExternalSessionCandidate, type ExternalSessionCandidateOpenState } from './openExternalSessionCandidate';
+import type { ExternalSessionCandidateOpenState } from './openExternalSessionCandidate';
+
+const homes = createHomeGovernanceHarness();
+const network = await installSessionOpsNetworkBoundary();
+installHomeGovernanceBoundaries(homes);
+const requests: SocketRpcRequestPayload[] = [];
+await loadSyncSingletonForTests();
+const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const { openExternalSessionCandidate } = await import('./openExternalSessionCandidate');
+const { storage } = await import('@/sync/domains/state/storage');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 let profileScope: ServerAccountScope | null = null;
 function input() {
@@ -37,46 +44,65 @@ function input() {
 
 describe('openExternalSessionCandidate', () => {
     it('uses the admitted existing link Action and never grants capture consent', async () => {
-        const actions: string[] = [];
-        // The protocol executor transport port is outside this process-owned UI adapter.
-        const deps = createActionExecutorBoundaryFixture({ isActionApprovalRequired: () => false, hostExternalSessionAction: async ({ actionId }) => {
-            actions.push(actionId);
-            return { ok: true as const, result: { ok: true, sessionId: 'continued', created: true } };
-        } });
-        const executor = createActionExecutor(deps);
+        boundary.ensure.mockResolvedValueOnce({ ok: true, sessionId: 'continued', created: true });
+        const frontDoor = createFrontDoorActionExecute();
+        // Observe invocation without substituting policy, admission or dispatch.
+        const execute = Object.assign(vi.fn(frontDoor), { prepare: frontDoor.prepare });
         const params = input();
-        expect(await openExternalSessionCandidate({ ...params, linkActionExecute: createFrontDoorActionExecute(executor) })).toBe('opened');
-        expect(actions).toEqual(['sessions.external.link.ensure']);
+        expect(await openExternalSessionCandidate({ ...params, linkActionExecute: execute })).toBe('opened');
+        expect(execute.mock.calls.map(([actionId]) => actionId)).toEqual(['sessions.external.link.ensure']);
         expect(params.openSession).toHaveBeenCalledWith('continued', params.resolveCurrentTarget(), undefined);
-        expect(boundary.ensure).not.toHaveBeenCalled();
+        expect(requests).toMatchObject([{ method: `machine-a:${RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE}` }]);
+        expect(boundary.ensure).toHaveBeenCalledOnce();
+        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
     });
     it('does not navigate or grant capture when the admitted link Account retires', async () => {
-        const pending = createDeferred<{ ok: true; result: { ok: true; sessionId: string; created: boolean } }>();
+        const pending = createDeferred<{ ok: true; sessionId: string; created: boolean }>();
         let current = true;
-        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionApprovalRequired: () => false,
-            hostExternalSessionAction: () => pending.promise,
-        }));
+        boundary.ensure.mockImplementationOnce(() => pending.promise);
         const params = input();
         const opening = openExternalSessionCandidate({ ...params, accountCurrentness: { isCurrent: () => current },
-            linkActionExecute: createFrontDoorActionExecute(executor) });
+            linkActionExecute: createFrontDoorActionExecute() });
+        await vi.waitFor(() => expect(boundary.ensure).toHaveBeenCalledOnce());
         current = false;
-        pending.resolve({ ok: true, result: { ok: true, sessionId: 'retired-account-session', created: true } });
+        pending.resolve({ ok: true, sessionId: 'retired-account-session', created: true });
         expect(await opening).toBe('ignored');
         expect(params.openSession).not.toHaveBeenCalled();
-        expect(boundary.ensure).not.toHaveBeenCalled();
+        expect(boundary.ensure).toHaveBeenCalledOnce();
+        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
     });
     beforeEach(async () => {
+        await homes.reset();
+        network.resetRequests();
+        await network.addHome('https://candidate-open.test', 'account-a');
+        network.setRpcResponder(call => {
+            const request = { method: `${call.targetId}:${call.method}`, params: call.payload };
+            requests.push(request);
+            return boundary.ensure(request);
+        });
+        installHomeGovernanceBoundaries(homes);
+        requests.length = 0;
         boundary.ensure.mockReset().mockResolvedValue({ ok: true, sessionId: 'happier-session', created: true });
         boundary.alert.mockReset();
-        const server = await upsertAndActivateServer({ serverUrl: 'https://candidate-open.test' });
-        runtime.serverId = server.id;
-        profileScope = { serverId: server.id, accountId: 'account-a' };
-        registerStorageStateReader(() => ({ profileScope } as unknown as StorageState));
+        const serverId = await homes.addHome({ name: 'Candidate Home', serverUrl: 'https://candidate-open.test', accountId: 'account-a' });
+        const machine = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' });
+        homes.answer(serverId, '/v1/machines/machine-a', { body: { machine } });
+        homes.answer(serverId, '/v1/machines', { body: [machine] });
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
+                approvalWaivedSurfaces: { 'sessions.external.link.ensure': ['ui'] } }),
+        } }, version: 1 } });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://candidate-open.test', accountId: 'account-a',
+            additionalRequestOrigins: ['https://selected-candidate.test'], request: homes.request });
+        installHomeGovernanceBoundaries(homes);
+        profileScope = { serverId: connection.home.id, accountId: 'account-a' };
     });
-    afterEach(() => {
+    afterEach(async () => {
+        await connection?.dispose();
+        connection = undefined;
         profileScope = null;
-        registerStorageStateReader(() => null as unknown as StorageState);
     });
+    afterAll(() => network.dispose());
 
     it('links once and hands off a message identity seed, never a transcript ordinal', async () => {
         const params = input();
@@ -113,6 +139,7 @@ describe('openExternalSessionCandidate', () => {
         const opening = openExternalSessionCandidate(params);
         expect(await openExternalSessionCandidate(params)).toBe('ignored');
         profileScope = { serverId: profileScope!.serverId, accountId: 'account-b' };
+        storage.setState({ profileScope });
         pending.resolve({ ok: true, sessionId: 'account-a-session', created: true });
         expect(await opening).toBe('ignored');
         expect(params.openSession).not.toHaveBeenCalled();
@@ -124,13 +151,30 @@ describe('openExternalSessionCandidate', () => {
         const pending = createDeferred<{ ok: true; sessionId: string; created: boolean }>();
         boundary.ensure.mockImplementation(() => pending.promise);
         const original = input();
-        const target = { ...original.resolveCurrentTarget(), accountId: 'selected-account' };
+        const selectedHomeId = await homes.addHome({ name: 'Selected candidate Home', serverUrl: 'https://selected-candidate.test',
+            accountId: 'selected-account', active: false });
+        await network.addHome('https://selected-candidate.test', 'selected-account');
+        const machine = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'selected-account' });
+        homes.answer(selectedHomeId, '/v1/machines/machine-a', { body: { machine } });
+        homes.answer(selectedHomeId, '/v1/machines', { body: [machine] });
+        storage.setState(state => ({ machineListByServerId: { ...state.machineListByServerId,
+            [selectedHomeId]: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })],
+        }, machineListStatusByServerId: { ...state.machineListStatusByServerId, [selectedHomeId]: 'idle' } }));
+        homes.answer(selectedHomeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
+                approvalWaivedSurfaces: { 'sessions.external.link.ensure': ['ui'] } }),
+        } }, version: 1 } });
+        const target = { machineId: 'machine-a', serverId: selectedHomeId, accountId: 'selected-account' };
         const params = { ...original, resolveCurrentTarget: () => target, accountCurrentness: { isCurrent: () => true } };
         const opening = openExternalSessionCandidate(params);
+        await vi.waitFor(() => expect(boundary.ensure).toHaveBeenCalledOnce());
         profileScope = { serverId: profileScope!.serverId, accountId: 'another-active-account' };
+        storage.setState({ profileScope });
         pending.resolve({ ok: true, sessionId: 'selected-home-session', created: true });
         expect(await opening).toBe('opened');
         expect(params.openSession).toHaveBeenCalledWith('selected-home-session', { machineId: target.machineId, serverId: target.serverId }, undefined);
-        expect(boundary.ensure).toHaveBeenCalledWith(expect.anything(), { serverId: target.serverId, accountId: 'selected-account' });
+        expect(requests).toMatchObject([{ method: expect.stringMatching(/^machine-a:/), params: { remoteSessionId: 'native-session' } }]);
+        expect(homes.requests.find(request => request.serverId === selectedHomeId && request.path === '/v1/machines/machine-a'))
+            .toMatchObject({ token: expect.any(String) });
     });
 });

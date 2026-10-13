@@ -233,7 +233,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     controls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     body: {
         minHeight: 0,
@@ -241,8 +241,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
-        paddingTop: 10,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s10,
     },
 }));
 

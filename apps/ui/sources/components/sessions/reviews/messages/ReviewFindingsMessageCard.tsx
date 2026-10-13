@@ -844,16 +844,16 @@ function ReviewOpenResultButton(props: Readonly<{ sessionId: string; runId: stri
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    startedReview: { ...Typography.default(), color: theme.colors.text.tertiary, fontSize: 13, lineHeight: 19, marginBottom: 8 },
+    startedReview: {  color: theme.colors.text.tertiary, ...Typography.variant('body'),  marginBottom: theme.space.s8 },
     grow: { flex: 1 },
-    finishedHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+    finishedHead: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
     // One line at every width (lab WT5-R8p): the title and the count keep their words; only the meta truncates.
-    finishedTitle: { ...Typography.default('semiBold'), flexShrink: 0, color: theme.colors.text.primary, fontSize: 15 },
+    finishedTitle: {  flexShrink: 0, color: theme.colors.text.primary, ...Typography.variant('heading') },
     finishedMeta: { ...Typography.default(), flexShrink: 1, color: theme.colors.text.tertiary, fontSize: 14 },
     finishedCount: { ...Typography.default(), flexShrink: 0, color: theme.colors.text.tertiary, fontSize: 14, fontVariant: ['tabular-nums'] },
-    compactRows: { gap: 2 },
+    compactRows: { gap: theme.space.s2 },
     // Under the titles, on their shared edge (severity column + the line's gap).
-    compactMore: { ...Typography.default(), paddingLeft: REVIEW_SEVERITY_COLUMN_WIDTH_PX + 12, paddingTop: 2, color: theme.colors.text.tertiary, fontSize: 13 },
+    compactMore: {  paddingLeft: REVIEW_SEVERITY_COLUMN_WIDTH_PX + 12, paddingTop: theme.space.s2, color: theme.colors.text.tertiary, ...Typography.variant('body') },
     compactDivider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border.default },
     lead: {
         ...Typography.default(),
@@ -862,22 +862,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 22,
     },
     section: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     sectionTitleRow: {
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 8,
+        gap: theme.space.s8,
     },
     sectionTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 15,
+        ...Typography.variant('heading'),
     },
     sectionCount: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         fontVariant: ['tabular-nums'],
     },
     sheet: {
@@ -888,8 +886,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 14,
     },
     reviewer: {
-        gap: 4,
-        paddingVertical: 12,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s12,
     },
     reviewerDivided: {
         borderTopWidth: StyleSheet.hairlineWidth,
@@ -899,39 +897,36 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     reviewerName: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
     },
     reviewerMeta: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         fontVariant: ['tabular-nums'],
     },
     more: {
         alignSelf: 'flex-start',
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
         paddingLeft: REVIEW_SEVERITY_COLUMN_WIDTH_PX + 12,
     },
     moreText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
     notice: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     question: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
         padding: 14,
         borderRadius: 12,
         borderWidth: StyleSheet.hairlineWidth,
@@ -940,39 +935,33 @@ const stylesheet = StyleSheet.create((theme) => ({
     questionBody: {
         flex: 1,
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     questionEyebrow: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
     questionText: {
-        ...Typography.default(),
         color: theme.colors.text.primary,
-        fontSize: 14.5,
-        lineHeight: 21,
+        ...Typography.variant('reading'),
     },
     quiet: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
     inlineLinkText: {
         ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
     },
     dock: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     caption: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
     },
     errorText: {
-        ...Typography.default(),
         color: theme.colors.state.danger.foreground,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
 }));

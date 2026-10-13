@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -340,18 +341,14 @@ const styles = StyleSheet.create(() => ({
         minWidth: 0,
     },
     setSubtitle: {
-        fontSize: 12,
-        fontWeight: '400',
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
     title: {
-        fontSize: 14,
-        fontWeight: '700',
+        ...Typography.variant('label', 'semiBold'),
     },
     statusText: {
         // U-8: lighter weight than the 700 action buttons so the status label does not read as tappable.
-        fontSize: 12,
-        fontWeight: '500',
+        ...Typography.variant('meta', 'medium'),
     },
     objectiveRow: {
         flexDirection: 'row',
@@ -406,12 +403,10 @@ const styles = StyleSheet.create(() => ({
         paddingHorizontal: 4,
     },
     actionText: {
-        fontSize: 13,
-        fontWeight: '700',
+        ...Typography.variant('body', 'semiBold'),
     },
     secondaryActionText: {
-        fontSize: 13,
-        fontWeight: '700',
+        ...Typography.variant('body', 'semiBold'),
     },
 }));
 

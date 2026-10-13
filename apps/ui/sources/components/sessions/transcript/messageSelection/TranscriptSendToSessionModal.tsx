@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
 import {
@@ -55,14 +56,13 @@ const styles = StyleSheet.create((theme) => ({
     },
     sessionMeta: {
         alignItems: 'flex-end',
-        gap: 2,
-        marginLeft: 12,
+        gap: theme.space.s2,
+        marginLeft: theme.space.s12,
         minWidth: 48,
         maxWidth: 128,
     },
     sessionStatus: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     sessionActivity: {
         color: theme.colors.text.secondary,

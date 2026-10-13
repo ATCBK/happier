@@ -1,6 +1,7 @@
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { isPromptStackSystemAppendPlacementV1 } from '@happier-dev/protocol/prompts/library/promptPlacementV1';
 import {
     readSessionMemoryEnabledV1,
     SessionDisabledInheritedEntryIdsV1Schema,
@@ -155,7 +156,7 @@ export function useSessionContextLayers(params: Readonly<{
         const disabled = new Set(disabledParse.success ? disabledParse.data : []);
         const rows = (layer: SessionContextLayerId, entries: readonly PromptStackEntryV1[]): SessionContextRow[] => entries
             // Composer inserts are picked by hand in the composer; they are not read before a turn.
-            .filter((entry) => entry.placement === 'system_append' || entry.placement === 'skill_instructions')
+            .filter((entry) => isPromptStackSystemAppendPlacementV1(entry.placement))
             .map((entry) => {
                 const { kind, title } = presentations(entry);
                 const off = !entry.enabled ? 'source'

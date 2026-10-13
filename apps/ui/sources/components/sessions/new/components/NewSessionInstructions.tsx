@@ -226,16 +226,16 @@ function AttachedInstructions(
 const stylesheet = StyleSheet.create((theme) => ({
   // The composer card follows on the page's section rhythm, like the draft header above it.
   root: {
-    gap: 8,
-    paddingBottom: 12,
+    gap: theme.space.s8,
+    paddingBottom: theme.space.s12,
   },
   // One row height in every state: the label stays put while its choices become the document.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    columnGap: 12,
-    rowGap: 6,
+    columnGap: theme.space.s12,
+    rowGap: theme.space.s6,
     minHeight: 32,
   },
   label: {
@@ -247,12 +247,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: theme.space.s8,
   },
   attached: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexShrink: 1,
     minWidth: 0,
   },

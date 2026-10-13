@@ -181,7 +181,7 @@ async function flush() {
     });
 }
 
-let disposeHome: (() => void) | null = null;
+let disposeHome: (() => Promise<void>) | null = null;
 let previousStorageState: ReturnType<ReturnType<typeof getStorage>['getState']>;
 beforeEach(async () => {
     previousStorageState = getStorage().getState();
@@ -202,12 +202,12 @@ beforeEach(async () => {
     disposeHome = served.dispose;
 });
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     // Releasing this test's ambient transcript also releases the intentional
     // stale-while-revalidate snapshot before restoring an unloaded prior state.
     getStorage().getState().evictSessionMessages('sess_1');
-    disposeHome?.();
+    await disposeHome?.();
     disposeHome = null;
     homeRoute.current = null;
     retireActiveServerAccountScopeLifetime();

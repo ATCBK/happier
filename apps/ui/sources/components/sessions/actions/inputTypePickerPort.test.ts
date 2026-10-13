@@ -1,7 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import { createInputTypePickerPort } from './inputTypePickerPort';
+import type { ResolvedInputTypeV1 } from '@happier-dev/protocol/inputs/runtime';
 
 describe('native reference input picker projection', () => {
+  it('keeps omitted picker-only inventory distinct from an explicitly empty field constraint', async () => {
+    const identity = { pluginId: 'test.inputs', localId: 'repository' };
+    const type: ResolvedInputTypeV1 = { identity, occurrenceId: 'current', definition: {
+      id: identity.localId, title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' }, picker: 'browse',
+    } };
+    const launches: unknown[] = [];
+    const port = createInputTypePickerPort({
+      resolveType: () => type,
+      canOpenPicker: () => true,
+      openPicker: async request => { launches.push(request.launchInput); return { kind: 'completed', input: 'repo' }; },
+    });
+    const field = { path: 'repository', title: 'Repository', inputType: identity };
+    const signal = new AbortController().signal;
+    expect(await port.pick({ field, value: undefined, options: [], signal })).toEqual({ status: 'selected', value: 'repo' });
+    expect(launches[0]).toEqual({ inputType: identity, semantic: 'repository' });
+    expect(await port.pick({ field: { ...field, options: [] }, value: undefined, options: [], signal })).toMatchObject({ status: 'error' });
+    expect(await port.pick({ field: { ...field, optionsSourceId: 'repositories' }, value: undefined, options: [], signal })).toMatchObject({ status: 'error' });
+    expect(await port.pick({ field, value: undefined, options: [{ value: 'other', label: 'Other' }], signal })).toMatchObject({ status: 'error' });
+  });
+
+  it('keeps a declared Resource inventory fail-closed when empty or unavailable', async () => {
+    const identity = { pluginId: 'test.inputs', localId: 'repository' };
+    const type: ResolvedInputTypeV1 = { identity, occurrenceId: 'current', definition: {
+      id: identity.localId, title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' },
+      picker: 'browse', options: { resource: 'repositories' },
+    } };
+    const port = createInputTypePickerPort({ resolveType: () => type, canOpenPicker: () => true,
+      openPicker: async () => ({ kind: 'completed', input: 'repo' }),
+    });
+    const field = { path: 'repository', title: 'Repository', inputType: identity };
+    const signal = new AbortController().signal;
+    expect(await port.pick({ field, value: undefined, options: [], signal })).toMatchObject({ status: 'error' });
+    expect(await port.pick({ field, value: undefined, signal })).toMatchObject({ status: 'error' });
+    expect(await port.pick({ field, value: undefined, options: [{ value: 'repo', label: 'Repository' }], signal }))
+      .toEqual({ status: 'selected', value: 'repo' });
+  });
+
   it('edits and validates UsageQuery through the host form instead of plugin resolution', async () => {
     const port = createInputTypePickerPort({
       resolveType: () => { throw new Error('Host query must not resolve a plugin'); },

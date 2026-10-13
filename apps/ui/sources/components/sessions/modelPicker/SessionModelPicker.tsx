@@ -11,6 +11,8 @@ import type {
 } from '@happier-dev/protocol/teams';
 
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
+import { ProviderApprovalPendingBanner } from '@/components/settings/providers/ProviderPageParts';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
 import {
@@ -289,6 +291,13 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
     scope?: Readonly<{ scope: SessionModelBrowseScope; onExit: () => void }>;
 }>) {
     const canConfirmExperimental = Boolean(props.experimentalConfirmation);
+    const router = useRouter();
+    const experimentalApprovalHref = props.experimentalConfirmation?.pending
+        ? props.experimentalConfirmation.pendingApproval?.href ?? null
+        : null;
+    const experimentalApproval = React.useMemo(() => experimentalApprovalHref ? {
+        onOpen: () => router.pushRetainingCurrent(experimentalApprovalHref as never),
+    } : null, [experimentalApprovalHref, router]);
     const hostNativeSourceLabel = React.useContext(SessionModelNativeSourceLabelContext);
     const hostApplyTiming = React.useContext(SessionModelApplyTimingContext);
     const nativeSourceLabel = props.nativeSourceLabel ?? hostNativeSourceLabel;
@@ -546,6 +555,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                 || props.projectionError
                 || (props.projectionFailures?.length ?? 0) > 0
                 || props.scope
+                || experimentalApproval
                 || props.experimentalConfirmation?.error ? (
                 <>
                     {props.reportedModel && reportedModelPresentation.label ? (
@@ -573,6 +583,13 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                             retry={projectionLineRetry}
                         />
                     ))}
+                    {experimentalApproval ? (
+                        <ProviderApprovalPendingBanner
+                            testID="model-picker-experimental-approval"
+                            presentation="line"
+                            onOpen={experimentalApproval.onOpen}
+                        />
+                    ) : null}
                     {props.experimentalConfirmation?.error ? (
                         <ProviderErrorItems
                             presentation="line"
@@ -591,6 +608,8 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                     commitSelection(resolution.ref);
                     return;
                 }
+                // One confirmation at a time: while it waits (on its approval too) the row stays put.
+                if (props.experimentalConfirmation?.pending) return;
                 void props.experimentalConfirmation?.confirm(resolution, () => commitSelection(ref));
             }}
         />

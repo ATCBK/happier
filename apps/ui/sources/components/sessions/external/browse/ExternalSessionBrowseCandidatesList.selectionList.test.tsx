@@ -40,7 +40,7 @@ vi.mock('@legendapp/list/react-native', () => ({
         React.createElement(capturedLegendList.LegendList, { ...props, ref })),
 }));
 
-vi.mock('@/text', () => ({ t: (key: string) => key }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
 
 const candidate = {
     remoteSessionId: 'session-1',

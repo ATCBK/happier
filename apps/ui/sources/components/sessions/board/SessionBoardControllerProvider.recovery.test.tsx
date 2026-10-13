@@ -15,6 +15,10 @@ import { SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from 
 
 installDisconnectedServerSocketBoundary();
 
+// Static storage/runtime imports need the canonical Socket boundary during collection.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 /**
  * Recovery and orientation reach the mounted product surface.
  *

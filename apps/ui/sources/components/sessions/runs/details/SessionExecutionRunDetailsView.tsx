@@ -3,6 +3,7 @@ import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appSh
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useUnistyles } from 'react-native-unistyles';
 
 import {
@@ -597,7 +598,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     const transcriptMessageSeq = typeof (transcriptMessage as { seq?: unknown } | null)?.seq === 'number'
         ? (transcriptMessage as { seq: number }).seq
         : null;
-    const runTitle = state.status === 'loaded' ? resolveExecutionRunTitle(state.run) : null;
+    const runTitle = state.status === 'loaded' && loadedRunAddressRef.current === runAddressKey
+        ? resolveExecutionRunTitle(state.run) : null;
+    useDestinationPageTitle(props.presentation === 'screen' ? runTitle : undefined);
     const givenRunTitle = state.status === 'loaded' ? state.run.display?.title?.trim() || null : null;
     const onTitleResolved = props.onTitleResolved;
     React.useEffect(() => {
@@ -752,8 +755,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         sendToSession={sendToSession}
                     />
                 )}
-            <View style={{ flex: 1, minHeight: 0, paddingHorizontal: 16, paddingVertical: 12, gap: 12 }}>
-            <View style={{ gap: 8 }}>
+            <View style={{ flex: 1, minHeight: 0, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s12 }}>
+            <View style={{ gap: theme.space.s8 }}>
                 {discussionOrigin ? (
                     <ExecutionRunContextChip
                         testID="session-run-details-context"
@@ -770,7 +773,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     <View
                         testID="session-run-details-pre-marker-state"
                         accessibilityRole="text"
-                        style={{ paddingVertical: 4 }}
+                        style={{ paddingVertical: theme.space.s4 }}
                     >
                         <Text style={{ color: theme.colors.text.secondary }}>
                             {t('status.awaitingUpdates')}
@@ -794,8 +797,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         style={{
                             ...interactiveTargetStyle,
                             alignSelf: 'flex-start',
-                            paddingVertical: 8,
-                            paddingHorizontal: 10,
+                            paddingVertical: theme.space.s8,
+                            paddingHorizontal: theme.space.s10,
                             borderRadius: 10,
                             backgroundColor: theme.colors.surface.inset,
                             borderWidth: 1,
@@ -833,7 +836,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             ) : hasStructuredResult ? stepsRow : null}
 
             {canMutateRunViaSessionRpc && (state.run.status === 'running' || interactionAffordances.canResume) ? (
-                <View style={{ gap: 8 }}>
+                <View style={{ gap: theme.space.s8 }}>
                     {stopError && !stopUnconfirmed ? <Text style={{ color: theme.colors.text.secondary }}>{stopError}</Text> : null}
                     {interactionError ? <Text style={{ color: theme.colors.text.secondary }}>{interactionError}</Text> : null}
                     {interactionAffordances.canResume ? (
@@ -849,8 +852,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                             onPress={() => invokeInteraction('resume')}
                             style={{
                                 ...interactiveTargetStyle,
-                                paddingVertical: 10,
-                                paddingHorizontal: 12,
+                                paddingVertical: theme.space.s10,
+                                paddingHorizontal: theme.space.s12,
                                 borderRadius: 10,
                                 backgroundColor: theme.colors.surface.inset,
                                 borderWidth: 1,
@@ -881,12 +884,12 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 <View
                     testID="session-run-details-latest-tool-result"
                     style={{
-                        padding: 12,
+                        padding: theme.space.s12,
                         borderRadius: 12,
                         backgroundColor: theme.colors.surface.inset,
                         borderWidth: 1,
                         borderColor: theme.colors.border.default,
-                        gap: 6,
+                        gap: theme.space.s6,
                     }}
                 >
                     <Text style={{ color: theme.colors.text.primary, fontWeight: '600' }}>{t('runs.runDetails.latestToolResultTitle')}</Text>
@@ -934,7 +937,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 />
             ) : null}
             {session && !structuredCard && transcriptMessage?.kind !== 'tool-call' ? (
-                <View style={{ gap: 10 }}>
+                <View style={{ gap: theme.space.s10 }}>
                     {transcriptToolId !== null ? (
                         // Same container the marker branch gives its transcript
                         // (`SessionMessageDetailsView`'s `toolCallFullViewContainer`), so the

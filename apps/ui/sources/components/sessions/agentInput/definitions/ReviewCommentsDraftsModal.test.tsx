@@ -45,13 +45,6 @@ const resolveReviewCommentDraftAnchorsForPromptSpy = vi.fn(async (input: {
     drafts: readonly ReviewCommentDraft[];
 }) => [...input.drafts]);
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: {
-        default: () => ({}),
-        mono: () => ({}),
-    },
-}));
-
 vi.mock('@/components/ui/text/Text', () => ({
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     TextInput: (props: any) => React.createElement('TextInput', props),

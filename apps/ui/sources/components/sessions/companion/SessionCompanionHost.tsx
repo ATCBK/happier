@@ -61,15 +61,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingStart: 12,
-        paddingEnd: 4,
-        paddingTop: 10,
+        gap: theme.space.s6,
+        paddingStart: theme.space.s12,
+        paddingEnd: theme.space.s4,
+        paddingTop: theme.space.s10,
     },
     // A title, not an eyebrow (lab CA): the column names itself like any pane.
     heading: {
-        ...Typography.default('semiBold'),
-        fontSize: 15,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
         flex: 1,
         minWidth: 0,

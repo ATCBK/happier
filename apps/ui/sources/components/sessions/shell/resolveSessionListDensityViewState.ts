@@ -26,8 +26,8 @@ export const SESSION_LIST_ROW_TITLE_TEXT_METRICS = {
 
 export const SESSION_LIST_ROW_STATUS_TEXT_METRICS = {
     default: { fontSize: 12, lineHeight: 16 },
-    compact: { fontSize: 11, lineHeight: 11 },
-    minimal: { fontSize: 10, lineHeight: 12 },
+    compact: { fontSize: 11, lineHeight: 14 },
+    minimal: { fontSize: 11, lineHeight: 14 },
 } as const;
 
 export const SESSION_LIST_ROW_IDENTITY_METRICS = {

@@ -18,6 +18,65 @@ function nativeSelection(agentTargetKey: string, modelId: string, updatedAt: num
 }
 
 describe('useNewSessionAgentAuthoringOptionsState', () => {
+    it('hydrates late draft engine options for the already selected target and keeps edits on unrelated updates', async () => {
+        const agentTargetKey = 'agent:happier.agent.claude/claude';
+        const draft = {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            modelSelection: nativeSelection(agentTargetKey, 'haiku', 123),
+            acpSessionModeId: 'plan',
+            sessionConfigOptionOverrides: { v: 1, updatedAt: 123, overrides: {
+                speed: { updatedAt: 123, value: 'fast' },
+            } },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
+        } satisfies NonNullable<Parameters<typeof useNewSessionAgentAuthoringOptionsState>[0]['hydratedPersistedAuthoringDraft']>;
+        const props = (persisted: typeof draft | null) => ({
+            agentType: 'claude', backendTargetKey: agentTargetKey, hydratedTempAuthoringDraft: null,
+            hydratedPersistedAuthoringDraft: persisted, rememberedEngineSelection: null,
+        });
+        const hook = await renderHook((input: ReturnType<typeof props>) => useNewSessionAgentAuthoringOptionsState(input),
+            { initialProps: props(null) });
+        await hook.rerender(props(draft));
+        expect(hook.getCurrent()).toMatchObject({ modelMode: 'haiku', modelSelection: draft.modelSelection,
+            acpSessionModeId: 'plan', sessionConfigOptionOverrides: draft.sessionConfigOptionOverrides,
+            capabilitySelection: draft.capabilitySelection });
+        act(() => { hook.getCurrent().setModelMode('sonnet'); });
+        await hook.rerender(props({ ...draft, sessionConfigOptionOverrides: { ...draft.sessionConfigOptionOverrides, updatedAt: 124 } }));
+        expect(hook.getCurrent().modelMode).toBe('sonnet');
+        const editedSelection = hook.getCurrent().modelSelection;
+        if (!editedSelection) throw new Error('Expected the edited model selection');
+        await hook.rerender(props({ ...draft, modelSelection: editedSelection,
+            sessionConfigOptionOverrides: { ...draft.sessionConfigOptionOverrides, updatedAt: 124 } }));
+        expect(hook.getCurrent().modelSelection).toBe(editedSelection);
+        await hook.unmount();
+    });
+
+    it('keeps pending model edits when same-target draft hydration arrives', async () => {
+        type Props = Parameters<typeof useNewSessionAgentAuthoringOptionsState>[0];
+        const targetKey = 'agent:happier.agent.claude/claude';
+        const props = (draft: Props['hydratedPersistedAuthoringDraft']): Props => ({
+            agentType: 'claude', backendTargetKey: targetKey,
+            hydratedTempAuthoringDraft: null, hydratedPersistedAuthoringDraft: draft,
+        });
+        const hook = await renderHook(useNewSessionAgentAuthoringOptionsState, { initialProps: props(null) });
+        act(() => { hook.getCurrent().setModelSelection(nativeSelection(targetKey, 'sonnet', 321)); });
+        const editedSelection = hook.getCurrent().modelSelection;
+        const remembered = {
+            v: 1, modelSelection: editedSelection, acpSessionModeId: null,
+            sessionConfigOptionOverrides: null, updatedAt: 321,
+        } satisfies NonNullable<Props['rememberedEngineSelection']>;
+        // The screen's real picker setter remembers the choice before the late
+        // draft arrives; that echo must not make the explicit edit unprotected.
+        await hook.rerender({ ...props(null), rememberedEngineSelection: remembered });
+        await hook.rerender({ ...props({
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            modelSelection: nativeSelection(targetKey, 'haiku', 123),
+            acpSessionModeId: 'plan',
+        }), rememberedEngineSelection: remembered });
+        expect(hook.getCurrent().modelSelection).toBe(editedSelection);
+        expect(hook.getCurrent().acpSessionModeId).toBe('plan');
+        await hook.unmount();
+    });
+
     it('reconciles config overrides for a backend target switch without a passive follow-up commit', async () => {
         const commitPhases: string[] = [];
         const wrapper = (props: React.PropsWithChildren) => (
@@ -309,6 +368,16 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
         await act(async () => {
             hook.getCurrent().setModelSelectionForBackendTarget(claudeTargetKey, profileSelection);
         });
+        // A current-target draft may arrive before the profile's preferred
+        // target renders. It must hydrate Codex without dropping staged Claude.
+        await hook.rerender({
+            ...buildProps('codex'),
+            hydratedPersistedAuthoringDraft: {
+                agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                modelSelection: nativeSelection(codexTargetKey, 'gpt-5.5', 123),
+            },
+        });
+        expect(hook.getCurrent().modelMode).toBe('gpt-5.5');
         await hook.rerender(buildProps('claude'));
 
         expect(hook.getCurrent().modelSelection).toEqual(profileSelection);

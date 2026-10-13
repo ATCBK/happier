@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View } from 'react-native';
 import { useSessionProjectScmSnapshot } from '@/sync/domains/state/storage';
@@ -35,7 +36,7 @@ export function SourceControlStatusBadge({ sessionId }: SourceControlStatusBadge
     const changedFilesLabel = t('files.sourceControlStatus.changedFilesLabel', { count: scmStatusSummary.changedFiles });
 
     return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, overflow: 'hidden' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flex: 1, overflow: 'hidden' }}>
             {/* Source-control icon */}
             <Icon
                 name="git-branch"
@@ -44,13 +45,12 @@ export function SourceControlStatusBadge({ sessionId }: SourceControlStatusBadge
 
             {/* Line changes only */}
             {hasLineChanges && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s2, flexShrink: 0 }}>
                     {scmStatusSummary.linesAdded > 0 && (
                         <Text
                             style={{
-                                fontSize: 12,
+                                ...Typography.variant('meta', 'semiBold'),
                                 color: theme.colors.versionControl.added.foreground,
-                                fontWeight: '600',
                             }}
                             numberOfLines={1}
                           >
@@ -60,9 +60,8 @@ export function SourceControlStatusBadge({ sessionId }: SourceControlStatusBadge
                     {scmStatusSummary.linesRemoved > 0 && (
                         <Text
                             style={{
-                                fontSize: 12,
+                                ...Typography.variant('meta', 'semiBold'),
                                 color: theme.colors.versionControl.removed.foreground,
-                                fontWeight: '600',
                             }}
                             numberOfLines={1}
                           >
@@ -74,9 +73,8 @@ export function SourceControlStatusBadge({ sessionId }: SourceControlStatusBadge
             {!hasLineChanges && scmStatusSummary.hasAnyChanges && (
                 <Text
                     style={{
-                        fontSize: 12,
+                        ...Typography.variant('meta', 'semiBold'),
                         color: theme.colors.text.secondary,
-                        fontWeight: '600',
                     }}
                     numberOfLines={1}
                 >

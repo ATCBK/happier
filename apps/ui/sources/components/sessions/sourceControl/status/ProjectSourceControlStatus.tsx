@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View } from 'react-native';
 import { useSessionProjectScmSnapshot } from '@/sync/domains/state/storage';
@@ -24,12 +25,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     branchIcon: {
-        marginRight: 4,
+        marginRight: theme.space.s4,
         flexShrink: 0,
     },
     branchText: {
-        fontSize: 13,
-        fontWeight: '500',
+        ...Typography.variant('body', 'medium'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
         minWidth: 0,
@@ -37,28 +37,25 @@ const stylesheet = StyleSheet.create((theme) => ({
     changesContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginLeft: 6,
+        marginLeft: theme.space.s6,
         flexShrink: 0,
     },
     filesText: {
-        fontSize: 11,
-        fontWeight: '500',
+        ...Typography.variant('micro', 'medium'),
         color: theme.colors.text.secondary,
-        marginRight: 4,
+        marginRight: theme.space.s4,
     },
     lineChanges: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     addedText: {
-        fontSize: 11,
-        fontWeight: '600',
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.versionControl.added.foreground,
     },
     removedText: {
-        fontSize: 11,
-        fontWeight: '600',
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.versionControl.removed.foreground,
     },
 }));

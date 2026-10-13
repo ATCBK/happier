@@ -14,10 +14,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     reference: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         maxWidth: 520,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: theme.colors.border.subtle,

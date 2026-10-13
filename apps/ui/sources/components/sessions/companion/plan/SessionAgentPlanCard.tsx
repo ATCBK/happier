@@ -21,13 +21,13 @@ import type { SessionAgentPlan, SessionAgentPlanStep } from './sessionAgentPlan'
  */
 
 const stylesheet = StyleSheet.create((theme) => ({
-    meta: { ...Typography.default(), ...Typography.tabular(), color: theme.colors.text.tertiary, fontSize: 12 },
-    progress: { flexDirection: 'row', gap: 3, marginTop: 2, marginBottom: 8 },
+    meta: {  ...Typography.tabular(), color: theme.colors.text.tertiary, ...Typography.variant('meta') },
+    progress: { flexDirection: 'row', gap: 3, marginTop: theme.space.s2, marginBottom: theme.space.s8 },
     segment: { flex: 1, height: 4, borderRadius: 2, backgroundColor: theme.colors.border.default },
     segmentDone: { backgroundColor: theme.colors.text.secondary },
     segmentHeld: { backgroundColor: theme.colors.state.warning.foreground },
     segmentWorking: { backgroundColor: theme.colors.text.tertiary },
-    step: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 23 },
+    step: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minHeight: 23 },
     marker: { width: 13, alignItems: 'center', justifyContent: 'center' },
     open: {
         width: 9,
@@ -37,7 +37,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.tertiary,
         opacity: 0.6,
     },
-    stepText: { ...Typography.default(), color: theme.colors.text.primary, fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
+    stepText: {  color: theme.colors.text.primary, ...Typography.variant('meta'),  flexShrink: 1 },
     stepDone: { color: theme.colors.text.secondary },
     stepCurrent: { ...Typography.default('semiBold') },
 }));

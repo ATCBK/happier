@@ -54,7 +54,7 @@ const SESSION_ID = 'review-submit-session';
 const RUN_ID = 'review-submit-run';
 const initialState = storage.getState();
 let ReviewFindingsMessageCard!: typeof import('./ReviewFindingsMessageCard').ReviewFindingsMessageCard;
-let disposeHomes: (() => void) | undefined;
+let disposeHomes: (() => Promise<void>) | undefined;
 
 const comment: ReviewCommentV1 = {
     ...buildReviewCommentFixture({ id: 'review-submit-comment', sessionId: SESSION_ID, runId: RUN_ID, state: 'open', serverRevision: 7 }),
@@ -83,10 +83,10 @@ beforeEach(async () => {
     await prepareSessionDraftPersistenceStorage();
 });
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     sync.disconnectServer();
-    disposeHomes?.();
+    await disposeHomes?.();
     disposeHomes = undefined;
     resetReviewRunCommentsForTests();
     invalidateAccountEncryptionModeCache();

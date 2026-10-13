@@ -422,8 +422,8 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
     color: theme.colors.text.secondary,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 10,
+    paddingHorizontal: theme.space.s12,
+    paddingTop: theme.space.s8,
+    paddingBottom: theme.space.s10,
   },
 }));

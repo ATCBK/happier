@@ -21,8 +21,8 @@ import { useComposerBannerCollapse } from '@/components/sessions/composerBanners
 import { buildComposerBannerBadgeAccessibility } from '@/components/sessions/composerBanners/composerBannerCollapse';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    container: { gap: 8 },
-    comparison: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+    container: { gap: theme.space.s8 },
+    comparison: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8, marginTop: theme.space.s8 },
     value: { flexBasis: 180, flexGrow: 1, gap: 3 },
     valueLabel: { color: theme.colors.state.warning.foreground, ...Typography.default('semiBold') },
     valueText: { color: theme.colors.text.primary },

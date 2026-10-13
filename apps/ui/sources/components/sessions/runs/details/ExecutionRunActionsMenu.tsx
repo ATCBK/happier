@@ -37,9 +37,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.selected,
     },
     factValue: {
-        ...Typography.default(),
         color: theme.colors.text.primary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         fontVariant: ['tabular-nums'],
         textAlign: 'right',
         flexShrink: 1,

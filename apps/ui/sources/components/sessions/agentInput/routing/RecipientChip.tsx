@@ -26,7 +26,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     chipRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
 }));
 

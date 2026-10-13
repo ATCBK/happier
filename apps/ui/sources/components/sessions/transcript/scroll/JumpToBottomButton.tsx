@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -55,35 +56,33 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
     },
     compactRow: {
         minWidth: 40,
         height: 40,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         paddingVertical: 0,
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     badge: {
         minWidth: 18,
         height: 18,
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         borderRadius: 999,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: theme.colors.accent.blue,
     },
     badgeText: {
-        fontSize: 11,
-        fontWeight: '700',
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.surface.base,
     },
     label: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
 }));

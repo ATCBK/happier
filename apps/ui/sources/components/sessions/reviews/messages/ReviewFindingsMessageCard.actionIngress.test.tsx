@@ -93,7 +93,7 @@ beforeEach(async () => {
 afterEach(async () => {
     standardCleanup();
     await disconnectActiveServerConnection();
-    homes?.dispose();
+    await homes?.dispose();
     resetReviewRunCommentsForTests();
     resetSessionDraftRepositoryForTests();
     invalidateAccountEncryptionModeCache();

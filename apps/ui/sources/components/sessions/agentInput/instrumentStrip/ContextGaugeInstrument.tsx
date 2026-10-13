@@ -209,9 +209,9 @@ function PopoverRow(props: Readonly<{ label: string; value: string }>) {
 
 const popoverStyles = StyleSheet.create((theme) => ({
     root: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
-        gap: 12,
+        gap: theme.space.s12,
         minWidth: 200,
     },
     shimmer: {
@@ -232,34 +232,31 @@ const popoverStyles = StyleSheet.create((theme) => ({
         ...Typography.header(),
     },
     rows: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 16,
+        gap: theme.space.s16,
     },
     rowLabel: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
-        ...Typography.default(),
     },
     rowValue: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
         flexShrink: 0,
-        ...Typography.default('semiBold'),
     },
     note: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        ...Typography.default(),
     },
     categories: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     stackedBar: {
         flexDirection: 'row',
@@ -271,7 +268,7 @@ const popoverStyles = StyleSheet.create((theme) => ({
     categoryRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     categorySwatch: {
         width: 8,
@@ -281,14 +278,12 @@ const popoverStyles = StyleSheet.create((theme) => ({
     categoryLabel: {
         flex: 1,
         minWidth: 0,
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     categoryValue: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default('semiBold'),
     },
 }));

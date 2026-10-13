@@ -22,7 +22,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
   },
   button: { minHeight: 44, flexShrink: 1 },
   status: { color: theme.colors.text.secondary, fontSize: 14 },

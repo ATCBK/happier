@@ -29,22 +29,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 24,
-        marginTop: 6,
-        marginBottom: 2,
-        paddingLeft: 12,
+        marginTop: theme.space.s6,
+        marginBottom: theme.space.s2,
+        paddingLeft: theme.space.s12,
     },
     label: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.tertiary,
-        fontSize: 11.5,
-        lineHeight: 16,
+        ...Typography.variant('micro'),
     },
     members: {
-        paddingLeft: 12,
+        paddingLeft: theme.space.s12,
     },
 }));
 

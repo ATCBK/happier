@@ -66,10 +66,10 @@ const stylesheet = StyleSheet.create((theme) => ({
             rim: surfaceUsesRim('floating', theme.dark),
         }),
         paddingHorizontal: 14,
-        paddingVertical: 10,
+        paddingVertical: theme.space.s10,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
         ...shadowLevelStyle(theme.colors.shadowLevels[3]),
     },
     noticeText: {
@@ -91,7 +91,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         // the platform's own accessible target rather than a copied constant.
         minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
         justifyContent: 'center',
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         borderRadius: 8,
     },
     undoControlActive: {

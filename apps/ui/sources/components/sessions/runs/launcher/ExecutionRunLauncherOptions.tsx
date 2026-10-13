@@ -49,40 +49,38 @@ export function resolveExecutionRunLauncherOptionFields(params: Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 20,
+        gap: theme.space.s20,
     },
     field: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     label: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
     },
     labelCount: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         fontVariant: ['tabular-nums'],
     },
     labelRow: {
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 8,
+        gap: theme.space.s8,
     },
     tiles: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 10,
+        gap: theme.space.s10,
     },
     tile: {
         flexGrow: 1,
         flexBasis: 200,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
+        gap: theme.space.s10,
+        paddingVertical: theme.space.s10,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -92,11 +90,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.primary,
     },
     tileTitle: {
-        ...Typography.default('semiBold'),
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
     },
     tileTitleDisabled: {
         color: theme.colors.text.secondary,
@@ -120,12 +117,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     pair: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 20,
+        gap: theme.space.s20,
     },
     pairItem: {
         flexGrow: 1,
         flexBasis: 240,
-        gap: 8,
+        gap: theme.space.s8,
     },
     segmented: {
         alignSelf: 'flex-start',
@@ -133,12 +130,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     chips: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 10,
+        gap: theme.space.s10,
     },
     chip: {
         justifyContent: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 10,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -148,9 +145,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.secondary,
     },
     chipText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
     },
     chipTextSelected: {
         color: theme.colors.text.primary,

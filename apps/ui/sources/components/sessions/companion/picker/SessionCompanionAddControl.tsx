@@ -22,14 +22,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
-        marginTop: 8,
-        paddingHorizontal: 8,
+        gap: theme.space.s6,
+        marginTop: theme.space.s8,
+        paddingHorizontal: theme.space.s8,
         borderRadius: 10,
     },
     rowActive: { backgroundColor: theme.colors.surface.selected },
     rowPressed: { backgroundColor: theme.colors.surface.pressed },
-    rowLabel: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 13 },
+    rowLabel: {  color: theme.colors.text.secondary, ...Typography.variant('body') },
     rowLabelActive: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
     anchor: { height: 1, alignSelf: 'center', width: 1 },
     icon: {

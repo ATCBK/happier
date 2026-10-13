@@ -41,7 +41,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 
 afterEach(standardCleanup);
 let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
-afterEach(() => { home.dispose(); });
+afterEach(async () => { await home.dispose(); });
 beforeEach(async () => {
     sessionRpcTransport.mockReset(); sessionRpcTransport.mockResolvedValue(undefined);
     routerPush.mockClear(); routerSetParams.mockClear();

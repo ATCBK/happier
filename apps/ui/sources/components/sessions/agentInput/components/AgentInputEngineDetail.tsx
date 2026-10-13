@@ -241,7 +241,7 @@ export function AgentInputEngineDetail(props: AgentInputEngineDetailProps) {
 
 const styles = StyleSheet.create((theme) => ({
   container: {
-    gap: 10,
+    gap: theme.space.s10,
   },
   containerFill: {
     flex: 1,
@@ -255,7 +255,7 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   configSection: {
-    gap: 8,
+    gap: theme.space.s8,
   },
   configNote: {
     fontSize: 12,

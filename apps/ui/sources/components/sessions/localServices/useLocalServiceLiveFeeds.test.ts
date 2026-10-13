@@ -22,7 +22,7 @@ vi.mock('@/modal', async () => {
 // Only the daemon transport is replaced; accepted topology, observation and both stores stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: remote }));
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { home?.dispose(); home = undefined; resetLocalServiceLauncherStoreForTests(); resetLocalServiceInventoryStoreForTests();
+afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServiceLauncherStoreForTests(); resetLocalServiceInventoryStoreForTests();
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {

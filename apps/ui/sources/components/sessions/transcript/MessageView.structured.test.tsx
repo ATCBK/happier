@@ -193,9 +193,9 @@ let thinkingDisplayMode: 'inline' | 'tool' | 'hidden' = 'inline';
 let thinkingInlinePresentation: 'full' | 'summary' = 'full';
 let filesImagePreviewMaxBytes: number | null = null;
 let toolViewTimelineChromeMode: 'activity_feed' | 'cards' | null = null;
-let disposeReviewHome: (() => void) | null = null;
+let disposeReviewHome: (() => Promise<void>) | null = null;
 
-afterEach(() => {
+afterEach(async () => {
     structuredRouterState.push = routerPushSpy;
     routerPushSpy.mockReset();
     thinkingDisplayMode = 'inline';
@@ -203,7 +203,7 @@ afterEach(() => {
     filesImagePreviewMaxBytes = null;
     toolViewTimelineChromeMode = null;
     standardCleanup();
-    disposeReviewHome?.();
+    await disposeReviewHome?.();
     disposeReviewHome = null;
     resetReviewRunCommentsForTests();
     invalidateAccountEncryptionModeCache();

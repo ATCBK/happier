@@ -24,15 +24,31 @@ const ready: ProfileCatalogSnapshotV1 = {
     controlRevision: 'absent', records: [], diagnostics: [], referenceGuardRevision: 'absent',
 };
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     resetProfileCatalogEngineForTests();
     resetProfileCatalogSnapshotsForTests();
-    fixture?.dispose();
+    await fixture?.dispose();
     fixture = undefined;
 });
 
 describe('Work admitted Profile context', () => {
+    it('projects only prompt-preparation placements while preserving a historical generic bundle', async () => {
+        fixture = await createPlainArtifactHomeFixture('https://work-context-placements.example');
+        const scope = { serverId: fixture.home.id, accountId: 'artifact-account' };
+        storage.getState().applySettingsForScope(scope, settingsDefaults, 1);
+        const entries = ['system_append', 'skill_instructions', 'provider_asset', 'composer_insert'].map(placement => ({
+            id: placement, ref: { kind: 'bundle', artifactId: 'generic' }, enabled: true, placement,
+        }));
+        storage.getState().applyArtifacts([{ id: 'generic', title: 'Retained bundle',
+            header: { v: 1, kind: 'prompt_bundle.v2', title: 'Retained bundle', bundleSchemaId: 'bundle.generic_v1' },
+            ownerAccountId: scope.accountId, access: 'owner', isDecrypted: true, body: null,
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
+        const hook = await renderHook(() => useSessionContextLayers({ serverId: scope.serverId,
+            sessionId: 'work', ownerMetadata: { work: { promptStack: entries } }, metadataVersion: 1 }));
+        expect(hook.getCurrent().sessionStackValid).toBe(true);
+        expect(hook.getCurrent().session.map(row => row.entry.id)).toEqual(['system_append', 'skill_instructions']);
+    });
     it('admits legitimate rowless built-ins while refusing unknown, disabled and incomplete selections', async () => {
         fixture = await createPlainArtifactHomeFixture('https://work-profile-admission.example');
         const scope = { serverId: fixture.home.id, accountId: 'artifact-account' };

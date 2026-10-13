@@ -100,10 +100,10 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
         fontSize: 11,
         lineHeight: 16,
-        marginRight: 8,
+        marginRight: theme.space.s8,
     },
     timestampTextInverted: {
-        marginLeft: 12,
+        marginLeft: theme.space.s12,
         marginRight: 0,
     },
 }));

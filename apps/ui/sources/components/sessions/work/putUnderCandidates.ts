@@ -1,5 +1,6 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type SessionRecord = Readonly<Record<string, Session>>;
 
@@ -18,27 +19,18 @@ export function resolvePutUnderEligibility(
     const candidate = sessions[leadSessionId];
     if (!session || !candidate) return { allowed: false, reason: 'unavailable' };
     const serverId = session.serverId ?? null;
-    if ((candidate.serverId ?? null) !== serverId
-        || (scope.serverId !== undefined && scope.serverId !== serverId)) return { allowed: false, reason: 'different_home' };
+    if (serverId === null) return { allowed: false, reason: 'unavailable' };
+    if (!areServerProfileIdentifiersEquivalent(candidate.serverId ?? null, serverId)
+        || (scope.serverId !== undefined && !areServerProfileIdentifiersEquivalent(scope.serverId, serverId))) return { allowed: false, reason: 'different_home' };
     if (session.id === candidate.id) return { allowed: false, reason: 'cycle' };
     if (session.archivedAt != null || candidate.archivedAt != null) return { allowed: false, reason: 'archived' };
     if (session.access?.capabilities.readTranscript !== true || candidate.access?.capabilities.readTranscript !== true) return { allowed: false, reason: 'read' };
     if (session.access?.capabilities.submitAgentInput !== true || candidate.access?.capabilities.submitAgentInput !== true) return { allowed: false, reason: 'input' };
-    const seen = new Set<string>([session.id]);
-    let cursor: string | null = candidate.id;
-    while (cursor) {
-        if (seen.has(cursor)) return { allowed: false, reason: 'cycle' };
-        seen.add(cursor);
-        const ancestor: Session | undefined = sessions[cursor];
-        // An unmounted/unloaded ancestor is not proof of a cycle; the Home's full tree decides.
-        if (!ancestor) break;
-        if ((ancestor.serverId ?? null) !== serverId) return { allowed: false, reason: 'unavailable' };
-        cursor = ancestor.reportsTo?.sessionId ?? null;
-    }
-    if (!scope.allowCurrentLead && session.reportsTo?.sessionId === candidate.id) return { allowed: false, reason: 'already_under' };
-    if (!facts || !facts.isCurrent() || facts.serverId !== serverId || facts.sessionId !== session.id
-        || (scope.accountId !== undefined && facts.accountId !== scope.accountId)
-        || facts.currentLeadSessionId !== (session.reportsTo?.sessionId ?? null)) return { allowed: false, reason: 'unavailable' };
+    // The current Home read owns cycle admission, the relation and the mutation's CAS basis.
+    // Retained list rows may still show previous edges; they cannot decide the current graph.
+    if (!facts || !facts.isCurrent() || !areServerProfileIdentifiersEquivalent(facts.serverId, serverId) || facts.sessionId !== session.id
+        || (scope.accountId !== undefined && facts.accountId !== scope.accountId)) return { allowed: false, reason: 'unavailable' };
+    if (!scope.allowCurrentLead && facts.currentLeadSessionId === candidate.id) return { allowed: false, reason: 'already_under' };
     const verdict = facts.readCandidate(candidate.id);
     return verdict ? verdict.allowed ? { allowed: true, expectedLeadSessionId: facts.currentLeadSessionId } : { allowed: false, reason: verdict.reason }
         : { allowed: false, reason: 'unavailable' };

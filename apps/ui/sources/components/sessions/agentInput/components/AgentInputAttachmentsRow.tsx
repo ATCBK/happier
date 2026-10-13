@@ -159,16 +159,16 @@ function focusAttachmentTarget(target: unknown): boolean {
 
 const stylesheet = StyleSheet.create((theme) => ({
     attachmentsRow: {
-        paddingHorizontal: 12,
-        paddingTop: 8,
-        paddingBottom: 4,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s8,
+        paddingBottom: theme.space.s4,
     },
     attachmentChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -179,31 +179,28 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
         flexDirection: 'row',
         flexShrink: 1,
-        gap: 6,
+        gap: theme.space.s6,
         justifyContent: 'center',
     },
     attachmentChipText: {
         color: theme.colors.text.primary,
-        fontSize: 12,
+        ...Typography.variant('meta'),
         maxWidth: 180,
-        ...Typography.default(),
     },
     attachmentChipMeta: {
         color: theme.colors.text.secondary,
-        fontSize: 11,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
     },
     attachmentChipError: {
         color: theme.colors.state.danger.foreground,
         flexShrink: 1,
-        fontSize: 11,
+        ...Typography.variant('micro', 'semiBold'),
         maxWidth: 180,
-        ...Typography.default('semiBold'),
     },
     attachmentErrorFeedback: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 4,
+        gap: theme.space.s4,
     },
     attachmentImageTile: {
         alignItems: 'center',
@@ -231,8 +228,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     attachmentImageOverlayText: {
         color: theme.colors.overlay.foreground,
-        fontSize: 11,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
     },
     attachmentImageErrorOverlay: {
         backgroundColor: theme.colors.state.danger.background,
@@ -241,11 +237,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'relative',
     },
     rowContent: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     contentSurfaceBand: {
-        gap: 8,
-        paddingTop: 8,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s8,
     },
     compactSurface: {
         alignSelf: 'stretch',
@@ -263,15 +259,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     surfaceHeader: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 6,
-        paddingHorizontal: 10,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
     },
     surfacePreviewButton: {
         alignItems: 'center',
         alignSelf: 'stretch',
         flex: 1,
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
     },
     surfaceRemoveButton: {
         alignItems: 'center',
@@ -280,8 +276,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     surfaceLabel: {
         color: theme.colors.text.secondary,
         flex: 1,
-        fontSize: 12,
-        ...Typography.default(),
+        ...Typography.variant('meta'),
     },
 }));
 

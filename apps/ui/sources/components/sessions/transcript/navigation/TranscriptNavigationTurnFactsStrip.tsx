@@ -97,9 +97,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     facts: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        columnGap: 10,
+        columnGap: theme.space.s10,
         rowGap: 3,
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     fact: {
         flexDirection: 'row',

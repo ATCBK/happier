@@ -113,8 +113,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    columnGap: 4,
-    rowGap: 2,
+    columnGap: theme.space.s4,
+    rowGap: theme.space.s2,
   },
   linkSlot: { flexDirection: 'row', alignItems: 'center' },
   meta: { ...Typography.rowMeta(), color: theme.colors.text.tertiary },
@@ -127,8 +127,8 @@ const styles = StyleSheet.create((theme) => ({
   scopeBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 6,
+    gap: theme.space.s6,
+    marginTop: theme.space.s6,
     marginLeft: -4,
   },
   scopeText: {

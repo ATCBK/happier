@@ -5,6 +5,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 const navigation = vi.hoisted(() => ({ routes: [] as unknown[] }));
@@ -19,13 +21,20 @@ vi.mock('react-native', async () => {
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 const { getStorage } = await import('@/sync/domains/state/storage');
-const { buildSessionMessagesPath } = await import('@happier-dev/protocol');
+const { buildSessionMessagesPath, SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol');
 const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+const { SessionViewerProjectionV1Schema } = await import('@happier-dev/protocol/sessions/personal/viewer');
+const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');
-const { invokeNextPendingRequest, markSessionPendingAnswer, useSessionPendingAnswerToken } = await import('@/activity/source/pendingNavigationRuntime');
+const { invokeNextPendingRequest, markSessionPendingAnswer, useSessionPendingAnswerToken, usePendingNavigationLanding } = await import('@/activity/source/pendingNavigationRuntime');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
 const { NextPendingNavigationHost } = await import('./NextPendingNavigationHost');
 const initialState = getStorage().getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 beforeEach(() => {
     // The real keyboard owner leaves the process only at the browser event target.
     vi.stubGlobal('window', new EventTarget());
@@ -33,6 +42,10 @@ beforeEach(() => {
 afterEach(async () => {
     standardCleanup();
     vi.unstubAllGlobals();
+    const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+    if (connection) await connection.dispose();
+    else await disconnectActiveServerConnection();
+    connection = undefined;
     getStorage().setState(initialState, true);
     await homes.reset();
     navigation.routes = [];
@@ -41,15 +54,33 @@ afterEach(async () => {
 describe('mounted app-shell Next navigation', () => {
     it('navigates a real pending request through the mounted runtime and keyboard seam, and retires on unmount', async () => {
         const serverId = await homes.addHome({ name: 'Next Home', serverUrl: 'https://next-home.test', accountId: 'next-owner' });
+        await homes.selectHomes([serverId]);
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://next-home.test', accountId: 'next-owner',
+            additionalRequestOrigins: ['https://other-next-home.test'], request: homes.request });
         const session = createSessionFixture({ id: 'needs-answer', serverId, active: true, activeAt: Date.now(), updatedAt: Date.now(),
             pendingRequestObservedAt: Date.now(),
             agentState: { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: Date.now() - 10 } } } });
-        homes.answer(serverId, '/v2/sessions/needs-answer', { body: { session: {
+        if (!session.access) throw new Error('Pending fixture requires owner access');
+        const wireSession = SessionCurrentProjectionRecordV1Schema.parse({
             id: session.id, createdAt: 1, updatedAt: Date.now(), seq: 5,
             active: true, activeAt: Date.now(), encryptionMode: 'plain', dataEncryptionKey: null,
-            metadataLayoutVersion: 0, metadataVersion: 1, metadata: JSON.stringify({ name: 'Needs an answer' }),
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: session.pendingRequestObservedAt,
+            metadataLayoutVersion: 0, metadataVersion: 1, metadata: JSON.stringify({ ...session.metadata, name: 'Needs an answer' }),
             agentStateVersion: 1, agentState: JSON.stringify(session.agentState), share: null,
-        } } });
+            effectiveAccess: { v: 1, level: session.access.level, sources: [{ kind: 'owner' }], capabilities: session.access.capabilities },
+            responsibleAccountId: null, responsibleAccount: null,
+            viewer: SessionViewerProjectionV1Schema.parse({
+                readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['user_action_required'], primary: 'user_action_required', presentation: 'full' },
+            }),
+        });
+        homes.answer(serverId, '/v2/sessions/needs-answer', { body: { session: wireSession } });
+        homes.answer(serverId, '/v2/sessions/active', { body: { sessions: [wireSession], hasNext: false, nextCursor: null } });
+        session.viewer = wireSession.viewer;
+        session.pendingUserActionRequestCount = 1;
+        session.pendingPermissionRequestCount = 0;
         homes.answer(serverId, buildSessionMessagesPath({ sessionId: session.id, scope: 'all' }), {
             body: { messages: [], hasMore: false, nextBeforeSeq: null },
         });
@@ -62,30 +93,47 @@ describe('mounted app-shell Next navigation', () => {
         });
         let invokeCommand: ReturnType<typeof useKeyboardCommand> = () => false;
         let answerToken: number | null = null;
+        let landing: ReturnType<typeof usePendingNavigationLanding> = null;
+        let bindings: ReturnType<typeof useServerCredentialAccountScopeBindings> = new Map();
         function KeyboardProbe() {
             invokeCommand = useKeyboardCommand();
+            bindings = useServerCredentialAccountScopeBindings([serverId]);
             return null;
         }
         function AnswerProbe({ address }: { address: SessionAddress | null }) {
             answerToken = useSessionPendingAnswerToken(address);
+            landing = usePendingNavigationLanding({ serverId, sessionId: session.id });
             return null;
         }
         const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}>
             <NextPendingNavigationHost /><KeyboardProbe /><AnswerProbe address={null} />
         </KeyboardShortcutProvider>);
         expect(homes.requestsFor('/v2/sessions/needs-answer')).toHaveLength(0);
-        let result: Awaited<ReturnType<typeof invokeNextPendingRequest>> = { status: 'unavailable' };
-        await act(async () => { result = await invokeNextPendingRequest(); });
-        expect(result, `HTTP paths: ${homes.requests.map(request => request.path).join(', ')}`).toEqual({ status: 'opened' });
-        expect(navigation.routes.at(-1)).toEqual(expect.stringContaining('/session/needs-answer'));
+        await waitForHomeGovernance(() => expect(bindings.get(serverId)?.isCurrent()).toBe(true));
+        const executor = createDefaultActionExecutor();
+        const context = { serverId, surface: 'ui' as const, expectedAccountId: 'next-owner' };
+        let result: Awaited<ReturnType<typeof executor.execute>> | undefined;
+        await act(async () => { result = await executor.execute('session.pending.next', {}, context); });
+        expect(result, `HTTP paths: ${homes.requests.map(request => request.path).join(', ')}`)
+            .toEqual({ ok: true, result: { status: 'opened' } });
+        if (!result?.ok) throw new Error('Expected a successful Next Action');
+        expect(getActionSpec('session.pending.next').outputSchema!.parse(result.result)).toEqual({ status: 'opened' });
+        expect(navigation.routes.at(-1)).toBe(`/session/needs-answer?serverId=${encodeURIComponent(serverId)}`);
+        expect(landing).toMatchObject({ address: { serverId, sessionId: session.id }, requestId: 'question',
+            state: 'pending', focusTarget: 'prompt' });
         await act(async () => {
             expect(invokeCommand('session.pending.next')).toBe(true);
-            await waitForHomeGovernance(() => expect(navigation.routes).toHaveLength(2));
         });
+        await waitForHomeGovernance(() => expect(navigation.routes).toHaveLength(2));
         await expect(invokeNextPendingRequest({ expectedServerId: 'another-home' })).resolves.toEqual({ status: 'unavailable' });
         const cancel = new AbortController();
         cancel.abort();
         await expect(invokeNextPendingRequest({ signal: cancel.signal })).resolves.toEqual({ status: 'unavailable' });
+        await screen.update(<KeyboardShortcutProvider handlers={{}}><KeyboardProbe /><AnswerProbe address={null} /></KeyboardShortcutProvider>);
+        // Removing the production host binding must make the public Action unavailable.
+        await expect(executor.execute('session.pending.next', {}, context))
+            .resolves.toEqual({ ok: true, result: { status: 'unavailable' } });
+        expect(navigation.routes).toHaveLength(2);
         let otherHome = '';
         await act(async () => {
             otherHome = await homes.addHome({ name: 'Other Home', serverUrl: 'https://other-next-home.test', accountId: 'other-owner' });

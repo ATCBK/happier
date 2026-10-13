@@ -27,9 +27,9 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOrigina
         (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
 });
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
-    home?.dispose(); home = undefined;
+    await home?.dispose(); home = undefined;
     resetSessionDraftRepositoryForTests();
     navigation.push.mockReset();
 });

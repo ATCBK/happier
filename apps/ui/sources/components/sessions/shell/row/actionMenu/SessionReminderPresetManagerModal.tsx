@@ -42,7 +42,7 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
         props.onClose();
     }, [props]);
     const footer = React.useMemo(() => (
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: theme.space.s10 }}>
             <RoundButton display="inverted" title={t('common.cancel')} disabled={saving} onPress={() => finish(null)} />
             <RoundButton title={t('common.save')} disabled={saving} loading={saving} onPress={() => {
                 if (saving) return;
@@ -74,7 +74,7 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
     }, []);
 
     return (
-        <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={{ padding: theme.space.s16, gap: theme.space.s10 }} keyboardShouldPersistTaps="handled">
             {drafts.map((preset, index) => {
                 const effectivePresetLabel = preset.label?.trim() || formatSessionReminderPresetRuleLabel(preset.rule);
                 return (
@@ -83,15 +83,15 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
                     style={{
                         flexDirection: 'row',
                         alignItems: 'center',
-                        gap: 8,
-                        padding: 10,
+                        gap: theme.space.s8,
+                        padding: theme.space.s10,
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.colors.border.default,
                         backgroundColor: materialColor(theme.colors.surface.base),
                     }}
                 >
-                    <View style={{ flex: 1, gap: 4 }}>
+                    <View style={{ flex: 1, gap: theme.space.s4 }}>
                         <TextInput
                             editable={!saving}
                             value={preset.label ?? ''}
@@ -99,9 +99,9 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
                             placeholderTextColor={theme.colors.text.secondary}
                             accessibilityLabel={t('sessionsList.reminders.renamePresetLabel', { preset: effectivePresetLabel })}
                             onChangeText={(value) => updateLabel(index, value)}
-                            style={{ ...Typography.default('semiBold'), color: theme.colors.text.primary, paddingVertical: 5, paddingHorizontal: 7 }}
+                            style={{ ...Typography.default('semiBold'), color: theme.colors.text.primary, paddingVertical: theme.space.s4, paddingHorizontal: theme.space.s6 }}
                         />
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 12, paddingHorizontal: 7 }}>
+                        <Text style={{ color: theme.colors.text.secondary, fontSize: 12, paddingHorizontal: theme.space.s6 }}>
                             {formatSessionReminderPresetRuleLabel(preset.rule)}
                         </Text>
                     </View>
@@ -137,7 +137,7 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
             })}
             {error ? <Text testID="session-reminder-presets-error" accessibilityLiveRegion="polite" style={{ color: theme.colors.text.primary }}>{error}</Text> : null}
             {drafts.length === 0 ? (
-                <View style={{ paddingVertical: 30, alignItems: 'center', gap: 7 }}>
+                <View style={{ paddingVertical: 30, alignItems: 'center', gap: theme.space.s6 }}>
                     <Text style={{ ...Typography.default('semiBold'), color: theme.colors.text.primary }}>{t('sessionsList.reminders.noPresets')}</Text>
                     <Text style={{ color: theme.colors.text.secondary, textAlign: 'center' }}>{t('sessionsList.reminders.noPresetsMessage')}</Text>
                 </View>

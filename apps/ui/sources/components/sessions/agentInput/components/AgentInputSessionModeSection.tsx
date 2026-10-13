@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from "react";
 import { Pressable, View } from 'react-native';
 import { Ionicons } from "@expo/vector-icons";
@@ -110,43 +111,41 @@ export function AgentInputSessionModeSection(
 
 const styles = StyleSheet.create((theme) => ({
   section: {
-    gap: 4,
+    gap: theme.space.s4,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: 8,
+    gap: theme.space.s8,
   },
   headerAccessory: {
     flexShrink: 0,
   },
   sectionTitle: {
-    fontSize: 11,
-    fontWeight: "600",
+    ...Typography.variant('micro', 'semiBold'),
     color: theme.colors.text.secondary,
   },
   summaryRow: {
     minHeight: 0,
   },
   summaryText: {
-    fontSize: 10,
-    lineHeight: 13,
+    ...Typography.variant('micro'),
     color: theme.colors.text.secondary,
   },
   cardsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 5,
+    gap: theme.space.s4,
   },
   optionCard: {
     width: "48.5%",
     minHeight: 52,
     borderRadius: 13,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
+    paddingHorizontal: theme.space.s8,
+    paddingVertical: theme.space.s6,
     backgroundColor: theme.colors.surface.base,
-    gap: 2,
+    gap: theme.space.s2,
   },
   optionCardFullWidth: {
     width: "100%",
@@ -161,13 +160,11 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: 4,
+    gap: theme.space.s4,
   },
   optionCardTitle: {
     flex: 1,
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: "700",
+    ...Typography.variant('micro', 'semiBold'),
     color: theme.colors.text.primary,
   },
   optionCardIndicator: {
@@ -177,8 +174,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "flex-start",
   },
   optionCardDescription: {
-    fontSize: 10,
-    lineHeight: 12,
+    ...Typography.variant('micro'),
     color: theme.colors.text.secondary,
   },
 }));

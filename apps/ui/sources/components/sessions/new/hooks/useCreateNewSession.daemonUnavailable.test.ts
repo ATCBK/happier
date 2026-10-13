@@ -323,8 +323,8 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
     await prepareSessionDraftPersistenceStorage();
   });
-  afterAll(() => {
-    actionHomesBoundary?.dispose();
+  afterAll(async () => {
+    await actionHomesBoundary?.dispose();
     syncSingletonBridge.current = null;
     vi.restoreAllMocks();
   });

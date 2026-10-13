@@ -38,7 +38,7 @@ export function ExternalSessionSearchProgress(props: Readonly<{
 }
 
 const styles = StyleSheet.create(theme => ({
-    status: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 6 },
-    region: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    status: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s6 },
+    region: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     label: { ...Typography.rowMeta(), color: theme.colors.text.secondary, flexShrink: 1 },
 }));

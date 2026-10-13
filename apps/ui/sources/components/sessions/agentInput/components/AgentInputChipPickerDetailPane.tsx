@@ -181,7 +181,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailPane: {
     flex: 1,
     minHeight: 0,
-    gap: 10,
+    gap: theme.space.s10,
     backgroundColor: theme.colors.surface.base,
   },
   detailHeader: {
@@ -204,7 +204,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailCustomContent: {
     flex: 1,
     minHeight: 0,
-    gap: 10,
+    gap: theme.space.s10,
   },
   detailDeferredPlaceholder: {
     minHeight: AGENT_INPUT_CHIP_PICKER_DETAIL_MIN_HEIGHT,
@@ -213,17 +213,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     backgroundColor: "transparent",
   },
   detailBullets: {
-    gap: 8,
+    gap: theme.space.s8,
   },
   detailBulletRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 8,
+    gap: theme.space.s8,
   },
   detailBulletDot: {
     width: 6,
     height: 6,
-    marginTop: 7,
+    marginTop: theme.space.s6,
     borderRadius: 999,
     backgroundColor: theme.colors.text.secondary,
   },
@@ -241,7 +241,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     borderWidth: 1,
     borderColor: theme.colors.border.default,
     backgroundColor: theme.colors.surface.inset,
-    paddingHorizontal: 12,
+    paddingHorizontal: theme.space.s12,
   },
   detailActionButtonText: {
     color: theme.colors.text.primary,
@@ -255,7 +255,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: theme.colors.button.primary.background,
-    paddingHorizontal: 12,
+    paddingHorizontal: theme.space.s12,
   },
   applyButtonText: {
     color: theme.colors.button.primary.tint,

@@ -1,33 +1,26 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import type { CommandMenuProps } from '@/components/ui/commandMenu';
+import { Popover } from '@/components/ui/popover';
 
 let mockWindowWidth = 1440;
-const capturedCommandMenuProps: { current: CommandMenuProps | null } = { current: null };
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
         Platform: {
             OS: 'web',
-            select: (value: any) => value.web ?? value.default ?? value.native ?? null,
+            select: (value: Record<string, unknown>) => value.web ?? value.default ?? value.native ?? null,
         },
         useWindowDimensions: () => ({ width: mockWindowWidth, height: 900 }),
     });
 });
 
-vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
-    useKeyboardHeight: () => 0,
-}));
-
-vi.mock('@/components/ui/commandMenu', () => ({
-    CommandMenu: (props: CommandMenuProps) => {
-        capturedCommandMenuProps.current = props;
-        return React.createElement(View, { testID: 'captured-command-menu' });
-    },
-}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Real layout and menu owners run below the portal/window measurement boundary.
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 function buildProps(overrides: Partial<CommandMenuProps> = {}): CommandMenuProps {
     return {
@@ -59,7 +52,6 @@ function buildProps(overrides: Partial<CommandMenuProps> = {}): CommandMenuProps
  */
 describe('AgentInputCommandMenu edge padding', () => {
     beforeEach(() => {
-        capturedCommandMenuProps.current = null;
         mockWindowWidth = 1440;
     });
 
@@ -67,28 +59,27 @@ describe('AgentInputCommandMenu edge padding', () => {
         mockWindowWidth = 390;
         const { AgentInputCommandMenu } = await import('../AgentInputCommandMenu');
 
-        await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
-
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 12, vertical: 12 });
+        const screen = await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
+        expect(screen.findAllByType(Popover)[0]?.props.edgePadding).toEqual({ horizontal: 12, vertical: 12 });
     });
 
     it('keeps the default edge padding on a wide web viewport', async () => {
         const { AgentInputCommandMenu } = await import('../AgentInputCommandMenu');
 
-        await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
+        const screen = await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
 
         // The desktop title strip stays clear above (`DESKTOP_MAIN_CONTENT_DRAG_HEIGHT_PX`).
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16, vertical: 16, top: 56 });
+        expect(screen.findAllByType(Popover)[0]?.props.edgePadding).toEqual({ horizontal: 16, vertical: 16, top: 56 });
     });
 
     it('lets an explicit caller override win over the layout owner', async () => {
         mockWindowWidth = 390;
         const { AgentInputCommandMenu } = await import('../AgentInputCommandMenu');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <AgentInputCommandMenu {...buildProps({ edgePadding: { horizontal: 4 } })} />,
         );
 
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 4 });
+        expect(screen.findAllByType(Popover)[0]?.props.edgePadding).toEqual({ horizontal: 4 });
     });
 });

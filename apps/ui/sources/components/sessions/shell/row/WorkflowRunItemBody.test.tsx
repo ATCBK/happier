@@ -1,26 +1,35 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WorkflowRunGetResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import {
+    WorkflowRunRecipientCensusResponseV1Schema, WorkflowProgressEnvelopeV1Schema,
+    materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+    sealWorkflowFinalResultStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
+    serializeWorkflowStoredContentEnvelopeV1,
+} from '@happier-dev/protocol';
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
-import { createDeferred, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createDeferred, flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { storage } from '@/sync/domains/state/storage';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { SessionWritesHereSection } from '@/components/workflows/triggers/SessionWritesHereSection';
-import { resetWorkflowLibraryReadsForTests } from '@/components/workflows/library/workflowLibraryReads';
-import { WorkViewportContext } from '@/components/sessions/work/WorkItemRow';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-import { WorkflowRunItemBody } from './WorkflowRunItemBody';
+const http = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(http);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { SessionWritesHereSection } = await import('@/components/workflows/triggers/SessionWritesHereSection');
+const { resetWorkflowLibraryReadsForTests } = await import('@/components/workflows/library/workflowLibraryReads');
+const { WorkViewportContext } = await import('@/components/sessions/work/WorkItemRow');
+const { WorkflowRunItemBody } = await import('./WorkflowRunItemBody');
+const route = '/v3/automations/runs/workflow-storage';
+const resultText = 'Kept the useful fact.\nArchived its predecessor.';
+let previous = storage.getState();
+let previousSnapshot = getActiveServerSnapshot();
 
-const execute = vi.hoisted(() => vi.fn());
-// Only the outgoing Action transport is replaced; schemas, detail selection and the Account store stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => execute }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
@@ -28,27 +37,74 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 
 afterEach(async () => {
     await standardCleanup();
-    retireActiveServerAccountScopeLifetime();
+    await http.reset();
     resetWorkflowLibraryReadsForTests();
-    storage.setState(storage.getInitialState(), true);
-    execute.mockReset();
+    storage.setState(previous, true);
+    publishAppliedActiveServerSnapshot(previousSnapshot);
 });
 
 async function initializeRun() {
-    const home = await upsertAndActivateServer({ serverUrl: 'http://habit-result.test' });
+    previous = storage.getState();
+    previousSnapshot = getActiveServerSnapshot();
+    await http.reset();
+    const id = await http.addHome({ name: 'Habit Home', serverUrl: 'http://habit-result.test', accountId: 'account-1' });
+    http.answer(id, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    storage.getState().activateProfileScope({ serverId: id, accountId: 'account-1' });
+    storage.setState({ settings: { ...storage.getState().settings, experiments: true, featureToggles: { automations: true } } });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-    storage.setState({ profileScope: { serverId: home.id, accountId: 'account-1' } });
-    const summary = createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'succeeded', revision: 3 });
+    const summary = createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'succeeded', revision: 3, origin: { kind: 'direct' } });
     storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
-    const definition = createWorkflowDefinitionFixture();
-    const detail = WorkflowRunGetResultV1Schema.parse({ run: summary, callerAccess: { canEdit: true },
-        definition, authoredDefinition: definition,
-        acceptedContext: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-1',
-            executionTarget: { kind: 'session' }, materializedLeaves: [], frozenChildren: {},
-            workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
-            origin: { kind: 'direct' }, startedBy: 'user' }, checkpoint: null,
-        result: 'Kept the useful fact.\nArchived its predecessor.', finalOutputInvocationId: 'chosen-output' });
-    return { home, detail };
+    const definition = createWorkflowDefinitionFixture({
+        defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+        blocks: ['first-session', 'second-session'].map((sessionId, index) => ({
+            kind: 'step' as const, id: `writer-${index}`,
+            document: { text: 'Write here', references: [], attachments: [] }, input: [], result: { kind: 'text' as const },
+            execution: { conversation: { kind: 'existing_session' as const, sessionId, machineId: summary.machineId } },
+        })),
+    });
+    const materialized = await materializeWorkflowAcceptedSnapshotV1({
+        definition, admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+        context: { source: { kind: 'inline' }, inputs: {}, machineId: summary.machineId, executionTarget: { kind: 'session' },
+            workspaceTarget: { project: { machineId: summary.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+            origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+    });
+    if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId: summary.ownerAccountId, runId: summary.id }, acceptedSnapshot: materialized.snapshot }));
+    const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: summary.id, ownerAccountId: summary.ownerAccountId,
+        access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+        ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+    const resultEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowFinalResultStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'final_result', accountId: summary.ownerAccountId, runId: summary.id },
+        finalResult: { kind: 'happier.workflow-final-result.v1', result: { kind: 'text', value: resultText },
+            producerInvocation: { recordId: 'chosen-output' } } }));
+    const stored = { run: summary, acceptedEnvelope, keyCensus, checkpointEnvelope: null, resultEnvelope };
+    const serve = (options: { summary?: WorkflowRunSummaryV1; refuse?: boolean; respondAfter?: Promise<void> } = {}) => {
+        const run = options.summary ?? summary;
+        http.answer(id, route, { select: (input) => {
+            if (!input || typeof input !== 'object' || !('operation' in input)) throw new Error('Missing Workflow operation');
+            if (input.operation === 'get') return options.refuse
+                ? { status: 503, body: { error: 'content_unavailable' } }
+                : { body: stored, respondAfter: options.respondAfter };
+            if (input.operation === 'run-key.census') return { body: keyCensus };
+            if (input.operation === 'invocations.list') return { body: { invocations: [], parentRevision: run.revision } };
+            if (input.operation === 'list') {
+                const index = createWorkflowInvocationIndexFixture({ id: 'habit-root', runId: run.id, contentRevision: '8' });
+                const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+                    invocationPath: { blockId: '$root', scope: [] }, blockKind: 'root', attempt: '0', logicalInvocationRecordId: index.id,
+                    ...(run.stepProgress ? { stepProgress: run.stepProgress } : {}) });
+                return { body: { runs: [run], acceptedEnvelopesByRunId: { [run.id]: acceptedEnvelope }, keyCensusByRunId: { [run.id]: keyCensus },
+                    rootProgressByRunId: { [run.id]: { index,
+                        contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+                            binding: { v: 1, purpose: 'invocation_progress', accountId: run.ownerAccountId, runId: run.id,
+                                recordId: index.id, sequence: index.sequence, parentRecordId: index.parentRecordId,
+                                memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress })) } } } };
+            }
+            throw new Error(`Unexpected Workflow operation:${String(input.operation)}`);
+        } });
+    };
+    serve();
+    return { home: { id }, detail: { result: resultText }, serve };
 }
 
 describe('opened habit History result', () => {
@@ -107,7 +163,7 @@ describe('opened habit History result', () => {
         expect(text).not.toMatch(/Sep(?:tember)? 8/);
     });
     it('keeps each destination writer and its observed progress beside aggregate Run progress', async () => {
-        const { home } = await initializeRun();
+        const { home, serve } = await initializeRun();
         const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
             stepProgressCurrentness: { recordId: 'root-record', attempt: '0', contentRevision: '8' },
             stepProgress: { completed: 1, total: 3, destinations: [
@@ -120,10 +176,7 @@ describe('opened habit History result', () => {
                     observation: { recordId: 'wait-record', sequence: '4', attempt: '0', contentRevision: '1',
                         lifecycle: 'waiting_for_review', blockKind: 'wait' } },
             ] } };
-        execute.mockImplementation(async (actionId: string) => {
-            if (actionId !== 'workflow.run.list') throw new Error(`Destination progress demanded ${actionId}`);
-            return { ok: true, result: { runs: [summary], metadataByRunId: {}, nextCursor: undefined } };
-        });
+        serve({ summary });
         // The platform viewport reports these mounted rows as off-screen: the
         // existing optional live mini-map is not demanded by this lean-row test.
         const viewport = { observe: (_target: unknown, onChange: (visible: boolean) => void) => {
@@ -151,7 +204,10 @@ describe('opened habit History result', () => {
             expect(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel)
                 .toContain('sessionWork.scheduled.step');
         }
-        expect(execute.mock.calls.map(call => call[0])).toEqual(['workflow.run.list', 'workflow.run.list']);
+        expect(http.requestsFor(route).map(request => request.input)).toMatchObject([
+            { operation: 'list', request: { targetSessionId: 'first-session' } },
+            { operation: 'list', request: { targetSessionId: 'second-session' } },
+        ]);
     });
     it('keeps the stopped lifecycle word in visual and spoken attention rows', async () => {
         const { home } = await initializeRun();
@@ -169,45 +225,49 @@ describe('opened habit History result', () => {
     });
     it('reads the exact selected Run result only when demanded and publishes it to the existing body owner', async () => {
         const { home, detail } = await initializeRun();
-        execute.mockResolvedValue({ ok: true, result: detail });
         await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} />);
-        expect(execute).not.toHaveBeenCalled();
+        expect(http.requestsFor(route)).toEqual([]);
         const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
             {...{ includeResult: true }} />);
+        await flushHookEffects({ cycles: 40 });
         expect(JSON.stringify(screen.tree.toJSON())).toContain('Kept the useful fact. Archived its predecessor.');
         expect(storage.getState().workflowRunsById['habit-run']?.detail)
             .toMatchObject({ result: detail.result, finalOutputInvocationId: 'chosen-output' });
-        expect(execute.mock.calls.map(call => call[0])).toEqual(['workflow.run.get']);
+        expect(http.requestsFor(route).filter(request => request.input && typeof request.input === 'object'
+            && 'operation' in request.input && request.input.operation === 'get').map(request => request.input))
+            .toEqual([{ operation: 'get', runId: 'habit-run' }]);
     });
 
     it('refuses an unavailable exact result and keeps the summary and retry reachable', async () => {
-        const { home, detail } = await initializeRun();
-        execute.mockResolvedValueOnce({ ok: false, errorCode: 'content_unavailable', error: 'Unavailable' });
+        const { home, serve } = await initializeRun();
+        serve({ refuse: true });
         const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
             {...{ includeResult: true }} />);
         expect(JSON.stringify(screen.tree.toJSON())).toContain('workflows.contentUnavailable');
         expect(storage.getState().workflowRunsById['habit-run']?.detail).toBeUndefined();
-        execute.mockResolvedValue({ ok: true, result: detail });
+        serve();
         const stopPropagation = vi.fn();
         await act(async () => {
             invokeTestInstanceHandler(screen.findHostByTestId('workflow-run-result:habit-run:retry'), 'onPress', { stopPropagation });
         });
+        await flushHookEffects({ cycles: 40 });
         expect(stopPropagation).toHaveBeenCalledOnce();
         expect(JSON.stringify(screen.tree.toJSON())).toContain('Kept the useful fact. Archived its predecessor.');
     });
 
     it('discards an exact-result response after the Account changes', async () => {
-        const { home, detail } = await initializeRun();
-        const pending = createDeferred<unknown>();
-        execute.mockReturnValue(pending.promise);
+        const { home, serve } = await initializeRun();
+        const pending = createDeferred<void>();
+        serve({ respondAfter: pending.promise });
         const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
             {...{ includeResult: true }} />);
-        expect(execute).toHaveBeenCalledWith('workflow.run.get', { runId: 'habit-run' }, expect.anything());
+        expect(http.requestsFor(route).map(request => request.input)).toEqual([{ operation: 'get', runId: 'habit-run' }]);
         await act(async () => {
             storage.setState({ profileScope: { serverId: home.id, accountId: 'other-account' }, workflowRunsById: {} });
-            pending.resolve({ ok: true, result: detail });
+            pending.resolve();
             await pending.promise;
         });
+        await flushHookEffects({ cycles: 40 });
         expect(storage.getState().workflowRunsById['habit-run']).toBeUndefined();
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Kept the useful fact.');
     });

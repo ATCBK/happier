@@ -15,6 +15,7 @@ import { ProviderErrorItems } from '@/components/settings/providers/ProviderErro
 import { SessionModelApplyTimingContext } from './SessionModelSourceBrowseHandoff';
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { t } from '@/text';
+import { router as expoRouter } from 'expo-router';
 
 /**
  * Committing a freeform model id is a SUBMIT, not a keystroke: the overlay's custom
@@ -32,8 +33,51 @@ function submitCustomModelValue(screen: Readonly<{
     act(() => { (onSubmitEditing as () => void)(); });
 }
 
+function experimentalProviderGroup(id: string) {
+    const connectionId = ProviderConnectionIdSchema.parse(id);
+    const selected = {
+        agentTargetKey: 'agent:happier.agent.codex/codex',
+        providerConnectionId: connectionId,
+        modelId: 'experimental-model',
+    } as const;
+    const providerGroups = [{
+        connectionId,
+        providerName: 'Gateway',
+        connectionName: 'Work',
+        connectionRole: 'named' as const,
+        connectionDisplayNameMode: 'custom' as const,
+        connectionRevision: 3,
+        authorization: { authorized: true as const },
+        manualModelPolicy: 'catalog-only' as const,
+        supportsFreeformModelIds: false,
+        suppressedConnectedServiceIds: [],
+        modelLoadAction: 'descriptor_absent' as const,
+        rows: [{
+            ref: selected,
+            descriptor: { id: selected.modelId, name: 'Experimental model' },
+            sources: { manual: false, static: true, probe: false },
+            confidence: 'verified_static' as const,
+            compatibility: {
+                result: {
+                    status: 'experimental' as const,
+                    selectedProtocol: 'openai-responses' as const,
+                    reasons: ['compatibility_evidence_missing' as const],
+                    confirmationScope: { kind: 'model' as const, modelId: selected.modelId },
+                },
+                compatibilityFingerprint: 'compatibility:v1:experimental',
+                confirmed: false,
+            },
+            endpointHealth: 'available' as const,
+            catalog: { stale: false },
+            loadState: 'unknown' as const,
+            visibility: 'visible' as const,
+        }],
+    }];
+    return { connectionId, selected, providerGroups };
+}
+
 describe('SessionModelPicker', () => {
-    it('does not turn declaration-only experimental compatibility into runtime confirmation', () => {
+    it('confirms unconfirmed experimental compatibility through the Account regardless of model-load availability', () => {
         const ref = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'manual-model' };
         const group = createProviderModelProjectionGroupFixture({ modelLoadAction: 'machine_required', rows: [{
             ref, descriptor: { id: ref.modelId, name: 'Manual model' },
@@ -45,11 +89,14 @@ describe('SessionModelPicker', () => {
                     confirmationScope: { kind: 'model' as const, modelId: ref.modelId } } },
         }] });
         expect(resolveSessionModelPickerSelection({ groups: [group], ref }))
-            .toEqual({ kind: 'select', ref });
-        // A managed machine runtime may have no checked catalog row yet, but
-        // its adapter-backed compatibility evidence remains actionable.
+            .toMatchObject({ kind: 'confirm-experimental', connectionId: ref.providerConnectionId,
+                expectedConnectionRevision: group.connectionRevision, modelId: ref.modelId,
+                compatibilityFingerprint: 'compatibility:v1:declaration' });
         expect(resolveSessionModelPickerSelection({ groups: [{ ...group, modelLoadAction: 'available' }], ref }))
             .toMatchObject({ kind: 'confirm-experimental', modelId: ref.modelId });
+        expect(resolveSessionModelPickerSelection({ groups: [{ ...group, rows: group.rows.map(row => ({
+            ...row, compatibility: { ...row.compatibility, confirmed: true },
+        })) }], ref })).toEqual({ kind: 'select', ref });
     });
     it('labels model groups only when there is more than one to tell apart', async () => {
         const selected = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-sol' } as const;
@@ -158,45 +205,7 @@ describe('SessionModelPicker', () => {
     });
 
     it('gives experimental confirmation ownership of the exact selection commit', async () => {
-        const connectionId = ProviderConnectionIdSchema.parse('pc_experimental');
-        const selected = {
-            agentTargetKey: 'agent:happier.agent.codex/codex',
-            providerConnectionId: connectionId,
-            modelId: 'experimental-model',
-        } as const;
-        const providerGroups = [{
-            connectionId,
-            providerName: 'Gateway',
-            connectionName: 'Work',
-            connectionRole: 'named' as const,
-            connectionDisplayNameMode: 'custom' as const,
-            connectionRevision: 3,
-            authorization: { authorized: true as const },
-            manualModelPolicy: 'catalog-only' as const,
-            supportsFreeformModelIds: false,
-            suppressedConnectedServiceIds: [],
-            modelLoadAction: 'descriptor_absent' as const,
-            rows: [{
-                ref: selected,
-                descriptor: { id: selected.modelId, name: 'Experimental model' },
-                sources: { manual: false, static: true, probe: false },
-                confidence: 'verified_static' as const,
-                compatibility: {
-                    result: {
-                        status: 'experimental' as const,
-                        selectedProtocol: 'openai-responses' as const,
-                        reasons: ['compatibility_evidence_missing' as const],
-                        confirmationScope: { kind: 'model' as const, modelId: selected.modelId },
-                    },
-                    compatibilityFingerprint: 'compatibility:v1:experimental',
-                    confirmed: false,
-                },
-                endpointHealth: 'available' as const,
-                catalog: { stale: false },
-                loadState: 'unknown' as const,
-                visibility: 'visible' as const,
-            }],
-        }];
+        const { connectionId, selected, providerGroups } = experimentalProviderGroup('pc_experimental');
         const onSelect = vi.fn();
         const confirm = vi.fn<SessionModelPickerExperimentalConfirmationController['confirm']>(async () => true);
         const screen = await renderScreen(
@@ -233,6 +242,41 @@ describe('SessionModelPicker', () => {
 
         expect(onSelect).toHaveBeenCalledOnce();
         expect(onSelect).toHaveBeenCalledWith(selected);
+    });
+
+    it('keeps an experimental confirmation waiting for approval reviewable in place without a second request', async () => {
+        const { connectionId, selected, providerGroups } = experimentalProviderGroup('pc_experimental_approval');
+        const confirm = vi.fn<SessionModelPickerExperimentalConfirmationController['confirm']>(async () => false);
+        const href = '/(app)/inbox/approval-artifact-1?server=srv_picker';
+        const screen = await renderScreen(
+            <SessionModelPicker
+                agentTargetKey="agent:happier.agent.codex/codex"
+                nativeModels={[]}
+                providerGroups={providerGroups}
+                providerProjectionAuthoritative
+                selected={null}
+                effectiveLabel="Automatic"
+                experimentalConfirmation={{
+                    confirm,
+                    pending: true,
+                    pendingApproval: { artifactId: 'approval-artifact-1', href },
+                    error: null,
+                    retry: null,
+                    clear: vi.fn(),
+                }}
+                onSelect={vi.fn()}
+            />,
+        );
+
+        expect(screen.findByTestId('model-picker-experimental-approval')).toBeTruthy();
+        await screen.pressByTestIdAsync('model-picker-experimental-approval.open');
+        expect(expoRouter.push).toHaveBeenCalledWith(href);
+        await screen.pressByTestIdAsync(`model-picker-overlay-option:${JSON.stringify([
+            selected.agentTargetKey,
+            connectionId,
+            selected.modelId,
+        ])}`);
+        expect(confirm).not.toHaveBeenCalled();
     });
 
     it('shows a discovery failure as one compact line, without a second "discovery unavailable" note', async () => {

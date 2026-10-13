@@ -55,13 +55,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     filters: {
-        paddingHorizontal: 16,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s8,
         alignItems: 'flex-start',
     },
     freshness: {
-        paddingHorizontal: 16,
-        paddingBottom: 6,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s6,
     },
     body: {
         flex: 1,
@@ -69,7 +69,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     lineState: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
     },
 }));
 

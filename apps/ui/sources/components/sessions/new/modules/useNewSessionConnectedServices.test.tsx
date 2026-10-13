@@ -28,6 +28,7 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { applyConnectedAccountCatalogSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -162,7 +163,9 @@ function v4Account(params: Readonly<{
 
 const profileState = {
     set current(profile: TestAccountProfile) {
-        storage.setState({ profile: AccountProfileSchema.parse({ ...profileDefaults, id: storage.getState().profile?.id ?? profileDefaults.id, ...profile }) });
+        const parsed = AccountProfileSchema.parse({ ...profileDefaults, id: storage.getState().profile?.id ?? profileDefaults.id, ...profile });
+        legacyProfile = parsed;
+        storage.setState({ profile: parsed });
     },
 };
 const initialStorageState = storage.getState();
@@ -173,6 +176,7 @@ let legacyConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | 
 let legacyBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | null = null;
 let legacyHttp: ReturnType<typeof createHomeHubArtifactHttpBoundary> | null = null;
 let legacyPurposeBindings: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
+let legacyProfile: ReturnType<typeof AccountProfileSchema.parse> | null = null;
 
 function publishLegacyTestPurposeBindings(value: QualifiedConnectedAccountPurposeBindingsV1): void {
     legacyPurposeBindings = value;
@@ -185,6 +189,9 @@ async function arrangeAccountGroupFeatures(preload = true) {
     resetServerFeaturesClientForTests();
     const request: typeof fetch = async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.pathname === '/v1/account/profile' && url.hostname === 'active-connected-services.test') {
+            return Response.json(AccountProfileSchema.parse({ ...legacyProfile, id: 'legacy-controls' }));
+        }
         if (url.pathname === '/v1/account/entity-rows/connected-accounts/purposes') return Response.json({
             status: 'present', revision: 1, content: { t: 'plain', v: { key: 'purposes', value: legacyPurposeBindings } },
         });
@@ -424,6 +431,9 @@ async function arrangeLegacyConnectedServicesHomes() {
         activeGroupsEnabled = true;
         legacyHttp = createHomeHubArtifactHttpBoundary('legacy-controls');
         legacyBridge = await loadSyncSingletonForTests();
+        // The Profile producer must serve the same accounts as the retained UI
+        // fixture; a late real hydration must not replace them with an empty row.
+        seedClaudeProfile();
         const boundaryRequest = await arrangeAccountGroupFeatures(false);
         legacyConnection = await restoreServerAccountForTest({ serverUrl: 'https://active-connected-services.test',
             accountId: 'legacy-controls', request: boundaryRequest });
@@ -460,19 +470,20 @@ describe('New Session purpose catalog authority', () => {
         const features = buildServerFeaturesResponse();
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
         const value = { v: 1 as const, bindings: [] };
+        const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected
+            ? [{ ...v4Account({ ...CLAUDE_CONNECTED_ACCOUNTS[0]!.service, accountId: 'work', displayName: 'Work', kind: 'token' }),
+                revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'api-key' }] : [] });
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://selected-launch-credential.test', accountId,
             request: (input, init) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/v1/features') return Promise.resolve(Response.json(features));
+                if (path === '/v1/account/profile') return Promise.resolve(Response.json(profile));
                 if (path === '/v1/account/entity-rows/connected-accounts/purposes') return Promise.resolve(Response.json({
                     status: 'present', revision: 1, content: { t: 'plain', v: { key: 'purposes', value } },
                 }));
                 return http.request(input, init);
             } });
         const scope = { serverId: connection.home.id, accountId };
-        const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected
-            ? [{ ...v4Account({ ...CLAUDE_CONNECTED_ACCOUNTS[0]!.service, accountId: 'work', displayName: 'Work', kind: 'token' }),
-                revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'api-key' }] : [] });
         storage.setState({ profileScope: scope, profile });
         installConnectedAccountDescriptorProjection(newSessionConnectedAccountProjection);
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 1, record: { key: 'purposes', value } }, true);
@@ -495,6 +506,7 @@ describe('New Session purpose catalog authority', () => {
                 setBackendNewSessionOptionStateByTargetKey: setOptions, router: { push() {} } });
         });
         try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().connectedAccountDefaultsStatus).toBe('ready'));
             expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(scenario.ready);
             // Aggregate Machine/Agent rows retain their "any usable credential" contract.
             expect(isMachineAgentReady(machineAgent)).toBe(scenario.connected || scenario.native === 'signedIn');
@@ -722,7 +734,8 @@ describe('useNewSessionConnectedServices', () => {
         const { AuthProvider } = await import('@/auth/context/AuthContext');
         const { resolveWorkflowStepSelectionV1 } = await import('@happier-dev/protocol/workflows/workflowStepSelectionV1');
         const { materializeWorkflowAcceptedSnapshotV1 } = await import('@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1');
-        const submit = vi.fn(async () => {});
+        const submit = vi.fn<Extract<import('@/components/workflows/triggers/TriggerPopover').TriggerPopoverProps,
+            { creatingSession?: false }>['onSubmit']>(async () => {});
         const screen = await renderScreen(<AuthProvider initialCredentials={legacyConnection!.credentials}><TriggerPopover testID="prompt-auth" anchorRef={React.createRef()}
             onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null} serverId={activeHomeId}
             initial={{ when: createDefaultWhen('schedule'), enabled: true, then: { kind: 'sendPrompt', prompt: 'Review the project',
@@ -739,7 +752,7 @@ describe('useNewSessionConnectedServices', () => {
         const target = submit.mock.calls[0]?.[1].target;
         if (target?.kind !== 'inline') throw new Error('Expected the authored prompt target');
         const binding = { source: 'connected', selection: 'profile', profileId: 'work' };
-        expect(target.definition.defaults.connectedServices.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
+        expect(target.definition.defaults.connectedServices?.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
         expect(resolveWorkflowStepSelectionV1({ defaults: target.definition.defaults, purpose: 'authoring' })
             .selection.connectedServices?.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
         const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: target.definition,
@@ -862,24 +875,24 @@ describe('useNewSessionConnectedServices', () => {
     it('updates the chip label and reopened popover selection after choosing a connected profile', async () => {
         const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
 
-        const setAgentOptionStateForCurrentAgent = vi.fn();
-
-        const hook = await renderHook(() =>
-            useNewSessionConnectedServices({
+        const hook = await renderHook(() => {
+            const [agentOptionState, setAgentOptionState] = React.useState<Record<string, unknown> | null>(null);
+            const result = useNewSessionConnectedServices({
                 agentCore: null,
                 defaultAuthAgentId: 'claude',
                 defaultAuthConsumer: { pluginId: 'happier.agent.claude', localId: 'claude' },
                 connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
-                agentOptionState: null,
+                agentOptionState,
                 settings: {
                     connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
                 },
                 targetServerId: activeHomeId,
                 router: { push: vi.fn() },
-                setAgentOptionStateForCurrentAgent,
-            }),
-        );
+                setAgentOptionStateForCurrentAgent: (key, value) => setAgentOptionState(current => ({ ...current, [key]: value })),
+            });
+            return { ...result, agentOptionState };
+        });
 
         const firstPopoverRenderer = requireCollapsedContentPopover(
             hook.getCurrent().connectedServicesAuthChip,
@@ -900,10 +913,9 @@ describe('useNewSessionConnectedServices', () => {
             });
         });
 
-        expect(setAgentOptionStateForCurrentAgent).toHaveBeenCalledWith(
-            'connectedServicesBindingsByServiceId',
+        expect(hook.getCurrent().agentOptionState).toEqual({ connectedServicesBindingsByServiceId:
             { [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' } },
-        );
+        });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
             .toBe('Runs through Anthropic API key · Work');
         // "Runs through <account>": the account is the route's native source.
@@ -921,8 +933,10 @@ describe('useNewSessionConnectedServices', () => {
         }) as React.ReactElement<{ bindingsByServiceId: Record<string, unknown> }>;
 
         expect(reopenedPopover.props.bindingsByServiceId).toEqual({
-            [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' },
+            [CLAUDE_SERVICE_KEY]: { source: 'connected', profileId: 'work' },
         });
+        expect(hook.getCurrent().connectedServicesBindingsPayload?.bindingsByServiceId[CLAUDE_SERVICE_KEY])
+            .toEqual({ source: 'connected', selection: 'profile', profileId: 'work' });
 
         await hook.unmount();
     });

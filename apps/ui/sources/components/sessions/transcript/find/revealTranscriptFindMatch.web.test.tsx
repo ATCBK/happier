@@ -2,30 +2,37 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { getStorage } from '@/sync/domains/state/storageStore';
 import { installWebLockManagerMock, type WebLockManagerMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { CommandView } from '../CommandView';
-import { FindBarPlacement } from '@/components/ui/find/FindBarPlacement';
-import { FindBar } from '@/components/ui/find/FindBar';
-import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
-import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import type { ChatTranscriptListItem } from '../chatListTypes';
-import { createReadOnlySessionTranscriptSource } from '../source/readOnlySessionTranscriptSource';
-import { createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, restoreTranscriptJumpEnvironment } from '../viewport/jump/host/transcriptJumpHostTestHarness';
-import { TranscriptFindSurface } from './TranscriptFindSurface';
-import { isTranscriptTargetObservedAtAlignment } from '../viewport/window/useTranscriptTargetWindowHostAdapter';
-import { createTranscriptFindModel, type TranscriptFindCorpus } from './useTranscriptFind';
-import { revealTranscriptFindMatch } from './revealTranscriptFindMatch';
+import type { TranscriptFindCorpus } from './useTranscriptFind';
+import type { restoreTranscriptJumpEnvironment } from '../viewport/jump/host/transcriptJumpHostTestHarness';
 
 vi.mock('react-native', async () => await import('react-native-web'));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+// Install the network boundary before the jump harness or renderers reach Sync.
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { CommandView } = await import('../CommandView');
+const { FindBarPlacement } = await import('@/components/ui/find/FindBarPlacement');
+const { FindBar } = await import('@/components/ui/find/FindBar');
+const { FindHighlightedText } = await import('@/components/ui/text/FindHighlightedText');
+const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+const { createReadOnlySessionTranscriptSource } = await import('../source/readOnlySessionTranscriptSource');
+const { createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, restoreTranscriptJumpEnvironment: restoreEnvironment } =
+    await import('../viewport/jump/host/transcriptJumpHostTestHarness');
+const { TranscriptFindSurface } = await import('./TranscriptFindSurface');
+const { isTranscriptTargetObservedAtAlignment } = await import('../viewport/window/useTranscriptTargetWindowHostAdapter');
+const { createTranscriptFindModel } = await import('./useTranscriptFind');
+const { revealTranscriptFindMatch } = await import('./revealTranscriptFindMatch');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 let environment: Awaited<ReturnType<typeof restoreTranscriptJumpEnvironment>> | undefined;
 let webLocks: WebLockManagerMockHandle;
 beforeEach(async () => {
@@ -33,7 +40,7 @@ beforeEach(async () => {
     vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1440);
     vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(900);
     await act(async () => { window.dispatchEvent(new Event('resize')); });
-    environment = await restoreTranscriptJumpEnvironment();
+    environment = await restoreEnvironment();
 });
 afterEach(async () => { await environment?.dispose(); webLocks.restore(); standardCleanup(); });
 
@@ -44,6 +51,87 @@ function installMessage(message: Message) {
 }
 
 describe('web Find reveal through the real jump owner', () => {
+    it.each(['plain', 'e2ee'] as const)('finds a fetched %s page through normalization, reducer, Action registration and the real jump host', async (mode) => {
+        const { SessionMessagesPageV1Schema } = await import('@happier-dev/protocol');
+        const { runSessionMessagesPagePipeline } = await import('@/sync/engine/sessions/sessionMessagesPagePipeline');
+        const { createFindSurfaceRegistry } = await import('@/keyboard/findSurfaceRegistry');
+        const { registerFindActionRuntime } = await import('@/keyboard/findActionRuntime');
+        const { UiFindOutputSchema } = await import('@happier-dev/protocol/actions/findActionSpecs');
+        const { SessionEncryption } = await import('@/sync/encryption/sessionEncryption');
+        const { SecretBoxEncryption } = await import('@/sync/encryption/encryptor');
+        const { EncryptionCache } = await import('@/sync/encryption/encryptionCache');
+        const encryption = mode === 'e2ee'
+            ? new SessionEncryption('s1', new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache()) : null;
+        const raw = { role: 'user' as const, content: { type: 'text' as const, text: '😀 needle and needle' } };
+        const content = mode === 'plain' ? { t: 'plain' as const, v: raw }
+            : { t: 'encrypted' as const, c: await encryption!.encryptRawRecord(raw) };
+        const page = SessionMessagesPageV1Schema.parse({ messages: [{ id: 'wire-find-message', seq: 5,
+            localId: null, sidechainId: null, createdAt: 5, updatedAt: 5,
+            content }],
+            hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+        await runSessionMessagesPagePipeline({ sessionId: 's1', purpose: 'older', lifecyclePolicy: 'suppress',
+            page: { direction: 'older', requestPath: '/messages', scope: 'main' }, sessionEncryptionMode: mode,
+            getSessionEncryption: () => encryption, request: async () => Response.json(page), sessionReceivedMessages: new Map(),
+            applyMessages: (id, rows) => getStorage().getState().applyMessages(id, rows), log: { log() {} } });
+        const stored = getStorage().getState().sessionMessages.s1;
+        if (!stored) throw new Error('Transcript pipeline did not publish its Session');
+        const message = stored.messagesById[stored.messageIdsOldestFirst[0]!];
+        if (!message) throw new Error('Transcript reducer did not publish the fetched message');
+        expect(message).toMatchObject({ kind: 'user-text', text: '😀 needle and needle' });
+        const items: ChatTranscriptListItem[] = [{ kind: 'message', id: 'pipeline-row', messageId: message.id,
+            seq: 5, createdAt: 5 }];
+        const harness = createTranscriptJumpHostTestHarness({ rows: items, messages: { [message.id]: message } });
+        harness.metrics.current = createTranscriptJumpWebMetrics({ rows: [{ id: 'pipeline-row', top: 500 }], scrollTop: 1000 });
+        const element = harness.metrics.current.element;
+        const row = element.querySelector<HTMLElement>('[data-testid="transcript-item-pipeline-row"]')!;
+        const rect = (y: number, height: number) => ({ top: y - element.scrollTop, bottom: y + height - element.scrollTop,
+            height, width: 800, left: 0, right: 800, x: 0, y: y - element.scrollTop, toJSON() {} });
+        row.getBoundingClientRect = () => rect(1500, 80);
+        const root = createRoot(row);
+        const hook = await harness.render({ platformOS: 'web', resolveWebScrollMetrics: () => ({ ...harness.metrics.current!, scrollTop: element.scrollTop }) });
+        const model: ReturnType<typeof createTranscriptFindModel> = createTranscriptFindModel({
+            readCorpus: () => ({ messages: Object.values(getStorage().getState().sessionMessages.s1.messagesById),
+                history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget,
+            reveal: (match, context) => revealTranscriptFindMatch(match, { items,
+                setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, readClearancePx: () => 96,
+                waitForVisualUpdate: async () => {
+                    const ranges = model.rowStore.getSnapshot(message.id)?.blocks[0]?.sourceRanges;
+                    // This external renderer-commit boundary must finish before the
+                    // jump measures DOM. Nested act defers it until the outer Action act.
+                    flushSync(() => { root.render(<FindHighlightedText text="😀 needle and needle" ranges={ranges} />); });
+                    const mark = row.querySelector<HTMLElement>('[data-testid="find-match-current"]')!;
+                    expect(mark.textContent).toBe('needle');
+                    // The first text line starts at the row edge; the fitting-row
+                    // placement owner seats that edge below the 96px Find capsule.
+                    mark.getBoundingClientRect = () => rect(1500, 20);
+                }, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget }, context),
+        });
+        const registry = createFindSurfaceRegistry();
+        const releaseSurface = registry.register({ surfaceId: 'pipeline-chat', controller: model, containsFocus: () => true,
+            open: () => model.open(), isOpen: () => model.getSnapshot().open, isInputFocused: () => false });
+        const releaseRuntime = registerFindActionRuntime(registry);
+        const context = { surface: 'ui' as const, serverId: environment!.home.id };
+        const executor = createDefaultActionExecutor();
+        try {
+            await act(async () => {
+                expect(await executor.execute('ui.find', { op: 'set', target: 'pipeline-chat', query: 'needle' }, context))
+                    .toMatchObject({ ok: true });
+                await model.settled();
+            });
+            const read = await executor.execute('ui.find', { op: 'read', target: 'pipeline-chat' }, context);
+            if (!read.ok) throw new Error('Find Action was unavailable');
+            const projected = UiFindOutputSchema.parse(read.result);
+            expect(projected).toEqual({ status: 'results', current: 1, total: 2, coverage: 'complete' });
+            expect(UiFindOutputSchema.safeParse({ ...projected, corpus: '😀 needle and needle' }).success).toBe(false);
+            expect(model.rowStore.getSnapshot(message.id)?.blocks[0]?.sourceRanges[0]).toMatchObject({ start: 3, end: 9, current: true });
+            expect(row.querySelector('[data-testid="find-match-current"]')!.getBoundingClientRect().top).toBe(96);
+            releaseSurface();
+            await expect(executor.execute('ui.find', { op: 'read', target: 'pipeline-chat' }, context))
+                .resolves.toEqual({ ok: true, result: { status: 'noMountedSurface' } });
+        } finally { releaseSurface(); releaseRuntime(); model.dispose(); await act(async () => root.unmount()); await hook.unmount(); }
+    });
+
     it.each(['first-row', 'tall-card'] as const)('lands a complete-coverage %s after the renderer bootstrap changes scrollTop', async (kind) => {
         const tall = kind === 'tall-card';
         const output = `${'diff line\n'.repeat(55)}must not remount the modal\n${'diff line\n'.repeat(20)}`;
@@ -196,9 +284,11 @@ describe('web Find reveal through the real jump owner', () => {
             expect(model.status).toMatchObject({ current: 1, total: 1 });
             expect(mark.getBoundingClientRect().top).toBe(10);
             const placement = screen.tree.root.findByType(FindBarPlacement);
+            const onLayout = placement.props.onLayout;
+            if (!onLayout) throw new Error('Find placement requires its layout boundary');
             // The header expands, preserving the old visible row before the Find clearance effect runs.
             contentY = 96; scrollTop = 86;
-            await act(async () => { placement.props.onLayout({ nativeEvent: { layout: { x: 14, y: 10, width: 560, height: 74 } } }); });
+            await act(async () => { onLayout(createLayoutChangeEvent({ x: 14, y: 10, width: 560, height: 74 })); });
             await model.settled();
             expect(clearance).toBe(96);
             expect(rect().top).toBe(96);
@@ -250,7 +340,9 @@ describe('web Find reveal through the real jump owner', () => {
         try {
             await act(async () => { model.setQuery('remount'); await model.settled(); });
             const placement = screen.tree.root.findByType(FindBarPlacement);
-            await act(async () => placement.props.onLayout({ nativeEvent: { layout: { x: 14, y: 10, width: 560, height: 34 } } }));
+            const onLayout = placement.props.onLayout;
+            if (!onLayout) throw new Error('Find placement requires its layout boundary');
+            await act(async () => onLayout(createLayoutChangeEvent({ x: 14, y: 10, width: 560, height: 34 })));
             for (let index = 1; index < 7; index += 1) {
                 await act(async () => { model.step(1); await model.settled(); });
             }
@@ -264,7 +356,7 @@ describe('web Find reveal through the real jump owner', () => {
             expect(screen.tree.root.findByType(FindBar).props.note).toMatchObject({ icon: 'history' });
             expect(mark.getBoundingClientRect().top).toBe(56);
             // Native layout reports the new note's height only after the step decides its presence.
-            await act(async () => placement.props.onLayout({ nativeEvent: { layout: { x: 14, y: 10, width: 560, height: 74 } } }));
+            await act(async () => onLayout(createLayoutChangeEvent({ x: 14, y: 10, width: 560, height: 74 })));
             await model.settled();
             expect(clearance).toBe(96);
             expect(mark.getBoundingClientRect().top).toBe(96);

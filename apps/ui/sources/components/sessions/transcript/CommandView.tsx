@@ -70,7 +70,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         color: theme.colors.text.primary,
         lineHeight: 18,
-        marginTop: 8,
+        marginTop: theme.space.s8,
         ...LONG_TOKEN_WRAP,
     },
     stderr: {
@@ -78,7 +78,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         color: theme.colors.state.neutral.foreground ?? theme.colors.text.secondary,
         lineHeight: 18,
-        marginTop: 8,
+        marginTop: theme.space.s8,
         ...LONG_TOKEN_WRAP,
     },
     error: {
@@ -86,7 +86,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         color: theme.colors.state.danger.foreground ?? theme.colors.state.danger.foreground ?? theme.colors.text.primary,
         lineHeight: 18,
-        marginTop: 8,
+        marginTop: theme.space.s8,
         ...LONG_TOKEN_WRAP,
     },
     emptyOutput: {
@@ -94,7 +94,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         color: theme.colors.text.secondary,
         lineHeight: 18,
-        marginTop: 8,
+        marginTop: theme.space.s8,
         fontStyle: 'italic',
     },
 }));

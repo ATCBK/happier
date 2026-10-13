@@ -9,7 +9,7 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 describe('prompt picker Account invocation inventory', () => {
     let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
     let hook: Awaited<ReturnType<typeof renderHook<ReturnType<typeof usePromptPickerLibrary>>>> | undefined;
-    afterEach(async () => { await hook?.unmount(); fixture?.dispose(); });
+    afterEach(async () => { await hook?.unmount(); await fixture?.dispose(); });
 
     it('does not resurrect retained Settings invocations or folders over current empty destinations', async () => {
         const retained = { v: 1, entries: [{ id: 'stale', token: '/stale', title: 'Stale',

@@ -9,28 +9,25 @@ import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     chip: {
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.inset,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     headerText: {
-        ...Typography.default('semiBold'),
         flexShrink: 1,
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
     },
     quote: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 19,
+        ...Typography.variant('body'),
     },
 }));
 

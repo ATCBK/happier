@@ -54,7 +54,7 @@ import {
     storeNewSessionAutomationHandoffSeed,
 } from '@/sync/domains/workflows/newSessionAutomationHandoffSeed';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
-import { readBackendNewSessionOptionStateByTargetKey } from '@/utils/sessions/backendNewSessionOptionState';
+import { readBackendNewSessionOptionStateByTargetKey, type BackendNewSessionOptionStateByTargetKey } from '@/utils/sessions/backendNewSessionOptionState';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { Modal } from '@/modal';
@@ -780,6 +780,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const temporaryComputerTargetScope = targetAccountScopeResolution.kind === 'bound'
         ? targetAccountScopeResolution.scope
         : null;
+    const temporaryComputerRegistryExecution = useMountedActionExecution(temporaryComputerTargetScope);
+    const temporaryComputerRegistryActionExecution = React.useMemo(() => temporaryComputerTargetScope ? {
+        scope: temporaryComputerTargetScope,
+        execute: temporaryComputerRegistryExecution.execute,
+        isCurrent: temporaryComputerRegistryExecution.isCurrent,
+    } : undefined, [temporaryComputerRegistryExecution.execute, temporaryComputerRegistryExecution.isCurrent, temporaryComputerTargetScope]);
     const [temporaryTargetDraftRevision, bumpTemporaryTargetDraftRevision] = React.useReducer((revision: number) => revision + 1, 0);
     React.useEffect(() => {
         if (!temporaryComputerTargetScope || (draftScope && areServerAccountScopesEqual(temporaryComputerTargetScope, draftScope))) return;
@@ -877,13 +883,69 @@ export function useNewSessionScreenModel(input?: Readonly<{
     }, [hydratedPersistedAuthoringDraft?.resumeSessionId, hydratedTempAuthoringDraft?.resumeSessionId, resumeSessionIdParam]);
     const [resumeSessionId, setResumeSessionId] = React.useState(hydratedResumeSessionId);
 
-    const [backendNewSessionOptionStateByTargetKey, setBackendNewSessionOptionStateByTargetKey] = React.useState<
-        Record<string, Record<string, unknown>>
-    >(() => {
-        return readBackendNewSessionOptionStateByTargetKey(tempSessionData)
+    const hydratedBackendNewSessionOptionStateByTargetKey = React.useMemo<BackendNewSessionOptionStateByTargetKey>(() => (
+        readBackendNewSessionOptionStateByTargetKey(tempSessionData)
             ?? readBackendNewSessionOptionStateByTargetKey(persistedDraft)
-            ?? {};
-    });
+            ?? {}
+    ), [tempSessionData, persistedDraft]);
+    const hydratedBackendOptionSignature = stableJsonStringify(hydratedBackendNewSessionOptionStateByTargetKey);
+    const [backendOptionHydrationSignature, setBackendOptionHydrationSignature] = React.useState(hydratedBackendOptionSignature);
+    const [backendOptionState, setBackendOptionState] = React.useState(() => ({
+        value: hydratedBackendNewSessionOptionStateByTargetKey,
+        authoredKeysByTarget: new Map<string, ReadonlySet<string>>(),
+    }));
+    const setBackendNewSessionOptionStateByTargetKey = React.useCallback<React.Dispatch<React.SetStateAction<
+        BackendNewSessionOptionStateByTargetKey
+    >>>((next) => {
+        setBackendOptionState((current) => {
+            const value = typeof next === 'function' ? next(current.value) : next;
+            if (value === current.value) return current;
+            const authoredKeysByTarget = new Map(current.authoredKeysByTarget);
+            for (const targetKey of new Set([...Object.keys(current.value), ...Object.keys(value)])) {
+                const previousOptions = current.value[targetKey] ?? {};
+                const nextOptions = value[targetKey] ?? {};
+                if (previousOptions === nextOptions) continue;
+                const authoredKeys = new Set(authoredKeysByTarget.get(targetKey));
+                for (const key of new Set([...Object.keys(previousOptions), ...Object.keys(nextOptions)])) {
+                    if (!Object.is(previousOptions[key], nextOptions[key])
+                        || Object.prototype.hasOwnProperty.call(previousOptions, key)
+                            !== Object.prototype.hasOwnProperty.call(nextOptions, key)) {
+                        authoredKeys.add(key);
+                    }
+                }
+                if (authoredKeys.size > 0) authoredKeysByTarget.set(targetKey, authoredKeys);
+            }
+            return { value, authoredKeysByTarget };
+        });
+    }, []);
+    let backendNewSessionOptionStateByTargetKey = backendOptionState.value;
+    // Reconcile before committing the authoring snapshot: a passive hydration
+    // effect would leave autosave holding the cold screen's empty option map.
+    if (backendOptionHydrationSignature !== hydratedBackendOptionSignature) {
+        setBackendOptionHydrationSignature(hydratedBackendOptionSignature);
+        const targets = new Map(Object.entries(hydratedBackendNewSessionOptionStateByTargetKey));
+        // A cold screen can already accept an explicit option edit. Hydrate
+        // untouched fields, not a whole-map replacement that erases that edit.
+        for (const [targetKey, authoredKeys] of backendOptionState.authoredKeysByTarget) {
+            const currentOptions = backendOptionState.value[targetKey] ?? {};
+            const options = new Map(Object.entries(targets.get(targetKey) ?? {}));
+            for (const key of authoredKeys) {
+                if (Object.prototype.hasOwnProperty.call(currentOptions, key)) options.set(key, currentOptions[key]);
+                else options.delete(key);
+            }
+            targets.set(targetKey, Object.fromEntries(options));
+        }
+        const hydratedOptions = Object.fromEntries([...targets].map(([targetKey, options]) => [
+            targetKey,
+            stableJsonStringify(options) === stableJsonStringify(backendOptionState.value[targetKey])
+                ? backendOptionState.value[targetKey]!
+                : options,
+        ]));
+        if (stableJsonStringify(backendOptionState.value) !== stableJsonStringify(hydratedOptions)) {
+            backendNewSessionOptionStateByTargetKey = hydratedOptions;
+            setBackendOptionState({ ...backendOptionState, value: hydratedOptions });
+        }
+    }
 
     const routeBackendTarget = React.useMemo(() => {
         return resolveBackendTargetFromRouteParams({
@@ -1178,9 +1240,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
             currentTeamCredentialResourceKeys: teamCredentialCatalog.currentResourceKeys,
             teamCredentialServerId: targetServerId,
             selectedTeamCredentialModel,
-            // The machine whose open Agent catalog this screen shows also owns
-            // the marketplace index that resolves an installed Agent's exact
-            // distribution, so both answers come from one machine.
+            registryActionExecution: temporaryComputerRegistryActionExecution,
+            // This machine owns the installed generation. Its exact acquisition
+            // listing is read through the qualified Account registry Actions.
             agentCatalogMachineId,
             projectedAgentsById: currentProjectionInputs?.pluginProjectionV2?.agentsById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
             installedPluginPackagesById: currentProjectionInputs?.pluginProjectionV2?.installedPackagesById ?? EMPTY_PLUGIN_PROJECTION_RECORD,
@@ -1192,6 +1254,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         targetServerId,
         teamCredentialCatalog.currentResourceKeys,
         teamCredentialCatalog.resources,
+        temporaryComputerRegistryActionExecution,
     ]);
     const temporaryComputerCreator: TemporaryComputerCreatorDependencies =
         input?.temporaryComputerCreatorDependencies ?? composedTemporaryComputerCreator.dependencies;
@@ -3178,10 +3241,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 const mcpMaterial = await prepareRunnerMcpMaterial({ context,
                     capabilitySelection: reviewedAuthoring.capabilitySelection, ...selectedAgentMcpContext, signal });
                 context.assertCurrent();
-                // The reviewed Agent's exact distribution is resolved here, from
-                // the same machine catalog the Agent was chosen in, so the sealed
-                // submission commits to bytes the endpoint can acquire. A bundled
-                // Agent resolves to null: the Runner artifact already carries it.
+                // The installed generation comes from the chosen machine; its
+                // matching exact listing comes from the qualified registry Actions,
+                // so the sealed submission commits to those installed bytes. A
+                // bundled Agent resolves to null: the Runner already carries it.
                 const agentPluginDistribution = await temporaryComputerCreator
                     .resolveAgentPluginDistribution({ agentTarget: canonicalAgentTarget, signal });
                 context.assertCurrent();

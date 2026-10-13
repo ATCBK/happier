@@ -84,35 +84,33 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 280,
     },
     body: {
-        paddingHorizontal: 12,
-        paddingTop: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s12,
         paddingBottom: 14,
     },
     sectionLabel: {
-        ...Typography.default('medium'),
         color: theme.colors.text.secondary,
-        fontSize: Platform.select({ ios: 13, default: 12 }),
-        lineHeight: Platform.select({ ios: 18, default: 16 }),
+        ...Typography.variant('meta', 'medium'),
         marginTop: 14,
-        marginBottom: 8,
-        marginHorizontal: 2,
+        marginBottom: theme.space.s8,
+        marginHorizontal: theme.space.s2,
     },
     sectionLabelFirst: {
         marginTop: 0,
     },
     row: {
         minHeight: MINIMUM_INTERACTIVE_TARGET_SIZE,
-        marginTop: 8,
+        marginTop: theme.space.s8,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     rowPressable: {
         borderRadius: 8,
         borderWidth: 1,
         borderColor: 'transparent',
         marginHorizontal: -6,
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
     },
     rowPressed: {
         backgroundColor: theme.colors.surface.pressed,
@@ -145,17 +143,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     chips: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     chip: {
         minHeight: 28,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: theme.colors.border.strong,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
     chipSelected: {
         backgroundColor: theme.colors.button.primary.background,
@@ -180,8 +178,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         minHeight: FOOTER_MIN_HEIGHT,
         paddingLeft: 14,
-        paddingRight: 8,
-        paddingVertical: 4,
+        paddingRight: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.subtle,
         flexDirection: 'row',
@@ -352,7 +350,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                                 />
                             ))}
                         </View>
-                        <Text style={[styles.rowSubtitle, { marginTop: 8 }]}>{labels.runsNeedingYouAlwaysShow}</Text>
+                        <Text style={[styles.rowSubtitle, { marginTop: theme.space.s8 }]}>{labels.runsNeedingYouAlwaysShow}</Text>
                     </>
                 ) : null}
                 {scopeTiles.length > 0 ? (

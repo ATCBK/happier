@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SessionWorkflowRunHeadlineV1 } from '@happier-dev/protocol';
+import { SessionWorkflowRunHeadlineV1Schema, type SessionWorkflowRunHeadlineV1 } from '@happier-dev/protocol';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -32,23 +32,13 @@ import {
     type WorkReportSessionSource,
 } from './workProjection';
 
-type StatusFacts = WorkReportSessionSource['statusFacts'];
-
-const workingFacts = {
-    awareness: { runtime: 'working', operational: { primary: 'working', reasons: ['working'] } },
-    word: 'Working',
-    settled: false,
-} as unknown as StatusFacts;
-const needsYouFacts = {
-    awareness: { runtime: 'waiting', operational: { primary: 'permission_required', reasons: ['permission_required'] } },
-    word: 'Needs you',
-    settled: false,
-} as unknown as StatusFacts;
-const settledFacts = {
-    awareness: { runtime: 'idle', operational: { primary: 'ready', reasons: ['ready'] } },
-    word: 'Ready',
-    settled: true,
-} as unknown as StatusFacts;
+const fixtureNow = Date.now();
+const workingFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: true,
+    activeAt: fixtureNow, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: fixtureNow }), fixtureNow);
+const needsYouFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: true,
+    activeAt: fixtureNow, hasPendingPermissionRequests: true, pendingRequestObservedAt: fixtureNow }), fixtureNow);
+const settledFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: true,
+    activeAt: fixtureNow, latestTurnStatus: 'completed', latestTurnStatusObservedAt: fixtureNow }), fixtureNow);
 
 function report(overrides: Partial<WorkReportSessionSource> & Pick<WorkReportSessionSource, 'sessionId' | 'leadSessionId'>): WorkReportSessionSource {
     return {
@@ -84,7 +74,7 @@ function managed(id: string, state: WorkManagedRunSource['run']['state'], needsA
 }
 
 function headline(runId: string, completedAgents: number, totalAgents: number): SessionWorkflowRunHeadlineV1 {
-    return {
+    return SessionWorkflowRunHeadlineV1Schema.parse({
         runId,
         title: `Headline ${runId}`,
         status: 'active',
@@ -93,7 +83,7 @@ function headline(runId: string, completedAgents: number, totalAgents: number): 
         recordUpdatedAt: 1,
         totalAgents,
         completedAgents,
-    } as SessionWorkflowRunHeadlineV1;
+    });
 }
 
 function input(overrides: Partial<WorkProjectionInput>): WorkProjectionInput {
@@ -118,7 +108,7 @@ describe('projectWork', () => {
     ])('agrees with direct-report counts and lead settlement for $active / $latestTurnStatus', ({ active, latestTurnStatus, needsYou, stalled, outstanding, group }) => {
         const now = Date.now();
         const child = createSessionListRenderableSessionFixture({ id: 'child', active, activeAt: now,
-            presence: active ? 0 : 1, latestTurnStatus, latestTurnStatusObservedAt: now });
+            presence: active ? 'online' : 'offline', latestTurnStatus, latestTurnStatusObservedAt: now });
         const projection = projectWork(input({ reportSessions: [report({ sessionId: child.id, leadSessionId: 'lead',
             statusFacts: readSessionWorkStatusFacts(child, now), stalled: readSessionWorkStalled(child, now) })] }));
         expect(projection.summary).toMatchObject({ needsYou, stalled, outstanding });
@@ -452,16 +442,10 @@ describe('projectWork', () => {
     });
 
     it('groups every item by state, Needs you / Working / Recent, an idle or offline item in Recent', () => {
-        const idleFacts = {
-            awareness: { runtime: 'idle', operational: { primary: 'none', reasons: [] } },
-            word: 'Online',
-            settled: false,
-        } as unknown as StatusFacts;
-        const offlineFacts = {
-            awareness: { runtime: 'offline', operational: { primary: 'none', reasons: ['runtime_offline'] } },
-            word: 'Offline',
-            settled: false,
-        } as unknown as StatusFacts;
+        const idleFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: true,
+            activeAt: fixtureNow }), fixtureNow);
+        const offlineFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: false,
+            presence: 1 }), fixtureNow);
         const projection = projectWork(input({
             reportSessions: [
                 report({ sessionId: 'checkout', leadSessionId: 'lead', statusFacts: needsYouFacts }),

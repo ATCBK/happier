@@ -13,13 +13,13 @@ import { useEntityDragDropSnapshot } from '@/components/ui/treeDragDrop';
 
 const stylesheet = StyleSheet.create((theme) => ({
     slot: {
-        marginTop: 12,
+        marginTop: theme.space.s12,
         height: 72,
         borderRadius: 12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 7,
+        gap: theme.space.s6,
         borderWidth: 1.5,
         borderStyle: 'dashed',
         borderColor: theme.colors.border.strong,
@@ -29,7 +29,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.link,
         backgroundColor: theme.colors.surface.selected,
     },
-    label: { ...Typography.default('semiBold'), fontSize: 13, color: theme.colors.text.secondary },
+    label: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
     labelHovering: { color: theme.colors.text.link },
 }));
 

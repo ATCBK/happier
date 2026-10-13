@@ -31,18 +31,18 @@ export type LocalServiceExposureTtlChoice = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
-        paddingTop: 4,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
         paddingBottom: 14,
         gap: 18,
     },
     consequences: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     consequence: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     /**
      * A fixed leading slot so the three sentences share one text edge. The glyph is nudged down
@@ -61,12 +61,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     choice: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     /** Sentence-case, above its control: no uppercase group labels (DESIGN "Configuration surfaces"). */
     choiceLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     /** One allowed lifetime is a fact, read on one line: label left, value right. */
@@ -74,11 +73,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     fixedChoiceLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     fixedChoiceValue: {
@@ -87,8 +85,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     commit: {
-        gap: 8,
-        paddingTop: 2,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s2,
     },
 }));
 

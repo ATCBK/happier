@@ -13,25 +13,22 @@ import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        gap: 16,
+        gap: theme.space.s16,
     },
     lead: {
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 8,
-        paddingHorizontal: 16,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
     },
     title: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 17,
+        ...Typography.variant('heading'),
         textAlign: 'center',
     },
     body: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body'),
         textAlign: 'center',
         maxWidth: 380,
     },

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -257,16 +258,15 @@ export function SessionWorkflowActivitySection(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     section: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     sectionTitle: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     panel: {
-        gap: 6,
-        padding: 10,
+        gap: theme.space.s6,
+        padding: theme.space.s10,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
     },
@@ -274,17 +274,16 @@ const styles = StyleSheet.create((theme) => ({
         gap: 0,
     },
     observedContent: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     observedKind: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     observedBody: {
         fontSize: 12,
         color: theme.colors.text.secondary,
-        paddingBottom: theme.margins.xs,
+        paddingBottom: theme.space.s4,
     },
     skeleton: {
         fontSize: 12,
@@ -295,8 +294,7 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     showMoreText: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -109,8 +110,7 @@ export function GoalUsageMetadata(props: Readonly<{ goal: SessionWorkStateItem }
 
 const styles = StyleSheet.create(() => ({
     meta: {
-        fontSize: 12,
-        fontWeight: '500',
+        ...Typography.variant('meta', 'medium'),
         fontVariant: ['tabular-nums'],
     },
     budgetBlock: {

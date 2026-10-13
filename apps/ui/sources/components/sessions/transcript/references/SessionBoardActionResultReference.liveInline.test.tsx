@@ -2,9 +2,13 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol';
+import { SessionSystemRecordStoredSchema, tryWriteServerEnabledBitInPlace, ApprovalRequestV2Schema,
+  ActionApprovalRequestCreatedResultSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
+import { SessionBoardMutationV1Schema, SessionBoardMutationResultV1Schema } from '@happier-dev/protocol/sessions/board';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { SessionEffectiveAccessV1Schema } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 
 import { makeToolCall, renderScreen, standardCleanup } from '@/dev/testkit';
 import {
@@ -20,18 +24,23 @@ import {
   resolveSessionBoardItemPrimaryMountHost,
   type SessionBoardPlacementPrimaryMountResolver,
 } from '@/components/sessions/board/sessionBoardHostVisibility';
-import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
+import { useSessionCallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime';
 import {
   createSessionBoardActionsPort,
   projectSessionBoard,
 } from '@/sync/domains/session/board';
 import type { ToolCall } from '@happier-dev/session-core/messages';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import type { SessionBoardActionsPort } from '@/sync/domains/session/board/sessionBoardActionsPort';
 import type { BrowserFrameEngineConfig } from '@/components/browser/frame/types';
 
 import { SessionBoardActionResultReference } from './SessionBoardActionResultReference';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { storage } from '@/sync/domains/state/storage';
+import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (
@@ -71,18 +80,6 @@ const pluginRuntime = {
   serverId: 'unused',
   platform: 'web' as const,
 };
-const callerRuntime: CallerHostedHtmlRuntime = {
-  serverIdentityId: 'home-1',
-  accountId: 'alice',
-  accountEncryptionMode: 'plain',
-  hostOrigin: 'https://app.example.test',
-  admittedHostMethods: [],
-  createRequestController: () => ({
-    handleRequest: async () => null,
-    dispose: () => {},
-  }),
-  lifetime: { isCurrent: () => true, onRetire: () => ({ dispose: () => {} }) },
-};
 // A desktop shell with no Board host on screen: Details closed, no Board sidebar, no Companion rail.
 const noBoardOnScreen = resolveSessionBoardHostVisibility({
   foreground: true,
@@ -108,7 +105,9 @@ const shellResolver: SessionBoardPlacementPrimaryMountResolver = (
     ...(boardView ? { boardView } : {}),
   });
 
-async function prepare(height: Readonly<Record<string, string>>) {
+async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner' | 'view' = 'view') {
+  // The browser's Location is the platform boundary; runtime admission and its request controller stay real.
+  vi.stubGlobal('location', { origin: 'https://app.example.test', href: 'https://app.example.test/' });
   const item = {
     v: 1,
     destination: 'transcript',
@@ -133,52 +132,92 @@ async function prepare(height: Readonly<Record<string, string>>) {
     createdAt: '2026-10-10T00:00:00.000Z',
     updatedAt: '2026-10-10T00:00:00.000Z',
   });
-  const fixture = createSessionSystemRecordHttpFixture({
+  const records: SessionSystemRecordStored[] = [SessionSystemRecordStoredSchema.parse({
+    ...record, id: 'layout-record', address: { ...record.address, kind: 'layout.v1', localId: 'layout' },
+    content: { t: 'plain', v: { v: 1, tabs: [{ id: 'view-a', title: 'A', items: [] }] } },
+  })];
+  const boundary = {
     sessionId: 'session-1',
-    records: [record],
-    effectiveAccess: {
+    records,
+    effectiveAccess: SessionEffectiveAccessV1Schema.parse({
       v: 1,
-      level: 'view',
-      sources: [{ kind: 'direct', shareId: 'reader-grant' }],
+      level: 'owner',
+      sources: [{ kind: 'owner' }],
       capabilities: projectSessionAccessCapabilitiesV1({
-        owner: false,
-        grants: [{ accessLevel: 'view', canApprovePermissions: false }],
+        owner: true,
+        grants: [],
       }),
-    },
-  });
+    }),
+  };
+  const fixture = createSessionSystemRecordHttpFixture(boundary);
+  const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'reader', encryptionMode: 'plain' });
+  const requests: string[] = [];
+  const features = createRootLayoutFeaturesResponse();
+  if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Missing Board feature declaration');
   const connection = await restoreServerAccountForTest({
     serverUrl: 'https://inline-live.test',
+    serverIdentityId: 'srv_inline-live',
     accountId: 'reader',
-    request: fixture.request,
+    request: async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      requests.push(`${init?.method ?? 'GET'} ${path}${new URL(String(url)).search}`);
+      if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+      if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+      if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+      if (new URL(String(url)).pathname === '/v2/sessions/session-1/board' && init?.method === 'PUT') {
+        const mutation = SessionBoardMutationV1Schema.parse(JSON.parse(String(init.body)));
+        if (mutation.operation === 'update_layout') {
+          const layoutIndex = records.findIndex(row => row.address.kind === 'layout.v1');
+          records[layoutIndex] = SessionSystemRecordStoredSchema.parse({ ...records[layoutIndex], content: mutation.layoutContent });
+          return Response.json(SessionBoardMutationResultV1Schema.parse({ operation: mutation.operation,
+            outcome: 'updated', layoutRevision: record.revision }));
+        }
+        if (mutation.operation !== 'upsert_item') throw new Error('Expected the visual publication mutation');
+        records.push(SessionSystemRecordStoredSchema.parse({ ...record, content: mutation.itemContent }));
+        return Response.json(SessionBoardMutationResultV1Schema.parse({ operation: mutation.operation,
+          itemId: mutation.itemId, outcome: 'created', itemRevision: record.revision }));
+      }
+      return await artifacts.handle(`${path}${new URL(String(url)).search}`, init) ?? fixture.request(url);
+    },
   });
   onTestFinished(async () => {
     standardCleanup();
     await connection.dispose();
+    vi.unstubAllGlobals();
   });
+  primeServerFeaturesSnapshot({ serverId: connection.home.id, snapshot: { status: 'ready', features } });
+  const actionInput = getActionSpec('session.board.item.upsert').inputSchema.parse({ sessionId: 'session-1',
+    itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item });
+  const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+  const executed = await createDefaultActionExecutor().execute('session.board.item.upsert', actionInput,
+    { serverId: connection.home.id, surface: 'ui', authority: 'present_user' });
+  expect(executed, JSON.stringify(executed)).toMatchObject({ ok: true });
+  if (!executed.ok) throw new Error(`Visual publication failed: ${executed.errorCode}`);
+  const approval = ActionApprovalRequestCreatedResultSchema.parse(executed.result);
+  expect(records.some(row => row.address.kind === 'item.v1')).toBe(false);
+  const decision = await decideApprovalAsInbox(connection.home.id, approval.artifactId, 'approve');
+  expect(decision, JSON.stringify({ approval: artifacts.readPlainBody(approval.artifactId), requests })).toMatchObject({
+    ok: true, result: { status: 'executed' },
+  });
+  const settled = ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(approval.artifactId) ?? 'null'));
+  if (settled.execution?.ok !== true) throw new Error('The published visual must have an approved execution result');
+  const acknowledged = getActionSpec('session.board.item.upsert').outputSchema.parse(settled.execution.result);
+  if (viewer === 'view') boundary.effectiveAccess = SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'view',
+    sources: [{ kind: 'direct', shareId: 'reader-grant' }], capabilities: projectSessionAccessCapabilitiesV1({
+      owner: false, grants: [{ accessLevel: 'view', canApprovePermissions: false }],
+    }) });
+  const session = storage.getState().sessions['session-1'];
+  if (!session) throw new Error('The published Session must be hydrated before reader admission');
+  storage.getState().applySessions([{ ...session, access: createSessionAccessFixture(viewer) }]);
   const tool = makeToolCall({
     name: 'session_board_item_upsert',
     state: 'completed',
-    input: {
-      itemId: 'visual',
-      expectedItemRevision: null,
-      destination: 'transcript',
-      item,
-    },
-    result: {
-      v: 1,
-      serverId: connection.home.id,
-      sessionId: 'session-1',
-      result: {
-        operation: 'upsert_item',
-        itemId: 'visual',
-        outcome: 'created',
-        itemRevision: revision,
-      },
-      destination: null,
-      itemDestination: 'transcript',
-    },
+    input: actionInput,
+    result: acknowledged,
   });
-  return { tool, serverId: connection.home.id };
+  return { tool, serverId: connection.home.id, records, artifacts, executor: createDefaultActionExecutor() };
 }
 
 /** One Session shell with the transcript repeating the same acknowledged visual in two replies. */
@@ -187,36 +226,39 @@ function Transcript(
     tool: ToolCall;
     serverId: string;
     demand: readonly [boolean, boolean];
+    canEdit?: boolean;
+    actions?: ReturnType<typeof createSessionBoardActionsPort>;
   }>,
 ) {
   const address = React.useMemo(
     () => ({ serverId: props.serverId, sessionId: 'session-1' }),
     [props.serverId],
   );
+  const callerRuntime = useSessionCallerHostedHtmlRuntime(props.serverId, 'session-1', pluginRuntime);
   const binding = React.useMemo(
     () => ({
       status: 'ready' as const,
       snapshot: projectSessionBoard({
         layout: {
-          revision: 'ssr1:layout',
+          revision,
           outcome: {
             status: 'ready',
             value: { v: 1, tabs: [{ id: 'view-a', title: 'A', items: [] }] },
           },
         },
         items: new Map(),
-        capabilities: { readTranscript: true, editSessionRecords: false },
+        capabilities: { readTranscript: true, editSessionRecords: props.canEdit === true },
         freshness: 'fresh',
         reachability: 'reachable',
         loading: 'idle',
         incomplete: false,
-      } as Parameters<typeof projectSessionBoard>[0]),
+      } satisfies Parameters<typeof projectSessionBoard>[0]),
     }),
-    [],
+    [props.canEdit],
   );
   const actions = React.useMemo(
-    () => createSessionBoardActionsPort(address),
-    [address],
+    () => props.actions ?? createSessionBoardActionsPort(address),
+    [address, props.actions],
   );
   return (
     <SessionBoardContinuityProvider
@@ -324,43 +366,26 @@ describe('live inline transcript visuals', () => {
   });
 
   it('pins a transcript visual to the Board as the same item, through the existing layout operation', async () => {
-    const { tool, serverId } = await prepare({ mode: 'auto', fallback: 'regular' });
+    const { tool, serverId, records, artifacts, executor } = await prepare({ mode: 'auto', fallback: 'regular' }, 'owner');
     const address = { serverId, sessionId: 'session-1' };
-    const layoutUpdates: Parameters<SessionBoardActionsPort['updateLayout']>[0][] = [];
-    const unavailable = { status: 'unavailable' as const, reason: 'board_actions_unavailable' as const };
-    // The Board mutation transport is the boundary; the controller and its command path stay real.
-    const actions: SessionBoardActionsPort = {
-      upsertItem: async () => unavailable,
-      removeItem: async () => unavailable,
-      updateLayout: async (input) => { layoutUpdates.push(input); return unavailable; },
-    };
-    const binding = {
-      status: 'ready' as const,
-      snapshot: projectSessionBoard({
-        layout: { revision: 'ssr1:layout', outcome: { status: 'ready', value: { v: 1, tabs: [{ id: 'view-a', title: 'A', items: [] }] } } },
-        items: new Map(),
-        capabilities: { readTranscript: true, editSessionRecords: true },
-        freshness: 'fresh', reachability: 'reachable', loading: 'idle', incomplete: false,
-      } as Parameters<typeof projectSessionBoard>[0]),
-    };
+    const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+    const actions = createSessionBoardActionsPort({ ...address, execute: createFrontDoorActionExecute(executor) });
+    const itemBefore = records.find(row => row.address.kind === 'item.v1');
     const screen = await renderScreen(
-      <SessionBoardContinuityProvider sessionId={address.sessionId} serverId={address.serverId}>
-        <SessionBoardControllerOwner address={address}
-          input={{ ...address, binding, actions, resolveSourceAvailability: available }}
-          binding={binding} actions={actions}
-          pluginRuntime={{ ...pluginRuntime, serverId }} callerHostedHtmlRuntime={callerRuntime}
-          resolvePrimaryHost={shellResolver}>
-          <SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="session-1" contentDemand />
-        </SessionBoardControllerOwner>
-      </SessionBoardContinuityProvider>,
+      <Transcript tool={tool} serverId={serverId} demand={[true, false]} canEdit actions={actions} />,
     );
     const readPin = () => screen.tree.root.findAllByType(ItemRowActions)
       .find((node) => node.props.overflowTriggerTestID === 'transcript-board-widget-visual-actions')
       ?.props.actions.find((action: { id: string }) => action.id === 'pin-to-board');
     await vi.waitFor(() => expect(readPin()).toBeTruthy());
+    const priorApprovals = new Set(artifacts.list().map(row => row.id));
     await act(async () => { readPin()?.onPress?.(); });
-    await vi.waitFor(() => expect(layoutUpdates).toHaveLength(1));
-    // A placement for the SAME item: no item write, no copy.
-    expect(layoutUpdates[0]).toMatchObject({ sessionId: 'session-1', operation: { op: 'item.place', itemId: 'visual', tabId: 'view-a' } });
+    await vi.waitFor(() => expect(artifacts.list().some(row => !priorApprovals.has(row.id))).toBe(true));
+    const approvalId = artifacts.list().find(row => !priorApprovals.has(row.id))!.id;
+    expect(await decideApprovalAsInbox(serverId, approvalId, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
+    await vi.waitFor(() => expect(records.find(row => row.address.kind === 'layout.v1')?.content).toMatchObject({
+      t: 'plain', v: { tabs: [{ id: 'view-a', items: [{ itemId: 'visual' }] }] },
+    }));
+    expect(records.filter(row => row.address.kind === 'item.v1')).toEqual([itemBefore]);
   });
 });

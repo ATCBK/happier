@@ -6238,6 +6238,46 @@ describe('SessionView (direct sessions)', () => {
     expect(storage.getState().sessions.s1.permissionMode).toBe(committed);
   });
 
+  it.each(['session.mode.set', 'session.config_option.set'] as const)('shows %s policy refusal through the same typed composer feedback', async (actionId) => {
+    installRunnerActiveDirectSubmitStatus();
+    storageState.sessions.s1.metadata = {
+      ...storageState.sessions.s1.metadata,
+      sessionModesV1: { v: 1, agentId: 'codex', updatedAt: 1, currentModeId: 'default',
+        availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }] },
+    };
+    const screen = await renderSessionViewAndSettle();
+    const permittedSettings = storage.getState().settings;
+    storage.setState({ settings: { ...permittedSettings, actionsSettingsV1: {
+      v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
+    } } });
+    await act(async () => {
+      const input = findAgentInput(screen);
+      if (actionId === 'session.mode.set') input.props.onAcpSessionModeChange('plan');
+      else input.props.onAcpConfigOptionChange('thinking', 'high');
+    });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalled());
+    expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'common.disabled');
+  });
+
+  it('shows pending Agent-mode approval without applying the choice', async () => {
+    const { readAcpSessionModeIntentFromMetadata } = await import('@happier-dev/agents');
+    installRunnerActiveDirectSubmitStatus();
+    storageState.sessions.s1.metadata = {
+      ...storageState.sessions.s1.metadata,
+      sessionModesV1: { v: 1, agentId: 'codex', updatedAt: 1, currentModeId: 'default',
+        availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }] },
+    };
+    const screen = await renderSessionViewAndSettle();
+    const priorIntent = readAcpSessionModeIntentFromMetadata(readSessionOwnerMetadataView(storage.getState().sessions.s1) ?? {});
+    await homes.requireUiApproval(canonicalDraftScope.serverId, 'session.mode.set');
+    await act(async () => { findAgentInput(screen).props.onAcpSessionModeChange('plan'); });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalled());
+    expect(modalAlertSpy).toHaveBeenCalledWith('approvals.title', 'approvals.status.open');
+    expect(modalAlertSpy.mock.calls.some(([title]) => title === 'common.error')).toBe(false);
+    expect(homes.artifacts(canonicalDraftScope.serverId).list()).toHaveLength(1);
+    expect(readAcpSessionModeIntentFromMetadata(readSessionOwnerMetadataView(storage.getState().sessions.s1) ?? {})).toEqual(priorIntent);
+  });
+
   it('shows pending stop-turn approval without treating it as a completed cancellation', async () => {
     installRunnerActiveDirectSubmitStatus();
     const screen = await renderSessionViewAndSettle();

@@ -41,28 +41,26 @@ import { resolveSessionBoardFailurePresentation } from '../sessionBoardFailurePr
 
 const stylesheet = StyleSheet.create((theme) => ({
     titleInput: {
-        ...Typography.default('semiBold'),
-        fontSize: 17,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        paddingVertical: 6,
+        paddingVertical: theme.space.s6,
     },
     body: {
         minHeight: 180,
         borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
         borderTopColor: theme.colors.border.default,
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     footer: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
         alignItems: 'center',
-        gap: 8,
-        paddingTop: 12,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s12,
     },
     notice: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         flex: 1,
         minWidth: 160,
@@ -71,15 +69,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
     },
     review: {
-        marginTop: 12,
-        paddingTop: 12,
+        marginTop: theme.space.s12,
+        paddingTop: theme.space.s12,
         borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
         borderTopColor: theme.colors.border.default,
-        gap: 6,
+        gap: theme.space.s6,
     },
     reviewHeading: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
 }));

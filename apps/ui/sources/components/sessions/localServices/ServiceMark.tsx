@@ -8,8 +8,7 @@ import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 
 const stylesheet = StyleSheet.create((theme) => ({
     letter: {
-        ...Typography.default('bold'),
-        fontSize: 16,
+        ...Typography.variant('heading'),
         color: theme.colors.text.secondary,
     },
 }));

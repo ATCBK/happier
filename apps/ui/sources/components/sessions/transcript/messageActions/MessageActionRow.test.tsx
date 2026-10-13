@@ -34,16 +34,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => false,
-    readReducedMotionPreference: () => false,
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('Text', props, props.children),
-}));
-
 describe('MessageActionRow', () => {
     afterEach(() => {
         standardCleanup();

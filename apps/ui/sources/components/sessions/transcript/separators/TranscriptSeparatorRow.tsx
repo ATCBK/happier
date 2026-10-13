@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -109,8 +110,7 @@ export function TranscriptSeparatorRow(props: Readonly<{
  * rather than restating the numbers.
  */
 export const TRANSCRIPT_SEPARATOR_TITLE_TEXT_STYLE = {
-  fontSize: 12,
-  fontWeight: '600',
+  ...Typography.variant('meta', 'semiBold'),
 } as const;
 
 const styles = StyleSheet.create((_theme) => ({
@@ -161,8 +161,7 @@ const styles = StyleSheet.create((_theme) => ({
     ...TRANSCRIPT_SEPARATOR_TITLE_TEXT_STYLE,
   },
   subtitle: {
-    fontSize: 12,
-    fontWeight: '500',
+    ...Typography.variant('meta', 'medium'),
   },
   rightAccessory: {
     marginLeft: 6,

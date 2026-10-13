@@ -222,9 +222,9 @@ const chromeStyles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingTop: 4,
-        paddingBottom: 6,
-        gap: 8,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s6,
+        gap: theme.space.s8,
     },
     headerCardsPressed: {
         opacity: motionTokens.press.opacitySubtle,
@@ -240,19 +240,17 @@ const chromeStyles = StyleSheet.create((theme) => ({
     title: {
         flexGrow: 1,
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
     },
     // The count is a quiet fact after the title: the title's size, not its weight, in the quietest ink (lab `.tt .n`).
     subtitle: {
         color: theme.colors.text.tertiary,
-        fontSize: 13,
-        ...Typography.default('regular'),
+        ...Typography.variant('body'),
     },
     headerRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     statusIconRight: {
         width: GROUP_STATUS_ICON_SIZE_PX,
@@ -263,19 +261,18 @@ const chromeStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        gap: 5,
+        gap: theme.space.s4,
         minWidth: 0,
     },
     terminalStatusText: {
         color: theme.colors.state.danger.foreground,
-        fontSize: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
         maxWidth: 160,
     },
     previewMore: {
         paddingHorizontal: 0,
-        paddingTop: 6,
-        paddingBottom: 6,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s6,
         alignSelf: 'flex-start',
     },
     previewMorePressed: {
@@ -283,8 +280,7 @@ const chromeStyles = StyleSheet.create((theme) => ({
     },
     previewMoreText: {
         color: theme.colors.text.secondary,
-        ...Typography.default('regular'),
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
 }));
 
@@ -299,7 +295,7 @@ const unitStyles = StyleSheet.create((theme) => ({
         flexBasis: 0,
     },
     container: {
-        marginHorizontal: 16,
+        marginHorizontal: theme.space.s16,
     },
     containerFooterMargin: {
         marginBottom: 22,
@@ -322,19 +318,19 @@ const unitStyles = StyleSheet.create((theme) => ({
     },
     unitFeedBackground: {
         backgroundColor: theme.colors.feed?.card?.background ?? theme.colors.surface.elevated,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
     },
     unitFeedBackgroundHeaderCap: {
         borderTopLeftRadius: theme.borderRadius.xl,
         borderTopRightRadius: theme.borderRadius.xl,
         overflow: 'hidden',
-        paddingTop: 6,
+        paddingTop: theme.space.s6,
     },
     unitFeedBackgroundFooterCap: {
         borderBottomLeftRadius: theme.borderRadius.xl,
         borderBottomRightRadius: theme.borderRadius.xl,
         overflow: 'hidden',
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
     scaffoldRow: {
         flexDirection: 'row',
@@ -354,6 +350,6 @@ const unitStyles = StyleSheet.create((theme) => ({
     scaffoldBody: {
         flex: 1,
         minWidth: 0,
-        paddingLeft: 6,
+        paddingLeft: theme.space.s6,
     },
 }));

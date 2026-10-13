@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
 import { Pressable } from 'react-native';
@@ -61,14 +62,13 @@ export function ForkDividerRow(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
   openButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: theme.space.s10,
+    paddingVertical: theme.space.s6,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: theme.colors.border.default,
   },
   openButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
+    ...Typography.variant('meta', 'semiBold'),
   },
 }));

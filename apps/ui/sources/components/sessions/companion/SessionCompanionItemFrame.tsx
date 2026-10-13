@@ -20,11 +20,11 @@ import { t } from '@/text';
 const stylesheet = StyleSheet.create((theme) => ({
     // Flat sections separated by a hairline (lab CA): the column reads as one
     // live strip, not a stack of cards. Only the needs-you block is tinted.
-    root: { paddingTop: 11, paddingBottom: 12 },
+    root: { paddingTop: theme.space.s10, paddingBottom: theme.space.s12 },
     separated: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     // Cards beside the chat keep the Board grid's gap between them.
-    cardGap: { marginBottom: 10 },
-    controls: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    cardGap: { marginBottom: theme.space.s10 },
+    controls: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2 },
 }));
 
 /**

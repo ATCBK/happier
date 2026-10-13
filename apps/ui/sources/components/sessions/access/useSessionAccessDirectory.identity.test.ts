@@ -53,6 +53,6 @@ describe('shared directory viewer presentation', () => {
             expect(home.requests.filter(request => request.path === '/v1/user/search')).toHaveLength(1);
             expect(home.requests.filter(request => request.path === '/v1/user/search').every(request => request.home === 'captured')).toBe(true);
             await hook.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 });

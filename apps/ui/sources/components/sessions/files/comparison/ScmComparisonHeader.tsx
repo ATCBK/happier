@@ -181,47 +181,43 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 16,
-        paddingHorizontal: 24,
+        gap: theme.space.s16,
+        paddingHorizontal: theme.space.s24,
         paddingTop: 18,
         paddingBottom: 14,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
     },
     headerStacked: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingTop: 14,
     },
     main: {
         flex: 1,
         minWidth: 0,
-        gap: 6,
+        gap: theme.space.s6,
     },
     eyebrow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     grow: {
         flex: 1,
     },
     eyebrowView: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     eyebrowScope: {
         flexShrink: 1,
         minWidth: 0,
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
-        ...Typography.default(),
     },
     title: {
-        fontSize: 22,
-        lineHeight: 28,
+        ...Typography.variant('title'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     titleStacked: {
         fontSize: 24,
@@ -231,9 +227,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 16,
-        rowGap: 6,
-        marginTop: 2,
+        columnGap: theme.space.s16,
+        rowGap: theme.space.s6,
+        marginTop: theme.space.s2,
     },
     coverageStacked: {
         flexDirection: 'column',
@@ -242,19 +238,17 @@ const styles = StyleSheet.create((theme) => ({
     fact: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     factText: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default(),
     },
     factStrong: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default('semiBold'),
     },
     accessory: {
         flexShrink: 0,
@@ -262,7 +256,7 @@ const styles = StyleSheet.create((theme) => ({
     accessoryRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginTop: 8,
+        gap: theme.space.s8,
+        marginTop: theme.space.s8,
     },
 }));

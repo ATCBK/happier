@@ -57,7 +57,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     overflow: {
         color: theme.colors.text.secondary,
-        fontSize: 11,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
     },
 }));

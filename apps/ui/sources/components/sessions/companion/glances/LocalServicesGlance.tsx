@@ -26,7 +26,7 @@ import { resolveLocalServicesGlanceRows, type LocalServicesGlanceRow } from './g
 const OPEN_TARGET_PX = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
 
 const stylesheet = StyleSheet.create((theme) => ({
-    row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40, minWidth: 0 },
+    row: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, minHeight: 40, minWidth: 0 },
     dotCell: { width: 16, alignItems: 'center', justifyContent: 'center' },
     dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.state.success.foreground },
     dotOff: { backgroundColor: theme.colors.border.strong },

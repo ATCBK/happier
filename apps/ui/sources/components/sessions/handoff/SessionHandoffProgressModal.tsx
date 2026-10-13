@@ -49,12 +49,12 @@ const FULL_TIMELINE_WITH_SOURCE_SCAN = SESSION_HANDOFF_PROGRESS_FULL_TIMELINE_WI
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 18,
         gap: 14,
     },
     messageRow: {
-        paddingBottom: 2,
+        paddingBottom: theme.space.s2,
     },
     message: {
         fontSize: 14,
@@ -63,15 +63,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
     },
     progressSection: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     timeline: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     timelineRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 12,
+        gap: theme.space.s12,
         minHeight: 34,
     },
     timelineMarker: {
@@ -90,8 +90,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     timelineContent: {
         flex: 1,
-        gap: 8,
-        paddingBottom: 6,
+        gap: theme.space.s8,
+        paddingBottom: theme.space.s6,
     },
     timelineContentWithProgress: {
         paddingBottom: 14,
@@ -109,56 +109,51 @@ const stylesheet = StyleSheet.create((theme) => ({
     summaryRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     summaryChip: {
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
     },
     summaryChipText: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     stats: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     statRow: {
         flexDirection: 'row',
         alignItems: 'baseline',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     statLabel: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     statValue: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
-        ...Typography.default(),
         textAlign: 'right',
     },
     progressMetaRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     progressMetaText: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     currentPath: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
         flex: 1,
         textAlign: 'right',
     },
@@ -166,23 +161,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'flex-end',
     },
     outcomeSection: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     outcomeText: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     outcomeWarningText: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         // Cleanup debt after a committed success is a warning, not a failure.
         color: theme.colors.state.warning.foreground,
-        ...Typography.default(),
     },
     detailsBody: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        gap: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s12,
     },
 }));
 

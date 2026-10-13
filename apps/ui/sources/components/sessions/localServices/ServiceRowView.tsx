@@ -61,7 +61,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     titleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     title: {
         flexShrink: 1,
@@ -74,15 +74,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontWeight: '400',
     },
     statusLabel: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     statusLabelAttention: {
         color: theme.colors.state.attention.foreground,
     },
     facts: {
-        gap: 2,
+        gap: theme.space.s2,
         alignItems: 'flex-start',
     },
     /** Lead facts, the source badge, then the trailing facts on one line (lab s-services). */
@@ -90,7 +89,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 6,
+        columnGap: theme.space.s6,
         maxWidth: '100%',
     },
     /**
@@ -125,7 +124,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     expansion: {
-        paddingBottom: 4,
+        paddingBottom: theme.space.s4,
     },
     actions: {
         flexDirection: 'row',

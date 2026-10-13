@@ -47,8 +47,7 @@ type ServerScopedMachineSelectorProps<TMachine extends ServerScopedMachinePresen
 }>;
 
 const emptyTextStyle = {
-    ...Typography.default(),
-    fontSize: 13,
+    ...Typography.variant('body'),
     opacity: 0.8,
     paddingHorizontal: 16,
     paddingVertical: 8,

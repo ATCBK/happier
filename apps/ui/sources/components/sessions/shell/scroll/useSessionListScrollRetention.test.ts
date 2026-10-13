@@ -272,6 +272,39 @@ describe('useSessionListScrollRetention', () => {
         expect(scrollToOffset).not.toHaveBeenCalled();
     });
 
+    it('keeps the viewport still when a reorder leaves its visible anchor in place', async () => {
+        const scrollToOffset = vi.fn();
+        const scrollToIndex = vi.fn();
+        const hook = await renderHook(
+            (props: { nodeIds: readonly string[] }) => useSessionListScrollRetention({
+                retentionKey: 'reorder-below-visible-anchor',
+                scrollToOffset,
+                scrollToIndex,
+                nodeIds: props.nodeIds,
+                measureNodeViewportOffset: async () => 26,
+            }),
+            { initialProps: { nodeIds: ['header:project', 'session:home:a', 'session:home:b', 'session:home:c'] } },
+        );
+
+        await act(async () => {
+            hook.getCurrent().handleLayout(layoutEvent(416));
+            hook.getCurrent().handleScroll(scrollEvent(0, 416));
+            hook.getCurrent().handleViewableItemsChanged({
+                viewableItems: [
+                    { item: { id: 'session:home:a' }, index: 1, isViewable: true },
+                    { item: { id: 'session:home:b' }, index: 2, isViewable: true },
+                    { item: { id: 'session:home:c' }, index: 3, isViewable: true },
+                ],
+            });
+        });
+
+        await hook.rerender({ nodeIds: ['header:project', 'session:home:a', 'session:home:c', 'session:home:b'] });
+
+        expect(scrollToIndex).not.toHaveBeenCalled();
+        expect(scrollToOffset).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
     it('returns to the list start when the visible qualified session does not survive replacement', async () => {
         const scrollToOffset = vi.fn();
         const hook = await renderHook(

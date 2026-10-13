@@ -25,12 +25,12 @@ const styles = StyleSheet.create((theme) => ({
     frame: {},
     row: {
         minHeight: 40,
-        paddingLeft: 12,
-        paddingRight: 10,
-        paddingVertical: 8,
+        paddingLeft: theme.space.s12,
+        paddingRight: theme.space.s10,
+        paddingVertical: theme.space.s8,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     pressed: { backgroundColor: theme.colors.surface.pressed },
     label: {
@@ -39,7 +39,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     grow: { flex: 1 },
-    value: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, minWidth: 0 },
+    value: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, flexShrink: 1, minWidth: 0 },
     valueText: {
         ...Typography.default('semiBold'),
         ...ITEM_TITLE_TEXT_METRICS.compact,
@@ -51,8 +51,8 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default(),
         ...ITEM_SUBTITLE_TEXT_METRICS.compact,
         color: theme.colors.text.secondary,
-        paddingHorizontal: 12,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     link: { color: theme.colors.text.link },
 }));

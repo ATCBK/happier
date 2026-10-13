@@ -62,16 +62,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: 'TextInput',
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    FontWeights: { regular: '400', semiBold: '500', bold: '600' },
-    Typography: {
-        default: () => ({}),
-        mono: () => ({}),
-        pillLabel: () => ({}),
-        rowMeta: () => ({}),
-    },
-}));
-
 vi.mock('@/agents/catalog/catalog', () => ({
     AGENT_IDS: ['claude', 'codex', 'custom-preset'],
     isBundledAgentId: (value: string) => ['claude', 'codex', 'custom-preset'].includes(value),

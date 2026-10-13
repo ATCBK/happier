@@ -94,34 +94,28 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         marginHorizontal: SESSION_LIST_SHEET_INSET_PX - (Platform.select(ITEM_GROUP_CONTAINER_HORIZONTAL_PADDING_PX) ?? 0),
     },
     groupHeaderTitle: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
-        ...Typography.default('semiBold'),
         textTransform: 'none' as const,
-        letterSpacing: 0,
     },
     /** A group's quiet count beside its label ("Drafts 3"). */
     groupHeaderCount: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default(),
     },
     /** The group's machine on the label's line: quiet and shrinking first, the label keeps its room. */
     groupHeaderMachine: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 2,
         minWidth: 0,
-        ...Typography.default(),
     },
     groupHeaderSubtitle: {
-        fontSize: 11,
+        ...Typography.variant('micro'),
         color: theme.colors.text.secondary,
-        marginTop: 2,
-        ...Typography.default(),
+        marginTop: theme.space.s2,
     },
     groupHeaderRow: {
         flexDirection: 'row' as const,
@@ -131,7 +125,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     groupHeaderTitleRow: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 6,
+        gap: theme.space.s6,
         flex: 1,
         minWidth: 0,
     },
@@ -153,7 +147,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         overflow: 'hidden' as const,
     },
     folderHeaderSection: {
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         paddingTop: 0,
         paddingBottom: 0,
     },
@@ -171,14 +165,14 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     groupHeaderInlineActions: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 2,
+        gap: theme.space.s2,
         flexShrink: 0,
     },
     groupHeaderTrailingActions: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
         flexShrink: 0,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
     groupHeaderActionButton: {
         width: 18,
@@ -186,7 +180,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
         borderRadius: 999,
-        marginLeft: 4,
+        marginLeft: theme.space.s4,
     },
     folderHeaderDragHandleIcon: {
         opacity: 0,
@@ -205,7 +199,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     headerLabelRow: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 4,
+        gap: theme.space.s4,
         flex: 1,
         minWidth: 0,
     },
@@ -218,7 +212,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     searchChrome: {
         paddingLeft: SESSION_LIST_TEXT_INSET_PX,
         paddingRight: SESSION_LIST_HEADER_PADDING_RIGHT_PX,
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     searchChromeControlsRow: {
         minHeight: SESSION_LIST_COLUMN_METRICS.titleRowHeightPx,
@@ -248,14 +242,14 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     searchChromeStatusRow: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 8,
+        gap: theme.space.s8,
         minHeight: 28,
     },
     searchChromeScopeRow: {
         minHeight: 24,
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 6,
+        gap: theme.space.s6,
     },
     searchChromeScopeText: {
         flex: 1,
@@ -273,7 +267,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     searchChromeStatusRetry: {
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     searchChromeStatusRetryText: {
         color: theme.colors.accent.blue,
@@ -291,9 +285,9 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
     searchChromeEscalationRow: {
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 44,
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
     },
     searchChromeEscalationText: {
         flex: 1,

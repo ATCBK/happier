@@ -293,8 +293,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     topContent: {
         flexShrink: 0,
-        paddingHorizontal: theme.margins.md,
-        paddingTop: theme.margins.sm,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s8,
     },
     armedNote: {
         ...Typography.rowMeta(),

@@ -8,10 +8,10 @@ import { Typography } from '@/constants/Typography';
 import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    row: { flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: 26 },
-    words: { ...Typography.default('semiBold'), color: theme.colors.text.primary,
-        fontSize: 15, lineHeight: 20, flexShrink: 1 },
-    timer: { ...Typography.default(), ...Typography.tabular(), color: theme.colors.text.secondary, fontSize: 13 },
+    row: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, minHeight: 26 },
+    words: {  color: theme.colors.text.primary,
+        ...Typography.variant('heading'),  flexShrink: 1 },
+    timer: {  ...Typography.tabular(), color: theme.colors.text.secondary, ...Typography.variant('body') },
     grow: { flex: 1 },
 }));
 

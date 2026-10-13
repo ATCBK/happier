@@ -761,8 +761,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
         alignItems: 'center',
         width: '100%',
-        paddingBottom: 8,
-        paddingTop: 8,
+        paddingBottom: theme.space.s8,
+        paddingTop: theme.space.s8,
     },
     /** A document card: the document's own rhythm places it (`panelPresentation="document"`). */
     containerDocument: {
@@ -804,8 +804,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 0,
-        paddingLeft: 8,
-        paddingRight: 8,
+        paddingLeft: theme.space.s8,
+        paddingRight: theme.space.s8,
         paddingVertical: AGENT_INPUT_CONTAINER_VERTICAL_PADDING,
         minHeight: 40,
     },
@@ -839,25 +839,24 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginHorizontal: -8,
     },
     webVariableSectionContentInset: {
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     composerPresentationEffects: {
-        gap: 4,
-        paddingHorizontal: 8,
-        paddingTop: 4,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
+        paddingTop: theme.space.s4,
     },
     composerInputLockFeedback: {
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.state.warning.border,
         backgroundColor: theme.colors.state.warning.background,
-        paddingHorizontal: 8,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     composerInputLockFeedbackText: {
         color: theme.colors.state.warning.foreground,
-        fontSize: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     composerDecorationFeedback: {
         alignSelf: 'flex-start',
@@ -865,7 +864,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 7,
+        paddingHorizontal: theme.space.s6,
         paddingVertical: 3,
     },
     composerDecorationFeedbackInteractive: {
@@ -878,8 +877,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'center',
     },
     composerDecorationFeedbackText: {
-        fontSize: 12,
-        ...Typography.default(),
+        ...Typography.variant('meta'),
     },
     nativeKeyboardFooterSection: {
         flexShrink: 0,
@@ -890,15 +888,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         // positioning is handled by `Popover`
     },
     overlaySection: {
-        paddingVertical: 16,
+        paddingVertical: theme.space.s16,
     },
     overlaySectionTitle: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingBottom: 4,
-        ...Typography.default('semiBold'),
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s4,
     },
     overlayInlineRefreshButton: {
         minWidth: 30,
@@ -917,17 +913,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         opacity: 0.6,
     },
     overlayEffectivePolicy: {
-        paddingHorizontal: 16,
-        paddingTop: 2,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s8,
     },
 
     // Selection styles
     selectionItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         backgroundColor: 'transparent',
     },
     selectionItemPressed: {
@@ -940,7 +936,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderWidth: 2,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 12,
+        marginRight: theme.space.s12,
     },
     radioButtonActive: {
         borderColor: theme.colors.radio.active,
@@ -970,8 +966,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingBottom: 4,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s4,
     },
     statusRow: {
         flexDirection: 'row',
@@ -986,19 +982,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexShrink: 1,
     },
     statusText: {
-        fontSize: 11,
-        ...Typography.default(),
+        ...Typography.variant('micro'),
     },
     statusDot: {
-        marginRight: 6,
+        marginRight: theme.space.s6,
     },
     permissionModeContainer: {
         flexDirection: 'column',
         alignItems: 'flex-end',
     },
     permissionModeText: {
-        fontSize: 11,
-        ...Typography.default(),
+        ...Typography.variant('micro'),
     },
 
     // Button styles
@@ -1006,7 +1000,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'flex-end',
         justifyContent: 'space-between',
-        columnGap: 8,
+        columnGap: theme.space.s8,
         paddingHorizontal: 0,
     },
     actionButtonsColumn: {
@@ -1062,7 +1056,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         minWidth: 0,
         maxWidth: '60%',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     trailingAccessoryStack: {
         flexDirection: 'column-reverse',
@@ -1087,7 +1081,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     actionButtonsLeft: {
         flexDirection: 'row',
-        ...(Platform.OS === 'web' ? { columnGap: 6, rowGap: 1 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
+        ...(Platform.OS === 'web' ? { columnGap: theme.space.s6, rowGap: 1 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
         flex: 1,
         minWidth: 0,
         flexWrap: 'wrap',
@@ -1104,12 +1098,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     actionButtonsLeftScrollInline: {
         flexDirection: 'row',
         alignItems: 'center',
-        ...(Platform.OS === 'web' ? { columnGap: 6 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
+        ...(Platform.OS === 'web' ? { columnGap: theme.space.s6 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
     },
     actionButtonsLeftScrollContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        ...(Platform.OS === 'web' ? { columnGap: 6 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
+        ...(Platform.OS === 'web' ? { columnGap: theme.space.s6 } : { marginBottom: -NATIVE_ACTION_CHIP_GAP_Y }),
         paddingRight: ACTION_BAR_SCROLL_CONTENT_PADDING_RIGHT,
     },
     actionButtonsFadeLeft: {
@@ -1129,14 +1123,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         zIndex: 2,
     },
     actionButtonsLeftNarrow: {
-        columnGap: 4,
+        columnGap: theme.space.s4,
     },
     actionButtonsLeftNoFlex: {
         flex: 0,
     },
     actionItemWrapper: {
         // Non-chip action items (e.g. SCM status) should align with chips on native.
-        ...(Platform.OS === 'web' ? {} : { marginRight: 6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
+        ...(Platform.OS === 'web' ? {} : { marginRight: theme.space.s6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
     },
     actionChip: AGENT_INPUT_ACTION_CHIP_STYLE,
     actionChipText: resolveAgentInputActionChipTextStyle(theme),
@@ -1146,8 +1140,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     overlayOptionRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
     },
     overlayOptionRowPressed: {
         backgroundColor: theme.colors.surface.pressed,
@@ -1159,7 +1153,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderWidth: 2,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 12,
+        marginRight: theme.space.s12,
     },
     overlayRadioOuterSelected: {
         borderColor: theme.colors.radio.active,
@@ -1185,27 +1179,25 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         color: theme.colors.text.primary,
     },
     overlayOptionDescription: {
-        fontSize: 11,
+        ...Typography.variant('micro'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     overlayEmptyText: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        ...Typography.default(),
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
     },
     actionButton: {
         flexDirection: 'row',
         alignItems: 'center',
         borderRadius: Platform.select({ default: 16, android: 20 }),
-        paddingHorizontal: 8,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s6,
         justifyContent: 'center',
         height: 32,
         // Keep vertical alignment consistent with `actionChip` on native.
-        ...(Platform.OS === 'web' ? {} : { marginRight: 6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
+        ...(Platform.OS === 'web' ? {} : { marginRight: theme.space.s6, marginBottom: NATIVE_ACTION_CHIP_GAP_Y }),
     },
     actionButtonPressed: {
         opacity: motionTokens.press.opacity,

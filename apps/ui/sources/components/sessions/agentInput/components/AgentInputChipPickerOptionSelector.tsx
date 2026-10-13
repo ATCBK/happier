@@ -96,7 +96,7 @@ export function AgentInputChipPickerOptionSelector(
     ...createAgentInputChipPickerOptionTransientStyles(theme),
     optionRowCompact: {
       minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
-      paddingVertical: 6,
+      paddingVertical: theme.space.s6,
     },
   }), [theme]);
 
@@ -341,35 +341,33 @@ function AgentInputChipPickerOptionButton(
 const stylesheet = StyleSheet.create((theme) => ({
   railContainer: {
     width: "100%",
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s12,
     backgroundColor: theme.colors.background.canvas,
   },
   sectionBlock: {
-    gap: 4,
-    marginBottom: 10,
+    gap: theme.space.s4,
+    marginBottom: theme.space.s10,
   },
   // Sentence-case group label ("Favorites", "Agents"): the same anatomy as every picker group.
   sectionTitle: {
-    paddingHorizontal: 6,
-    fontSize: 12,
-    lineHeight: 16,
+    paddingHorizontal: theme.space.s6,
+    ...Typography.variant('meta', 'medium'),
     color: theme.colors.text.secondary,
-    ...Typography.default("medium"),
   },
   railOptionsColumn: {
-    gap: 6,
+    gap: theme.space.s6,
   },
   optionRow: {
     minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
     borderRadius: AGENT_INPUT_CHIP_PICKER_OPTION_ROW_RADIUS,
     borderWidth: 0,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: theme.space.s8,
+    paddingVertical: theme.space.s6,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 8,
+    gap: theme.space.s8,
     backgroundColor: "transparent",
   },
   optionRowContainer: {
@@ -379,7 +377,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: theme.space.s8,
   },
   optionTextBlock: {
     flex: 1,
@@ -390,7 +388,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 6,
+    gap: theme.space.s6,
   },
   railAction: {
     width: RAIL_ACTION_SIZE,

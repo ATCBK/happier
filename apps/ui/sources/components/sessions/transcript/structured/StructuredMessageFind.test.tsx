@@ -1,18 +1,34 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createTestSessionTranscriptSource, renderScreen, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
 import { ReviewCommentsV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
-import { installToolShellCommonModuleMocks } from '@/components/tools/shell/views/ToolView.testHelpers';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createTranscriptFindRowStore } from '../find/transcriptFindRowStore';
 import { TranscriptFindProvider } from '../find/TranscriptFindContext';
-import { projectStructuredMessageFindText, renderStructuredMessage } from './StructuredMessageBlock';
 import type { Message } from '@happier-dev/session-core/messages';
-import { findBuiltInStructuredMessageEntry } from './descriptorRegistry';
 import { TranscriptRowLayoutMutationProvider, type TranscriptRowLayoutMutation } from '../measurement/TranscriptRowLayoutMutationContext';
-import { renderExecutionRunStructuredMeta } from '@/components/sessions/runs/renderExecutionRunStructuredMeta';
 
-installToolShellCommonModuleMocks();
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
+});
+installDisconnectedServerSocketBoundary();
+const { projectStructuredMessageFindText, renderStructuredMessage } = await import('./StructuredMessageBlock');
+const { findBuiltInStructuredMessageEntry } = await import('./descriptorRegistry');
+const { renderExecutionRunStructuredMeta } = await import('@/components/sessions/runs/renderExecutionRunStructuredMeta');
 
 describe('Structured transcript Find', () => {
     it('decorates actual typed-card display text rather than the envelope or hidden recipient identity', async () => {

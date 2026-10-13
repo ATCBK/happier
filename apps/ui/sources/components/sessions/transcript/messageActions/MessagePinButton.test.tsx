@@ -3,15 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { MessagePinAvailability } from './resolveMessagePinAvailability';
-import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const platformState = vi.hoisted(() => ({
     os: 'web',
 }));
-
-const iconCalls = vi.hoisted(() => [] as Array<{ name: string; color: string; size: number }>);
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -70,20 +68,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key) => key });
 });
 
-vi.mock('@/components/sessions/shell/sessionPinIcons', () => ({
-    PinIcon: (props: { color: string; size: number }) => {
-        iconCalls.push({ name: 'push-pin', color: props.color, size: props.size });
-        return React.createElement('PinIcon', props);
-    },
-    PinSlashIcon: (props: { color: string; size: number }) => {
-        iconCalls.push({ name: 'push-pin-slash', color: props.color, size: props.size });
-        return React.createElement('PinSlashIcon', props);
-    },
-}));
-
 describe('MessagePinButton', () => {
     afterEach(() => {
-        iconCalls.length = 0;
         platformState.os = 'web';
         standardCleanup();
     });
@@ -104,7 +90,7 @@ describe('MessagePinButton', () => {
         expect(button?.props.accessibilityRole).toBe('button');
         expect(button?.props.accessibilityLabel).toBe('session.transcriptNavigation.pinMessageA11y');
         expect(button?.props.hitSlop).toBeUndefined();
-        expect(iconCalls).toEqual([expect.objectContaining({ name: 'push-pin', color: '#666666', size: ICON_SIZE.xs })]);
+        expect(screen.findAllByType(Icon).map(node => node.props)).toEqual([expect.objectContaining({ name: 'push-pin', color: '#666666', size: ICON_SIZE.xs })]);
     });
 
     it('uses an unpin label and active icon color when pinned', async () => {
@@ -119,7 +105,7 @@ describe('MessagePinButton', () => {
         );
 
         expect(screen.findByTestId('message-pin')?.props.accessibilityLabel).toBe('session.transcriptNavigation.unpinMessageA11y');
-        expect(iconCalls).toEqual([expect.objectContaining({ name: 'push-pin-slash', color: '#0a7a4b' })]);
+        expect(screen.findAllByType(Icon).map(node => node.props)).toEqual([expect.objectContaining({ name: 'push-pin-slash', color: '#0a7a4b' })]);
     });
 
     it('stamps the pin at press time rather than at render time', async () => {

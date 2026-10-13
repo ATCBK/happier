@@ -22,29 +22,26 @@ const stylesheet = StyleSheet.create((theme) => ({
     root: {
         width: 420,
         maxWidth: '100%',
-        padding: 12,
-        gap: 10,
+        padding: theme.space.s12,
+        gap: theme.space.s10,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     line: {
-        ...Typography.default(),
         ...Typography.tabular(),
         flex: 1,
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     openLink: {
-        ...Typography.default('semiBold'),
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

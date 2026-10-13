@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountProfileSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import type { NewSessionPathSelectionContentProps } from '../components/NewSessionPathSelectionContent';
 import { createDeferred, createMachineFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { AcpCatalogRecordV1Schema, ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -27,6 +28,9 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
+import { getSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
+import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 import { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
@@ -39,6 +43,10 @@ import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-d
 import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/contributions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
+
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
 // Only platform/navigation, secure storage, HTTP, Socket.IO and machine RPC
 // boundaries are replaced. The complete launcher and all domain owners stay real.
@@ -67,6 +75,13 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
 const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
 const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
 const declaration = { purpose: 'model_upstream', service, credentialKinds: ['oauth' as const] };
+const connectedDescriptor = ConnectedAccountUiProjectionEntryV1Schema.parse({
+    id: 'claude-subscription', serviceId: 'claude-subscription', pluginId: service.pluginId,
+    provenance: 'first_party', sourceKind: 'bundled', title: 'Claude subscription',
+    authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
+        pkce: 'required', callbackUrl: 'https://platform.claude.com/oauth/code/callback', outcomeReconciliation: 'none' }] },
+    capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+});
 const initialState = storage.getState();
 let mountedConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let mountedBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | null = null;
@@ -124,10 +139,11 @@ describe('New Session selected credential launch gate', () => {
             record: { key: 'purposes', value: purposeValue } }, true);
         applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: acpRecord }, true);
         installConnectedAccountDescriptorProjection({ scopeKey: 'credential-suggestions', status: 'ready', conflicts: [], errorReason: null,
-            descriptors: [{ id: 'claude-subscription', serviceId: 'claude-subscription', pluginId: service.pluginId, provenance: 'first_party', sourceKind: 'bundled',
-                title: 'Claude subscription', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
-                    pkce: 'required', callbackUrl: 'https://platform.claude.com/oauth/code/callback', outcomeReconciliation: 'none' }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] });
-        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: { claude: {
+            descriptors: [connectedDescriptor] });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: {
+                'happier.agent.claude/claude-subscription': connectedDescriptor,
+            } } }, agentsById: { claude: {
             id: 'claude', identity: consumer, isBuiltIn: true, title: 'Claude', connectedAccounts: [declaration],
             capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
         } } });
@@ -172,6 +188,8 @@ describe('New Session selected credential launch gate', () => {
         { native: 'signedOut' as const, connected: true, selected: 'native', acpReady: true, ready: false },
         { native: 'signedIn' as const, connected: true, selected: 'native', acpReady: true, ready: true },
         { native: 'signedOut' as const, connected: true, selected: 'connected', acpReady: true, ready: true },
+        { native: 'signedOut' as const, connected: true, selected: 'connected-late', acpReady: true, ready: true },
+        { native: 'signedOut' as const, connected: true, selected: 'connected-late-edited', acpReady: true, ready: true },
         { native: 'signedOut' as const, connected: false, selected: 'native', acpReady: true, ready: false },
         { native: 'signedIn' as const, connected: true, selected: 'native', acpReady: false, ready: true },
         { native: 'signedOut' as const, connected: false, selected: 'provider', acpReady: true, ready: true },
@@ -180,7 +198,7 @@ describe('New Session selected credential launch gate', () => {
     ])('loads readiness with the picker closed and keeps Start on the exact launch credential: %j', async (scenario) => {
         await prepareSessionDraftPersistenceStorage();
         const bridge = await loadSyncSingletonForTests();
-        const accountId = 'credential-launcher';
+        const accountId = `credential-launcher-${scenario.native}-${scenario.connected}-${scenario.selected}-${scenario.acpReady}`;
         const http = createHomeHubArtifactHttpBoundary(accountId);
         const features = buildServerFeaturesResponse();
         features.features.providers.enabled = true;
@@ -188,11 +206,33 @@ describe('New Session selected credential launch gate', () => {
         const consumer = { pluginId: 'happier.agent.claude', localId: 'claude' };
         const purposeValue = { v: 1 as const, bindings: [] };
         const acpRecord = { v: 1 as const, definitions: [] };
+        const lateDraft = scenario.selected.startsWith('connected-late');
+        const editedLateDraft = scenario.selected === 'connected-late-edited';
+        const profileId = 'credential-late-profile';
+        const profileRecord = ProfileRecordV1Schema.parse({ v: 1, id: profileId, enabled: true,
+            promptStack: [], secretBindings: {}, definition: { kind: 'inline', profile: {
+                v: 2, id: profileId, name: 'Draft profile', compatibilityByTargetKey: { 'agent:happier.agent.claude/claude': true },
+                preferredAgentTargetKey: 'agent:happier.agent.claude/claude', createdAt: 1, updatedAt: 1,
+            } },
+        });
+        const profileTransfer = ProfileTransferRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+            content: { t: 'plain', v: { v: 1, phase: 'active', sourceSettingsVersion: 1, migratedLogicalRevision: 1,
+                inventory: [{ kind: 'account_row', id: profileId, revision: 1 }] } },
+        });
         const pendingAcpRead = createDeferred<Response>();
-        const connection = await restoreServerAccountForTest({ serverUrl: 'https://credential-launcher.test', accountId,
+        const connection = await restoreServerAccountForTest({ serverUrl: `https://${accountId}.test`, accountId,
             request: (input, init) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/v1/features') return Promise.resolve(Response.json(features));
+                if (lateDraft && path === '/v2/account/settings') return Promise.resolve(Response.json({ version: 1,
+                    content: { t: 'plain', v: { useProfiles: true, useEnhancedSessionWizard: false, lastUsedAgent: 'claude' } } }));
+                if (lateDraft && path === PROFILE_ROWS_ROUTE_V1) return Promise.resolve(Response.json(ProfileRowsListResponseV1Schema.parse({
+                    status: 'listed', rows: [{ id: profileId, revision: 1, content: { t: 'plain', v: profileRecord } }],
+                    complete: true, nextCursor: null, referenceGuardRevision: 1, transferControl: profileTransfer, diagnostics: [],
+                })));
+                if (lateDraft && path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Promise.resolve(Response.json(
+                    ProfileReferenceGuardReadResponseV1Schema.parse({ status: 'ready', revision: 1 })));
+                if (lateDraft && path === PROFILE_TRANSFER_ROUTE_V1) return Promise.resolve(Response.json(profileTransfer));
                 if (path === '/v1/account/entity-rows/connected-accounts/purposes') return Promise.resolve(Response.json({
                     status: 'present', revision: 1, content: { t: 'plain', v: { key: 'purposes', value: purposeValue } } }));
                 if (path === '/v1/account/entity-rows/acp') return scenario.acpReady
@@ -202,7 +242,7 @@ describe('New Session selected credential launch gate', () => {
             } });
         const scope = { serverId: connection.home.id, accountId };
         mountedConnection = connection;
-        storage.setState({ profileScope: scope, settingsScope: scope, settings: { ...settingsDefaults, lastUsedAgent: 'claude', useEnhancedSessionWizard: false },
+        storage.setState({ profileScope: scope, settingsScope: scope, settings: { ...settingsDefaults, lastUsedAgent: 'claude', useEnhancedSessionWizard: false, useProfiles: lateDraft },
             profile: AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected ? [{
                 ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
                 status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
@@ -215,10 +255,11 @@ describe('New Session selected credential launch gate', () => {
             ? { status: 'ready', revision: 1, record: acpRecord }
             : { status: 'loading' }, true);
         installConnectedAccountDescriptorProjection({ scopeKey: 'credential-launcher', status: 'ready', conflicts: [], errorReason: null,
-            descriptors: [{ id: 'claude-subscription', serviceId: 'claude-subscription', pluginId: service.pluginId, provenance: 'first_party', sourceKind: 'bundled',
-                title: 'Claude subscription', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
-                    pkce: 'required', callbackUrl: 'https://platform.claude.com/oauth/code/callback', outcomeReconciliation: 'none' }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] });
-        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: { claude: {
+            descriptors: [connectedDescriptor] });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: {
+                'happier.agent.claude/claude-subscription': connectedDescriptor,
+            } } }, agentsById: { claude: {
             id: 'claude', identity: consumer, isBuiltIn: true, title: 'Claude', connectedAccounts: [declaration],
             capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
         } } });
@@ -245,7 +286,7 @@ describe('New Session selected credential launch gate', () => {
             return { jobs: [] };
         });
         const draftId = `credential-${scenario.native}-${scenario.connected}-${scenario.selected}`;
-        if (scenario.selected === 'connected') writeNewSessionDraftToRepository({ scope, draftId, draft: {
+        const connectedDraft = {
             input: 'hello', selectedMachineId: machine.id, selectedPath: '/repo', targetServerId: scope.serverId,
             backendTarget: { kind: 'backend', backendId: 'claude' }, permissionMode: 'default', updatedAt: 1,
             // The configuration-seed adapter produces this canonical envelope.
@@ -254,7 +295,13 @@ describe('New Session selected credential launch gate', () => {
                     source: 'connected', selection: 'profile', profileId: 'work',
                 } },
             } } },
-        } });
+        } satisfies NewSessionDraft;
+        if (scenario.selected === 'connected') writeNewSessionDraftToRepository({ scope, draftId, draft: connectedDraft });
+        if (lateDraft) {
+            // The route supplies no new folder intent during persisted recovery.
+            authoringRoute.directory = undefined;
+            await refreshProfileCatalog(scope);
+        }
         if (scenario.selected.startsWith('provider') || scenario.selected === 'native-with-provider') writeNewSessionDraftToRepository({ scope, draftId, draft: {
             input: 'hello', selectedMachineId: machine.id, selectedPath: '/repo', targetServerId: scope.serverId,
             backendTarget: { kind: 'backend', backendId: 'claude' },
@@ -267,6 +314,74 @@ describe('New Session selected credential launch gate', () => {
             await vi.waitFor(() => expect(machineAgentInventoryStore.read(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id)))
                 .toMatchObject({ status: 'ready', agents: [{ agentId: 'claude', installed: true }] }));
             await flushHookEffects();
+            if (lateDraft) {
+                const cold = hook.getCurrent();
+                if (cold.variant !== 'simple') throw new Error('Expected cold simple launcher');
+                expect(cold.simpleProps.canCreate).toBe(false);
+                if (editedLateDraft) {
+                    // The blocker is the composer's status line: its primary action is the one-tap connected account.
+                    expect(cold.simpleProps.connectionStatus?.action?.testID).toBe('new-session-agent-blocker.connected');
+                    await act(async () => { cold.simpleProps.connectionStatus?.action?.onPress(); });
+                    await vi.waitFor(() => {
+                        const edited = hook.getCurrent();
+                        if (edited.variant !== 'simple') throw new Error('Expected edited simple launcher');
+                        expect(edited.simpleProps.canCreate).toBe(true);
+                    });
+                }
+                // The real repository publishes a late scoped draft, as after a cold
+                // Account restore. No reader, subscription or autosave is replaced.
+                const restoredDraft = { ...connectedDraft, selectedPath: '/repo/late', selectedProfileId: profileId,
+                    modelSelection: { v: 1, updatedAt: 1, ref: { agentTargetKey, providerConnectionId: null, modelId: 'haiku' } },
+                    backendNewSessionOptionStateByTargetKey: {
+                        ...(editedLateDraft ? { [agentTargetKey]: { connectedServices: {
+                            v: 2, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': { source: 'native' } },
+                        } } } : connectedDraft.backendNewSessionOptionStateByTargetKey),
+                        'agent:happier.agent.codex/codex': { reasoningEffort: 'low' },
+                    },
+                } satisfies NewSessionDraft;
+                vi.useFakeTimers();
+                await act(async () => { writeNewSessionDraftToRepository({ scope, draftId, draft: restoredDraft }); });
+                await flushHookEffects();
+                await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+                const saved = readNewSessionDraftFromRepository({ scope, draftId });
+                expect(saved).toMatchObject({ selectedPath: '/repo/late', selectedProfileId: profileId,
+                    modelSelection: { ref: { modelId: 'haiku' } },
+                    ...(editedLateDraft ? { backendNewSessionOptionStateByTargetKey: {
+                        [agentTargetKey]: { connectedServicesBindingsByServiceId: {
+                            'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+                        } }, 'agent:happier.agent.codex/codex': { reasoningEffort: 'low' },
+                    } } : { backendNewSessionOptionStateByTargetKey: restoredDraft.backendNewSessionOptionStateByTargetKey }) });
+                const hydrated = hook.getCurrent();
+                if (hydrated.variant !== 'simple') throw new Error('Expected hydrated simple launcher');
+                expect(hydrated.simpleProps.canCreate, JSON.stringify({
+                    statusBadges: hydrated.simpleProps.statusBadges,
+                    selectedMachineId: hydrated.simpleProps.selectedMachineId,
+                    agentType: hydrated.simpleProps.agentType,
+                    inventory: machineAgentInventoryStore.read(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id)),
+                })).toBe(true);
+                await hook.unmount();
+                // Flush device storage, discard the repository's in-memory replicas,
+                // and reopen through the same real persisted reader used on reload.
+                const draftStorage = getSessionDraftPersistenceStorage();
+                if ('flush' in draftStorage) await draftStorage.flush();
+                resetSessionDraftRepositoryForTests();
+                vi.useRealTimers();
+                const reopened = await renderHook(() => useNewSessionScreenModel({ draftId }));
+                try {
+                    await flushHookEffects();
+                    const restored = reopened.getCurrent();
+                    if (restored.variant !== 'simple') throw new Error('Expected restored simple launcher');
+                    expect(restored.simpleProps.canCreate).toBe(true);
+                    expect(restored.simpleProps.selectedPath).toBe('/repo/late');
+                    expect(restored.simpleProps.selectedProfileId).toBe(profileId);
+                    expect(restored.simpleProps.modelMode).toBe('haiku');
+                    const { NewSessionSimplePanel } = await import('../components/NewSessionSimplePanel');
+                    const panel = await renderScreen(<NewSessionSimplePanel {...restored.simpleProps} />);
+                    try { expect(panel.findByTestId('new-session-composer-send')?.props.accessibilityState)
+                        .toMatchObject({ disabled: false }); } finally { await panel.unmount(); }
+                } finally { await reopened.unmount(); }
+                return;
+            }
             if (scenario.selected.startsWith('provider')) await vi.waitFor(() => {
                 expect(rpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toBe(true);
                 const current = hook.getCurrent();
@@ -295,18 +410,9 @@ describe('New Session selected credential launch gate', () => {
                         .toMatchObject({ disabled: false });
                 } finally { await rendered.unmount(); }
             }
-            expect(model.simpleProps.statusBadges?.some((badge) => badge.key === 'new-session-create-blocked'),
+            expect(Boolean(model.simpleProps.connectionStatus?.text),
                 observedAdmission).toBe(!scenario.ready);
-            if (!scenario.ready) {
-                const { t } = await import('@/text');
-                const statusLabel = t(scenario.selected === 'provider-unconfirmed' ? 'machineAgents.unknown' : 'machineAgents.needsSignIn');
-                expect(model.simpleProps.statusBadges?.find((badge) => badge.key === 'new-session-create-blocked'),
-                    observedAdmission).toMatchObject({
-                    label: expect.stringContaining(statusLabel),
-                    accessibilityLabel: expect.stringContaining(statusLabel),
-                });
-            }
-            // Unknown Provider admission uses the status badge, not a native
+            // Unknown Provider admission uses the status line, not a native
             // sign-in recovery line that cannot admit the selected route.
             expect(model.simpleProps.connectionStatus?.action?.testID?.startsWith('new-session-agent-blocker.') === true, observedAdmission)
                 .toBe(!scenario.ready && scenario.selected !== 'provider-unconfirmed');
@@ -316,7 +422,7 @@ describe('New Session selected credential launch gate', () => {
                 const recovered = hook.getCurrent();
                 if (recovered.variant !== 'simple') throw new Error('Expected recovered simple launcher');
                 expect(recovered.simpleProps.canCreate).toBe(true);
-                expect(recovered.simpleProps.statusBadges?.some((badge) => badge.key === 'new-session-create-blocked')).toBe(false);
+                expect(recovered.simpleProps.connectionStatus?.text).toBeFalsy();
                 if (scenario.selected === 'native' && scenario.native === 'signedOut') {
                     const authoredPath = '/repo/authored-before-send';
                     const renderPathContent = recovered.simpleProps.pathPopover?.renderContent;
@@ -326,6 +432,9 @@ describe('New Session selected credential launch gate', () => {
                         throw new Error('Expected the real folder picker');
                     }
                     await act(async () => {
+                        // Route text is passive hydration; a real text edit
+                        // materializes the new draft before autosave/Send.
+                        recovered.simpleProps.promptStore.setPrompt('hello authored before send');
                         pathContent.props.onChangeSelectedPath(authoredPath);
                         recovered.simpleProps.setModelMode?.('haiku');
                     });
@@ -340,6 +449,9 @@ describe('New Session selected credential launch gate', () => {
                     expect(refreshed.simpleProps.canCreate).toBe(true);
                     expect(refreshed.simpleProps.selectedPath).toBe(authoredPath);
                     expect(refreshed.simpleProps.modelMode).toBe('haiku');
+                    await vi.waitFor(() => expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+                        selectedPath: authoredPath, modelSelection: { ref: { modelId: 'haiku' } },
+                    }));
                     await act(async () => { await refreshed.simpleProps.handleCreateSession(); });
                     const submitted = readNewSessionDraftFromRepository({ scope, draftId });
                     expect(submitted).toMatchObject({ selectedPath: authoredPath,
@@ -365,6 +477,7 @@ describe('New Session selected credential launch gate', () => {
                 }
             }
         } finally {
+            vi.useRealTimers();
             pendingAcpRead.resolve(Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: acpRecord } }));
             await hook.unmount();
             await connection.dispose();

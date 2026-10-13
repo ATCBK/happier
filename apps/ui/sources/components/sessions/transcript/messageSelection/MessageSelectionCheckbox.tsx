@@ -52,7 +52,7 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 32,
         minWidth: 32,
         borderRadius: 16,
-        marginRight: 6,
+        marginRight: theme.space.s6,
         backgroundColor: theme.colors.surface.base,
     },
     checkboxSelected: {

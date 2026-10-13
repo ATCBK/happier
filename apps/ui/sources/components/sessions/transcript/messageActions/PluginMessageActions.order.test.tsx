@@ -8,6 +8,7 @@ import type {
     PluginProjectionEntry,
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { Icon } from '@/components/ui/icons/Icon';
 
 import {
     createPluginMessageActionHost,
@@ -40,17 +41,6 @@ vi.mock('react-native-unistyles', async () => {
         },
     });
 });
-
-vi.mock('@/components/ui/icons/Icon', () => ({
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-    ICON_SIZE: { xs: 14 },
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: React.PropsWithChildren<Record<string, unknown>>) => (
-        React.createElement('Text', props, props.children)
-    ),
-}));
 
 const messageReference: MessageActionReferenceV1 = {
     v: 1,
@@ -185,7 +175,7 @@ describe('PluginMessageActions row adapter', () => {
             'plugin-message-action:zeta.preview/review',
             'plugin-message-action:alpha.preview/review',
         ]);
-        expect(screen.findAllByType('Icon').map((node) => node.props.name)).toEqual([
+        expect(screen.findAllByType(Icon).map((node) => node.props.name)).toEqual([
             'magic-wand',
             'arrow-right',
         ]);

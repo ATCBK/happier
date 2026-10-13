@@ -360,7 +360,7 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
             await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith(activeCurrentPreviewExposure));
             expect(modalSpies.confirm).not.toHaveBeenCalled();
             await result.unmount();
-        } finally { home.dispose(); }
+        } finally { await home.dispose(); }
     });
 
     it('does not revoke an active public preview when confirmation is declined', async () => {

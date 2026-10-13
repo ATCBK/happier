@@ -132,7 +132,7 @@ describe('SessionHeaderActionMenu real runtime boundaries', () => {
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
         resetServerFeaturesClientForTests();
-        homes?.dispose();
+        await homes?.dispose();
         storage.setState(previousState, true);
         voiceSessionBindingStore.setState({
             bindingsByConversationSessionId: {}, runtimeBindingsByConversationSessionId: {}, persistedBindingsByConversationSessionId: {},

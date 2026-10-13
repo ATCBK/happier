@@ -1,33 +1,26 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { CommandMenuProps } from '@/components/ui/commandMenu';
-
-let mockKeyboardHeight = 0;
-const capturedCommandMenuProps: { current: CommandMenuProps | null } = { current: null };
+import { Popover } from '@/components/ui/popover';
+import { makeMutable } from 'react-native-reanimated';
+import { ComposerKeyboardProvider, type ComposerKeyboardLayout } from '@/components/sessions/keyboardAvoidance/ComposerKeyboardContext';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
         Platform: {
             OS: 'android',
-            select: (value: any) => value.android ?? value.native ?? value.default ?? value.ios ?? null,
+            select: (value: Record<string, unknown>) => value.android ?? value.native ?? value.default ?? value.ios ?? null,
         },
         useWindowDimensions: () => ({ width: 2400, height: 1080 }),
     });
 });
 
-vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
-    useKeyboardHeight: () => mockKeyboardHeight,
-}));
-
-vi.mock('@/components/ui/commandMenu', () => ({
-    CommandMenu: (props: CommandMenuProps) => {
-        capturedCommandMenuProps.current = props;
-        return React.createElement(View, { testID: 'captured-command-menu' });
-    },
-}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Replace only the portal/window measurement boundary below the real CommandMenu.
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 function buildProps(overrides: Partial<CommandMenuProps> = {}): CommandMenuProps {
     return {
@@ -47,24 +40,30 @@ function buildProps(overrides: Partial<CommandMenuProps> = {}): CommandMenuProps
 }
 
 describe('AgentInputCommandMenu', () => {
-    beforeEach(() => {
-        mockKeyboardHeight = 0;
-        capturedCommandMenuProps.current = null;
-    });
+    afterEach(standardCleanup);
 
     it('applies the agent-input keyboard-safe popover contract on native', async () => {
-        mockKeyboardHeight = 320;
+        // The native composer owns keyboard geometry; consume its real context.
+        const layout: ComposerKeyboardLayout = {
+            availablePanelHeight: makeMutable(760), bottomInset: makeMutable(320), composerHeight: makeMutable(80),
+            isKeyboardLiftSuppressed: makeMutable(false), keyboardHeightForInset: makeMutable(320),
+            keyboardHeightLive: makeMutable(320), keyboardProgress: makeMutable(1), listBottomInset: makeMutable(400),
+            getKeyboardHeight: () => 320, setComposerMeasuredHeight: () => {},
+        };
         const { AgentInputCommandMenu } = await import('../AgentInputCommandMenu');
 
-        await renderScreen(<AgentInputCommandMenu {...buildProps()} />);
+        const screen = await renderScreen(<ComposerKeyboardProvider layout={layout}>
+            <AgentInputCommandMenu {...buildProps()} />
+        </ComposerKeyboardProvider>);
+        const menu = screen.findAllByType(Popover)[0]?.props;
 
-        expect(capturedCommandMenuProps.current?.placement).toBe('top');
-        expect(capturedCommandMenuProps.current?.gap).toBe(8);
-        expect(capturedCommandMenuProps.current?.keyboardBottomInset).toBe(320);
-        expect(capturedCommandMenuProps.current?.edgePadding).toEqual({ horizontal: 16, vertical: 16 });
-        expect(capturedCommandMenuProps.current?.consumeOutsidePointerDown).toBe(false);
-        expect(capturedCommandMenuProps.current?.containerStyle).toEqual({ paddingHorizontal: 0 });
-        expect(capturedCommandMenuProps.current?.backdrop).toEqual({
+        expect(menu?.placement).toBe('top');
+        expect(menu?.gap).toBe(8);
+        expect(menu?.keyboardBottomInset).toBe(320);
+        expect(menu?.edgePadding).toEqual({ horizontal: 16, vertical: 16 });
+        expect(menu?.consumeOutsidePointerDown).toBe(false);
+        expect(menu?.containerStyle).toEqual({ paddingHorizontal: 0 });
+        expect(menu?.backdrop).toEqual({
             style: { backgroundColor: 'transparent' },
             blockOutsidePointerEvents: 'above-anchor',
         });

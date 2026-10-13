@@ -703,6 +703,7 @@ describe('multi-Home Session creation composition', () => {
         routeBoundary.params = { draftId };
         const { NewSessionScreen } = await import('../NewSessionScreen');
         const { NewSessionDraftComposerActions } = await import('@/components/sessions/drafts/NewSessionDraftComposerActions');
+        const { AgentInput } = await import('@/components/sessions/agentInput');
         const { getSessionDraftSnapshot, writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         const element = () => React.createElement(InjectedAuthProvider, { credentials: { token: homeAToken },
             children: React.createElement(NewSessionScreen, { presentation: 'embedded' }) });
@@ -710,7 +711,7 @@ describe('multi-Home Session creation composition', () => {
         modalBoundary.confirm.mockClear();
         modalBoundary.confirm.mockResolvedValue(false);
         try {
-            await vi.waitFor(() => expect(screen.root.findAllByType(NewSessionDraftComposerActions)).toHaveLength(0));
+            await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
             const scope = { serverId: homeAScopeId, accountId: 'account-a' };
             await act(async () => { writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Keep exact composer scope' } }); });
             await vi.waitFor(() => expect(screen.root.findAllByType(NewSessionDraftComposerActions)).toHaveLength(1));

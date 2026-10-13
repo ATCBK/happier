@@ -29,20 +29,19 @@ const stylesheet = StyleSheet.create((theme) => ({
     body: {
         // The prompt aligns with the row's text column: past the mark and its gap.
         paddingLeft: 38,
-        paddingRight: 4,
-        paddingBottom: 10,
-        gap: 4,
+        paddingRight: theme.space.s4,
+        paddingBottom: theme.space.s10,
+        gap: theme.space.s4,
     },
     openLink: {
         alignSelf: 'flex-start',
-        paddingVertical: 6,
-        paddingHorizontal: 10,
+        paddingVertical: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 8,
     },
     openLinkText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
     },
 }));
 

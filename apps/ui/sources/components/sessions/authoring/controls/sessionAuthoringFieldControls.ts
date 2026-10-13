@@ -9,9 +9,10 @@ import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getRes
 import { buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
 import { PortableRuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
-import type {
-    WorkflowSessionAuthoringSelection,
-    WorkflowSessionAuthoringSelectionFieldId,
+import {
+    WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS,
+    type WorkflowSessionAuthoringSelection,
+    type WorkflowSessionAuthoringSelectionFieldId,
 } from '@happier-dev/protocol/workflows/workflowV1';
 
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/catalog';
@@ -37,7 +38,13 @@ import type { SessionAuthoringControls } from './useSessionAuthoringControls';
  * navigates, persists, or remembers a selection.
  */
 
-export type SessionAuthoringFieldId = WorkflowSessionAuthoringSelectionFieldId;
+// Execution tool policy round-trips in selections but has no standalone
+// Session-authoring control. A serialized field is not a control descriptor.
+export type SessionAuthoringFieldId = Exclude<WorkflowSessionAuthoringSelectionFieldId, 'allowedTools' | 'unlistedTools'>;
+export const SESSION_AUTHORING_CONTROL_FIELD_IDS = Object.freeze(
+    WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS.filter((field): field is SessionAuthoringFieldId =>
+        field !== 'allowedTools' && field !== 'unlistedTools'),
+);
 
 /** Option id meaning "no value", kept distinct from "inherit" (absence). */
 export const SESSION_AUTHORING_NONE_OPTION_ID = '__none__';

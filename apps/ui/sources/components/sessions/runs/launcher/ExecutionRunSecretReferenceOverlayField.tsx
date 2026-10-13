@@ -171,7 +171,7 @@ export const ExecutionRunSecretReferenceOverlayField = React.memo((props: Readon
     if (!props.profile || requirements.length === 0) return null;
 
     return (
-        <View style={{ gap: 8 }}>
+        <View style={{ gap: theme.space.s8 }}>
             <Pressable
                 testID="execution-run-secret-overlay-edit"
                 accessibilityRole="button"
@@ -182,7 +182,7 @@ export const ExecutionRunSecretReferenceOverlayField = React.memo((props: Readon
                     minWidth: interactiveTargetSize,
                     minHeight: interactiveTargetSize,
                     justifyContent: 'center',
-                    paddingHorizontal: 12,
+                    paddingHorizontal: theme.space.s12,
                     borderRadius: 10,
                     borderWidth: 1,
                     borderColor: theme.colors.border.default,
@@ -194,7 +194,7 @@ export const ExecutionRunSecretReferenceOverlayField = React.memo((props: Readon
                     {t('profiles.requirements.modalTitle')}
                 </Text>
             </Pressable>
-            <View testID="execution-run-secret-overlay-review" style={{ gap: 4 }}>
+            <View testID="execution-run-secret-overlay-review" style={{ gap: theme.space.s4 }}>
                 {requirementPresentations.map((presentation) => (
                     <View key={presentation.name}>
                         <Text style={{ color: theme.colors.text.primary, fontWeight: '600' }}>

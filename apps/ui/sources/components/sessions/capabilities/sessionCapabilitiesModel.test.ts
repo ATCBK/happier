@@ -1,0 +1,83 @@
+import { describe, expect, it } from 'vitest';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { SessionSkillPlanV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
+import { setSessionCapabilitySelectionItemV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { SessionCapabilitiesGetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { buildSessionCapabilitiesModel } from './sessionCapabilitiesModel';
+import { sessionCapabilityApplyNotice } from './sessionCapabilityApplyNotice';
+import { resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
+
+const context = { machineId: 'machine', machinePlatform: 'posix', projectKey: 'project', directory: '/repo', agentId: 'codex' } as const;
+const names = { machineName: () => 'MacBook', projectName: () => 'Project', agentName: () => 'Codex', folderLabel: () => '~/repo' };
+const rules = [{ id: 'project', target: { t: 'project', projectKey: 'project' }, enabled: true, createdAt: 1, updatedAt: 1 }] as const;
+function fixture() {
+    const selection = setSessionCapabilitySelectionItemV1({}, 'skill', 'review', 'on');
+    const resolved = resolveSessionCapabilitiesV1({ context, selection, agentAcceptsUserMcp: true,
+        mcp: { v: 1, strictMode: false, servers: [{ id: 'linear', name: 'linear', title: 'Linear', transport: 'http', remote: { url: 'https://example.test/mcp', headers: {} },
+            env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ ...rules[0], enabled: false, serverId: 'linear' }] },
+        skills: { items: [{ skillId: 'review', name: 'Review' }], rules: [{ ...rules[0], skillId: 'review' }] } });
+    const view = SessionCapabilitiesGetOutputV1Schema.parse({ ok: true,
+        mcp: { items: resolved.mcp.items.map(({ effectiveConfig: _config, ...item }) => item) },
+        skills: { items: resolved.skills.items, plan: SessionSkillPlanV1Schema.parse({ plan: 'session_dir', items: [], nativeDisables: [], diagnostics: [] }) },
+        pendingApply: { mcp: false, skills: false }, applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } } });
+    if (!view.ok) throw new Error('Invalid fixture');
+    return { view, selection, context, names, state: 'ready' as const, readOnly: false,
+        rules: (kind: 'skill' | 'mcp_server') => kind === 'skill' ? rules : [{ ...rules[0], enabled: false }],
+        mcpStatus: () => [] as readonly CapabilityStatus[], skillStatus: () => [] as readonly CapabilityStatus[],
+        cost: (kind: 'skill' | 'mcp_server') => kind === 'skill' ? { tokensWhenUsed: 42 } : { toolCount: 3, tokensPerTurn: 123 } };
+}
+describe('the session capability sheet data owner', () => {
+    it('keeps Off MCP items in the add source, then projects a draft/session include through the same selection owner', () => {
+        const input = fixture();
+        const initial = buildSessionCapabilitiesModel(input);
+        expect(initial.addItems).toMatchObject([{ kind: 'mcp_server', id: 'linear', title: 'Linear' }]);
+        const next = buildSessionCapabilitiesModel({ ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'mcp_server', 'linear', 'on') });
+        expect(next.groups[1]?.rows).toMatchObject([{ key: 'mcp_server:linear', line2: { kind: 'change', change: 'added' } }]);
+        expect(next.addItems).toEqual([]);
+    });
+    it('puts a problem ahead of a session change, quiet states behind cost, and preserves unknown cost', () => {
+        const input = fixture();
+        const blocked = buildSessionCapabilitiesModel({ ...input, skillStatus: () => [{ kind: 'signin' as const, fix: { kind: 'sign_in' as const, onPress() {} } }] });
+        expect(blocked.groups[0]?.rows[0]).toMatchObject({ line2: { kind: 'status', status: { kind: 'signin' } }, action: { kind: 'fix' } });
+        expect(blocked.attention).toBe(true);
+        const inherited = { ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'inherit'),
+            skillStatus: () => [{ kind: 'unused' as const }, { kind: 'connected' as const }] };
+        expect(buildSessionCapabilitiesModel(inherited).groups[0]?.rows[0]?.line2).toEqual({ kind: 'cost', cost: { tokensWhenUsed: 42 } });
+        const unknown = buildSessionCapabilitiesModel({ ...inherited, cost: () => null });
+        expect(unknown.costKnown).toBe(false);
+        expect(unknown.costLine).not.toContain('0');
+    });
+    it('keeps dimmed removals and respects read-only/native masking and no-resume timing', () => {
+        const input = fixture();
+        const removed = buildSessionCapabilitiesModel({ ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'off') });
+        expect(removed.groups[0]?.rows[0]).toMatchObject({ dimmed: true, line2: { kind: 'change', change: 'turned_off' }, action: { kind: 'turn_on' } });
+        const readonly = buildSessionCapabilitiesModel({ ...input, readOnly: true });
+        expect(readonly.groups[0]?.rows[0]?.action.kind).toBe('none');
+        const cannotApply = buildSessionCapabilitiesModel({ ...input, view: { ...input.view, applyTiming: { mcp: { t: 'new_sessions_only' }, skills: { t: 'new_sessions_only' } } } });
+        expect(cannotApply.groups[0]?.rows[0]?.action.kind).toBe('none');
+        expect(cannotApply.addItems[0]?.readOnlyReason).not.toBeNull();
+    });
+    it('does not offer native overlay edits on a non-resumable Agent that only reloads library skills', () => {
+        const input = fixture();
+        const model = buildSessionCapabilitiesModel({ ...input, nativeSkills: { items: [{ name: 'native-review', path: '/skills/review' }],
+            canDisable: true, machineName: 'MacBook', agentName: 'Codex', applyTiming: { t: 'new_sessions_only' } } });
+        expect(model.groups[0]?.nativeRow?.rows[0]).toMatchObject({ readOnlyReason: 'new_sessions_only', action: { kind: 'none' } });
+    });
+    it('reports a pending native overlay through its canonical next-turn timing on an Agent with live library reload', () => {
+        const input = fixture();
+        const agent = { vendorResume: 'supported', skillsLiveReload: 'supported' } as const;
+        const nativeTiming = resolveCapabilityApplyTimingV1({ kind: 'native_skill', agent, sessionRunning: true, launchRestart: 'automatic' });
+        const libraryTiming = resolveCapabilityApplyTimingV1({ kind: 'skill', agent, sessionRunning: true, launchRestart: 'automatic' });
+        const change = { kind: 'native_skill', title: 'Native review', state: 'off' } as const;
+        const pendingApply = { mcp: false, skills: true };
+        const model = buildSessionCapabilitiesModel({ ...input, change,
+            view: { ...input.view, pendingApply, applyTiming: { ...input.view.applyTiming, skills: libraryTiming } },
+            nativeSkills: { items: [{ name: 'native-review', path: '/skills/review' }], canDisable: true,
+                machineName: 'MacBook', agentName: 'Codex', applyTiming: nativeTiming } });
+        const expected = sessionCapabilityApplyNotice({ change, pendingApply, applyTiming: { mcp: { t: 'next_turn' }, skills: nativeTiming },
+            machineOnline: true, machineName: 'MacBook', turnSettled: true });
+        expect(expected?.key).toBe('leavesNextTurn');
+        expect(model.pendingNote).toBe(expected?.text);
+    });
+});

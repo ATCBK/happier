@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -137,8 +138,8 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
                 flexWrap: 'wrap',
                 flexShrink: 1,
                 alignItems: 'center',
-                columnGap: 4,
-                rowGap: 6,
+                columnGap: theme.space.s4,
+                rowGap: theme.space.s6,
                 justifyContent: 'flex-end',
                 maxWidth: inlineActions ? availableWidth / 2 : '100%',
                 width: inlineActions ? undefined : '100%',
@@ -158,17 +159,16 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
                         ...actionBaseStyle,
                         // Concentric with the banner surface: inner radius = outer radius - the inset between them.
                         borderRadius: theme.parts.composer.radius - BANNER_PADDING_VERTICAL,
-                        paddingHorizontal: 10,
+                        paddingHorizontal: theme.space.s10,
                         backgroundColor: theme.colors.button.secondary.background,
                         opacity: action.disabled ? 0.45 : pressed ? motionTokens.press.opacity : 1,
                     }, focusRingStyle({ focused, color: theme.colors.border.focus })]}
                 >
                     <Text style={{
-                        fontSize: 12,
+                        ...Typography.variant('meta', 'semiBold'),
                         color: action.variant === 'quiet'
                             ? theme.colors.text.secondary
                             : theme.colors.button.secondary.tint,
-                        fontWeight: '600',
                     }}>
                         {action.label}
                     </Text>
@@ -190,7 +190,7 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
                         opacity: props.disabled ? 0.45 : pressed ? motionTokens.press.opacitySubtle : 1,
                     }, focusRingStyle({ focused, color: theme.colors.border.focus })]}
                 >
-                    <Text style={{ fontSize: 12, color: theme.colors.button.primary.tint, fontWeight: '600' }}>
+                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.button.primary.tint,  }}>
                         {props.actionLabel}
                     </Text>
                 </HappierPressable>
@@ -219,7 +219,7 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
                 props.style,
             ]}
             titleContent={props.title ? (
-                <View testID={`${props.testID}-title-row`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <View testID={`${props.testID}-title-row`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s12 }}>
                     <Text
                         selectable
                         style={{

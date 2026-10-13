@@ -323,7 +323,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             settingsScope: { serverId, accountId: 'account_1' }, profileScope: { serverId, accountId: 'account_1' } });
         await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
     });
-    afterEach(async () => { await disconnectActiveServerConnection(); await standardCleanup(); home?.dispose(); });
+    afterEach(async () => { await disconnectActiveServerConnection(); await standardCleanup(); await home?.dispose(); });
 
     it('creates nothing until rendered Send, then admits captured text to the exact new Run', async () => {
         const opened = vi.fn();
@@ -358,7 +358,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await waitFor(() => expect(composer().canSendMessages).toBe(true));
         // The secure credential boundary now answers for another Account, before
         // its asynchronous UI projection can replace the mounted binding.
-        home.switchAccount('home', 'replacement_account');
+        await home.switchAccount('home', 'replacement_account');
         await act(async () => { await sendButton().props.onPress(); });
         await settle();
         expect(emittedStarts).toEqual([]);
@@ -505,7 +505,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         startResults.push(childChoiceRefusal(), childChoiceRefusal(), started());
         await mount();
         await send();
-        await screen.pressByTestIdAsync('execution-run-child-choice.cancel');
+        await screen.pressByTestIdAsync('execution-run-child-choice-learn-more');
         expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
         expect(emittedStarts).toHaveLength(1);
         await send();

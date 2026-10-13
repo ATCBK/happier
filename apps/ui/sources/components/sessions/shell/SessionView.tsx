@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { resolveEffectiveApiTokenPermissionModeV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -71,7 +72,6 @@ import {
 } from '@/components/plugins/actions/pluginContributedActionController';
 import { useSessionConnectedServicesAuthSwitch } from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
 import { useExistingSessionMcpSelection } from '@/components/sessions/agentInput/hooks/useExistingSessionMcpSelection';
-import type { SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 import {
     type SessionConnectedServiceAuthSwitchResult,
     setSessionConnectedServiceAuthBinding,
@@ -1612,10 +1612,10 @@ const SessionTranscriptPlaceholder = React.memo(function SessionTranscriptPlaceh
                         gap: 10,
                     }}
                 >
-                    <Text style={{ fontSize: 18, color: restoreSecretKeyColor }}>
+                    <Text style={{ ...Typography.variant('heading'), color: restoreSecretKeyColor }}>
                         {t('navigation.restoreWithSecretKey')}
                     </Text>
-                    <Text style={{ fontSize: 14, color: restoreSecretKeyDescriptionColor, lineHeight: 20 }}>
+                    <Text style={{ ...Typography.variant('reading'), color: restoreSecretKeyDescriptionColor }}>
                         {t('connect.restoreWithSecretKeyDescription')}
                     </Text>
                     <Pressable
@@ -2647,8 +2647,8 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
             return surface(embedded ? <EmbeddedSessionUnavailable /> : (
                 <View testID="session-root-unavailable" style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                     <Icon name="trash" size={48} color={theme.colors.text.secondary} />
-                    <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
-                    <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>{t('errors.sessionDeletedDescription')}</Text>
+                    <Text style={{ color: theme.colors.text.primary, ...Typography.variant('title'), marginTop: theme.space.s16,  }}>{t('errors.sessionDeleted')}</Text>
+                    <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: theme.space.s8, textAlign: 'center', paddingHorizontal: theme.space.s32 }}>{t('errors.sessionDeletedDescription')}</Text>
                 </View>
             ), 'unavailable');
         }
@@ -6428,9 +6428,7 @@ function SessionViewLoadedContent({
             surface: 'ui',
             defaultSessionId: sessionId,
             serverId: sessionRouteServerId,
-        }).then((result) => {
-            if (!result.ok) throw result;
-        }).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpSessionModeOverride' });
+        }).then(requireActionSuccess).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpSessionModeOverride' });
     }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId, sessionModeOptionIds, sessionRouteServerId]);
 
     const updateAcpConfigOptionOverride = React.useCallback((configId: string, valueId: string) => {
@@ -6442,9 +6440,7 @@ function SessionViewLoadedContent({
             surface: 'ui',
             defaultSessionId: sessionId,
             serverId: sessionRouteServerId,
-        }).then((result) => {
-            if (!result.ok) throw result;
-        }).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpConfigOptionOverride' });
+        }).then(requireActionSuccess).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpConfigOptionOverride' });
     }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId, sessionRouteServerId]);
 
     const publishModelSelection = React.useCallback(async (ref: ProviderBoundModelRef | null, modelOptionsContext?: SessionModelOptionsContext) => {
@@ -7560,7 +7556,7 @@ function SessionViewLoadedContent({
       const content = (
           <>
               {authSurfaceState && !(inactiveUi.shouldShowInput && !isEncryptedSessionLocked) ? (
-                  <View style={{ marginTop: 8, marginHorizontal: 8 }}>
+                  <View style={{ marginTop: theme.space.s8, marginHorizontal: theme.space.s8 }}>
                       <SessionAuthRecoveryBanner message={authSurfaceState.message} />
                   </View>
               ) : null}
@@ -7746,18 +7742,6 @@ function SessionViewLoadedContent({
             });
         }, [composerPluginActionController, composerPluginActionScopeSignal, openSessionComposerContributedAction]);
         const composerPluginActionChips = composerPluginPresentation.extraActionChips;
-        const applySessionMcpSelection = React.useCallback(async (selection: SessionMcpSelectionV1) => {
-            const result = await actionExecutor.execute('session.mcp_selection.set', {
-                sessionId,
-                selection,
-                sessionActive: session.active === true,
-            }, {
-                surface: 'ui',
-                defaultSessionId: sessionId,
-                serverId: sessionRouteServerId,
-            });
-            if (!result.ok) throw new Error(result.error);
-        }, [actionExecutor, session.active, sessionId, sessionRouteServerId]);
         const sessionMcpChip = useExistingSessionMcpSelection({
             sessionId,
             sessionMetadata: ownerMetadata,
@@ -7767,7 +7751,6 @@ function SessionViewLoadedContent({
             serverId: sessionRouteServerId,
             isReadOnly,
             sessionActive: session.active === true,
-            applySelection: applySessionMcpSelection,
         });
         const routingControls = useSessionAgentInputRoutingControls({
             isReadOnly,
@@ -10316,7 +10299,7 @@ function SessionViewLoadedContent({
     ) : null;
     // On a phone, an open Find seats its bar in this slot in place of the composer (Find lab F1p).
     const inputWithTranscriptSelection = transcriptSelectionToolbar || input ? (
-        <View style={{ gap: 8 }}>
+        <View style={{ gap: theme.space.s8 }}>
             {transcriptSelectionToolbar}
             <FindComposerSlotHost composer={input} />
         </View>

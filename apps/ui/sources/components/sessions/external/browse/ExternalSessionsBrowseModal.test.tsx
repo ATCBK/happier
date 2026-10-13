@@ -1,26 +1,17 @@
+// @vitest-environment jsdom
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
+import { installNewSessionComponentsCommonModuleMocks } from '@/components/sessions/new/components/newSessionComponentsTestHelpers';
+import { createTextModuleMock } from '@/dev/testkit/mocks/text';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 const capturedChrome = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
-const capturedModal = vi.hoisted(() => ({ value: null as Record<string, any> | null }));
-const capturedScreenProps = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
 
-vi.mock('@/modal/components/card/useModalCardChrome', () => ({
-    useModalCardChrome: (_setChrome: unknown, chrome: Record<string, unknown>) => {
-        capturedChrome.value = chrome;
-    },
-}));
-
-// The modal shell is a platform boundary here (portal, focus scope, Escape layer): capture what the
-// browse surface asks it to present.
-vi.mock('@/modal/components/CustomModal', () => ({
-    CustomModal: (props: Record<string, any>) => {
-        capturedModal.value = props;
-        return null;
-    },
-}));
+const setChrome: NonNullable<import('@/modal/types').CustomModalInjectedProps['setChrome']> = chrome => {
+    capturedChrome.value = chrome;
+};
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -28,21 +19,26 @@ vi.mock('react-native', async () => {
     return { ...base, Platform: { ...base.Platform, OS: 'web', select: (spec: Record<string, unknown>) => spec.web ?? spec.default } };
 });
 
-vi.mock('@/components/appShell/search/UniversalSearchController', () => ({
-    UniversalSearchController: () => null,
-}));
-
-vi.mock('./ExternalSessionsBrowseScreen', () => ({
-    ExternalSessionsBrowseScreen: (props: Record<string, unknown>) => {
-        capturedScreenProps.value = props;
-        return React.createElement('ExternalSessionsBrowseScreen', props);
-    },
-}));
+installNewSessionComponentsCommonModuleMocks({ text: () => createTextModuleMock({
+    translate: key => key === 'tools.names.search' ? 'Search'
+        : key === 'externalSessions.browseHeaderTitle' ? 'External sessions' : key,
+}) });
+vi.unmock('@/sync/domains/state/storage');
+// React Test Renderer cannot commit DOM portals. Substitute only the DOM
+// renderer and Radix SDK adapters; keep the modal, frame and Browse body real.
+vi.mock('@/utils/web/reactDomCjs', () => ({ requireReactDOM: () => ({ createPortal: (children: React.ReactNode) => children }) }));
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { CustomModal } = await import('@/modal/components/CustomModal');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const AppProviders = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={null}>{children}</InjectedAuthProvider>;
+function renderScreen(element: React.ReactElement) { return renderScreenWithTestkit(element, { wrapper: AppProviders }); }
+afterAll(() => network.dispose());
 
 afterEach(() => {
     capturedChrome.value = null;
-    capturedModal.value = null;
-    capturedScreenProps.value = null;
     standardCleanup();
 });
 
@@ -53,9 +49,9 @@ describe('ExternalSessionsBrowseModal', () => {
         const { ExternalSessionsBrowseModal } = await import('./ExternalSessionsBrowseModal');
         const { UniversalSearchModal } = await import('@/components/appShell/search/UniversalSearchModal');
 
-        await renderScreen(<UniversalSearchModal commands={[]} onClose={vi.fn()} setChrome={vi.fn()} />);
+        await renderScreen(<UniversalSearchModal commands={[]} onClose={vi.fn()} setChrome={setChrome} />);
         const searchChrome = capturedChrome.value;
-        await renderScreen(<ExternalSessionsBrowseModal onClose={vi.fn()} setChrome={vi.fn()} />);
+        await renderScreen(<ExternalSessionsBrowseModal onClose={vi.fn()} setChrome={setChrome} />);
         const browseChrome = capturedChrome.value;
 
         expect(browseChrome).toMatchObject({
@@ -73,11 +69,12 @@ describe('ExternalSessionsBrowseModal', () => {
         const { ExternalSessionsBrowseSurface } = await import('./ExternalSessionsBrowseModal');
         const onRequestClose = vi.fn();
 
-        await renderScreen(<ExternalSessionsBrowseSurface lockScope={null} onRequestClose={onRequestClose} />);
+        const screen = await renderScreen(<ExternalSessionsBrowseSurface lockScope={null} onRequestClose={onRequestClose} />);
+        const modal = screen.findByType(CustomModal);
 
-        expect(capturedModal.value?.visible).toBe(true);
-        expect(capturedModal.value?.config.webPlacement).toBe('top');
-        capturedModal.value?.onClose();
+        expect(modal.props.visible).toBe(true);
+        expect(modal.props.config.webPlacement).toBe('top');
+        modal.props.onClose();
         expect(onRequestClose).toHaveBeenCalledOnce();
     });
 });

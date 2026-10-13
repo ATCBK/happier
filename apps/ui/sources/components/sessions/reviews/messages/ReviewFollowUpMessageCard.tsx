@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -47,27 +48,26 @@ export function ReviewFollowUpMessageCard(props: Readonly<{ payload: ReviewFollo
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.elevated,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        gap: 10,
+        gap: theme.space.s10,
     },
     markdownText: {
         color: theme.colors.text.primary,
         fontSize: 13,
     },
     findingsBlock: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     findingRow: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     findingTitle: {
         color: theme.colors.text.primary,
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
     },
     findingSummary: {
         color: theme.colors.text.secondary,

@@ -6,6 +6,7 @@ import {
     TERMINAL_PREVIEW_MAX_OUTPUT_CHARS,
 } from '@/sync/domains/terminal/stream/replay';
 import type { TerminalStreamCursor } from '@/sync/domains/terminal/stream/model';
+import type { TerminalFindSnapshot } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
 
 export type TerminalSurfaceState = Readonly<{
     terminalId: string | null;
@@ -13,6 +14,8 @@ export type TerminalSurfaceState = Readonly<{
     cursorMode: TerminalStreamCursor['mode'];
     output: string;
     detectedUrl: DaemonTerminalStreamEventUrl | null;
+    /** Ephemeral same-surface renderer handoff; matching/counts belong to the new renderer. */
+    find?: Pick<TerminalFindSnapshot, 'open' | 'query' | 'options'>;
 }>;
 
 type TerminalSurfaceStateInput = Omit<TerminalSurfaceState, 'cursorMode'> & Readonly<{

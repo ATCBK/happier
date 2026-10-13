@@ -66,20 +66,20 @@ export function MessagePinButton(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     button: {
-        padding: 2,
+        padding: theme.space.s2,
         borderRadius: 6,
         opacity: 0.6,
         cursor: 'pointer',
-        marginRight: 6,
+        marginRight: theme.space.s6,
     },
     webActionButton: {
-        padding: 6,
+        padding: theme.space.s6,
     },
     webActionButtonInverted: {
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     invertedSpacing: {
-        marginRight: 2,
+        marginRight: theme.space.s2,
     },
     buttonPinned: {
         opacity: 1,

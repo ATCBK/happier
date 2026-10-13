@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -32,22 +33,20 @@ export function SubagentStructuredMessageCard(props: SubagentCardProps) {
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.elevated,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerText: {
         color: theme.colors.text.primary,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
     },
     targetText: {
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     detailText: {
         color: theme.colors.text.secondary,

@@ -28,6 +28,7 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AvatarStack } from '@/components/ui/avatar/AvatarStack';
 import { DetailsTabHeader } from '@/components/appShell/panes/details/header/DetailsTabHeader';
+import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -81,33 +82,33 @@ const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platfor
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, minHeight: 0, minWidth: 0, backgroundColor: theme.colors.surface.base },
-    body: { flex: 1, paddingHorizontal: 16, paddingTop: 18, gap: 14 },
-    input: { minHeight: 46, borderWidth: 1, borderColor: theme.colors.border.default, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: theme.colors.surface.inset, color: theme.colors.text.primary, fontSize: 16, fontWeight: '600' },
-    presenceRow: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, gap: 8, minWidth: 0 },
-    headerMeta: { ...Typography.default(), flexShrink: 1, color: theme.colors.text.secondary, fontSize: 13 },
+    body: { flex: 1, paddingHorizontal: theme.space.s16, paddingTop: 18, gap: 14 },
+    input: { minHeight: 46, borderWidth: 1, borderColor: theme.colors.border.default, borderRadius: 14, paddingHorizontal: 14, paddingVertical: theme.space.s10, backgroundColor: theme.colors.surface.inset, color: theme.colors.text.primary, fontSize: 16, fontWeight: '600' },
+    presenceRow: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, gap: theme.space.s8, minWidth: 0 },
+    headerMeta: {  flexShrink: 1, color: theme.colors.text.secondary, ...Typography.variant('body') },
     messages: { flex: 1, minHeight: 0 },
     // Messages grouped by author (collab lab D1): the face, name and time open a group; the author's
     // next messages continue under it without repeating them. A selected message is tinted in place.
-    message: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginHorizontal: 8, paddingHorizontal: 8, paddingTop: 12, paddingBottom: 2, borderRadius: 10, borderLeftWidth: 2, borderLeftColor: 'transparent' },
-    messageGroupContinuation: { paddingTop: 2 },
+    message: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s10, marginHorizontal: theme.space.s8, paddingHorizontal: theme.space.s8, paddingTop: theme.space.s12, paddingBottom: theme.space.s2, borderRadius: 10, borderLeftWidth: 2, borderLeftColor: 'transparent' },
+    messageGroupContinuation: { paddingTop: theme.space.s2 },
     messageSelected: { backgroundColor: theme.colors.state.active.background, borderLeftColor: theme.colors.state.active.foreground },
     messageFaceColumn: { width: 28, alignItems: 'center' },
-    messageBody: { flex: 1, minWidth: 0, gap: 2 },
-    messageAttribution: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 },
-    messageAuthor: { ...Typography.default('semiBold'), color: theme.colors.text.primary, fontSize: 14 },
+    messageBody: { flex: 1, minWidth: 0, gap: theme.space.s2 },
+    messageAttribution: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: theme.space.s8 },
+    messageAuthor: {  color: theme.colors.text.primary, ...Typography.variant('label', 'semiBold') },
     messageText: { ...Typography.default(), color: theme.colors.text.primary, fontSize: 15, lineHeight: 22 },
     mention: { ...Typography.default('semiBold'), color: theme.colors.state.active.foreground, backgroundColor: theme.colors.state.active.background, borderRadius: 4 },
-    reference: { marginLeft: 46, marginRight: 16, marginTop: 6 },
+    reference: { marginLeft: 46, marginRight: theme.space.s16, marginTop: theme.space.s6 },
     selectionToolbar: { position: 'absolute', left: 12, right: 12, bottom: 12 },
-    meta: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 12 },
-    timestamp: { ...Typography.default(), color: theme.colors.text.tertiary, fontSize: 12, fontVariant: ['tabular-nums'] },
+    meta: {  color: theme.colors.text.secondary, ...Typography.variant('meta') },
+    timestamp: {  color: theme.colors.text.tertiary, ...Typography.variant('meta'), fontVariant: ['tabular-nums'] },
     selectAffordance: { alignSelf: 'center' },
-    stateLine: { paddingHorizontal: 16, paddingVertical: 8 },
+    stateLine: { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
     deliveryStatus: { color: theme.colors.text.secondary, fontSize: 12 },
     error: { color: theme.colors.text.destructive, textAlign: 'center' },
     retry: { minHeight: minimumInteractiveTargetSize, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
     retryText: { color: theme.colors.accent.blue, fontWeight: '600' },
-    banner: { paddingHorizontal: 14, paddingVertical: 10, color: theme.colors.text.secondary },
+    banner: { paddingHorizontal: 14, paddingVertical: theme.space.s10, color: theme.colors.text.secondary },
     fieldHint: { color: theme.colors.text.destructive },
 }));
 const VIEWABILITY = Object.freeze({ itemVisiblePercentThreshold: 1 });
@@ -413,6 +414,7 @@ function Discussion(props: Readonly<{ target: Extract<SessionDiscussionDetailsTa
     const onOpenedRef = React.useRef(props.onOpened);
     onOpenedRef.current = props.onOpened;
     const openedTitle = discussion?.title ?? null;
+    useDestinationPageTitle(props.standaloneSurface ? openedTitle : undefined);
     React.useEffect(() => {
         if (!discussion || !openedTitle) return;
         onOpenedRef.current?.(discussion);

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { resolveThemeColor } from '@/theme/parseThemeColor';
 import * as React from 'react';
 import { Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
@@ -81,18 +82,18 @@ export function SessionViewLayout(props: SessionViewLayoutProps) {
                         borderColor: theme.colors.state.warning.border,
                         borderRadius: 100,
                         paddingHorizontal: 14,
-                        paddingVertical: 7,
+                        paddingVertical: theme.space.s6,
                         flexDirection: 'row',
                         alignItems: 'center',
                         zIndex: 998,
                         ...shadowLevelStyle(theme.colors.shadowLevels[3]),
                     }}
                 >
-                    <Icon name="warning" size={14} color={theme.colors.state.warning.foreground} style={{ marginRight: 6 }} />
-                    <Text style={{ fontSize: 12, color: theme.colors.state.warning.foreground, fontWeight: '600' }}>
+                    <Icon name="warning" size={14} color={theme.colors.state.warning.foreground} style={{ marginRight: theme.space.s6 }} />
+                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.state.warning.foreground,  }}>
                         {t('sessionInfo.cliVersionOutdated')}
                     </Text>
-                    <Icon name="x" size={14} color={theme.colors.state.warning.foreground} style={{ marginLeft: 8 }} />
+                    <Icon name="x" size={14} color={theme.colors.state.warning.foreground} style={{ marginLeft: theme.space.s8 }} />
                 </Pressable>
             )}
 

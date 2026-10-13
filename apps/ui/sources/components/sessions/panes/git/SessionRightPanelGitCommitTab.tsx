@@ -389,16 +389,16 @@ const CommitFlightChip = React.memo(function CommitFlightChip(props: Readonly<{
             }}
         >
             <Icon name="git-commit" size={14} color={colors.text.secondary} />
-            <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, color: colors.text.primary, ...Typography.default('semiBold') }}>
+            <Text numberOfLines={1} style={{ flexShrink: 1, ...Typography.variant('body', 'semiBold'), color: colors.text.primary,  }}>
                 {props.chip.subject}
             </Text>
-            <Text style={{ fontSize: 12, color: colors.text.secondary, ...Typography.default() }}>
+            <Text style={{ ...Typography.variant('meta'), color: colors.text.secondary,  }}>
                 {t('sessionGitPane.commit.selection', { count: props.chip.fileCount })}
             </Text>
-            <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: colors.state?.success?.foreground, ...Typography.default('semiBold') }}>
+            <Text style={{ ...Typography.variant('meta', 'semiBold'), fontVariant: ['tabular-nums'], color: colors.state?.success?.foreground,  }}>
                 {`+${formatExactCount(props.chip.added)}`}
             </Text>
-            <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: colors.state?.danger?.foreground, ...Typography.default('semiBold') }}>
+            <Text style={{ ...Typography.variant('meta', 'semiBold'), fontVariant: ['tabular-nums'], color: colors.state?.danger?.foreground,  }}>
                 {`\u2212${formatExactCount(props.chip.removed)}`}
             </Text>
         </View>
@@ -819,7 +819,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                                     popoverAnchorAlign="start"
                                 />
                             ) : (
-                                <Text style={{ fontSize: 12, color: themeTextSecondary, ...Typography.default('semiBold') }}>
+                                <Text style={{ ...Typography.variant('meta', 'semiBold'), color: themeTextSecondary,  }}>
                                     {t('sessionGitPane.scope.allChanges')}
                                 </Text>
                             )}
@@ -828,10 +828,10 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                             {scopedLineTotals.added > 0 || scopedLineTotals.removed > 0 ? (
                                 <View testID="session-rightpanel-git-scope-lines" style={{ flexDirection: 'row', gap: 6 }}>
-                                    <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: themeSuccess, ...Typography.default('semiBold') }}>
+                                    <Text style={{ ...Typography.variant('meta', 'semiBold'), fontVariant: ['tabular-nums'], color: themeSuccess,  }}>
                                         {`+${formatExactCount(scopedLineTotals.added)}`}
                                     </Text>
-                                    <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: themeDanger, ...Typography.default('semiBold') }}>
+                                    <Text style={{ ...Typography.variant('meta', 'semiBold'), fontVariant: ['tabular-nums'], color: themeDanger,  }}>
                                         {`\u2212${formatExactCount(scopedLineTotals.removed)}`}
                                     </Text>
                                 </View>
@@ -1082,7 +1082,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         const label = t(resolveChangedFilesEmptyStateTranslationKey(props.changedFilesViewMode));
         return (
             <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                <Text style={{ color: themeTextSecondary, fontSize: 12, ...Typography.default() }}>
+                <Text style={{ color: themeTextSecondary, ...Typography.variant('meta'),  }}>
                     {label}
                 </Text>
             </View>
@@ -1235,14 +1235,14 @@ const ChangeGroupHeaderRow = React.memo((props: Readonly<{
                 />
             ) : null}
             {group.id === 'session' && props.agentId ? <AgentIcon agentId={props.agentId} size={14} /> : null}
-            <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 12, color: textSecondary, ...Typography.default('semiBold') }}>
+            <Text numberOfLines={1} style={{ flexShrink: 1, ...Typography.variant('meta', 'semiBold'), color: textSecondary,  }}>
                 {group.title}
             </Text>
-            <Text style={{ fontSize: 12, color: textTertiary, fontVariant: ['tabular-nums'], ...Typography.default() }}>
+            <Text style={{ ...Typography.variant('meta'), color: textTertiary, fontVariant: ['tabular-nums'],  }}>
                 {formatExactCount(group.files.length)}
             </Text>
             {proposalCount > 0 && props.proposalHighlight ? (
-                <Text testID={`scm-change-group-proposal:${group.id}`} style={{ marginLeft: 'auto', fontSize: 12, color: props.theme.colors.state.active.foreground, fontVariant: ['tabular-nums'], ...Typography.default('semiBold') }}>
+                <Text testID={`scm-change-group-proposal:${group.id}`} style={{ marginLeft: 'auto', ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.state.active.foreground, fontVariant: ['tabular-nums'],  }}>
                     {t('commitProposal.gitPane.inCommit', { count: proposalCount, number: props.proposalHighlight.groupNumber })}
                 </Text>
             ) : null}

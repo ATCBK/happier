@@ -274,7 +274,7 @@ export function AgentInputChipPickerPanel(
                       variant="rail"
                     />
                   </ScrollView>
-                  <ScrollEdgeFades color={theme.colors.background.canvas} size={theme.margins.lg} edges={railFades.visibility} />
+                  <ScrollEdgeFades color={theme.colors.background.canvas} size={theme.space.s16} edges={railFades.visibility} />
                 </View>
               ) : (
                 <View>
@@ -348,18 +348,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface.base,
   },
   title: {
-    fontSize: 13,
-    lineHeight: 18,
-    ...Typography.default("semiBold"),
+    ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.primary,
   },
   body: {
-    padding: 12,
+    padding: theme.space.s12,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: theme.space.s10,
   },
   headerTitleWrap: {
     flex: 1,
@@ -368,10 +366,10 @@ const stylesheet = StyleSheet.create((theme) => ({
   sheetHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 4,
-    paddingBottom: 8,
+    gap: theme.space.s8,
+    paddingHorizontal: theme.space.s12,
+    paddingTop: theme.space.s4,
+    paddingBottom: theme.space.s8,
   },
   sheetHeaderSide: {
     flex: 1,
@@ -385,7 +383,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   sheetBack: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 2,
+    gap: theme.space.s2,
     minHeight: 44,
     maxWidth: "100%",
   },
@@ -402,9 +400,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexShrink: 1,
     maxWidth: "50%",
     textAlign: "center",
-    fontSize: 15,
-    lineHeight: 20,
-    ...Typography.default("semiBold"),
+    ...Typography.variant('heading'),
     color: theme.colors.text.primary,
   },
   sheetListScroll: {
@@ -416,9 +412,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   headerDetailed: {
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 10,
+    paddingHorizontal: theme.space.s12,
+    paddingTop: theme.space.s12,
+    paddingBottom: theme.space.s10,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border.default,
   },
@@ -455,7 +451,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   railScrollContent: {
-    paddingBottom: 10,
+    paddingBottom: theme.space.s10,
   },
   detailScroll: {
     flex: 1,
@@ -465,10 +461,10 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailStackedWithSelector: {
     width: "100%",
     flexShrink: 1,
-    padding: 10,
+    padding: theme.space.s10,
   },
   detailScrollContent: {
-    paddingHorizontal: 12,
+    paddingHorizontal: theme.space.s12,
     paddingVertical: 15,
     flex: 1,
     minHeight: 0,

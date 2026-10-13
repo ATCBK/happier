@@ -1,49 +1,40 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
-import { getStorage } from '@/sync/domains/state/storageStore';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const candidatesListSpy = vi.hoisted(() => vi.fn());
-const credentials = vi.hoisted(() => ({
-    accountByServerId: new Map<string, string>(),
-    listeners: new Set<(event: import('@/auth/storage/tokenStorage').HomeCredentialMutationEvent) => void>(),
-}));
-
-// Secure storage and its mutation notifications are the boundary; credential scopes remain real.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-            getCredentialsForServerUrl: async (_serverUrl, options) => {
-                const accountId = credentials.accountByServerId.get(options?.serverId ?? '');
-                return accountId ? { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64')}.signature` } : null;
-            },
-        },
-        subscribeHomeCredentialMutations: (listener) => {
-            credentials.listeners.add(listener);
-            return () => credentials.listeners.delete(listener);
-        },
-    });
-});
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (call: { method: string; payload: unknown; signal?: AbortSignal; serverId?: string }) => {
-        if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
-        return candidatesListSpy(call.payload, { signal: call.signal, serverId: call.serverId });
-    },
-}));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
 
-import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+const network = await installSessionOpsNetworkBoundary();
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+await import('./useExternalSessionBrowseCandidates');
+function requestIdFor(payload: unknown): string {
+    const request = network.socketBoundaries.flatMap(item => item.socket.emitWithAck.mock.calls)
+        .map(([event, raw]) => event === SOCKET_RPC_EVENTS.CALL && raw !== null && typeof raw === 'object'
+            ? raw as SocketRpcRequestPayload : null)
+        .reverse().find(request => request?.params === payload);
+    if (!request?.requestId) throw new Error('Expected a cancellable candidate request');
+    return request.requestId;
+}
+function wasCancelled(requestId: string): boolean {
+    return network.socketBoundaries.some(item => item.socket.emit.mock.calls.some(([event, raw]) =>
+        event === SOCKET_RPC_EVENTS.CANCEL && raw !== null && typeof raw === 'object'
+        && 'requestId' in raw && raw.requestId === requestId));
+}
+afterAll(() => network.dispose());
 
 const params = {
     machineId: 'machine-1',
@@ -62,26 +53,31 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
     let home: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>>;
     beforeEach(async () => {
         candidatesListSpy.mockReset();
-        credentials.accountByServerId.clear();
         home = await serveExternalSessionBrowseHome({ homes: [
             { key: 'foreign', serverUrl: 'https://foreign-lifetime.test', accountId: 'foreign-account' },
             { key: 'foreground', serverUrl: 'https://account-lifetime.test', accountId: 'account-a' },
-        ], route: () => undefined });
+        ], route: request => request.path.startsWith('/v1/machines/')
+            ? Response.json({ machine: createPlainMachineRowFixture({ id: request.path.slice('/v1/machines/'.length),
+                accountId: request.home === 'foreign' ? 'foreign-account' : 'account-a' }) }) : undefined });
+        network.setRpcResponder(async call => {
+            if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
+            const selected = Object.values(home.homes).find(profile => profile.serverUrl === call.serverUrl);
+            if (!selected) throw new Error('Unexpected candidate Home');
+            return candidatesListSpy(call.payload, { serverId: selected.id, requestId: requestIdFor(call.payload) });
+        });
         const profile = home.homes.foreground!;
         profileScope = { serverId: profile.id, accountId: 'account-a' };
         getStorage().setState({ profileScope });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         profileScope = null;
         standardCleanup();
-        home.dispose();
-        credentials.accountByServerId.clear();
+        await home.dispose();
     });
 
     it('keeps an exact foreign Home request current when the foreground Account switches', async () => {
         const foreignHome = home.homes.foreign!;
-        credentials.accountByServerId.set(foreignHome.id, 'foreign-account');
         const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const scopes = await renderHook(() => useServerCredentialAccountScopes([foreignHome.id]));
         await vi.waitFor(() => expect(scopes.getCurrent().get(foreignHome.id)?.accountId).toBe('foreign-account'));
@@ -108,7 +104,6 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
 
     it('aborts a retired exact credential request and restarts for its replacement lifetime', async () => {
         const foreignHome = home.homes.foreign!;
-        credentials.accountByServerId.set(foreignHome.id, 'foreign-account');
         const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const scopes = await renderHook(() => useServerCredentialAccountScopes([foreignHome.id]));
         await vi.waitFor(() => expect(scopes.getCurrent().get(foreignHome.id)?.accountId).toBe('foreign-account'));
@@ -124,12 +119,17 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
             const exactParams = { ...params, serverId: foreignHome.id, accountLifetime };
             return useExternalSessionBrowseCandidates(exactParams);
         });
-        const signal = candidatesListSpy.mock.calls[0][1].signal as AbortSignal;
+        const requestId = candidatesListSpy.mock.calls[0][1].requestId as string;
         await act(async () => {
-            for (const listener of credentials.listeners) listener({ kind: 'credentials_set', serverId: foreignHome.id, serverUrl: foreignHome.serverUrl });
+            const credentials = await TokenStorage.getCredentialsForServerUrl(foreignHome.serverUrl, { serverId: foreignHome.id });
+            if (!credentials) throw new Error('Foreign Account credentials missing');
+            // Re-persisting this Account credential is a genuine custody
+            // mutation; its lifetime retires even when the Account stays the same.
+            expect(await TokenStorage.setCredentialsForServerUrl(foreignHome.serverUrl, { serverId: foreignHome.id },
+                credentials)).toBe(true);
         });
         expect(oldLifetime.isCurrent()).toBe(false);
-        expect(signal.aborted).toBe(true);
+        expect(wasCancelled(requestId)).toBe(true);
         await vi.waitFor(() => {
             const replacement = scopes.getCurrent().get(foreignHome.id);
             expect(replacement).not.toBe(oldLifetime);

@@ -32,13 +32,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     sidebarContainer: {
         width: '100%',
         alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingTop: 12,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s12,
     },
     primaryPaneContainer: {
         width: '100%',
         alignItems: 'center',
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     inlineCode: {
         ...Typography.mono(),
@@ -46,7 +46,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 4,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
         paddingVertical: 1,
     },
 }));

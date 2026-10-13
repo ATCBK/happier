@@ -20,7 +20,7 @@ export function ConversationHitSummary(props: Readonly<{
     const { theme } = useUnistyles();
     const density = useResolvedItemDensity(undefined);
     const meta = [props.where, props.atMs && props.atMs > 0 ? formatShortRelativeTime(props.atMs) : ''].filter(Boolean).join(' · ');
-    return <View style={{ gap: 2 }}>
+    return <View style={{ gap: theme.space.s2 }}>
         <Text testID={props.testID} numberOfLines={2} style={[Typography.default(), ITEM_SUBTITLE_TEXT_METRICS[density], { color: theme.colors.text.secondary }]}>
             <FindHighlightedText text={props.snippet} ranges={queryRanges(props.snippet, props.query ?? '')} />
         </Text>

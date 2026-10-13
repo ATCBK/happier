@@ -25,12 +25,12 @@ const styles = StyleSheet.create((theme) => ({
     button: {
         minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
         minWidth: resolveMinimumInteractiveTargetSize(Platform.OS),
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
         borderRadius: 8, borderWidth: 1, borderColor: 'transparent',
     },
     hovered: { backgroundColor: theme.colors.surface.selected },
-    overflow: { ...Typography.default('semiBold'), ...ITEM_SUBTITLE_TEXT_METRICS.cozy, color: theme.colors.text.secondary, paddingLeft: 4 },
+    overflow: { ...Typography.default('semiBold'), ...ITEM_SUBTITLE_TEXT_METRICS.cozy, color: theme.colors.text.secondary, paddingLeft: theme.space.s4 },
 }));
 
 function ViewerAvatar({ viewer }: Readonly<{ viewer: SessionHumanPresenceViewer }>) {

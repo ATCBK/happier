@@ -235,6 +235,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('sectionDescription'),
         color: theme.colors.text.secondary,
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
 }));

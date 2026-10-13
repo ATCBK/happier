@@ -11,18 +11,18 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 
 const stylesheet = StyleSheet.create((theme) => ({
     content: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 12,
-        gap: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s12,
+        gap: theme.space.s10,
     },
     input: {
         minHeight: 140,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         textAlignVertical: 'top' as any,
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.input.background,
@@ -35,12 +35,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
+        gap: theme.space.s8,
     },
     footerSecondaryActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));
 

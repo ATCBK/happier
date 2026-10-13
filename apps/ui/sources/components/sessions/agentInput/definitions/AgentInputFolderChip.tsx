@@ -208,7 +208,7 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
                 style={({ pressed, focused }) => [
                     props.chipStyle(pressed),
                     props.layout === 'wrap' ? WRAP_STYLE : SHRINK_STYLE,
-                    reservesRemoveSlot ? { paddingRight: 2 } : null,
+                    reservesRemoveSlot ? { paddingRight: theme.space.s2 } : null,
                     focusRingStyle({ focused, color: theme.colors.border.focus }),
                 ]}
             >

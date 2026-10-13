@@ -50,11 +50,11 @@ export const ScmChangesSelectionHeaderRow = React.memo((props: ScmChangesSelecti
         >
             <View style={{ flex: 1 }}>
                 {props.selectedCount > 0 ? (
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.secondary,  }}>
                         {t('files.sourceControlOperations.selection', { count: props.selectedCount })}
                     </Text>
                 ) : null}
-                <Text style={{ marginTop: props.selectedCount > 0 ? 2 : 0, fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ marginTop: props.selectedCount > 0 ? 2 : 0, ...Typography.variant('micro'), color: props.theme.colors.text.secondary,  }}>
                     {t('files.repositoryChangedFiles', { count: props.totalCount })}
                 </Text>
             </View>

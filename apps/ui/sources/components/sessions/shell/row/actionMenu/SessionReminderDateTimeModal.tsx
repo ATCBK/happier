@@ -64,7 +64,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
     }, [props]);
 
     const footer = React.useMemo(() => (
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: theme.space.s10 }}>
             <RoundButton display="inverted" title={savedReminder ? t('common.close') : t('common.cancel')} disabled={saving} onPress={() => finish(savedReminder)} />
             <RoundButton
                 title={savedReminder ? t('common.retry') : t('sessionsList.reminders.setReminder')}
@@ -122,7 +122,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
     }), [footer]));
 
     return (
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, gap: 16 }}>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, gap: theme.space.s16 }}>
             {savedReminder ? <Item
                 title={t('sessionsList.reminders.reminderSaved')}
                 subtitle={new Date(savedReminder.remindAt).toLocaleString()}

@@ -294,17 +294,15 @@ const styles = StyleSheet.create((theme) => ({
     note: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
         paddingHorizontal: MENU_ROW_METRICS.insetPx + MENU_ROW_METRICS.paddingHorizontalPx,
-        paddingTop: 10,
-        paddingBottom: 6,
+        paddingTop: theme.space.s10,
+        paddingBottom: theme.space.s6,
     },
     noteText: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 0,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

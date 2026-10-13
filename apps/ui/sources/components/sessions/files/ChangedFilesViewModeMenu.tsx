@@ -138,9 +138,8 @@ export const ChangedFilesViewModeMenu = React.memo((props: ChangedFilesViewModeM
                             {
                                 minWidth: 0,
                                 flexShrink: 1,
-                                fontSize: 12,
+                                ...Typography.variant('meta', 'semiBold'),
                                 color: triggerLabelColor,
-                                ...Typography.default('semiBold'),
                             },
                             props.triggerTextStyle,
                         ]}

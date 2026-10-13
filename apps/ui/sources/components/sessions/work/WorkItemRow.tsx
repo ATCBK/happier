@@ -36,11 +36,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The live mini-map (lab `.uws-mini`): an inset panel under the row, on the row's text edge — the
     // one box in the list besides the needs-you tint, because it holds live content.
     miniMap: {
-        marginTop: 2,
-        marginBottom: 8,
+        marginTop: theme.space.s2,
+        marginBottom: theme.space.s8,
         marginLeft: WORK_ROW_TEXT_INSET,
         marginRight: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        padding: 10,
+        padding: theme.space.s10,
         borderRadius: theme.borderRadius.lg,
         backgroundColor: theme.colors.surface.inset,
     },

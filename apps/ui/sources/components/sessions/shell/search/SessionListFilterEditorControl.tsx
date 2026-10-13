@@ -52,24 +52,22 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: MINIMUM_TRIGGER_TARGET_SIZE,
         minWidth: MINIMUM_TRIGGER_TARGET_SIZE,
         flexShrink: 1,
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         // Optical alignment: the label, not the press fill, sits on the group labels' edge.
         marginLeft: -6,
         borderRadius: 8,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
-        gap: 6,
+        gap: theme.space.s6,
     },
     triggerPressed: {
         backgroundColor: theme.colors.surface.pressed,
     },
     triggerLabel: {
-        ...Typography.default('semiBold'),
         minWidth: 0,
         flexShrink: 1,
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     phoneTriggerLabel: {

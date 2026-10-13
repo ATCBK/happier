@@ -15,11 +15,11 @@ import { buildWalkthroughReadingProgress, type WalkthroughReadingProgress } from
 import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    body: { gap: theme.margins.md, minWidth: 0 },
-    hero: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: theme.margins.sm },
+    body: { gap: theme.space.s12, minWidth: 0 },
+    hero: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', columnGap: theme.space.s8 },
     count: { ...Typography.default('bold'), ...happierPageTextMetrics('pageTitle'), color: theme.colors.text.primary, fontVariant: ['tabular-nums'] },
     countLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
-    stops: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.margins.xs },
+    stops: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s4 },
     next: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary },
     nextTitle: { ...Typography.default('medium'), color: theme.colors.text.primary },
     quiet: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.secondary },

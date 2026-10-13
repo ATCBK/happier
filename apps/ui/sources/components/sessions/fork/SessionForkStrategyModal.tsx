@@ -53,14 +53,14 @@ export function truncateForkSourcePreview(value: string | null | undefined): str
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 4,
-        paddingBottom: 12,
-        gap: 4,
+        paddingHorizontal: theme.space.s4,
+        paddingBottom: theme.space.s12,
+        gap: theme.space.s4,
     },
     sourcePreview: {
-        marginHorizontal: 12,
-        marginBottom: 8,
-        paddingLeft: 10,
+        marginHorizontal: theme.space.s12,
+        marginBottom: theme.space.s8,
+        paddingLeft: theme.space.s10,
         borderLeftWidth: 2,
         borderLeftColor: theme.colors.border.default,
     },
@@ -71,32 +71,30 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     recommendedPill: {
-        paddingHorizontal: 8,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s2,
         borderRadius: 999,
         backgroundColor: theme.colors.surface.inset,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
     },
     recommendedPillText: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     notice: {
-        marginTop: 8,
-        marginHorizontal: 12,
+        marginTop: theme.space.s8,
+        marginHorizontal: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     noticeCopy: {
         flex: 1,
-        gap: 2,
+        gap: theme.space.s2,
     },
     noticeTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     noticeBody: {
@@ -106,8 +104,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     noticeActions: {
-        marginTop: 12,
-        marginHorizontal: 12,
+        marginTop: theme.space.s12,
+        marginHorizontal: theme.space.s12,
         flexDirection: 'row',
         justifyContent: 'flex-end',
     },
@@ -115,9 +113,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     // group directly above it rather than the modal's closing action, so it sits
     // symmetrically between the two groups instead of hanging off the last one.
     replaySettingsAction: {
-        marginTop: 4,
-        marginBottom: 4,
-        marginHorizontal: 12,
+        marginTop: theme.space.s4,
+        marginBottom: theme.space.s4,
+        marginHorizontal: theme.space.s12,
         flexDirection: 'row',
         justifyContent: 'flex-end',
     },

@@ -58,7 +58,6 @@ export function ExecutionRunChildChoiceCard(
       }}
       note={t('session.agentContinuation.childChoice.keptNote')}
       learnMore={{
-        testID: 'execution-run-child-choice.cancel',
         label: t('common.cancel'),
         onPress: props.onCancel,
       }}

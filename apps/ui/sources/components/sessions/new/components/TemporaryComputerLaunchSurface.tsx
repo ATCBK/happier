@@ -178,7 +178,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
             // phase twice — once for the card, once for the region.
             style={{
                 width: '100%', borderWidth: 1, borderColor: failed ? theme.colors.status.error : theme.colors.border.default,
-                backgroundColor: theme.colors.surface.elevated, borderRadius: 12, padding: 14, gap: 10,
+                backgroundColor: theme.colors.surface.elevated, borderRadius: 12, padding: 14, gap: theme.space.s10,
             }}
         >
             <Text accessibilityRole="header" style={{ color: theme.colors.text.primary }}>
@@ -188,7 +188,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
                 {t('newSession.temporaryComputer.subtitle')}
             </Text>
             {props.target ? (
-                <View testID="temporary-computer-target" style={{ gap: 2 }}>
+                <View testID="temporary-computer-target" style={{ gap: theme.space.s2 }}>
                     <Text testID="temporary-computer-target-platform" style={{ color: theme.colors.text.primary }}>
                         {describeRunnerArtifactTarget(props.target.artifactTarget)}
                     </Text>
@@ -223,7 +223,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
                 accessibilityRole={progressStates.has(status) ? 'progressbar' : undefined}
                 accessibilityLabel={statusLabel}
                 accessibilityLiveRegion={Platform.OS === 'ios' ? undefined : failed ? 'assertive' : 'polite'}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}
             >
                 {progressStates.has(status) ? <ActivitySpinner size="small" color={theme.colors.text.secondary} /> : null}
                 <Text testID="temporary-computer-launch-status" style={{ color: failed ? theme.colors.status.error : theme.colors.text.primary }}>
@@ -249,7 +249,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
                     {terminalReasonLabel}
                 </Text>
             ) : null}
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 }}>
                 {showExportAction ? (
                     <Action
                         testID="temporary-computer-export"
@@ -304,7 +304,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
                 </Text>
             ) : null}
             {packageExportFailed ? (
-                <View testID="temporary-computer-package-export-error" style={{ gap: 4 }}>
+                <View testID="temporary-computer-package-export-error" style={{ gap: theme.space.s4 }}>
                     <Text style={{ color: theme.colors.status.error }}>
                         {t('newSession.temporaryComputer.status.failed')}
                     </Text>
@@ -319,7 +319,7 @@ export function TemporaryComputerLaunchSurface(props: Readonly<{
                 // package nor be told to prepare one. The two things it can
                 // actually do are the two the plan names, and Cancel — which is
                 // mounted above for this status — is the second of them.
-                <View testID="temporary-computer-package-export-guidance" style={{ gap: 4 }}>
+                <View testID="temporary-computer-package-export-guidance" style={{ gap: theme.space.s4 }}>
                     <Text testID="temporary-computer-other-device-guidance" style={{ color: theme.colors.text.secondary }}>
                         {t('newSession.temporaryComputer.otherDevice.guidance')}
                     </Text>

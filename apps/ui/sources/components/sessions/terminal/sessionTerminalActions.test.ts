@@ -83,7 +83,7 @@ describe('mounted terminal Actions', () => {
             expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.list', input: { scopeId } }))
                 .toMatchObject({ ok: false, errorCode: 'terminal_scope_unavailable' });
             expect(state).toBe(beforeRetirement);
-        } finally { retireMeasurement(); retire(); machineRpc.mockReset(); home.dispose(); }
+        } finally { retireMeasurement(); retire(); machineRpc.mockReset(); await home.dispose(); }
     });
     it('opens the exact retained member in pinned Details through the same Action owner', async () => {
         const scopeId = 'session:address:home-details:session-details';

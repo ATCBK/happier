@@ -280,9 +280,7 @@ const styles = StyleSheet.create((_theme) => ({
     },
     noticeText: {
         flex: 1,
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
     },
     status: {
         flexDirection: 'row',
@@ -290,9 +288,7 @@ const styles = StyleSheet.create((_theme) => ({
         gap: 8,
     },
     statusText: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 19,
+        ...Typography.variant('body'),
     },
     brief: {
         // Concentric with the modal card: the card's own radius less this
@@ -316,11 +312,7 @@ const styles = StyleSheet.create((_theme) => ({
         gap: 8,
     },
     sectionLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 10,
-        lineHeight: 14,
-        letterSpacing: 0.6,
-        textTransform: 'uppercase',
+        ...Typography.eyebrow(),
     },
     sectionAttributes: {
         flexShrink: 1,
@@ -338,9 +330,7 @@ const styles = StyleSheet.create((_theme) => ({
         // the prompt rather than about the conversation. Setting them in the UI
         // face keeps the mono for the recording, where a monospaced line is
         // carrying real structure rather than decorating prose.
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
     },
     actions: {
         flexDirection: 'row',
@@ -360,7 +350,6 @@ const styles = StyleSheet.create((_theme) => ({
         borderWidth: 1,
     },
     actionText: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
 }));

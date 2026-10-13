@@ -1,55 +1,22 @@
-/**
- * The row menu chain end to end: a target built by the production
- * `createSessionActionTarget`, rendered through the real menu builder, then
- * dispatched through the real `handleMoreMenuSelect` switch into the real
- * `executeSessionAction`. A hand-built target literal plus a hand-built menu
- * item would pass even when no production call site supplies the standing
- * inputs and the dispatch switch drops the id.
- */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import {
     SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
     SESSION_ACTION_SET_ATTENTION_STANDING_ID,
 } from '@/components/sessions/actions/sessionActionIds';
-import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { renderHook, standardCleanup } from '@/dev/testkit';
-import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionListRenderableSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 
-import { useSessionRowActionMenu } from './useSessionRowActionMenu';
-
-const setAttentionStandingWrite = vi.fn(async () => ({ success: true as const }));
-const clearAttentionReminderWrite = vi.fn(async () => ({ success: true as const }));
-
-vi.mock('@/sync/ops/sessionOrganization', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    sessionSetAttentionStandingWithServerScope: (...args: readonly unknown[]) => setAttentionStandingWrite(...(args as [])),
-    sessionClearAttentionReminderWithServerScope: (...args: readonly unknown[]) => clearAttentionReminderWrite(...(args as [])),
-}));
-
-function makeSession(): SessionListRenderableSession {
-    return {
-        id: 'session_1',
-        active: false,
-        archivedAt: null,
-        owner: 'user_1',
-        access: createSessionAccessFixture(),
-        accessLevel: undefined,
-        seq: 4,
-        lastViewedSessionSeq: 4,
-        latestTurnStatus: 'completed',
-        createdAt: 1,
-        updatedAt: 1,
-        activeAt: 1,
-        metadataVersion: 1,
-        agentStateVersion: 1,
-        metadata: null,
-        thinking: false,
-        thinkingAt: 0,
-        presence: 1,
-    };
-}
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { useSessionRowActionMenu } = await import('./useSessionRowActionMenu');
+const SESSION_ID = 'session_1';
+const route = `/v2/session-organization/attention-standings/${SESSION_ID}`;
+let serverId: string;
+let previousState = storage.getState();
 
 function renderRowMenu(params: Readonly<{
     attentionStandingEnabled: boolean;
@@ -57,8 +24,11 @@ function renderRowMenu(params: Readonly<{
     reminder?: Readonly<{ state: 'scheduled' | 'due'; remindAt: number }>;
 }>) {
     const target = createSessionActionTarget({
-        session: makeSession(),
-        serverId: 'server_1',
+        session: createSessionListRenderableSessionFixture({
+            id: SESSION_ID, active: false, owner: 'user_1', metadata: null,
+            seq: 4, lastViewedSessionSeq: 4, latestTurnStatus: 'completed',
+        }),
+        serverId,
         currentUserId: 'user_1',
         isConnected: false,
         attentionStandingEnabled: params.attentionStandingEnabled,
@@ -79,33 +49,44 @@ function renderRowMenu(params: Readonly<{
     }));
 }
 
-afterEach(() => {
-    standardCleanup();
-    setAttentionStandingWrite.mockClear();
-    clearAttentionReminderWrite.mockClear();
+beforeEach(async () => {
+    previousState = storage.getState();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Row menu Home', serverUrl: 'https://row-menu-standing.test', accountId: 'user_1' });
+});
+afterEach(async () => {
+    await standardCleanup();
+    await home.reset();
+    storage.setState(previousState, true);
 });
 
 describe('session row action menu attention standing', () => {
-    it('renders Keep in Needs attention and writes standing when it is pressed', async () => {
+    it('renders Keep in Needs attention and commits standing when it is pressed', async () => {
+        home.answer(serverId, route, { body: { standing: { sessionId: SESSION_ID, standing: true, updatedAt: 7 } } });
         const menu = await renderRowMenu({ attentionStandingEnabled: true, attentionStanding: false });
 
         expect(menu.getCurrent().moreMenuItems.map((item) => item.id))
             .toContain(SESSION_ACTION_SET_ATTENTION_STANDING_ID);
-
         await menu.getCurrent().handleMoreMenuSelect(SESSION_ACTION_SET_ATTENTION_STANDING_ID);
 
-        expect(setAttentionStandingWrite).toHaveBeenCalledWith('session_1', true, { serverId: 'server_1' });
+        expect(home.requestsFor(route)).toMatchObject([{ serverId, input: { standing: true } }]);
+        expect(storage.getState().sessionOrganizationAttentionStandingsBySessionKey[
+            buildSessionOrganizationSessionKey(serverId, SESSION_ID)
+        ]).toEqual({ sessionId: SESSION_ID, standing: true, updatedAt: 7 });
     });
 
     it('renders Remove from Needs attention for a standing session and clears it', async () => {
+        home.answer(serverId, route, { body: { standing: { sessionId: SESSION_ID, standing: false, updatedAt: 8 } } });
         const menu = await renderRowMenu({ attentionStandingEnabled: true, attentionStanding: true });
 
         expect(menu.getCurrent().moreMenuItems.map((item) => item.id))
             .toContain(SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID);
-
         await menu.getCurrent().handleMoreMenuSelect(SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID);
 
-        expect(setAttentionStandingWrite).toHaveBeenCalledWith('session_1', false, { serverId: 'server_1' });
+        expect(home.requestsFor(route)).toMatchObject([{ serverId, input: { standing: false } }]);
+        expect(storage.getState().sessionOrganizationAttentionStandingsBySessionKey[
+            buildSessionOrganizationSessionKey(serverId, SESSION_ID)
+        ]).toEqual({ sessionId: SESSION_ID, standing: false, updatedAt: 8 });
     });
 
     it('renders neither direction while the attention band is off', async () => {
@@ -114,9 +95,11 @@ describe('session row action menu attention standing', () => {
 
         expect(ids).not.toContain(SESSION_ACTION_SET_ATTENTION_STANDING_ID);
         expect(ids).not.toContain(SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID);
+        expect(home.requestsFor(route)).toEqual([]);
     });
 
-    it('clears the current reminder through the canonical standing mutation', async () => {
+    it('clears the current reminder through the real standing mutation', async () => {
+        home.answer(serverId, route, { body: { standing: { sessionId: SESSION_ID, standing: false, updatedAt: 9 } } });
         const menu = await renderRowMenu({
             attentionStandingEnabled: true,
             attentionStanding: false,
@@ -124,9 +107,11 @@ describe('session row action menu attention standing', () => {
         });
         const reminderItem = menu.getCurrent().moreMenuItems.find((item) => item.id === 'attention-reminder');
         expect(reminderItem?.submenu?.items.at(-1)?.id).toBe('attention-reminder:remove');
-
         await menu.getCurrent().handleMoreMenuSelect('attention-reminder:remove');
 
-        expect(clearAttentionReminderWrite).toHaveBeenCalledWith('session_1', { serverId: 'server_1' });
+        expect(home.requestsFor(route)).toMatchObject([{ serverId, input: { remindAt: null } }]);
+        expect(storage.getState().sessionOrganizationAttentionStandingsBySessionKey[
+            buildSessionOrganizationSessionKey(serverId, SESSION_ID)
+        ]).toEqual({ sessionId: SESSION_ID, standing: false, updatedAt: 9 });
     });
 });

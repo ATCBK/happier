@@ -22,25 +22,22 @@ const stylesheet = StyleSheet.create((theme) => ({
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        marginRight: 2,
+        gap: theme.space.s4,
+        marginRight: theme.space.s2,
     },
     needsYou: {
-        ...Typography.default('semiBold'),
         ...Typography.tabular(),
-        fontSize: 11,
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.state.warning.foreground,
     },
     working: {
-        ...Typography.default(),
         ...Typography.tabular(),
-        fontSize: 10,
+        ...Typography.variant('micro'),
         color: theme.colors.text.secondary,
     },
     total: {
-        ...Typography.default(),
         ...Typography.tabular(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     // The caret sits in the row's leading edge, tight against the identity (lab `.cm-car`).

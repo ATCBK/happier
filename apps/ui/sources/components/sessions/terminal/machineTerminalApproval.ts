@@ -18,14 +18,19 @@ export function inspectMachineTerminalMemberApproval(input: Readonly<{
     if (matched?.family !== 'built_in' || matched.request.v !== 2) return null;
     const request = matched.request;
     const origin = request.executionOriginV1;
+    // A requester Action can be produced on the daemon, whose local profile id
+    // does not exist on this device. Its immutable portable Home binding is the
+    // same authority used by the generic approval continuation.
+    const originHomeId = origin.serverIdentityId ?? origin.serverId;
     if (request.actionId !== pending.actionId || origin.actionId !== pending.actionId
         || origin.accountId !== pending.scope.accountId
-        || !areServerProfileIdentifiersEquivalent(origin.serverId, pending.scope.serverId)) return null;
+        || !areServerProfileIdentifiersEquivalent(originHomeId, pending.scope.serverId)) return null;
     const parsed = getActionSpec(pending.actionId).inputSchema.safeParse(request.actionArgs);
     if (!parsed.success || typeof parsed.data !== 'object' || parsed.data === null) return null;
     const args: Readonly<Record<string, unknown>> = parsed.data;
     if (args.machineId !== input.machineId || typeof args.serverId !== 'string'
-        || !areServerProfileIdentifiersEquivalent(args.serverId, pending.scope.serverId)) return null;
+        || (args.serverId !== origin.serverId
+            && !areServerProfileIdentifiersEquivalent(args.serverId, pending.scope.serverId))) return null;
     // Resize is presentation-owned and can differ when the same member remounts.
     // All launch/root/Session operands still have to match the immutable Artifact.
     const { cols: originalCols, rows: originalRows, ...original } = args;

@@ -225,8 +225,8 @@ export function useMachinePickerScreenModel() {
             selectedTeamCredentialModel: null,
             // This route resolves its Agent target from route params alone, so
             // it can only ever hold a bundled contribution identity; an
-            // installed Agent's catalog and marketplace index belong to the New
-            // Session screen's focused machine.
+            // installed Agent's catalog belongs to the New Session screen's
+            // focused machine; this picker performs no registry acquisition.
             agentCatalogMachineId: null,
             projectedAgentsById: {},
             installedPluginPackagesById: {},

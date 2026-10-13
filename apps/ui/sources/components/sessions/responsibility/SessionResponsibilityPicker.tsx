@@ -133,7 +133,7 @@ function SessionResponsibilityPickerContent(
                         />
                     ),
                     ...(hint ? { rightAccessory: () => (
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 13, ...Typography.default() }}>
+                        <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('body'),  }}>
                             {hint}
                         </Text>
                     ) } : {}),
@@ -238,8 +238,8 @@ function SessionResponsibilityPickerContent(
                     style={{
                         color: theme.colors.state.warning.foreground,
                         fontSize: 14,
-                        paddingHorizontal: 16,
-                        paddingBottom: 8,
+                        paddingHorizontal: theme.space.s16,
+                        paddingBottom: theme.space.s8,
                         ...Typography.default(),
                     }}
                 >

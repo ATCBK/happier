@@ -150,15 +150,13 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
 
 const styles = StyleSheet.create((theme) => ({
     header: {
-        gap: 2,
-        paddingHorizontal: theme.margins.md,
-        paddingTop: theme.margins.md,
-        paddingBottom: theme.margins.xs,
+        gap: theme.space.s2,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s4,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
-        lineHeight: 18,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     description: {

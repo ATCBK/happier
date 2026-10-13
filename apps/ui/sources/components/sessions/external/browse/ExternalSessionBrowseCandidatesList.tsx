@@ -63,7 +63,7 @@ const styles = StyleSheet.create((theme: AppTheme) => ({
     },
     loading: {
         flex: 1,
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     loadingProgressRegion: {
         width: '100%',
@@ -71,16 +71,16 @@ const styles = StyleSheet.create((theme: AppTheme) => ({
     searchSuffix: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         flexShrink: 1,
     },
     searchProgress: {
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     searchIncomplete: {
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
     },
     // Indexing: a 2px line across the list's top edge and one status line under it, with Stop at its
     // end. Rows the index has already served stay live below it.

@@ -486,7 +486,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   summary: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexShrink: 1,
   },
   summaryText: {
@@ -501,15 +501,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.tertiary,
   },
   line: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s4,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    marginHorizontal: 12,
+    marginHorizontal: theme.space.s12,
     backgroundColor: theme.colors.border.default,
   },
   emptyRoot: {
-    paddingBottom: 12,
+    paddingBottom: theme.space.s12,
   },
 }));

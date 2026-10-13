@@ -76,21 +76,21 @@ export function SelectMessageButton(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     button: {
-        padding: 2,
+        padding: theme.space.s2,
         borderRadius: 6,
         opacity: 0.6,
         cursor: 'pointer',
-        marginRight: 6,
+        marginRight: theme.space.s6,
     },
     webActionButton: {
-        padding: 6,
+        padding: theme.space.s6,
     },
     webActionButtonInverted: {
-        paddingHorizontal: 4,
-        marginRight: 2,
+        paddingHorizontal: theme.space.s4,
+        marginRight: theme.space.s2,
     },
     selectionToggleButton: {
-        padding: 6,
+        padding: theme.space.s6,
         borderRadius: 16,
         backgroundColor: theme.colors.surface.base,
     },

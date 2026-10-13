@@ -68,7 +68,7 @@ export function ExternalSessionsEmptyState(props: ExternalSessionsEmptyStateProp
                         name="folder-open"
                         size={48}
                         color={theme.colors.text.secondary}
-                        style={{ marginBottom: 12 }}
+                        style={{ marginBottom: theme.space.s12 }}
                     />
                 )}
                 title={t('externalSessions.emptyStateTitle')}

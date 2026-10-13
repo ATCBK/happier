@@ -647,7 +647,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                     style={shellStyle}
                     composer={(
                         <View style={{
-                            paddingTop: 12,
+                            paddingTop: theme.space.s12,
                             paddingBottom: newSessionBottomPadding,
                             position: 'relative',
                             overflow: 'visible',
@@ -706,7 +706,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                       */}
                                     {props.footer.launchPendingPreviewVisible === true
                                         && props.footer.pendingLaunchAttempt != null ? (
-                                        <View style={{ paddingBottom: 8 }}>
+                                        <View style={{ paddingBottom: theme.space.s8 }}>
                                             <NewSessionLaunchPendingPreview launchAttempt={props.footer.pendingLaunchAttempt} />
                                         </View>
                                     ) : null}
@@ -890,18 +890,18 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             <View style={{
                                                 backgroundColor: warningBackgroundColor,
                                                 borderRadius: 10,
-                                                padding: 12,
-                                                marginBottom: 12,
+                                                padding: theme.space.s12,
+                                                marginBottom: theme.space.s12,
                                                 borderWidth: 1,
                                                 borderColor: warningBorderColor ?? defaultBorderColor,
                                             }}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, marginBottom: theme.space.s6 }}>
                                                     {renderIconNode('warning', 16, neutralForegroundColor)}
-                                                    <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                                                    <Text style={{ ...Typography.variant('body', 'semiBold'),  color: theme.colors.text.primary,  }}>
                                                         {t('machine.tmux.notDetectedSubtitle')}
                                                     </Text>
                                                 </View>
-                                                <Text style={{ fontSize: 11, color: theme.colors.text.secondary, ...Typography.default() }}>
+                                                <Text style={{ ...Typography.variant('micro'), color: theme.colors.text.secondary,  }}>
                                                     {t('machine.tmux.notDetectedMessage')}
                                                 </Text>
                                             </View>
@@ -1068,7 +1068,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                     </View>
 
                                     {shouldRenderModelSection && (
-                                        <View style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : { marginTop: 24 }}>
+                                        <View style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : { marginTop: theme.space.s24 }}>
                                         <View onLayout={registerWizardSectionOffset('model')}>
                                             <WizardSectionHeaderRow
                                                 rowStyle={styles.wizardSectionHeaderRow}
@@ -1155,7 +1155,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             {t('newSession.selectMachineDescription')}
                                         </Text>
 
-                                        <View style={{ marginBottom: 24 }}>
+                                        <View style={{ marginBottom: theme.space.s24 }}>
                                             <AdaptiveSelectionSection
                                                 presentation={machinePresentation}
                                                 expandedContent={typeof props.footer.machinePopover?.renderContent === 'function'
@@ -1178,21 +1178,21 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             {selectedMachineIsOffline && (
                                                 <View
                                                     style={{
-                                                        marginTop: 12,
+                                                        marginTop: theme.space.s12,
                                                         borderRadius: 10,
-                                                        padding: 12,
+                                                        padding: theme.space.s12,
                                                         borderWidth: 1,
                                                         backgroundColor: warningBackgroundColor,
                                                         borderColor: warningBorderColor ?? defaultBorderColor,
                                                     }}
                                                 >
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, marginBottom: theme.space.s4 }}>
                                                         {renderIconNode(
                                                             'warning',
                                                             16,
                                                             neutralForegroundColor ?? dangerForegroundColor,
                                                         )}
-                                                        <Text style={{ color: theme.colors.text.primary, fontWeight: '600', ...Typography.default('semiBold') }}>
+                                                        <Text style={{ color: theme.colors.text.primary,  ...Typography.default('semiBold') }}>
                                                             {t('newSession.machineOfflineInlineTitle')}
                                                         </Text>
                                                     </View>
@@ -1218,7 +1218,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             {t('newSession.selectWorkingDirectoryDescription')}
                                         </Text>
 
-                                        <View style={{ marginBottom: 24 }}>
+                                        <View style={{ marginBottom: theme.space.s24 }}>
                                             <PathSelectionList
                                                 initialValue={selectedPath}
                                                 machineHomeDir={selectedMachineHomeDir}

@@ -121,7 +121,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         pane.openDetailsTab(createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'walkthrough' }), { intent: 'pinned' });
     }, [pane.openDetailsTab]);
     const scopeAccessory = React.useMemo(() => (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, flexWrap: 'wrap' }}>
             {displayMenu}
             <RoundButton testID="session-rightpanel-git-walkthrough" size="small" display="inverted"
                 title={t('turnChanges.card.walkThrough')} onPress={openWalkThrough}
@@ -788,7 +788,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
             {!scmWriteEnabled ? (
                 // Git lab ST "Write actions off": the pane stays readable; one notice says why nothing can be
                 // committed here and offers the switch instead of hiding the form silently.
-                <View style={{ paddingHorizontal: 12, paddingTop: 4, paddingBottom: 6 }}>
+                <View style={{ paddingHorizontal: theme.space.s12, paddingTop: theme.space.s4, paddingBottom: theme.space.s6 }}>
                     <AttentionBanner
                         testID="session-git-writes-off"
                         tone="neutral"

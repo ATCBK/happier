@@ -13,8 +13,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     empty: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 24,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s24,
     },
     emptyText: {
         color: theme.colors.text.secondary,

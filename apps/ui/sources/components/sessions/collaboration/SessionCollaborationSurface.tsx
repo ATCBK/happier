@@ -49,17 +49,15 @@ const WebInertView = View as React.ComponentType<ViewProps & Readonly<{ inert?: 
 
 const styles = StyleSheet.create((theme) => ({
     surface: { flex: 1, minHeight: 0, minWidth: 0 },
-    column: { flex: 1, minHeight: 0, minWidth: 0, paddingTop: 4 },
+    column: { flex: 1, minHeight: 0, minWidth: 0, paddingTop: theme.space.s4 },
     // Only the conversations flex, so their list stays the one scroller and the
     // present line, Responsible and the access card stay put around it.
     body: { flex: 1, minHeight: 0, minWidth: 0 },
-    responsible: { paddingVertical: 2 },
+    responsible: { paddingVertical: theme.space.s2 },
     panel: { flex: 1, minHeight: 0, minWidth: 0 },
-    panelHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 10, paddingLeft: 16, paddingRight: 8 },
+    panelHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingTop: theme.space.s10, paddingLeft: theme.space.s16, paddingRight: theme.space.s8 },
     panelTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
         flex: 1,
     },
@@ -67,13 +65,13 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default(),
         ...ITEM_SUBTITLE_TEXT_METRICS.compact,
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingTop: 2,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s8,
     },
     accessBody: { flex: 1, minHeight: 0, minWidth: 0 },
     spacer: { flex: 1 },
-    publicLink: { paddingTop: 4 },
+    publicLink: { paddingTop: theme.space.s4 },
 }));
 
 /** Hosts supply geometry; each domain child retains its own state and failure boundary. */

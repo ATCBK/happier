@@ -8,10 +8,10 @@ import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { t } from '@/text';
 
 const styles = StyleSheet.create((theme) => ({
-    root: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
-    title: { textAlign: 'center', marginBottom: 8 },
+    root: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.space.s16 },
+    title: { textAlign: 'center', marginBottom: theme.space.s8 },
     description: { textAlign: 'center', color: theme.colors.text.secondary },
-    back: { marginTop: 16 },
+    back: { marginTop: theme.space.s16 },
 }));
 
 /**

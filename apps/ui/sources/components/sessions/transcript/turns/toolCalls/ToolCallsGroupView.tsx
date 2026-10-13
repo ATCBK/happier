@@ -119,8 +119,8 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
             borderRadius: theme.borderRadius.xl,
             backgroundColor: theme.colors.feed?.card?.background ?? theme.colors.surface.elevated,
             overflow: 'hidden' as const,
-            paddingHorizontal: 10,
-            paddingVertical: 6,
+            paddingHorizontal: theme.space.s10,
+            paddingVertical: theme.space.s6,
         }
         : null;
     const previewCount = resolveTranscriptToolCallsCollapsedPreviewCount(transcriptToolCallsCollapsedPreviewCount);
@@ -283,7 +283,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        marginHorizontal: 16,
+        marginHorizontal: theme.space.s16,
         marginBottom: 22,
     },
     containerCards: {
@@ -302,7 +302,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     contentRowFeed: {},
     contentRowCards: {
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
     contentGutter: {
         width: 18,
@@ -314,15 +314,15 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 2,
         backgroundColor: theme.colors.message.event.foreground,
         opacity: 0.1,
-        marginBottom: 7
+        marginBottom: theme.space.s6
     },
     contentBody: {
         flex: 1,
         minWidth: 0,
-        paddingLeft: 6,
+        paddingLeft: theme.space.s6,
     },
     preview: {
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
     previewCards: {
         paddingHorizontal: 0,
@@ -339,7 +339,7 @@ const styles = StyleSheet.create((theme) => ({
         marginHorizontal: 0,
     },
     body: {
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
     bodyCards: {},
     bodyFeed: {},

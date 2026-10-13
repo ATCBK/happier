@@ -38,12 +38,12 @@ export const ScmCommitSelectionSummaryRow = React.memo((props: ScmCommitSelectio
                     : (props.theme.colors.surface.inset ?? props.theme.colors.input.background),
             }}
         >
-            <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+            <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                 {t('files.sourceControlOperations.selection', { count: props.count })}
             </Text>
             {props.onClear ? (
                 <Pressable onPress={props.onClear} accessibilityRole="button">
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.link, ...Typography.default('semiBold') }}>
+                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.link,  }}>
                         {t('files.sourceControlOperations.clear')}
                     </Text>
                 </Pressable>

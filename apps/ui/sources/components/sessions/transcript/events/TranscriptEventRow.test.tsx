@@ -5,7 +5,7 @@ import { SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol';
 
 import { renderScreen } from '@/dev/testkit';
 import { setPreferredLanguageFromSettings, t } from '@/text';
-import type { AgentEvent } from "@happier-dev/session-core/raw";
+import { normalizeRawMessage, RawRecordSchema, type AgentEvent } from "@happier-dev/session-core/raw";
 
 import { TranscriptEventRow } from './TranscriptEventRow';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
@@ -41,6 +41,27 @@ vi.mock('@/modal', async () => {
 });
 
 describe('TranscriptEventRow', () => {
+    it('retains canonical MCP accounting evidence without displaying it as an unknown conversation event', async () => {
+        // The host projector commits this canonical event; usageWorkEvidence consumes
+        // it independently of the transcript presentation.
+        const raw = RawRecordSchema.parse({ role: 'agent', content: { type: 'event', id: 'mcp-window', data: {
+            type: 'mcp-binding-usage', usage: {
+                v: 1, evidenceId: 'mcp-window', sessionId: 'session-1', turnId: 'turn-1', observedAtMs: 200,
+                window: { startMs: 100, endMs: 200 }, coverage: 'complete',
+                bindings: [{ serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20,
+                    catalogRevision: 40, toolCallCount: 0, schemaBytes: null }],
+            },
+        } } });
+        const normalized = normalizeRawMessage('mcp-window', null, 200, raw);
+        expect(normalized?.role).toBe('event');
+        if (normalized?.role !== 'event') throw new Error('Expected the retained accounting event');
+        const screen = await renderScreen(<TranscriptEventRow event={normalized.content} />);
+        expect(screen.getTextContent()).toBe('');
+        const future = await renderScreen(<TranscriptEventRow event={{ type: 'future-event' } as unknown as AgentEvent} />);
+        expect(future.getTextContent()).toContain(t('message.unknownEvent'));
+        await screen.unmount();
+        await future.unmount();
+    });
     it('does not describe a terminal policy decision as a user cancellation', async () => {
         const screen = await renderScreen(<TranscriptEventRow event={{
             type: 'connected-service-runtime-auth-recovery',
@@ -781,5 +802,46 @@ describe('TranscriptEventRow runtime-config-outcome', () => {
         const detail = screen.findByProps({ testID: 'transcript-event-runtime-config-outcome-applied-detail' });
         expect(JSON.stringify(detail.props.children)).toContain(t('message.runtimeConfigOutcomeSessionMode'));
         expect(JSON.stringify(detail.props.children)).toContain('plan');
+    });
+    describe('capability notice', () => {
+        const notice = (items: unknown, message = 'Linear couldn\'t start · env:LINEAR_API_KEY') => ({
+            type: 'message', message, capabilityNoticeV1: { v: 1, items },
+        }) as unknown as AgentEvent;
+
+        it('says in plain words which server was left out and why, and opens that server', async () => {
+            const screen = await renderScreen(<TranscriptEventRow event={notice([
+                { kind: 'mcp_server', name: 'Linear', itemId: 'srv 1', code: 'missing_value_ref', detail: 'env:LINEAR_API_KEY' },
+            ])} />);
+            expect(screen.getTextContent()).toContain('Linear couldn’t start · missing LINEAR_API_KEY');
+            expect(screen.getTextContent()).not.toContain('env:LINEAR_API_KEY');
+            await screen.pressByTestIdAsync('transcript-event-capability-notice-open');
+            expect(workerUpdateRouter.push).toHaveBeenCalledWith('/settings/mcp/srv%201');
+        });
+
+        it('keeps one line per skipped server and opens the collection when several were left out', async () => {
+            const screen = await renderScreen(<TranscriptEventRow event={notice([
+                { kind: 'mcp_server', name: 'Linear', itemId: 'a', code: 'invalid_server', detail: 'mcp_sign_in_required' },
+                { kind: 'mcp_server', name: 'Postgres', itemId: 'b', code: 'missing_value_ref', detail: 'header:X_TOKEN' },
+            ])} />);
+            expect(screen.getTextContent()).toContain('Linear couldn’t start · needs sign-in');
+            expect(screen.getTextContent()).toContain('Postgres couldn’t start · missing X_TOKEN');
+            await screen.pressByTestIdAsync('transcript-event-capability-notice-open');
+            expect(workerUpdateRouter.push).toHaveBeenCalledWith('/settings/mcp');
+        });
+
+        it('opens the prompt library for an unavailable optional prompt notice', async () => {
+            const screen = await renderScreen(<TranscriptEventRow event={notice([
+                { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
+            ], 'Prompt library could not load')} />);
+            await screen.pressByTestIdAsync('transcript-event-capability-notice-open');
+            expect(workerUpdateRouter.push).toHaveBeenCalledWith('/settings/prompts');
+        });
+
+        it('never renders the sidecar itself when it is malformed or from a future writer', async () => {
+            const screen = await renderScreen(<TranscriptEventRow event={notice({ unexpected: true }, 'Linear couldn\'t start')} />);
+            expect(screen.getTextContent()).toContain('Linear couldn\'t start');
+            expect(screen.getTextContent()).not.toContain('unexpected');
+            expect(screen.findByTestId('transcript-event-capability-notice-open')).toBeNull();
+        });
     });
 });

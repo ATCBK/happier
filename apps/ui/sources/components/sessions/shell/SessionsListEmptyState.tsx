@@ -64,7 +64,7 @@ export function SessionsListEmptyState(props: SessionsListEmptyStateProps) {
         : t('sessionsList.emptyState.reconnectMachineActionSubtitle');
 
     return (
-        <ItemList presentation="grouped" testID="sessions-empty-state-list" containerStyle={{ paddingTop: 12 }}>
+        <ItemList presentation="grouped" testID="sessions-empty-state-list" containerStyle={{ paddingTop: theme.space.s12 }}>
             <View testID={`session-getting-started-kind-${props.kind}`} style={{ width: 0, height: 0, overflow: 'hidden' }} />
             {props.surface === 'sidebar' ? (
                 <SessionGettingStartedSummary

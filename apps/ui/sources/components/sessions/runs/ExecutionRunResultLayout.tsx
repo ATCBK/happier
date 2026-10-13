@@ -26,14 +26,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     pageContent: {
         gap: 18,
-        paddingTop: 4,
-        paddingBottom: 16,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s16,
     },
     foot: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingTop: 12,
+        gap: theme.space.s10,
+        paddingTop: theme.space.s12,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
@@ -42,11 +42,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'stretch',
     },
     footNote: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         fontVariant: ['tabular-nums'],
     },
     footNoteBlock: {
@@ -54,18 +53,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     footNoteStrong: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         fontVariant: ['tabular-nums'],
     },
     dock: {
-        paddingTop: 10,
+        paddingTop: theme.space.s10,
     },
     footActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     footActionsWrap: {
         flexWrap: 'wrap',
@@ -74,7 +72,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'flex-end',
     },
     messageFoot: {
-        gap: 10,
+        gap: theme.space.s10,
     },
 }));
 

@@ -803,12 +803,9 @@ describe('SessionAuthoringControls', () => {
 
     /** Every field a host can list has a canonical localized name. */
     it('names every field with its canonical control title', async () => {
-        const { resolveSessionAuthoringFieldTitle } = await import('./sessionAuthoringFieldControls');
-        const { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS } = await import(
-            '@happier-dev/protocol/workflows/workflowV1'
-        );
+        const { resolveSessionAuthoringFieldTitle, SESSION_AUTHORING_CONTROL_FIELD_IDS } = await import('./sessionAuthoringFieldControls');
 
-        for (const field of WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS) {
+        for (const field of SESSION_AUTHORING_CONTROL_FIELD_IDS) {
             const title = resolveSessionAuthoringFieldTitle(field);
             expect(title, `no canonical title for ${field}`).toBeTruthy();
             // A title is a name, never the schema id a reader cannot act on.

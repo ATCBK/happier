@@ -148,9 +148,9 @@ export function CommittedMessageActions(props: Props) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    button: { marginRight: 6 },
-    inverted: { marginRight: 2 },
-    saved: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 28, paddingHorizontal: 6, marginRight: 6, borderRadius: 14 },
+    button: { marginRight: theme.space.s6 },
+    inverted: { marginRight: theme.space.s2 },
+    saved: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, height: 28, paddingHorizontal: theme.space.s6, marginRight: theme.space.s6, borderRadius: 14 },
     savedPressed: { backgroundColor: theme.colors.surface.pressed },
     savedText: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
     savedLink: { color: theme.colors.text.link },

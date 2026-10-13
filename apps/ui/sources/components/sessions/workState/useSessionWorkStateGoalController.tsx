@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -347,20 +348,17 @@ const styles = StyleSheet.create(() => ({
         gap: 8,
     },
     pendingText: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
     },
     slowText: {
-        fontSize: 12,
-        fontWeight: '500',
+        ...Typography.variant('meta', 'medium'),
     },
     sectionDivider: {
         height: StyleSheet.hairlineWidth,
         marginVertical: 2,
     },
     emptyText: {
-        fontSize: 13,
-        fontWeight: '500',
+        ...Typography.variant('body', 'medium'),
         paddingVertical: 8,
     },
 }));

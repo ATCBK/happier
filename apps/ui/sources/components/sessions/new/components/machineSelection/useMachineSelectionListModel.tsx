@@ -138,7 +138,7 @@ export type MachineSelectionAvailability = Readonly<{
 }>;
 
 export type MachineSelectionPresentation = Readonly<{
-    title: string;
+    title?: string;
     subtitle?: string;
 }>;
 
@@ -158,7 +158,7 @@ export type BuildMachineSelectionListModelParams<TMachine extends MachineDisplay
     onSelectScopedMachine: (machine: ScopedSelectionMachine<TMachine>) => void;
     /** Domain-owned availability; omit it to keep the canonical presence rule. */
     resolveMachineAvailability?: (machine: TMachine, serverId: string) => MachineSelectionAvailability;
-    /** Domain-owned row naming, for domains that must not disclose opaque machine ids. */
+    /** Domain-owned naming or detail; omitted titles retain canonical Machine naming. */
     resolveMachinePresentation?: (machine: TMachine) => MachineSelectionPresentation;
     onSelectPool?: (selection: ServerScopedMachinePoolSelection) => void;
     poolSelectionStatus?: MachinePoolSelectionStatus;

@@ -1,22 +1,33 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const candidatesListSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (call: { method: string; payload: unknown; signal?: AbortSignal; serverId?: string }) => {
-        if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
-        return candidatesListSpy(call.payload, { signal: call.signal, serverId: call.serverId });
-    },
-}));
-
-vi.mock('@/text', () => ({
-    t: (key: string) => key,
-}));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
+const network = await installSessionOpsNetworkBoundary();
+// Transform the real owner outside a candidate operation's timeout.
+await import('./useExternalSessionBrowseCandidates');
+function requestIdFor(payload: unknown): string {
+    const request = network.socketBoundaries.flatMap(item => item.socket.emitWithAck.mock.calls)
+        .map(([event, raw]) => event === SOCKET_RPC_EVENTS.CALL && raw !== null && typeof raw === 'object'
+            ? raw as SocketRpcRequestPayload : null)
+        .reverse().find(request => request?.params === payload);
+    if (!request?.requestId) throw new Error('Expected a cancellable native candidate request');
+    return request.requestId;
+}
+function wasCancelled(requestId: string): boolean {
+    return network.socketBoundaries.some(item => item.socket.emit.mock.calls.some(([event, raw]) =>
+        event === SOCKET_RPC_EVENTS.CANCEL && raw !== null && typeof raw === 'object'
+        && 'requestId' in raw && raw.requestId === requestId));
+}
+afterAll(() => network.dispose());
 
 const params = {
     machineId: 'machine-1',
@@ -79,13 +90,19 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         candidatesListSpy.mockReset();
         home = await serveExternalSessionBrowseHome({
             homes: [{ key: 'browse', serverUrl: 'https://browse-pagination.test', accountId: 'browse-account' }],
-            route: () => undefined,
+            route: request => request.path.startsWith('/v1/machines/')
+                ? Response.json({ machine: createPlainMachineRowFixture({ id: request.path.slice('/v1/machines/'.length), accountId: 'browse-account' }) })
+                : undefined,
+        });
+        network.setRpcResponder(async call => {
+            if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
+            return candidatesListSpy(call.payload, { serverId: home.serverId, requestId: requestIdFor(call.payload) });
         });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
-        home.dispose();
+        await home.dispose();
     });
 
     it('admits only one same-tick request for each scope and cursor', async () => {
@@ -106,7 +123,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(candidatesListSpy).toHaveBeenCalledTimes(2);
         expect(candidatesListSpy).toHaveBeenLastCalledWith(
             expect.objectContaining({ cursor: 'cursor-1' }),
-            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            expect.objectContaining({ requestId: expect.any(String) }),
         );
 
         nextPage.resolve(page([], null));
@@ -150,7 +167,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(candidatesListSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({
             cursor: 'shared-cursor',
             searchMode: 'fast',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(hook.getCurrent().nextCursor).toBe('fast-cursor-two');
 
         fullRootPage.resolve({
@@ -171,7 +188,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(candidatesListSpy).toHaveBeenNthCalledWith(4, expect.objectContaining({
             cursor: 'shared-cursor',
             searchMode: 'full',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(hook.getCurrent().candidates.map((candidate) => candidate.remoteSessionId)).toEqual([
             'fast-result',
             'fast-page-two',
@@ -534,13 +551,13 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         ['source', { ...params, source: null }],
     ] as const)('aborts and clears a valid scope when its %s selection becomes invalid', async (_scopeKind, invalidParams) => {
         const stalePage = createDeferred<ReturnType<typeof page>>();
-        let staleSignal: AbortSignal | undefined;
+        let staleRequest: string | undefined;
         candidatesListSpy
             .mockResolvedValueOnce(page([
                 { remoteSessionId: 'loaded-result', title: 'Loaded result', updatedAtMs: 1 },
             ], 'stale-cursor'))
-            .mockImplementationOnce((_request, options: Readonly<{ signal?: AbortSignal }>) => {
-                staleSignal = options.signal;
+            .mockImplementationOnce((_request, options: Readonly<{ requestId: string }>) => {
+                staleRequest = options.requestId;
                 return stalePage.promise;
             });
         const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
@@ -562,11 +579,12 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
             void hook.getCurrent().loadMore();
         });
         expect(hook.getCurrent().loadingMore).toBe(true);
-        expect(staleSignal?.aborted).toBe(false);
+        expect(staleRequest).toEqual(expect.any(String));
+        expect(wasCancelled(staleRequest!)).toBe(false);
 
         await hook.rerender(invalidParams);
 
-        expect(staleSignal?.aborted).toBe(true);
+        expect(wasCancelled(staleRequest!)).toBe(true);
         expect(hook.getCurrent()).toMatchObject({
             candidates: [],
             nextCursor: null,
@@ -903,26 +921,29 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
 
     it('aborts and fences cold-index continuation when the hook unmounts', async () => {
         const nextChunk = createDeferred<ReturnType<typeof preparationPage>>();
-        const observedSignals: AbortSignal[] = [];
+        const observedRequests: string[] = [];
         candidatesListSpy
-            .mockImplementationOnce((_request, opts: Readonly<{ signal?: AbortSignal }>) => {
-                if (opts.signal) observedSignals.push(opts.signal);
+            .mockImplementationOnce((_request, opts: Readonly<{ requestId: string }>) => {
+                observedRequests.push(opts.requestId);
                 return Promise.resolve(preparationPage(50, 100));
             })
-            .mockImplementationOnce((_request, opts: Readonly<{ signal?: AbortSignal }>) => {
-                if (opts.signal) observedSignals.push(opts.signal);
+            .mockImplementationOnce((_request, opts: Readonly<{ requestId: string }>) => {
+                observedRequests.push(opts.requestId);
                 return nextChunk.promise;
             });
         const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
         const hook = await renderHook(() => useExternalSessionBrowseCandidates(params));
 
         expect(candidatesListSpy).toHaveBeenCalledTimes(2);
-        expect(observedSignals).toHaveLength(2);
-        expect(observedSignals.every((signal) => !signal.aborted)).toBe(true);
+        expect(observedRequests).toHaveLength(2);
+        expect(observedRequests.every(request => !wasCancelled(request))).toBe(true);
 
         await hook.unmount();
 
-        expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
+        // The acknowledged first page is settled; only its pending continuation
+        // receives a request-correlated cancellation on the native transport.
+        expect(wasCancelled(observedRequests[0]!)).toBe(false);
+        expect(wasCancelled(observedRequests[1]!)).toBe(true);
         nextChunk.resolve(preparationPage(100, 100));
         await flushHookEffects();
         expect(candidatesListSpy).toHaveBeenCalledTimes(2);
@@ -930,18 +951,18 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
 
     it('cancels cold-index continuation while retaining served current-generation candidates as stopped and allows retry', async () => {
         const nextChunk = createDeferred<ReturnType<typeof preparationPage>>();
-        const observedSignals: AbortSignal[] = [];
+        const observedRequests: string[] = [];
         candidatesListSpy
-            .mockImplementationOnce((_request, opts: Readonly<{ signal?: AbortSignal }>) => {
-                if (opts.signal) observedSignals.push(opts.signal);
+            .mockImplementationOnce((_request, opts: Readonly<{ requestId: string }>) => {
+                observedRequests.push(opts.requestId);
                 return Promise.resolve(preparationPage(50, 100, [{
                     remoteSessionId: 'served-before-cancel',
                     title: 'Served before cancel',
                     updatedAtMs: 3,
                 }]));
             })
-            .mockImplementationOnce((_request, opts: Readonly<{ signal?: AbortSignal }>) => {
-                if (opts.signal) observedSignals.push(opts.signal);
+            .mockImplementationOnce((_request, opts: Readonly<{ requestId: string }>) => {
+                observedRequests.push(opts.requestId);
                 return nextChunk.promise;
             })
             .mockResolvedValueOnce(page([
@@ -965,7 +986,9 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
             hook.getCurrent().cancelPreparation();
         });
 
-        expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
+        expect(observedRequests).toHaveLength(2);
+        expect(wasCancelled(observedRequests[0]!)).toBe(false);
+        expect(wasCancelled(observedRequests[1]!)).toBe(true);
         expect(hook.getCurrent()).toMatchObject({
             candidates: [expect.objectContaining({ remoteSessionId: 'served-before-cancel' })],
             candidatesAuthoritative: true,
@@ -1022,7 +1045,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(candidatesListSpy).toHaveBeenCalledTimes(3);
         expect(candidatesListSpy).toHaveBeenLastCalledWith(
             expect.not.objectContaining({ cursor: expect.anything() }),
-            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            expect.objectContaining({ requestId: expect.any(String) }),
         );
         expect(hook.getCurrent()).toMatchObject({
             candidates: [expect.objectContaining({ remoteSessionId: 'recovered' })],
@@ -1088,7 +1111,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
                 searchMode: 'full',
                 searchTerm: 'Initial QA Response',
             }),
-            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            expect.objectContaining({ requestId: expect.any(String) }),
         );
         expect(hook.getCurrent()).toMatchObject({
             candidates: [
@@ -1129,16 +1152,16 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(candidatesListSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({
             searchMode: 'fast',
             searchTerm: 'Continuity proof marker WINDOWS_FINAL',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(candidatesListSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({
             searchMode: 'full',
             searchTerm: 'Continuity proof marker WINDOWS_FINAL',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(candidatesListSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({
             cursor: 'full-cursor',
             searchMode: 'full',
             searchTerm: 'Continuity proof marker WINDOWS_FINAL',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(hook.getCurrent()).toMatchObject({
             candidates: [
                 expect.objectContaining({
@@ -1202,7 +1225,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
             cursor: 'full-cursor-19',
             limit: 50,
             searchMode: 'full',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(hook.getCurrent()).toMatchObject({
             candidates: [],
             nextCursor: 'full-cursor-20',

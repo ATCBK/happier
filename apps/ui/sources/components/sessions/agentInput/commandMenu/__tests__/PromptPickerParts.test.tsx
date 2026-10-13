@@ -83,17 +83,18 @@ describe('picker coverage and preview read admission', () => {
             { artifactId: 'two', title: 'Other tests', tags: [], folderId: null, favorite: false, updatedAtMs: 1 },
         ];
         const rows = (query: string) => buildPromptPickerRows({ documents, invocations: [], builtIns: [], history: [], sessionId: null, query });
-        const read = vi.fn(async (row: PromptPickerRow) => `${row.id} body`);
+        let bodyRevision = 0;
+        const read = async (row: PromptPickerRow) => `${row.id} body revision ${++bodyRevision}`;
         const preview = (query: string, index = 0) => <PromptPickerPreview row={rows(query)[index]} read={read} nowMs={0} folderNames={new Map()} sessionNames={new Map()} />;
         const screen = await renderScreen(preview(''));
         await act(async () => {});
-        expect(screen.getTextContent()).toContain('doc:one body');
+        expect(screen.getTextContent()).toContain('doc:one body revision 1');
         await screen.update(preview('Run'));
-        expect(read).toHaveBeenCalledTimes(1);
+        expect(screen.getTextContent()).toContain('doc:one body revision 1');
         await screen.update(preview('', 1));
-        expect(read).toHaveBeenCalledTimes(2);
+        expect(screen.getTextContent()).toContain('doc:two body revision 2');
         documents[1] = { ...documents[1], updatedAtMs: 2 };
         await screen.update(preview('', 1));
-        expect(read).toHaveBeenCalledTimes(3);
+        expect(screen.getTextContent()).toContain('doc:two body revision 3');
     });
 });

@@ -45,13 +45,13 @@ const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platfor
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
-        gap: 12,
+        gap: theme.space.s12,
     },
     optionButton: {
         minHeight: minimumInteractiveTargetSize,
-        paddingVertical: 13,
+        paddingVertical: theme.space.s12,
         paddingHorizontal: 14,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.inset,
@@ -59,15 +59,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     optionTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     optionSubtitle: {
-        marginTop: 4,
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 18,
+        marginTop: theme.space.s4,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     processWarningCard: {
@@ -76,18 +73,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
         paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 8,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s8,
     },
     processWarningTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     processWarningBody: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     targetCard: {
@@ -96,30 +90,26 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
         paddingHorizontal: 14,
-        paddingVertical: 12,
-        gap: 8,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s8,
     },
     targetMachine: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     targetPath: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     cancelButton: {
         alignSelf: 'flex-start',
         minHeight: minimumInteractiveTargetSize,
         justifyContent: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: 4,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s4,
     },
     cancelText: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));

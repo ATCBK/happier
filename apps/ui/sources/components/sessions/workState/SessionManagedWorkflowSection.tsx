@@ -33,8 +33,8 @@ const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 const styles = StyleSheet.create((theme) => ({
     section: {
-        gap: theme.margins.sm,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s8,
     },
     sectionLabel: {
         ...Typography.default('semiBold'),
@@ -43,13 +43,13 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minHeight: MINIMUM_TARGET_SIZE,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
     },
     rowBody: {
         flexShrink: 1,
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     rowMeta: {
         ...Typography.default('regular'),

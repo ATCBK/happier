@@ -21,27 +21,22 @@ import type { WorkItem, WorkProjection } from './workProjection';
 
 const stylesheet = StyleSheet.create((theme) => ({
     subtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     root: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     foldNote: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     status: {
-        ...Typography.default(),
         // The map's trailing slot caps the word's width; a long word truncates before the name does.
         flexShrink: 1,
         minWidth: 0,
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -1,418 +1,92 @@
-import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { SpawnCapabilitiesPreviewSuccessV1Schema, type SpawnCapabilitiesPreviewOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { projectManagedMcpSelectionV1, projectManagedMcpPreviewEntriesV1 } from '@happier-dev/protocol/mcp/servers/previewV1';
+import type { NewSessionMcpSelectionContentProps } from '@/components/sessions/new/components/NewSessionMcpSelectionContent';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
-import type { DaemonMcpServersPreviewResponse } from '@happier-dev/protocol';
-import { SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { RpcError } from '@happier-dev/protocol/rpcErrors';
-import { renderScreen } from '@/dev/testkit';
-import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
-
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-type McpPreviewSpyFn = (_machineId: string, _request: unknown, _options?: unknown) => Promise<DaemonMcpServersPreviewResponse>;
-
-const previewSpy = vi.hoisted(() => vi.fn<McpPreviewSpyFn>(async (_machineId, _request, _options) => ({
-    ok: true,
-    builtIn: [{
-        key: 'built-in:happier',
-        name: 'happier',
-        title: 'Happier',
-        transport: 'stdio',
-        authMode: 'none',
-        selected: true,
-        selectable: false,
-        availability: 'active',
-        sourceKind: 'builtIn',
-        scopeKind: 'builtIn',
-    }],
-    managed: [{
-        key: 'managed:playwright',
-        serverId: 'server-playwright',
-        name: 'playwright',
-        title: 'Playwright',
-        transport: 'stdio',
-        authMode: 'none',
-        selected: true,
-        selectable: true,
-        availability: 'active',
-        sourceKind: 'managed',
-        scopeKind: 'allMachines',
-        reasonCode: 'active_by_default',
-        portability: 'portable',
-        defaultSelected: true,
-    }],
-    detected: [{
-        key: 'detected:codex:sequential-thinking',
-        name: 'sequential-thinking',
-        transport: 'stdio',
-        authMode: 'unknown',
-        selected: true,
-        selectable: false,
-        availability: 'readOnly',
-        sourceKind: 'detected',
-        scopeKind: 'providerUser',
-        provider: 'codex',
-        enabled: true,
-        envKeyCount: 0,
-        headerKeyCount: 0,
-        sourcePath: '/Users/test/.codex/config.toml',
-    }],
-})));
-installNewSessionScreenModelCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Pressable: 'Pressable',
-            ScrollView: 'ScrollView',
-            View: 'View',
-            Dimensions: {
-                get: () => ({ width: 900, height: 800 }),
-                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
-            },
-            useWindowDimensions: () => ({ width: 900, height: 800 }),
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => {
-                if (key === 'newSession.mcpChipLabel') return 'MCP';
-                return key;
-            },
-        });
-    },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            useSetting: createUseSettingMock({
-                values: {
-                    mcpServersSettingsV1: {
-                        v: 1,
-                        strictMode: false,
-                        servers: [
-                            {
-                                id: 'server-playwright',
-                                name: 'playwright',
-                                title: 'Playwright',
-                                transport: 'stdio',
-                                stdio: { command: 'playwright', args: [] },
-                                env: {},
-                                createdAt: 1,
-                                updatedAt: 2,
-                            },
-                        ],
-                        bindings: [
-                            {
-                                id: 'binding-all',
-                                serverId: 'server-playwright',
-                                enabled: true,
-                                target: { t: 'allMachines' },
-                                createdAt: 1,
-                                updatedAt: 2,
-                            },
-                        ],
-                        presets: [],
-                    } as any,
-                },
-            }),
-        });
-    },
-});
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureId === 'mcp.servers',
-}));
-
-vi.mock('@/sync/ops/machineMcpServers', () => ({
-    machineMcpServersPreview: (...args: [string, unknown, unknown?]) => previewSpy(...args),
-}));
-
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-}));
-
+const rpc = vi.hoisted(() => vi.fn());
+// The machine network is the only substituted behavior below the real Action and preview owners.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
 const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
+let serverId: string;
+let producerPreview: Extract<SpawnCapabilitiesPreviewOutputV1, { ok: true }>;
+beforeEach(async () => {
+    await homes.reset();
+    serverId = await homes.addHome({ name: 'Composer Home', serverUrl: 'https://composer-capabilities.test', accountId: 'composer-owner' });
+    rpc.mockReset();
+    const settings = { v: 1 as const, strictMode: false, servers: [{ id: 'server', name: 'lint', transport: 'stdio' as const,
+        stdio: { command: 'lint', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
+        bindings: [{ id: 'on', serverId: 'server', target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 }] };
+    const context = { machineId: 'machine-1', machinePlatform: 'posix' as const, directory: '/repo', projectKey: null, agentId: 'codex' };
+    const resolved = resolveSessionCapabilitiesV1({ context, mcp: settings, skills: null, selection: {}, agentAcceptsUserMcp: true });
+    const entries = projectManagedMcpPreviewEntriesV1(projectManagedMcpSelectionV1(resolved, { settings, context }));
+    producerPreview = SpawnCapabilitiesPreviewSuccessV1Schema.parse({ ok: true, machinePlatform: 'posix',
+        mcp: { strictMode: false, items: resolved.mcp.items.map(({ effectiveConfig: _config, ...item }) => ({ ...item, preview: entries.find(entry => entry.serverId === item.id) })),
+            detected: [{ key: 'native', name: 'native-server', transport: 'stdio', authMode: 'unknown', selected: true, selectable: false,
+                availability: 'readOnly', sourceKind: 'detected', scopeKind: 'providerUser', provider: 'codex', enabled: true,
+                envKeyCount: 0, headerKeyCount: 0, sourcePath: '/home/user/.codex/config.toml' }] },
+        skills: { items: [], plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] } },
+        applyTiming: { mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' } } });
+    rpc.mockResolvedValue(producerPreview);
+});
+afterEach(async () => { await standardCleanup(); await homes.reset(); });
 
-describe('useNewSessionMcpSelection', () => {
-    beforeEach(() => {
-        previewSpy.mockClear();
+function useChip(portableOnly = false) {
+    const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+    return useNewSessionMcpSelection({ selectedMachineId: portableOnly ? null : 'machine-1', selectedPath: '/repo',
+        portableOnly, agentType: 'codex', targetServerId: serverId, capabilitySelection: selection,
+        setCapabilitySelection: setSelection, onOpenSettings: () => {} });
+}
+function content(chip: ReturnType<typeof useChip>['mcpChip']) {
+    const node = chip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 420 });
+    if (!React.isValidElement<NewSessionMcpSelectionContentProps>(node)) throw new Error('Missing MCP content');
+    return node.props;
+}
+
+describe('incumbent MCP chip Action adapter', () => {
+    it('loads only after intent, preserves detected-only counts, and carries draft selection to the Action', async () => {
+        const hook = await renderHook(() => useChip());
+        expect(rpc).not.toHaveBeenCalled();
+        await act(async () => { hook.getCurrent().mcpChip?.onIntent?.(); await flushHookEffects(); });
+        await vi.waitFor(() => expect(hook.getCurrent().mcpPreview?.detected).toHaveLength(1));
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', serverId,
+            payload: expect.objectContaining({ directory: '/repo', agentId: 'codex', capabilitySelection: {} }) }));
+        expect(content(hook.getCurrent().mcpChip)).toMatchObject({ preview: { managed: [{ serverId: 'server' }] }, maxHeight: 420 });
+        await act(async () => { content(hook.getCurrent().mcpChip).onSelectionChange({ mcp: {
+            v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['server'] } }); });
+        expect(content(hook.getCurrent().mcpChip).selection.mcp?.forceExcludeServerIds).toEqual(['server']);
     });
-
-    it('offers portable managed MCP selection before a temporary endpoint Machine exists', async () => {
-        let chip: any = null;
-
-        function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
-            chip = useNewSessionMcpSelection({
-                selectedMachineId: null,
-                selectedPath: '',
-                portableOnly: true,
-                agentType: 'codex',
-                capabilitySelection: selection,
-                setCapabilitySelection: setSelection,
-                onOpenSettings: vi.fn(),
-            }).mcpChip;
-            return null;
-        }
-
-        await renderScreen(React.createElement(Probe));
-        await flushHookEffects();
-
-        expect(previewSpy).not.toHaveBeenCalled();
-        const rendered = chip!.collapsedContentPopover.renderContent({ requestClose: () => {}, maxHeight: 420 });
-        expect(rendered.props).toMatchObject({ hasContext: true, portableOnly: true });
+    it('keeps the portable picker available before the temporary Machine exists', async () => {
+        const hook = await renderHook(() => useChip(true));
+        expect(content(hook.getCurrent().mcpChip)).toMatchObject({ hasContext: true, portableOnly: true });
+        expect(rpc).not.toHaveBeenCalled();
     });
-
-    it('renders an MCP chip with the effective selected count and routes visible-chip presses through the shared collapsed popover path', async () => {
-
-        let chip: any = null;
-        const toggleCollapsedPopover = vi.fn();
-
-        function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
-            const result = useNewSessionMcpSelection({
-                selectedMachineId: 'machine-1',
-                selectedPath: '/workspace',
-                selectedMachineName: 'Machine One',
-                agentType: 'codex',
-                targetServerId: 'server-a',
-                capabilitySelection: selection,
-                setCapabilitySelection: setSelection,
-                onOpenSettings: vi.fn(),
-            });
-            chip = result.mcpChip;
-            return result.mcpChip?.render({
-                chipStyle: () => null,
-                iconColor: '#000',
-                showLabel: true,
-                textStyle: null,
-                countTextStyle: null,
-                chipAnchorRef: { current: null },
-                popoverAnchorRef: { current: null },
-                toggleCollapsedPopover,
-            }) ?? null;
-        }
-
-        await renderScreen(React.createElement(Probe));
-        await flushHookEffects();
-
-        expect(previewSpy).not.toHaveBeenCalled();
-
-        const intentChip = chip!.render({
-            chipStyle: () => null,
-            iconColor: '#000',
-            showLabel: true,
-            textStyle: null,
-            countTextStyle: null,
-            chipAnchorRef: { current: null },
-            popoverAnchorRef: { current: null },
-            toggleCollapsedPopover,
-        }) as React.ReactElement<{ onPressIn?: () => void }>;
-
-        await act(async () => {
-            intentChip.props.onPressIn?.();
-            await flushHookEffects();
-        });
-
-        expect(previewSpy).toHaveBeenCalledWith(
-            'machine-1',
-            expect.objectContaining({
-                agentId: 'codex',
-                directory: '/workspace',
-                capabilitySelection: {},
-            }),
-            { serverId: 'server-a' },
-        );
-
-        expect(chip?.key).toBe('new-session-mcp');
-        expect(chip?.controlId).toBe('mcp');
-        expect(chip?.collapsedContentPopover).toEqual(expect.objectContaining({
-            title: 'MCP',
-            maxHeightCap: 760,
-            maxWidthCap: 620,
-            renderContent: expect.any(Function),
-        }));
-
-        const renderedChip = chip!.render({
-            chipStyle: () => null,
-            iconColor: '#000',
-            showLabel: true,
-            textStyle: null,
-            countTextStyle: null,
-            chipAnchorRef: { current: null },
-            popoverAnchorRef: { current: null },
-            toggleCollapsedPopover,
-        }) as React.ReactElement<{
-            onPress?: () => void;
-            testID?: string;
-            children?: React.ReactNode;
-        }>;
-
-        expect(renderedChip.props.testID).toBe('new-session-mcp-chip');
-        expect(React.isValidElement(renderedChip.props.children)).toBe(false);
-
-        const renderedChipChildren = React.Children.toArray(renderedChip.props.children);
-        const labelNode = renderedChipChildren[1];
-        expect(React.isValidElement(labelNode)).toBe(true);
-        expect((labelNode as React.ReactElement<{ label: string; count: number }>).props.label).toBe('MCP');
-        // Chip count should reflect detected servers only (exclude managed/Happier entries).
-        expect((labelNode as React.ReactElement<{ label: string; count: number }>).props.count).toBe(1);
-
-        await act(async () => {
-            renderedChip.props.onPress?.();
-        });
-
-        expect(toggleCollapsedPopover).toHaveBeenCalledWith('new-session-mcp');
-
-        const renderedContent = chip!.collapsedContentPopover.renderContent({
-            requestClose: () => {},
-            maxHeight: 420,
-        });
-        expect(React.isValidElement(renderedContent)).toBe(true);
-        const contentNode = renderedContent as React.ReactElement<{
-            maxHeight?: number;
-            onSelectionChange: (selection: unknown) => void;
-        }>;
-        expect(contentNode.props.maxHeight).toBe(420);
-
-        const compactContent = chip!.collapsedContentPopover.renderContent({
-            requestClose: () => {},
-            maxHeight: 300,
-        });
-        expect(React.isValidElement(compactContent)).toBe(true);
-        expect((compactContent as React.ReactElement<{ maxHeight?: number }>).props.maxHeight).toBe(300);
-
-        await act(async () => {
-            contentNode.props.onSelectionChange({ mcp: {
-                v: 1,
-                managedServersEnabled: true,
-                forceIncludeServerIds: [],
-                forceExcludeServerIds: ['server-playwright'],
-            } });
-            await flushHookEffects({ cycles: 1, turns: 2 });
-        });
-
-        const updatedContent = chip!.collapsedContentPopover.renderContent({
-            requestClose: () => {},
-            maxHeight: 420,
-        });
-        expect(React.isValidElement(updatedContent)).toBe(true);
-        const updatedContentNode = updatedContent as React.ReactElement<{
-            preview: unknown;
-            selection: unknown;
-        }>;
-
-        expect(updatedContentNode.props.preview).toEqual(expect.objectContaining({
-            managed: expect.any(Array),
-            detected: expect.any(Array),
-        }));
-        expect(updatedContentNode.props.selection).toEqual(expect.objectContaining({ mcp: expect.objectContaining({
-            forceExcludeServerIds: ['server-playwright'],
-        }) }));
+    it('refuses incomplete legacy rendering detail without dropping real items or replacing the last-known projection', async () => {
+        const hook = await renderHook(() => useChip());
+        await act(async () => { hook.getCurrent().mcpChip?.onIntent?.(); await flushHookEffects(); });
+        await vi.waitFor(() => expect(hook.getCurrent().mcpPreview?.managed).toHaveLength(1));
+        const lastKnown = hook.getCurrent().mcpPreview;
+        rpc.mockResolvedValue(SpawnCapabilitiesPreviewSuccessV1Schema.parse({ ...producerPreview, mcp: { ...producerPreview.mcp,
+            items: producerPreview.mcp.items.map(({ preview: _legacy, ...item }) => item) } }));
+        await act(async () => { await content(hook.getCurrent().mcpChip).onRefresh(); });
+        expect(content(hook.getCurrent().mcpChip).error).toBe('invalid_action_output');
+        expect(hook.getCurrent().mcpPreview).toBe(lastKnown);
     });
-
-    it('treats RPC method-not-available preview errors as unsupported instead of surfacing them as a blocking error', async () => {
-        previewSpy.mockRejectedValueOnce(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
-
-
-        let chip: any = null;
-
-        function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
-            const result = useNewSessionMcpSelection({
-                selectedMachineId: 'machine-1',
-                selectedPath: '/workspace',
-                selectedMachineName: 'Machine One',
-                agentType: 'codex',
-                capabilitySelection: selection,
-                setCapabilitySelection: setSelection,
-                onOpenSettings: vi.fn(),
-            });
-            chip = result.mcpChip;
-            return null;
-        }
-
-        await renderScreen(React.createElement(Probe));
-        await flushHookEffects({ cycles: 1, turns: 2 });
-
-        expect(previewSpy).not.toHaveBeenCalled();
-        await act(async () => {
-            chip?.onIntent?.();
-            await flushHookEffects({ cycles: 1, turns: 2 });
-        });
-
-        expect(chip).toBeTruthy();
-        const renderedContent = chip!.collapsedContentPopover.renderContent({
-            requestClose: () => {},
-            maxHeight: 420,
-        });
-        expect(React.isValidElement(renderedContent)).toBe(true);
-
-        const contentNode = renderedContent as React.ReactElement<{
-            preview: unknown;
-            error: unknown;
-            previewUnsupported?: boolean;
-        }>;
-
-        expect(contentNode.props.preview).toBeNull();
-        expect(contentNode.props.error).toBeNull();
-        expect(contentNode.props.previewUnsupported).toBe(true);
-    });
-
-    it('treats ok:false RPC method-not-available preview responses as unsupported instead of surfacing them as a blocking error', async () => {
-        previewSpy.mockResolvedValueOnce({ ok: false as const, errorCode: 'internal_error', error: 'RPC method not available' });
-
-
-        let chip: any = null;
-
-        function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
-            const result = useNewSessionMcpSelection({
-                selectedMachineId: 'machine-1',
-                selectedPath: '/workspace',
-                selectedMachineName: 'Machine One',
-                agentType: 'codex',
-                capabilitySelection: selection,
-                setCapabilitySelection: setSelection,
-                onOpenSettings: vi.fn(),
-            });
-            chip = result.mcpChip;
-            return null;
-        }
-
-        await renderScreen(React.createElement(Probe));
-        await flushHookEffects({ cycles: 1, turns: 2 });
-
-        expect(previewSpy).not.toHaveBeenCalled();
-        await act(async () => {
-            chip?.onIntent?.();
-            await flushHookEffects({ cycles: 1, turns: 2 });
-        });
-
-        expect(chip).toBeTruthy();
-        const renderedContent = chip!.collapsedContentPopover.renderContent({
-            requestClose: () => {},
-            maxHeight: 420,
-        });
-        expect(React.isValidElement(renderedContent)).toBe(true);
-
-        const contentNode = renderedContent as React.ReactElement<{
-            preview: unknown;
-            error: unknown;
-            previewUnsupported?: boolean;
-        }>;
-
-        expect(contentNode.props.preview).toBeNull();
-        expect(contentNode.props.error).toBeNull();
-        expect(contentNode.props.previewUnsupported).toBe(true);
+    it('shows the strict invalid-input result for an older preview method while the picker remains usable', async () => {
+        rpc.mockRejectedValue(createRpcCallError({ error: 'RPC method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE' }));
+        const hook = await renderHook(() => useChip());
+        await act(async () => { hook.getCurrent().mcpChip?.onIntent?.(); await flushHookEffects(); });
+        await vi.waitFor(() => expect(content(hook.getCurrent().mcpChip).error).toBe('invalid_input'));
+        expect(content(hook.getCurrent().mcpChip)).toMatchObject({ preview: null, previewUnsupported: false });
     });
 });

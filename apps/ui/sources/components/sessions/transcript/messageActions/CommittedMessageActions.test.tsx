@@ -1,13 +1,16 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installMessageViewCommonModuleMocks } from '../messageViewTestHelpers';
 import type { UserTextMessage, AgentTextMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptForkCommon } from '../transcriptSessionCommon';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-installMessageViewCommonModuleMocks({ reactNative: async () => {
+vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: (values: Record<string, unknown>) => values.ios ?? values.default ?? values.web } });
-} });
+});
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 // Home fixtures can reach React Native too: configure its native boundary before importing them.
 const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
 const home = createHomeGovernanceHarness();

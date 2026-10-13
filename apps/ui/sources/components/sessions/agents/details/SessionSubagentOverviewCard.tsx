@@ -9,7 +9,7 @@ import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
 const stylesheet = StyleSheet.create((theme) => ({
     card: {
-        gap: 12,
+        gap: theme.space.s12,
         padding: 14,
         borderRadius: 14,
         borderWidth: 1,

@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { Message } from "@happier-dev/session-core/messages";
 import { storage, useActiveServerAccountScope, useForkedTranscriptSnapshot } from '@/sync/domains/state/storage';
 import { readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import { refreshWorkflowTranscriptProvenance } from '@/sync/engine/workflows/refreshWorkflowRun';
+import { refreshWorkflowRunSummaries } from '@/sync/engine/workflows/refreshWorkflowRun';
 import { useSessionTranscriptSource } from '../source/SessionTranscriptSourceContext';
 import { buildForkAwareMessageDescriptors } from '@/components/sessions/transcript/forkContext/buildForkAwareMessageDescriptors';
 import { sync } from '@/sync/sync';
@@ -79,7 +79,7 @@ export function useTranscriptRootMessages(sessionId: string) {
         }
         const batch = [...references].sort(([a], [b]) => a.localeCompare(b))
             .map(([runId, ids]) => ({ runId, invocationRecordIds: [...ids].sort() }));
-        fireAndForget(refreshWorkflowTranscriptProvenance(batch), { tag: 'transcript.workflowProvenance' });
+        fireAndForget(refreshWorkflowRunSummaries(batch), { tag: 'transcript.workflowProvenance' });
         // Hydration publishes only to chip selectors; never replace message objects or subscribe the list to Run facts.
     }, [source.kind, scope, messageIdsOldestFirst, messagesById]);
 

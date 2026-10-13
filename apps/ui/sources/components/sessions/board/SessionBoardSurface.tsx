@@ -117,7 +117,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     viewsRow: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: 4,
+        gap: theme.space.s4,
     },
     viewsStrip: {
         flex: 1,
@@ -131,33 +131,32 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     viewsActions: {
-        paddingHorizontal: 4,
-        paddingBottom: 4,
+        paddingHorizontal: theme.space.s4,
+        paddingBottom: theme.space.s4,
     },
     // Beside the views' ⋯: the same bottom inset, stretched to the row so the pill centres on the ⋯ target.
     viewsAdd: {
         alignSelf: 'stretch',
         justifyContent: 'center',
-        paddingBottom: 4,
+        paddingBottom: theme.space.s4,
     },
     addRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
         paddingHorizontal: GRID_GAP,
         paddingTop: GRID_GAP,
     },
     freshness: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         paddingHorizontal: GRID_GAP,
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     mutationRecovery: {
         marginHorizontal: GRID_GAP,
         marginTop: GRID_GAP,
-        gap: 10,
+        gap: theme.space.s10,
         alignItems: 'flex-start',
     },
     mutationRecoveryText: {
@@ -166,17 +165,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     section: {
         paddingHorizontal: GRID_GAP,
-        paddingTop: 20,
-        gap: 4,
+        paddingTop: theme.space.s20,
+        gap: theme.space.s4,
     },
     sectionTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     sectionBody: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));
@@ -1364,7 +1361,10 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                                             <View
                                                 key={placement.itemId}
                                                 testID={`${testID}-placement-${placement.itemId}`}
-                                                style={width === null ? undefined : { width, minWidth: 0 }}
+                                                // A single-column tier fills its row: left to its content, a wide card (a chart)
+                                                // sizes the wrapping grid past the pane instead of fitting it.
+                                                style={width !== null ? { width, minWidth: 0 }
+                                                    : props.layout === 'grid' ? { flexBasis: '100%', minWidth: 0 } : undefined}
                                                 onLayout={(event) => {
                                                     const { x, y, width: measuredWidth, height } = event.nativeEvent.layout;
                                                     recordItemRect(placementRects.current, placement.itemId, {

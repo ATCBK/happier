@@ -1,12 +1,32 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
     TeamCredentialProviderModelSelectionV1Schema,
     TeamCredentialResourceCatalogEntryV1Schema,
     type TeamCredentialResourceCatalogEntryV1,
 } from '@happier-dev/protocol/teams';
 import type { RunnerActivationClient } from '@/sync/api/ephemeralRunner/runnerActivationClient';
+import { InstalledPluginCapabilityEntryV1Schema } from '@happier-dev/protocol/capabilities';
+import { BUILT_IN_REGISTRY_SOURCES_V1, createRegistryHostV1, RegistryFetchErrorV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { installPromptRegistriesCommonModuleMocks } from '@/components/settings/prompts/registries/promptRegistriesScreenTestHelpers';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, deriveMarketplaceSourceId } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
+import { ExpectedMarketplaceListingV1Schema } from '@happier-dev/protocol/marketplace/internal';
+import { MarketplaceIndexSourceSnapshotV1Schema } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 
 import { createTemporaryComputerCreatorDependencies } from './temporaryComputerCreatorDependencies';
+
+installPromptRegistriesCommonModuleMocks({ storage: original => original() });
+vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+installDisconnectedServerSocketBoundary();
+// Collect the real execution graph before the test's lifecycle begins. The
+// composed test exercises requests, not the bundler's cold module transform.
+const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const { createPlainPromptLibraryCatalogHomeFixture } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+await Promise.all([import('@/auth/storage/tokenStorage'), import('@/sync/domains/state/storage'),
+    import('@/utils/system/runtimeFetch'), import('@/sync/runtime/orchestration/appliedActiveServerRuntime')]);
 
 const AGENT_TARGET_KEY = 'agent:happier.agent.codex/codex';
 
@@ -90,7 +110,7 @@ function selection(revision = 7, deliveryMode: 'brokered' | 'direct' = 'brokered
 const EXTERNAL_AGENT = { pluginId: 'acme.reviewed-external', localId: 'assistant' } as const;
 const EXTERNAL_AGENT_TARGET_KEY = 'agent:acme.reviewed-external/assistant';
 
-/** The exact listing shape `daemon.marketplaceIndex.query` answers with. */
+/** Catalog facts shared by the registry adapters and the strict install projector. */
 function marketplaceListing(overrides: Readonly<{ sourceKind?: 'curated' | 'community-npm' | 'user' }> = {}) {
     const sourceKind = overrides.sourceKind ?? 'community-npm';
     return {
@@ -109,6 +129,9 @@ function marketplaceListing(overrides: Readonly<{ sourceKind?: 'curated' | 'comm
         summary: { contributions: ['agent'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] },
         review: { status: sourceKind === 'curated' ? 'approved' : 'unreviewed', reviewedAt: sourceKind === 'curated' ? '2026-01-02T03:04:05.000Z' : null },
         updatePolicy: 'pinned',
+        categories: [],
+        media: [],
+        links: {},
         source: {
             id: sourceKind === 'community-npm' ? 'marketplace:community-npm' : 'acme-catalog',
             title: 'Acme',
@@ -127,7 +150,8 @@ function compose(params: Readonly<{
     agentCatalogMachineId?: string | null;
     projectedAgentsById?: Readonly<Record<string, unknown>>;
     installedPluginPackagesById?: Readonly<Record<string, unknown>>;
-    queryMarketplaceIndex?: (input: Readonly<{ machineId: string; pluginId: string; signal?: AbortSignal }>) => Promise<unknown>;
+    registryActionExecution?: Parameters<typeof createTemporaryComputerCreatorDependencies>[0]['registryActionExecution'];
+    readInstalledPlugins?: Parameters<typeof createTemporaryComputerCreatorDependencies>[0]['readInstalledPlugins'];
 }> = {}) {
     return createTemporaryComputerCreatorDependencies({
         teamCredentialServerId: params.serverId === undefined ? 'srv-runner' : params.serverId,
@@ -137,7 +161,8 @@ function compose(params: Readonly<{
         agentCatalogMachineId: params.agentCatalogMachineId === undefined ? 'machine-1' : params.agentCatalogMachineId,
         projectedAgentsById: (params.projectedAgentsById ?? {}) as never,
         installedPluginPackagesById: (params.installedPluginPackagesById ?? {}) as never,
-        ...(params.queryMarketplaceIndex ? { queryMarketplaceIndex: params.queryMarketplaceIndex as never } : {}),
+        ...(params.registryActionExecution ? { registryActionExecution: params.registryActionExecution } : {}),
+        ...(params.readInstalledPlugins ? { readInstalledPlugins: params.readInstalledPlugins } : {}),
     });
 }
 
@@ -597,21 +622,62 @@ describe('createTemporaryComputerCreatorDependencies external Agent acquisition'
         },
     );
 
-    it('resolves the exact commitment from the focused machine marketplace index', async () => {
-        const queryMarketplaceIndex = vi.fn(async () => ({ items: [marketplaceListing()], nextCursor: null, revision: 1 }));
+    const installedProjection = {
+        id: EXTERNAL_AGENT.pluginId, displayName: 'Reviewed External', version: '1.2.3', enabled: true,
+        immutableGenerationId: 'generation-installed', source: { kind: 'package', locator: '@acme/reviewed-external' },
+    };
+    function registryAcquisition(overrides: Readonly<{ missing?: boolean; changedIntegrity?: boolean; duplicate?: boolean; retired?: boolean; staleGeneration?: boolean; reviewRefused?: 'withdrawn' | 'blocked' }> = {}) {
+        const privateOrigin = 'https://npm.acme.example.test';
+        const urls = ['https://public-catalog.example/index.json', overrides.reviewRefused ? DEFAULT_CURATED_MARKETPLACE_SOURCE_URL : 'https://private-catalog.example/index.json',
+            ...(overrides.duplicate ? ['https://duplicate-catalog.example/index.json'] : [])];
+        const sources: readonly RegistrySourceDescriptorV1[] = urls.map(url => ({ id: deriveMarketplaceSourceId(url), title: url,
+            format: 'happier-catalog', kinds: ['plugin'], url, enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true,
+            npmRegistryProfileId: 'creator_private_profile' }));
+        const http = vi.fn(async (url: string) => {
+            const source = sources.find(source => source.url === url)!;
+            const { source: _source, artifactAccess: _access, ...entry } = marketplaceListing({ sourceKind: 'user' });
+            return { ok: true as const, fetchedAt: 1, value: MarketplaceIndexSourceSnapshotV1Schema.parse({
+                source: { id: source.id, title: source.title, kind: url === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL ? 'curated' : 'user', sourceUrl: source.url },
+                freshness: { state: 'fresh', fetchedAtMs: 1 }, diagnostics: [], entries: overrides.missing ? [] : [{ ...entry,
+                    ...(url === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL ? { review: { status: overrides.reviewRefused, reviewedAt: '2026-07-13T00:00:00.000Z' } } : {}),
+                    distribution: { ...entry.distribution, registryOrigin: url === urls[0] ? 'https://registry.npmjs.org' : privateOrigin,
+                        ...(overrides.changedIntegrity ? { integrity: `sha512-${Buffer.alloc(64, 2).toString('base64')}` } : {}) } }],
+            }) };
+        });
+        const host = createRegistryHostV1({ host: 'node', readSources: async () => sources,
+            http: { getJson: http, getText: async () => { throw new Error('unused'); }, getBytes: async () => { throw new Error('unused'); } } });
+        const scope = { serverId: 'srv-runner', accountId: 'account-a' };
+        const execute: NonNullable<Parameters<typeof compose>[0]>['registryActionExecution'] = {
+            scope, isCurrent: () => !overrides.retired,
+            execute: async (actionId, input, options) => {
+                options?.signal?.throwIfAborted();
+                if (actionId !== 'registries.sources.list' && actionId !== 'registries.items.read') throw new Error('Unexpected Action');
+                try { return { ok: true, result: await host.execute(actionId, input) }; }
+                catch (error) { if (error instanceof RegistryFetchErrorV1) return { ok: false, errorCode: error.status.state, error: error.status.state }; throw error; }
+            },
+        };
+        const inventory = InstalledPluginCapabilityEntryV1Schema.parse({
+            pluginId: EXTERNAL_AGENT.pluginId, desiredGeneration: 'generation-installed', appliedGeneration: overrides.staleGeneration ? 'generation-newer' : 'generation-installed',
+            admittedIntegrity: marketplaceListing().distribution.integrity, title: 'Reviewed External', description: null,
+            version: '1.2.3', enabled: true, source: installedProjection.source,
+            install: { mode: 'managed', manifestVersion: '2', trust: { pluginId: EXTERNAL_AGENT.pluginId, state: 'trusted', approvedAtMs: 1,
+                distribution: { kind: 'npm', registryOrigin: privateOrigin, packageName: '@acme/reviewed-external', registryProfileId: 'creator_private_profile' } } },
+            compatibility: { status: 'compatible', diagnostics: [] }, diagnostics: [],
+        });
+        return { registryActionExecution: execute, readInstalledPlugins: async () => [inventory], http, privateOrigin, sources };
+    }
+
+    it('uses the installed private distribution and frozen version rather than the public package with the same name and version', async () => {
+        const acquisition = registryAcquisition();
         const composed = compose({
             resources: [externalCatalogEntry()],
             projectedAgentsById: { assistant: projectedExternalAgent },
             installedPluginPackagesById: {
                 'acme.reviewed-external': {
-                    id: 'acme.reviewed-external',
-                    displayName: 'Reviewed External',
-                    version: '1.2.3',
-                    enabled: true,
-                    source: { kind: 'package', locator: '@acme/reviewed-external' },
+                    ...installedProjection,
                 },
             },
-            queryMarketplaceIndex,
+            ...acquisition,
         });
 
         const resolved = await composed.dependencies.resolveAgentPluginDistribution({
@@ -619,34 +685,28 @@ describe('createTemporaryComputerCreatorDependencies external Agent acquisition'
             signal: new AbortController().signal,
         });
 
-        expect(queryMarketplaceIndex).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            pluginId: 'acme.reviewed-external',
-        }));
+        expect(ExpectedMarketplaceListingV1Schema.parse(resolved)).toMatchObject({ registryOrigin: acquisition.privateOrigin });
         expect(resolved).toMatchObject({
             pluginId: 'acme.reviewed-external',
             packageName: '@acme/reviewed-external',
             version: '1.2.3',
-            source: { kind: 'community-npm' },
+            source: { kind: 'user', id: acquisition.sources[1]!.id },
         });
         expect(resolved).not.toHaveProperty('registryProfileId');
     });
 
-    it('fails closed when the focused machine index carries no listing for the installed Agent', async () => {
-        const queryMarketplaceIndex = vi.fn(async () => ({ items: [], nextCursor: null, revision: 1 }));
+    it.each([{ missing: true }, { changedIntegrity: true }, { duplicate: true }, { retired: true }, { staleGeneration: true },
+        { reviewRefused: 'withdrawn' }, { reviewRefused: 'blocked' }] as const)('fails closed for unavailable or ambiguous exact acquisition: %j', async (override) => {
+        const acquisition = registryAcquisition(override);
         const composed = compose({
             resources: [externalCatalogEntry()],
             projectedAgentsById: { assistant: projectedExternalAgent },
             installedPluginPackagesById: {
                 'acme.reviewed-external': {
-                    id: 'acme.reviewed-external',
-                    displayName: 'Reviewed External',
-                    version: '1.2.3',
-                    enabled: true,
-                    source: { kind: 'package', locator: '@acme/reviewed-external' },
+                    ...installedProjection,
                 },
             },
-            queryMarketplaceIndex,
+            ...acquisition,
         });
 
         await expect(composed.dependencies.resolveAgentPluginDistribution({
@@ -656,15 +716,80 @@ describe('createTemporaryComputerCreatorDependencies external Agent acquisition'
         expect(composed.readGaps()).toContain('agent_plugin_distribution_unacquirable');
     });
 
+    it('preserves cancellation after the Machine inventory answers without disclosing a registry commitment', async () => {
+        const acquisition = registryAcquisition();
+        const cancellation = new AbortController();
+        const composed = compose({ resources: [externalCatalogEntry()], projectedAgentsById: { assistant: projectedExternalAgent },
+            installedPluginPackagesById: { [EXTERNAL_AGENT.pluginId]: installedProjection }, ...acquisition,
+            readInstalledPlugins: async () => { const inventory = await acquisition.readInstalledPlugins(); cancellation.abort(); return inventory; },
+        });
+        await expect(composed.dependencies.resolveAgentPluginDistribution({ agentTarget: { kind: 'agent', identity: EXTERNAL_AGENT },
+            signal: cancellation.signal })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(acquisition.http).not.toHaveBeenCalled();
+    });
+
     it('acquires nothing for a bundled Agent the Runner artifact already carries', async () => {
-        const queryMarketplaceIndex = vi.fn();
-        const composed = compose({ queryMarketplaceIndex: queryMarketplaceIndex as never });
+        const acquisition = registryAcquisition();
+        const readInstalledPlugins = vi.fn(acquisition.readInstalledPlugins);
+        const composed = compose({ ...acquisition, readInstalledPlugins });
 
         await expect(composed.dependencies.resolveAgentPluginDistribution({
             agentTarget: { kind: 'agent', identity: MANAGED_INSTALL_AGENT },
             signal: new AbortController().signal,
         })).resolves.toBeNull();
-        expect(queryMarketplaceIndex).not.toHaveBeenCalled();
+        expect(readInstalledPlugins).not.toHaveBeenCalled();
+        expect(acquisition.http).not.toHaveBeenCalled();
         expect(composed.readGaps()).toEqual([]);
+    });
+
+    it('composes the default Machine inventory transport and mounted qualified registry Actions into a strict sealed commitment', async () => {
+        let phase = 'create Account catalog fixture';
+        onTestFinished(() => { if (phase !== 'finished') throw new Error(`Creator composition did not finish: ${phase}`); });
+        const acquisition = registryAcquisition();
+        const serverUrl = 'https://creator-registry-wiring.test';
+        const sourceUrl = `${serverUrl}/catalog.json`;
+        const sourceId = deriveMarketplaceSourceId(sourceUrl);
+        const { value } = await acquisition.http(acquisition.sources[1]!.url);
+        const snapshot = { ...value, source: { ...value.source, id: sourceId, sourceUrl } };
+        installDisconnectedServerSocketBoundary(socket => {
+            socket.connected = true;
+            socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+            socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: unknown) => {
+                if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+                expect(request).toMatchObject({ method: 'machine-1:capabilities.detect',
+                    params: { requests: [{ id: 'tool.plugins' }], bypassCache: true } });
+                return { ok: true, result: { protocolVersion: 1, results: { 'tool.plugins': { ok: true, checkedAt: 1,
+                    data: { installedPlugins: await acquisition.readInstalledPlugins() } } } } };
+            });
+        });
+        const fixture = await createPlainPromptLibraryCatalogHomeFixture(serverUrl, { key: 'registry-sources', value: {
+            v: 2, disabledSourceIds: BUILT_IN_REGISTRY_SOURCES_V1.map(source => source.id),
+            sources: [{ id: sourceId, title: 'Private catalog', format: 'happier-catalog', kinds: ['plugin'], url: sourceUrl,
+                enabled: true, addedAt: 0, npmRegistryProfileId: 'creator_private_profile' }],
+        } }, 'updated', { handleRequest: async path => path === '/catalog.json' ? Response.json(snapshot)
+            : path === '/v1/machines/machine-1' ? Response.json({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }) : null });
+        onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
+        phase = 'hydrate Account settings';
+        await fixture.hydrateAccountSettings();
+        const scope = { serverId: fixture.home.id, accountId: 'artifact-account' };
+        const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+        phase = 'hydrate registry source catalog';
+        await refreshPromptLibraryCatalog(scope);
+        phase = 'mount qualified Action execution';
+        const mounted = await renderHook(() => useMountedActionExecution(scope));
+        await vi.waitFor(() => expect(mounted.getCurrent().ready).toBe(true));
+        const composed = compose({ serverId: scope.serverId, resources: [externalCatalogEntry()],
+            projectedAgentsById: { assistant: projectedExternalAgent },
+            installedPluginPackagesById: { [EXTERNAL_AGENT.pluginId]: installedProjection },
+            registryActionExecution: { scope, execute: mounted.getCurrent().execute, isCurrent: mounted.getCurrent().isCurrent },
+        });
+        phase = 'read Machine inventory and registry listing';
+        const resolved = await composed.dependencies.resolveAgentPluginDistribution({ agentTarget: { kind: 'agent', identity: EXTERNAL_AGENT },
+            signal: new AbortController().signal });
+        expect(ExpectedMarketplaceListingV1Schema.parse(resolved)).toMatchObject({ source: { id: sourceId }, registryOrigin: acquisition.privateOrigin,
+            version: installedProjection.version, integrity: marketplaceListing().distribution.integrity });
+        expect(resolved).not.toHaveProperty('registryProfileId');
+        expect(fixture.mutations).toEqual([]);
+        phase = 'finished';
     });
 });

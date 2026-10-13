@@ -29,15 +29,15 @@ export type CheckpointCodeRollbackDialogProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        gap: 12,
-        padding: 16,
+        gap: theme.space.s12,
+        padding: theme.space.s16,
     },
     choice: {
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 12,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s10,
+        paddingHorizontal: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
     },
     choiceSelected: {
@@ -47,24 +47,22 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: 0.45,
     },
     choiceText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
     hint: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 12,
+        ...Typography.variant('meta'),
     },
     footer: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 10,
+        gap: theme.space.s10,
     },
     footerButton: {
         borderRadius: 10,
-        paddingVertical: 9,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
     },
     confirmButton: {
         backgroundColor: theme.colors.surface.inset,
@@ -73,14 +71,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: 0.45,
     },
     footerText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.link,
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
     advancedButton: {
         alignSelf: 'flex-start',
         borderRadius: 10,
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
     },
 }));
 

@@ -33,13 +33,13 @@ import {
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
-        paddingTop: theme.margins.xs,
-        gap: theme.margins.xs,
+        paddingTop: theme.space.s4,
+        gap: theme.space.s4,
     },
     line: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minWidth: 0,
     },
     action: {
@@ -55,7 +55,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     shot: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
 }));
 

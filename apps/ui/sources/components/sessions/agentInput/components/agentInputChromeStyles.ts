@@ -32,7 +32,7 @@ export function resolveAgentInputPanelLayoutStyle(theme: Theme, readOnly = false
         overflow: 'hidden' as const,
         paddingTop: AGENT_INPUT_PANEL_PADDING_TOP,
         paddingBottom: AGENT_INPUT_PANEL_PADDING_BOTTOM,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     };
 }
 

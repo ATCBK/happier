@@ -32,12 +32,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     strip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 32,
         maxWidth: 280,
-        marginRight: 4,
-        paddingLeft: 10,
-        paddingRight: 8,
+        marginRight: theme.space.s4,
+        paddingLeft: theme.space.s10,
+        paddingRight: theme.space.s8,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: 'transparent',
@@ -48,12 +48,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
     text: {
-        ...Typography.default(),
         ...Typography.tabular(),
         flexShrink: 1,
         color: theme.colors.text.primary,
-        fontSize: 12.5,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
 }));
 

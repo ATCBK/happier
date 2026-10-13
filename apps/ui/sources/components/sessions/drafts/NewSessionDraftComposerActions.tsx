@@ -96,15 +96,15 @@ const styles = StyleSheet.create((theme) => ({
     root: {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 4,
+        gap: theme.space.s4,
     },
     labeledAction: {
         alignItems: 'center',
         borderRadius: 8,
         flexDirection: 'row',
-        gap: 5,
+        gap: theme.space.s4,
         minHeight: NEW_SESSION_DRAFT_COMPOSER_ACTION_MIN_SIZE,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     iconAction: {
         alignItems: 'center',

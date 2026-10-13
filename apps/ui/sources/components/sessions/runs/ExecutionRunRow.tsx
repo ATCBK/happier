@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -83,12 +84,12 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
             onPress={onPress}
             disabled={!onPress}
             style={({ pressed }) => ({
-                padding: 12,
+                padding: theme.space.s12,
                 borderRadius: 12,
                 backgroundColor: theme.colors.surface.inset,
                 borderWidth: 1,
                 borderColor: props.selected ? theme.colors.text.link : theme.colors.border.default,
-                gap: 8,
+                gap: theme.space.s8,
                 opacity: pressed ? motionTokens.press.opacitySubtle : 1,
                 ...(actionable
                     ? { minWidth: interactiveTargetSize, minHeight: interactiveTargetSize, justifyContent: 'center' as const }
@@ -99,7 +100,7 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
                 <Text style={[styles.title, { color: theme.colors.text.primary }]} numberOfLines={1}>
                     {title}
                 </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                     <StatusPill
                         testID="execution-run-row-status"
                         variant={WORK_STATUS_PILL_VARIANT[status.tone]}
@@ -129,8 +130,7 @@ const styles = StyleSheet.create(() => ({
         gap: 10,
     },
     title: {
-        fontWeight: '600',
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
     subtitle: {
         fontFamily: 'Menlo',

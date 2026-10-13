@@ -422,18 +422,18 @@ const styles = StyleSheet.create((theme) => ({
     rowControls: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     form: {
-        gap: 8,
-        padding: 12,
+        gap: theme.space.s8,
+        padding: theme.space.s12,
         minWidth: 320,
     },
     formRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
+        gap: theme.space.s8,
     },
     formLabel: {
         fontSize: 13,
@@ -442,6 +442,6 @@ const styles = StyleSheet.create((theme) => ({
     formActions: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));

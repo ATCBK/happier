@@ -157,7 +157,7 @@ describe('Work › Instructions', () => {
         expect(navigation.push).not.toHaveBeenCalled();
       }
       await screen.unmount();
-    } finally { standardCleanup(); fixture.dispose(); }
+    } finally { standardCleanup(); await fixture.dispose(); }
   });
 
   it('admits the exact Agent edits mode and preserves current neighboring Account policies', async () => {

@@ -112,18 +112,16 @@ function choiceRunsAgent(choice: ExecutionRunLauncherBackendChoice, agentTargetK
 
 const stylesheet = StyleSheet.create((theme) => ({
     lead: {
-        gap: 6,
-        paddingHorizontal: 4,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s4,
     },
     marks: {
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
     },
     title: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 20,
-        lineHeight: 26,
+        ...Typography.variant('title'),
     },
     description: {
         ...Typography.default(),
@@ -132,12 +130,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
     foot: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         textAlign: 'right',
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
 }));
 
@@ -819,7 +815,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 disabled,
                 revision: chipRevision,
                 renderContent: () => (
-                    <View style={{ gap: 16 }}>
+                    <View style={{ gap: theme.space.s16 }}>
                         {renderOptions(['profiles', 'fields'], isAdvancedFieldPath)}
                         {teamCredential.picker}
                     </View>
@@ -882,7 +878,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         : null;
 
     return (
-        <View style={{ flex: 1, gap: 12, justifyContent: 'flex-end' }}>
+        <View style={{ flex: 1, gap: theme.space.s12, justifyContent: 'flex-end' }}>
             {/* What this start is, right above the composer where the answer will appear (lab S1/S3).
                 An Ask Agent draft leads with the lead and the selected context instead (collab lab R1). */}
             {props.launchOrigin && selectionContext ? (
@@ -1001,8 +997,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                         minWidth: interactiveTargetSize,
                         minHeight: interactiveTargetSize,
                         justifyContent: 'center',
-                        paddingVertical: 8,
-                        paddingHorizontal: 10,
+                        paddingVertical: theme.space.s8,
+                        paddingHorizontal: theme.space.s10,
                         borderRadius: 10,
                         backgroundColor: theme.colors.surface.inset,
                         opacity: pressed ? motionTokens.press.opacity : 1,

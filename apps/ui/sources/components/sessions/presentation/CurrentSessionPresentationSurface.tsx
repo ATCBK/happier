@@ -15,20 +15,20 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 
 const stylesheet = StyleSheet.create((theme) => ({
     group: {
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
     },
     transientLines: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     item: {
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 10,
-        paddingVertical: 7,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
     },
     text: {
         color: theme.colors.text.secondary,

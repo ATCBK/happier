@@ -55,29 +55,27 @@ const styles = StyleSheet.create((theme) => ({
     suggestionContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     leadingIcon: {
         width: 16,
         height: 16,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 8,
+        marginRight: theme.space.s8,
     },
     iconColor: {
         color: theme.colors.text.secondary,
     },
     fileTitleText: {
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     filePathText: {
         flex: 1,
         minWidth: 0,
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
 }));

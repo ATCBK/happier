@@ -24,7 +24,7 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     frame: {
         flex: 1,

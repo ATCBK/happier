@@ -6,22 +6,22 @@ vi.mock('@/text', async () => {
 });
 
 import { NO_SESSION_AGENT_ACTIVITY_ATTENTION } from '@/sync/domains/session/agentActivity';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
 
 import { projectSessionWorkMap, readWorkFoldedFromMap } from './workMapProducer';
 import { projectWork, type WorkProjectionInput, type WorkReportSessionSource } from './workProjection';
 
 function report(sessionId: string, leadSessionId: string): WorkReportSessionSource {
+    const now = Date.now();
     return {
         sessionId,
         leadSessionId,
         title: sessionId,
         agentId: null,
         facts: [],
-        statusFacts: {
-            awareness: { runtime: 'working', operational: { primary: 'working', reasons: ['working'] } },
-            word: 'Working',
-            settled: false,
-        } as unknown as WorkReportSessionSource['statusFacts'],
+        statusFacts: readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ id: sessionId, active: true,
+            activeAt: now, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now }), now),
         stalled: false,
         archived: false,
     };
@@ -69,13 +69,11 @@ describe('projectSessionWorkMap', () => {
 });
 
 function finished(sessionId: string, leadSessionId: string): WorkReportSessionSource {
+    const now = Date.now();
     return {
         ...report(sessionId, leadSessionId),
-        statusFacts: {
-            awareness: { runtime: 'idle', operational: { primary: 'none', reasons: [] } },
-            word: 'Finished its turn',
-            settled: true,
-        } as unknown as WorkReportSessionSource['statusFacts'],
+        statusFacts: readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ id: sessionId, active: true,
+            activeAt: now, latestTurnStatus: 'completed', latestTurnStatusObservedAt: now }), now),
     };
 }
 

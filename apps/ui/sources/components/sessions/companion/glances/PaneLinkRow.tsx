@@ -19,7 +19,7 @@ import { t } from '@/text';
 const stylesheet = StyleSheet.create((theme) => ({
     title: { ...Typography.default('semiBold'), ...happierPageTextMetrics('sectionTitle'), color: theme.colors.text.primary },
     fact: { ...Typography.default(), ...Typography.tabular(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
-    chevron: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, alignSelf: 'stretch' },
+    chevron: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.space.s4, alignSelf: 'stretch' },
 }));
 
 /** A link row has no body; the header is the whole row. */

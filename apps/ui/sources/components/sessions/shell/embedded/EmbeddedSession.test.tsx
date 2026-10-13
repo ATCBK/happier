@@ -20,6 +20,14 @@ import { useSessionTranscriptSource } from '@/components/sessions/transcript/sou
 import { SessionView } from '../SessionView';
 import { EmbeddedSessionNewChat } from './EmbeddedSessionNewChat';
 import { getSessionDraftSnapshot, resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { SessionChat, SessionComposer, SessionProvider, SessionTranscript } from '@happier-dev/plugin-ui';
+import { PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
+import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment';
+import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { PluginSessionPartMountScope, renderPluginSessionPart } from '@/components/plugins/surfaces/PluginSessionPartHost';
+import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
+import { useIsBeneathPluginSurfaceNestingBoundary } from '@/components/plugins/surfaces/pluginSurfaceNesting';
+import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
     EmbeddedSessionComposerPart, EmbeddedSessionProvider, EmbeddedSessionTranscriptPart,
     type SessionViewEmbeddedPresentation,
@@ -27,6 +35,10 @@ import {
 
 // Only platform adapters and Metro's lazy module loader are replaced. All Session owners,
 // stores, catalogs, transcript interaction and rendered controls run their production logic.
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
+});
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -126,6 +138,68 @@ afterEach(async () => {
 });
 
 describe('EmbeddedSessionProvider', () => {
+    it('composes public plugin Session parts through the registered host into one real controller', async () => {
+        const lifetime: ActiveServerAccountScopeLifetime = {
+            scope: { serverId: account.home.id, accountId: 'account-1' },
+            isCurrent: () => true, onRetire: () => ({ dispose: () => undefined }),
+        };
+        const environment = projectHappierUiEnvironment(createPluginSurfaceContextFixture());
+        const presentationHost = createPluginUiPrivatePresentationHost(undefined, { renderSessionPart: renderPluginSessionPart });
+        function NestingProbe() {
+            return React.createElement('PluginNestingProbe', { testID: 'plugin-nesting', beneath: useIsBeneathPluginSurfaceNestingBoundary() });
+        }
+        const render = (readOnly = false, focusEligible = true) => host(
+            <PluginSessionPartMountScope accountLifetime={lifetime} presented focusEligible={focusEligible}>
+                <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
+                    <SessionProvider sessionId="s1" readOnly={readOnly}>
+                        <SessionTranscript testID="plugin-transcript" />
+                        <SessionComposer testID="plugin-composer" />
+                        <NestingProbe />
+                    </SessionProvider>
+                </PluginUiHostPresentationScope>
+            </PluginSessionPartMountScope>,
+        );
+        const screen = await renderScreen(render());
+        expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
+        expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(1);
+        expect(screen.tree.findAllHostsByTestId('plugin-transcript')).toHaveLength(1);
+        expect(screen.tree.findHostByTestId('plugin-nesting')?.props.beneath).toBe(true);
+        const controller = screen.tree.findByType(EmbeddedSessionProvider);
+        expect(controller.props).toMatchObject({ serverId: account.home.id,
+            target: { kind: 'session', sessionId: 's1' }, surfaceFocused: true, surfaceVisible: true,
+            presentation: { kind: 'embedded', composer: 'auto' } });
+        expect(Object.keys(controller.props.presentation).sort()).toEqual(['composer', 'kind']);
+        await screen.update(render(false, false));
+        expect(screen.tree.findByType(EmbeddedSessionProvider)).toBe(controller);
+        expect(screen.tree.findByType(EmbeddedSessionProvider).props).toMatchObject({ surfaceFocused: false, surfaceVisible: true });
+        expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
+        await screen.update(render(true));
+        expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
+        expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(0);
+        expect(screen.tree.findByType(EmbeddedSessionProvider).props.presentation).toEqual({ kind: 'embedded', composer: 'none' });
+    });
+
+    it('renders public plugin Session fallback without registration and denies an unscoped host controller', async () => {
+        const environment = projectHappierUiEnvironment(createPluginSurfaceContextFixture());
+        const render = (registered: boolean) => host(
+            <PluginSessionPartMountScope accountLifetime={null} presented focusEligible>
+                <PluginUiHostPresentationScope environment={environment}
+                    presentationHost={createPluginUiPrivatePresentationHost(undefined,
+                        registered ? { renderSessionPart: renderPluginSessionPart } : {})}>
+                    <SessionChat sessionId="s1" fallback={<span data-testid="plugin-session-fallback" />} />
+                </PluginUiHostPresentationScope>
+            </PluginSessionPartMountScope>,
+        );
+        const screen = await renderScreen(render(false));
+        expect(screen.tree.findHostByTestId('plugin-session-fallback')).not.toBeNull();
+        expect(screen.tree.findAllByType(EmbeddedSessionProvider)).toHaveLength(0);
+        await screen.update(render(true));
+        expect(screen.tree.findHostByTestId('embedded-session-unavailable')).not.toBeNull();
+        expect(screen.tree.findHostByTestId('plugin-session-fallback')).toBeNull();
+        expect(screen.tree.findAllByType(EmbeddedSessionProvider)).toHaveLength(0);
+        expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(0);
+    });
+
     it('restores the admitted new-chat draft across loading remounts without sharing it with another intent', async () => {
         const draftScope = { serverId: account.home.id, accountId: 'account-1' };
         const draftId = '00000000-0000-4000-8000-000000000001';

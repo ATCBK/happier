@@ -10,15 +10,14 @@ import type {
 import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import { createSessionCallerHostedHtmlRequestController } from '@/components/ui/surfaces/hostedHtml/sessionCallerHostedHtmlRequestController';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { SessionWidgetHost } from './SessionWidgetHost';
 import type { SessionBoardItemProjection, SessionBoardMountHost } from '@/sync/domains/session/board';
 
 const state = vi.hoisted(() => ({
     frames: [] as Record<string, unknown>[],
-    requests: [] as string[],
-    controllersCreated: 0,
-    controllersDisposed: 0,
-    session: null as ReturnType<typeof createSessionFixture> | null,
     openedExternalUrls: [] as string[],
 }));
 
@@ -37,22 +36,6 @@ vi.mock('@/components/browser/frame/BrowserViewFrame.web', () => ({
         state.frames.push(props.engine);
         return React.createElement('BrowserViewFrame');
     },
-}));
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/hooks')>()),
-    useSession: () => state.session,
-    useSessionServerId: () => 'home-a',
-    useSettings: () => ({}),
-}));
-
-vi.mock('@/utils/sessions/sessionUtils', () => ({
-    useSessionStatus: () => ({ state: 'waiting' }),
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-    useServerFeaturesSnapshotForServerId: () => ({ status: 'ready', features: {} }),
-    resolveRuntimeFeatureDecisionFromSnapshot: () => ({ state: 'enabled' }),
 }));
 
 const item = {
@@ -89,16 +72,13 @@ function runtime(): CallerHostedHtmlRuntime {
         // runtime ceiling. The caller manifest must still expose only its exact
         // reviewed request.
         admittedHostMethods: ['context', 'watchContext', 'executeAction', 'notify', 'readClipboard'],
-        createRequestController: () => {
-            state.controllersCreated += 1;
-            return {
-                handleRequest: async (request) => {
-                    state.requests.push(request.method);
-                    return null;
-                },
-                dispose: () => { state.controllersDisposed += 1; },
-            };
-        },
+        createRequestController: publishResourceEvent => createSessionCallerHostedHtmlRequestController({
+            sessionId: 'session-1', serverId: 'home-a', serverIdentityId: 'server-identity-a', accountId: 'account-a',
+            executeHostAction: createFrontDoorActionExecute(),
+            isAccountCurrent: () => storage.getState().profileScope?.accountId === 'account-a',
+            isSessionCurrent: () => storage.getState().sessions['session-1']?.access?.capabilities.readTranscript === true,
+            pluginTarget: null, publishResourceEvent, notify: () => {},
+        }),
         lifetime: {
             isCurrent: () => true,
             onRetire: () => ({ dispose: () => undefined }),
@@ -149,6 +129,8 @@ async function renderPlacement(
 
 describe('SessionWidgetHost caller-authored hosted HTML', () => {
     afterEach(() => {
+        standardCleanup();
+        storage.setState({ sessions: {}, profileScope: null });
         vi.restoreAllMocks();
     });
 
@@ -156,11 +138,9 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         standardCleanup();
         await act(async () => { await loadPluginUiHostSupport(); });
         state.frames = [];
-        state.requests = [];
-        state.controllersCreated = 0;
-        state.controllersDisposed = 0;
         state.openedExternalUrls = [];
-        state.session = createSessionFixture({ id: 'session-1' });
+        storage.setState({ profileScope: { serverId: 'home-a', accountId: 'account-a' } });
+        storage.getState().applySessions([createSessionFixture({ id: 'session-1', serverId: 'home-a' })]);
     });
 
     it('mounts the neutral hosted frame with revision-bound lifecycle and the stored reduced API', async () => {
@@ -244,7 +224,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
             kind: 'result',
             payload: { kind: 'error', error: { code: 'denied' } },
         });
-        expect(state.requests).toEqual([]);
 
         standardCleanup();
         state.frames = [];
@@ -439,7 +418,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         const screen = await renderScreen(renderWidget(item));
         expect(state.frames).toHaveLength(1);
         const firstBridge = readFrameBridge(state.frames[0]!);
-        expect(state.controllersCreated).toBe(1);
 
         randomUuidSpy.mockImplementation(() => {
             throw new Error('secure_entropy_unavailable');
@@ -448,8 +426,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         await screen.update(renderWidget({ ...item, revision: 'revision-entropy-failure' }));
 
         expect(state.frames).toHaveLength(0);
-        expect(state.controllersCreated).toBe(1);
-        expect(state.controllersDisposed).toBe(1);
         expect(screen.findByTestId('caller-widget-hosted-html-unavailable')).not.toBeNull();
         expect(screen.findByTestId(
             'caller-widget-hosted-html-unavailable-diagnostic-hosted_web_profile_isolation_unavailable',
@@ -469,7 +445,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         expect(state.frames).toHaveLength(1);
         const recoveredBridge = readFrameBridge(state.frames[0]!);
         expect(recoveredBridge.identity).not.toEqual(firstBridge.identity);
-        expect(state.controllersCreated).toBe(2);
         randomUuidSpy.mockRestore();
     });
 

@@ -89,7 +89,7 @@ const styles = StyleSheet.create((theme) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: theme.space.s4,
     minWidth: 0,
     maxWidth: '100%',
   },

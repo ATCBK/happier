@@ -118,10 +118,9 @@ const styles = StyleSheet.create((theme) => ({
     ring: { borderWidth: 1.25, borderColor: theme.colors.border.strong },
     ringCurrent: { borderWidth: 1.5, borderColor: theme.colors.text.primary },
     number: {
-        fontSize: 11.5,
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default('semiBold'),
     },
     numberRail: { fontSize: 10 },
     numberCurrent: { color: theme.colors.text.primary },
@@ -136,6 +135,6 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    generated: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0, maxWidth: '100%' },
-    generatedText: { fontSize: 12.5, color: theme.colors.text.tertiary, flexShrink: 1, minWidth: 0, ...Typography.default('medium') },
+    generated: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, flexShrink: 0, maxWidth: '100%' },
+    generatedText: { ...Typography.variant('meta', 'medium'), color: theme.colors.text.tertiary, flexShrink: 1, minWidth: 0,  },
 }));

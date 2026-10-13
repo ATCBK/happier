@@ -40,11 +40,11 @@ const inlineImageFillStyle = {
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        marginTop: 2,
-        marginBottom: 7,
+        marginTop: theme.space.s2,
+        marginBottom: theme.space.s6,
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     tile: {
         borderRadius: 12,
@@ -60,15 +60,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.elevated,
     },
     unavailableText: {
-        marginTop: 6,
+        marginTop: theme.space.s6,
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },
     videoLabel: {
-        marginTop: 6,
+        marginTop: theme.space.s6,
         color: theme.colors.text.secondary,
         textAlign: 'center',
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
 }));
 

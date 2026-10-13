@@ -152,12 +152,12 @@ const quotaStyles = StyleSheet.create((theme) => ({
     rings: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     ring: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     providerCaption: {
         fontSize: 8,

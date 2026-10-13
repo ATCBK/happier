@@ -55,5 +55,5 @@ export const GitCleanState = React.memo(function GitCleanState(props: Readonly<{
             {...(props.lastPushedAt ? { live: { text: t('sessionGitPane.fidelity.lastPushed', { when: formatScmTimelineWhen(props.lastPushedAt) }) } } : props.lastCommitAt ? { live: { text: t('sessionGitPane.flow.clean.lastCommit', { when: formatScmTimelineWhen(props.lastCommitAt) }) } } : {})}
         />
     );
-    return <View style={{ paddingHorizontal: 12, paddingVertical: 8 }}><SurfaceCard padding="sm" style={{ backgroundColor: theme.colors.state.success.background, borderColor: theme.colors.state.success.border }}>{state}</SurfaceCard></View>;
+    return <View style={{ paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s8 }}><SurfaceCard padding="sm" style={{ backgroundColor: theme.colors.state.success.background, borderColor: theme.colors.state.success.border }}>{state}</SurfaceCard></View>;
 });

@@ -61,8 +61,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         backgroundColor: theme.colors.surface.base,
     },
     header: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -70,20 +70,19 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderBottomColor: theme.colors.border.default,
     },
     headerTitle: {
-        fontSize: 17,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     scroll: {
         flex: 1,
     },
     scrollContent: {
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
         flexGrow: 1,
     },
     section: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
     },
     descriptionText: {
         color: theme.colors.text.secondary,
@@ -97,8 +96,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...Typography.default('semiBold'),
     },
     detailText: {
-        fontSize: 13,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
     },
 }));
 

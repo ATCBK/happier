@@ -1,0 +1,589 @@
+import * as React from 'react';
+import { Platform, ScrollView, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
+import { presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
+import { Icon } from '@/components/ui/icons/Icon';
+import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
+import { Item } from '@/components/ui/lists/Item';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
+import { t } from '@/text';
+
+import type {
+  SessionCapabilitiesModel,
+  SessionCapabilityAddItem,
+  SessionCapabilityRowModel,
+} from './sessionCapabilitiesModel';
+
+export type SessionCapabilitiesChange = (
+  change: Readonly<{
+    kind: 'skill' | 'mcp_server' | 'native_skill';
+    id: string;
+    state: 'on' | 'off' | 'inherit';
+  }>,
+) => Promise<unknown>;
+
+export type SessionCapabilitiesContentProps = Readonly<{
+  model: SessionCapabilitiesModel;
+  onChange: SessionCapabilitiesChange;
+  testID: string;
+  /** The popover's remaining height budget; the body scrolls under the fixed add field and footer. */
+  maxHeight?: number;
+  /** The MCP server's identity mark (P7 `McpServerMark`), by catalog id. */
+  renderMark?: (serverId: string) => React.ReactNode;
+  /** The explicit retry for a failed or offline preview (always issues the request). */
+  onRetry?: () => void;
+  /** Destinations: the Skills and MCP servers pages ("Browse" for an empty group). */
+  onOpen?: (destination: 'skills' | 'mcp') => void;
+  /** Display name of the session's machine, for the offline line. */
+  machineName?: string;
+}>;
+
+/** A group shows this many rows before "n more" (layout density, not a data cap; L3 §12). */
+const GROUP_PREVIEW_ROWS = 6;
+
+/**
+ * "This session gets": the one body for the composer chip's popover and its phone sheet (the shared
+ * `AgentInputContentPopover` owns the title band and the presentation). Rows are P5's menu-density
+ * `CapabilityRow`: mark | name + line 2 | scope | action, recomposed by the row itself on a phone.
+ */
+export function SessionCapabilitiesContent(
+  props: SessionCapabilitiesContentProps,
+): React.ReactElement {
+  const { model } = props;
+  const [adding, setAdding] = React.useState(false);
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const expand = React.useCallback(
+    (key: string) => setExpanded((current) => new Set(current).add(key)),
+    [],
+  );
+  const hasRows = model.groups.some(
+    (group) => group.rows.length > 0 || group.nativeRow !== null,
+  );
+  const resolvingWithoutRows = model.state === 'resolving' && !hasRows;
+
+  const body = (
+    <View testID={`${props.testID}:lists`}>
+      {model.state === 'error' ? (
+        <View style={styles.stateLine}>
+          <SurfaceStateCard
+            testID={`${props.testID}:error`}
+            kind="error"
+            size="line"
+            title={t('capabilities.session.sheet.checkFailed')}
+            {...(props.onRetry
+              ? {
+                  action: {
+                    label: t('capabilities.status.fix.tryAgain'),
+                    onPress: props.onRetry,
+                  },
+                }
+              : {})}
+          />
+        </View>
+      ) : model.state === 'machine_unreachable' ? (
+        <View style={styles.stateLine}>
+          <SurfaceStateCard
+            testID={`${props.testID}:offline`}
+            kind="unavailable"
+            size="line"
+            title={t('capabilities.session.sheet.offline', {
+              machine: props.machineName ?? '',
+            })}
+            {...(props.onRetry
+              ? {
+                  action: {
+                    label: t('capabilities.status.fix.tryAgain'),
+                    onPress: props.onRetry,
+                  },
+                }
+              : {})}
+          />
+        </View>
+      ) : resolvingWithoutRows ? (
+        <View style={styles.stateLine}>
+          <SurfaceStateCard
+            testID={`${props.testID}:resolving`}
+            kind="loading"
+            size="line"
+            title={t('capabilities.session.sheet.checking')}
+          />
+        </View>
+      ) : null}
+      {resolvingWithoutRows || (model.state === 'error' && !hasRows)
+        ? null
+        : model.groups.map((group, index) => {
+            const open = expanded.has(group.kind);
+            const visible = open
+              ? group.rows
+              : group.rows.slice(0, GROUP_PREVIEW_ROWS);
+            const hidden = group.rows.length - visible.length;
+            const count =
+              group.kind === 'skills' ? model.counts.skills : model.counts.mcp;
+            return (
+              <View
+                key={group.kind}
+                testID={`${props.testID}:group:${group.kind}`}
+                style={index > 0 ? styles.groupDivider : null}
+              >
+                <CollectionListGroupLabel
+                  title={group.title}
+                  count={count}
+                  first={index === 0}
+                  trailing={
+                    <Text
+                      variant="meta"
+                      numberOfLines={1}
+                      style={styles.trailing}
+                    >
+                      {group.trailing}
+                    </Text>
+                  }
+                />
+                <View role="list" accessibilityLabel={group.title}>
+                  {visible.map((row) => (
+                    <SessionCapabilityRow
+                      key={row.key}
+                      row={row}
+                      onChange={props.onChange}
+                      renderMark={props.renderMark}
+                      testID={`${props.testID}:row:${row.key}`}
+                    />
+                  ))}
+                </View>
+                {hidden > 0 ? (
+                  <View style={styles.more}>
+                    <TextLinkButton
+                      label={t('capabilities.where.more', { count: hidden })}
+                      expanded={false}
+                      onPress={() => expand(group.kind)}
+                      testID={`${props.testID}:more:${group.kind}`}
+                    />
+                  </View>
+                ) : null}
+                {group.rows.length === 0 && group.nativeRow === null ? (
+                  <View style={styles.stateLine}>
+                    <SurfaceStateCard
+                      testID={`${props.testID}:empty:${group.kind}`}
+                      kind="empty"
+                      size="line"
+                      title={
+                        group.kind === 'skills'
+                          ? t('capabilities.session.sheet.noSkills')
+                          : t('capabilities.session.sheet.noServers')
+                      }
+                      {...(props.onOpen
+                        ? {
+                            action: {
+                              label: t('capabilities.session.sheet.browse'),
+                              onPress: () =>
+                                props.onOpen?.(
+                                  group.kind === 'skills' ? 'skills' : 'mcp',
+                                ),
+                            },
+                          }
+                        : {})}
+                    />
+                  </View>
+                ) : null}
+                {group.nativeRow ? (
+                  <NativeSkillsRow
+                    nativeRow={group.nativeRow}
+                    open={expanded.has('native')}
+                    onOpen={() => expand('native')}
+                    onChange={props.onChange}
+                    testID={`${props.testID}:native`}
+                  />
+                ) : null}
+              </View>
+            );
+          })}
+    </View>
+  );
+
+  const footer = (
+    <View style={styles.footer}>
+      {adding ? (
+        <SessionCapabilityAddField
+          items={model.addItems}
+          onChange={props.onChange}
+          onDone={() => setAdding(false)}
+          testID={`${props.testID}:add`}
+        />
+      ) : (
+        <AddRow
+          onPress={() => setAdding(true)}
+          disabled={model.state === 'resolving' && !hasRows}
+          testID={`${props.testID}:add`}
+        />
+      )}
+      <View style={styles.costLine}>
+        <Text
+          variant="meta"
+          numberOfLines={1}
+          style={styles.cost}
+          testID={`${props.testID}:cost`}
+        >
+          {model.costLine}
+        </Text>
+        {props.onOpen ? (
+          <View style={styles.destinations}>
+            <TextLinkButton
+              size="meta"
+              tone="strong"
+              label={t('capabilities.skills.title')}
+              onPress={() => props.onOpen?.('skills')}
+              testID={`${props.testID}:open:skills`}
+            />
+            <TextLinkButton
+              size="meta"
+              tone="strong"
+              label={t('capabilities.session.mcpServers')}
+              onPress={() => props.onOpen?.('mcp')}
+              testID={`${props.testID}:open:mcp`}
+            />
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+
+  return (
+    <View
+      testID={props.testID}
+      style={[
+        styles.root,
+        props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : null,
+      ]}
+    >
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {body}
+      </ScrollView>
+      {footer}
+    </View>
+  );
+}
+
+function SessionCapabilityRow(
+  props: Readonly<{
+    row: SessionCapabilityRowModel;
+    onChange: SessionCapabilitiesChange;
+    renderMark?: (serverId: string) => React.ReactNode;
+    testID: string;
+  }>,
+) {
+  const { row } = props;
+  const set = (state: 'on' | 'off' | 'inherit') =>
+    props.onChange({ kind: row.kind, id: row.id, state });
+  const status = row.line2?.kind === 'status' ? row.line2.status : null;
+  const fix = row.action.kind === 'fix' ? row.action.status : null;
+  const fixLabel = fix
+    ? presentCapabilityStatus(fix, 'row').fixLabel
+    : undefined;
+  const removable = row.readOnlyReason === null && !row.dimmed;
+  const action =
+    row.action.kind === 'turn_on' ? (
+      <TextLinkButton
+        tone="strong"
+        label={t('capabilities.status.fix.turnOn')}
+        accessibilityLabel={t('capabilities.session.sheet.turnOnLabel', {
+          item: row.title,
+        })}
+        // A session removal is undone by returning to what the rules give; a native overlay is cleared the same way.
+        onPress={() => set('inherit')}
+        testID={`${props.testID}:turn-on`}
+      />
+    ) : (
+      <>
+        {fix?.fix && fixLabel ? (
+          <TextLinkButton
+            tone="strong"
+            label={fixLabel}
+            onPress={fix.fix.onPress}
+            testID={`${props.testID}:fix`}
+          />
+        ) : null}
+        {removable ? (
+          <IconButton
+            iconName="x"
+            size={24}
+            variant="plain"
+            accessibilityLabel={t('capabilities.session.sheet.removeLabel', {
+              item: row.title,
+            })}
+            tooltip={t('capabilities.session.sheet.removeLabel', {
+              item: row.title,
+            })}
+            onPress={() =>
+              set(
+                row.line2?.kind === 'change' && row.line2.change === 'added'
+                  ? 'inherit'
+                  : 'off',
+              )
+            }
+            testID={`${props.testID}:remove`}
+          />
+        ) : null}
+      </>
+    );
+  const description =
+    row.line2?.kind === 'change'
+      ? row.line2.change === 'added'
+        ? t('capabilities.session.sheet.added')
+        : t('capabilities.session.sheet.turnedOff')
+      : null;
+  return (
+    <CapabilityRow
+      density="menu"
+      title={row.title}
+      description={description}
+      status={status}
+      {...(row.line2?.kind === 'cost'
+        ? { facts: { cost: row.line2.cost, presentation: 'row' as const } }
+        : {})}
+      whereSummary={row.scope}
+      mark={
+        row.mark === 'none'
+          ? undefined
+          : props.renderMark?.(row.mark.mcpServerId)
+      }
+      action={action}
+      dimmed={row.dimmed}
+      testID={props.testID}
+    />
+  );
+}
+
+function NativeSkillsRow(
+  props: Readonly<{
+    nativeRow: NonNullable<
+      SessionCapabilitiesModel['groups'][number]['nativeRow']
+    >;
+    open: boolean;
+    onOpen: () => void;
+    onChange: SessionCapabilitiesChange;
+    testID: string;
+  }>,
+) {
+  const { nativeRow } = props;
+  const cannotTurnOff = nativeRow.rows.every(
+    (row) => row.readOnlyReason === 'native_disable_unsupported',
+  );
+  if (!props.open) {
+    return (
+      <View style={styles.more}>
+        <TextLinkButton
+          label={t('capabilities.session.sheet.nativeFound', {
+            count: nativeRow.rows.length,
+            machine: nativeRow.machineName,
+          })}
+          expanded={false}
+          onPress={props.onOpen}
+          testID={props.testID}
+        />
+      </View>
+    );
+  }
+  return (
+    <View testID={props.testID}>
+      {cannotTurnOff ? (
+        <Text variant="meta" style={styles.nativeNote}>
+          {t('capabilities.session.sheet.nativeCantTurnOff', {
+            agent: nativeRow.agentName,
+          })}
+        </Text>
+      ) : null}
+      {nativeRow.rows.map((row) => (
+        <SessionCapabilityRow
+          key={row.key}
+          row={row}
+          onChange={props.onChange}
+          testID={`${props.testID}:${row.key}`}
+        />
+      ))}
+    </View>
+  );
+}
+
+function AddRow(
+  props: Readonly<{ onPress: () => void; disabled: boolean; testID: string }>,
+) {
+  const { theme } = useUnistyles();
+  const { width } = useWindowDimensions();
+  // The `$` shortcut belongs to a keyboard; a phone sheet shows the row alone.
+  const showShortcut = Platform.OS === 'web' && !isMobileLayoutWidth(width);
+  return (
+    <Item
+      title={t('capabilities.session.sheet.add')}
+      icon={<Icon name="plus" size={18} color={theme.colors.text.secondary} />}
+      rightElement={
+        showShortcut ? (
+          <Text variant="meta" style={styles.shortcut}>
+            $
+          </Text>
+        ) : undefined
+      }
+      onPress={props.onPress}
+      disabled={props.disabled}
+      showChevron={false}
+      rowRole="menu"
+      testID={props.testID}
+    />
+  );
+}
+
+/** PD10: one list — library skills and every item that exists but is off here; a pick adds it for this session. */
+function SessionCapabilityAddField(
+  props: Readonly<{
+    items: readonly SessionCapabilityAddItem[];
+    onChange: SessionCapabilitiesChange;
+    onDone: () => void;
+    testID: string;
+  }>,
+) {
+  const [query, setQuery] = React.useState('');
+  const needle = query.trim().toLowerCase();
+  const matches = props.items.filter(
+    (item) =>
+      needle === '' ||
+      item.title.toLowerCase().includes(needle) ||
+      item.id.toLowerCase().includes(needle),
+  );
+  return (
+    <View testID={props.testID} style={styles.addField}>
+      {matches.length === 0 ? (
+        <Text
+          variant="meta"
+          style={styles.addEmpty}
+          testID={`${props.testID}:empty`}
+        >
+          {props.items.length === 0
+            ? t('capabilities.session.sheet.nothingToAdd')
+            : t('capabilities.session.sheet.noMatch', { query: query.trim() })}
+        </Text>
+      ) : (
+        <ScrollView
+          style={styles.addResults}
+          keyboardShouldPersistTaps="handled"
+        >
+          {matches.map((item) => (
+            <Item
+              key={`${item.kind}:${item.id}`}
+              title={item.title}
+              subtitle={
+                item.kind === 'skill'
+                  ? t('capabilities.skills.title')
+                  : t('capabilities.session.mcpServers')
+              }
+              disabled={item.readOnlyReason !== null}
+              showChevron={false}
+              rowRole="menu"
+              onPress={() => {
+                void props.onChange({
+                  kind: item.kind,
+                  id: item.id,
+                  state: 'on',
+                });
+                props.onDone();
+              }}
+              testID={`${props.testID}:pick:${item.kind}:${item.id}`}
+            />
+          ))}
+        </ScrollView>
+      )}
+      <CompactSearchField
+        value={query}
+        onChangeText={setQuery}
+        placeholder={t('capabilities.session.sheet.search')}
+        autoFocus
+        accessibilityLabel={t('capabilities.session.sheet.add')}
+        onKeyPress={(event) => {
+          if (event.nativeEvent.key === 'Escape') props.onDone();
+        }}
+        testID={`${props.testID}:search`}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  // The owner's separator between the popover's title band and what this session gets.
+  root: {
+    minHeight: 0,
+    flexShrink: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  scroll: { flexShrink: 1 },
+  scrollContent: { paddingBottom: theme.space.s4 },
+  stateLine: {
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s8,
+  },
+  groupDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+    marginTop: theme.space.s8,
+  },
+  trailing: { color: theme.colors.text.tertiary },
+  more: {
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s6,
+    alignItems: 'flex-start',
+  },
+  nativeNote: {
+    color: theme.colors.text.secondary,
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s4,
+  },
+  footer: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  costLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  cost: {
+    flex: 1,
+    color: theme.colors.text.secondary,
+    fontVariant: ['tabular-nums'],
+  },
+  destinations: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+  },
+  shortcut: {
+    color: theme.colors.text.tertiary,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+  },
+  addField: {
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s8,
+    paddingVertical: theme.space.s8,
+  },
+  addResults: { maxHeight: 220 },
+  addEmpty: {
+    color: theme.colors.text.secondary,
+    paddingHorizontal: theme.space.s4,
+    paddingVertical: theme.space.s6,
+  },
+}));

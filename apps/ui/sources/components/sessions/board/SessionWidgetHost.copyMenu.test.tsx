@@ -1,12 +1,15 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSessionSurfaceNoteDocumentV1,
+  SessionSurfaceItemV1Schema,
   type SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
+import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { SessionBoardItemProjection } from '@/sync/domains/session/board';
 
 import {
@@ -26,17 +29,6 @@ vi.mock('react-native-gesture-handler', async () => {
   return createGestureHandlerMock();
 });
 
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { createStorageModuleStub } =
-    await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({
-    useActiveServerAccountScope: () => ({
-      serverId: 'home-1',
-      accountId: 'account-1',
-    }),
-  });
-});
-
 /**
  * The copies a visual offers from its ⋯ menu. Every visual, typed or HTML, becomes a widget through
  * one entry; a second "Add to…" that opens the same panel from another host is a duplicate.
@@ -50,13 +42,13 @@ function itemOf(
     revision: 'rev-1',
     state: {
       kind: 'ready',
-      item: {
+      item: SessionSurfaceItemV1Schema.parse({
         v: 1,
         title: 'Build time by package',
         frame: 'frameless',
         height: { mode: 'auto', fallback: 'regular' },
         source,
-      } as SessionSurfaceItemV1,
+      }),
     },
   };
 }
@@ -75,7 +67,7 @@ async function menuIds(
     canEdit: false,
     executableCurrentness: 'not_executable',
     testID: 'widget',
-  } as SessionWidgetHostProps;
+  } satisfies SessionWidgetHostProps;
   const screen = await renderScreen(<SessionWidgetHost {...props} />);
   const owners = screen.root.findAll(
     (node) =>
@@ -93,6 +85,10 @@ async function menuIds(
 }
 
 describe('a visual’s copies in its ⋯ menu', () => {
+  beforeEach(() => {
+    storage.setState({ profileScope: { serverId: 'home-1', accountId: 'account-1' } });
+  });
+  afterEach(() => { standardCleanup(); storage.setState({ profileScope: null }); });
   it('offers native builtin promotion and sharing alongside reading', async () => {
     const ids = await menuIds(itemOf({ kind: 'widget', instance: { v: 1, id: 'visual-1',
       definition: { kind: 'builtin', id: 'usage_daily' }, bindings: {} } }));
@@ -115,18 +111,12 @@ describe('a visual’s copies in its ⋯ menu', () => {
   });
 
   it('makes an HTML visual a widget through the same entry, beside Save as Artifact and Share', async () => {
-    const html = {
-      v: 1,
-      entrypoint: 'index.html',
-      files: {
-        'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' },
-      },
-    };
+    const html = artifactHtmlBundleFromBodyV1('<b>hi</b>');
     const ids = await menuIds(
       itemOf({
         kind: 'hostedHtml',
         source: html,
-      } as SessionSurfaceItemV1['source']),
+      }),
     );
     expect(
       ids.filter((id) => id === 'saveAsYours' || id === 'addVisualTo'),

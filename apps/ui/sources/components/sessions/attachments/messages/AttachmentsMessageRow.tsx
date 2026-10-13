@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -15,20 +16,20 @@ export type MessageAttachmentSummary = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        marginTop: 2,
-        marginBottom: 7,
-        gap: 8,
+        marginTop: theme.space.s2,
+        marginBottom: theme.space.s6,
+        gap: theme.space.s8,
     },
     row: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     attachmentChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 7,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -37,8 +38,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     attachmentText: {
         color: theme.colors.text.primary,
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         flexShrink: 1,
     },
     attachmentMeta: {

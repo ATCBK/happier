@@ -83,9 +83,8 @@ export function DelegateOutputMessageCard(props: Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     headerText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 15,
+        ...Typography.variant('heading'),
     },
     lead: {
         ...Typography.default(),
@@ -94,12 +93,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 22,
     },
     section: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     sectionTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 15,
+        ...Typography.variant('heading'),
     },
     sheet: {
         borderRadius: 12,
@@ -108,22 +106,19 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 14,
     },
     deliverableRow: {
-        gap: 4,
-        paddingVertical: 12,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s12,
     },
     deliverableDivider: {
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
     deliverableTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
     },
     deliverableDetails: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body'),
     },
 }));

@@ -14,7 +14,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: theme.colors.surface.elevated,
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         height: 16,
         borderRadius: 4,
     },
@@ -26,7 +26,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     lineChanges: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     addedText: {
         fontSize: 10,

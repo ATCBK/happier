@@ -145,18 +145,18 @@ export function SessionActionDraftCard(props: Readonly<{ draft: SessionActionDra
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
       <View style={{ width: '100%', alignSelf: 'center', flexDirection: 'column', flexGrow: 1, flexBasis: 0, maxWidth: layout.maxWidth }}>
-        <View style={{ marginHorizontal: 16 }}>
+        <View style={{ marginHorizontal: theme.space.s16 }}>
           <View
             style={{
-              marginVertical: 8,
-              padding: 12,
+              marginVertical: theme.space.s8,
+              padding: theme.space.s12,
               borderRadius: 12,
               borderWidth: 1,
               borderColor: theme.colors.border.default,
               backgroundColor: theme.colors.surface.base,
             }}
           >
-            <Text style={{ color: theme.colors.text.primary, fontWeight: '600', marginBottom: 8 }}>{title}</Text>
+            <Text style={{ color: theme.colors.text.primary, fontWeight: '600', marginBottom: theme.space.s8 }}>{title}</Text>
 
             {fields.length > 0 ? (
               <ActionInputFields
@@ -171,17 +171,17 @@ export function SessionActionDraftCard(props: Readonly<{ draft: SessionActionDra
           )}
 
           {error ? (
-            <Text style={{ color: theme.colors.status.error, marginTop: 10 }}>{error}</Text>
+            <Text style={{ color: theme.colors.status.error, marginTop: theme.space.s10 }}>{error}</Text>
           ) : null}
 
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: theme.space.s10, marginTop: theme.space.s12 }}>
             <Pressable
               accessibilityRole="button"
               onPress={cancel}
               disabled={props.draft.status === 'running' || isSubmitting}
               style={({ pressed }) => ({
-                paddingVertical: 10,
-                paddingHorizontal: 12,
+                paddingVertical: theme.space.s10,
+                paddingHorizontal: theme.space.s12,
                 borderRadius: 10,
                 opacity: props.draft.status === 'running' || isSubmitting ? 0.4 : pressed ? motionTokens.press.opacity : 1,
               })}
@@ -193,8 +193,8 @@ export function SessionActionDraftCard(props: Readonly<{ draft: SessionActionDra
               onPress={() => void submit()}
               disabled={startDisabled}
               style={({ pressed }) => ({
-                paddingVertical: 10,
-                paddingHorizontal: 12,
+                paddingVertical: theme.space.s10,
+                paddingHorizontal: theme.space.s12,
                 borderRadius: 10,
                 backgroundColor: theme.colors.button.primary.background,
                 opacity: startDisabled ? 0.5 : pressed ? motionTokens.press.opacitySubtle : 1,

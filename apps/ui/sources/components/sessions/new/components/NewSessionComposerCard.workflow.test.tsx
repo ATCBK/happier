@@ -11,6 +11,9 @@ import { act } from 'react-test-renderer';
 import { flattenTestStyle } from '@/dev/testkit';
 import Color from 'color';
 import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover/OverlayPortal';
 
 const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'android', width: 1440 }));
 let activeAccountScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
@@ -37,20 +40,12 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-// Portal/window measurement is the boundary; the menu and its workflow selection stay real.
-vi.mock('@/components/ui/popover', async (importOriginal) => {
-    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
-    return createInlinePopoverModuleMock(importOriginal);
-});
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => [],
+}));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
-});
-vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => {
-    const { createConnectionManagerModuleMock } = await import('@/dev/testkit/mocks/connectionManager');
-    return createConnectionManagerModuleMock(importOriginal, {
-        getSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://server-a.test', generation: 1 }),
-    });
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -87,11 +82,24 @@ describe('New workflow entry', () => {
         const previous = getStorage().getState().profileScope;
         const props = { ...panelProps(), selectedMachineId: 'machine-1', targetServerId: 'server-a' };
         platformState.width = 1440;
+        const restorePopoverGlobals = withPopoverWebGlobals();
         try {
             await act(async () => {
                 getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
             });
-            const screen = await renderScreen(<NewSessionSimplePanel {...props} />);
+            const screen = await renderScreen(<NewSessionSimplePanel {...props} />, {
+                wrapper: ({ children }) => <OverlayPortalProvider>{children}<OverlayPortalHost /></OverlayPortalProvider>,
+                // Only the platform's ref measurement/focus/listener API is supplied; Popover's
+                // placement, presence, dismissal and child selection remain real.
+                createNodeMock: () => ({
+                    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(80, 120, 44, 44),
+                    getBoundingClientRect: () => ({ x: 80, y: 120, left: 80, top: 120, width: 44, height: 44, right: 124, bottom: 164 }),
+                    focus: () => {},
+                    blur: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                }),
+            });
             await screen.pressByTestIdAsync('new-session-workflow-chip');
             await screen.pressByTestIdAsync('workflow-choice:builtin:plan-with-a-panel');
             const input = screen.findByTestId('workflow-run-inputs');
@@ -103,6 +111,7 @@ describe('New workflow entry', () => {
                 expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
             }
         } finally {
+            restorePopoverGlobals();
             platformState.width = 1440;
             await act(async () => { getStorage().setState({ profileScope: previous }); });
         }
@@ -116,8 +125,10 @@ describe('New workflow entry', () => {
             await act(async () => {
                 store.setState({ settings: { ...previous, glassBlurEnabled: true, glassSurfaceMaterials: null } });
             });
-            const screen = await renderScreen(<AgentInput value="Frozen document" placeholder="Document" surfaceGroup="floating"
-                autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+            const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ nativeRenderer: true }}>
+                <AgentInput value="Frozen document" placeholder="Document" surfaceGroup="floating"
+                    autocompleteKinds={[]} autocompleteSuggestions={async () => []} />
+            </GlassRuntimeEnvironmentProvider>);
             const surface = screen.findByTestId('agent-input-material-surface');
             expect(surface).not.toBeNull();
             expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.02);
@@ -136,7 +147,9 @@ describe('New workflow entry', () => {
             await act(async () => {
                 store.setState({ settings: { ...previous, glassBlurEnabled: true, glassSurfaceMaterials: null } });
             });
-            const screen = await renderScreen(<NewSessionComposerCard panelProps={panelProps()} layout="screen" attachments={false} surfaceGroup="floating" />);
+            const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ nativeRenderer: true }}>
+                <NewSessionComposerCard panelProps={panelProps()} layout="screen" attachments={false} surfaceGroup="floating" />
+            </GlassRuntimeEnvironmentProvider>);
             const surface = screen.findByTestId('agent-input-material-surface');
             expect(surface).not.toBeNull();
             expect(Color(flattenTestStyle(surface?.props.style).backgroundColor as string).alpha()).toBe(0.02);
@@ -147,7 +160,9 @@ describe('New workflow entry', () => {
             expect(Color(flattenTestStyle(screen.findByTestId('agent-input-material-surface')?.props.style).backgroundColor as string).alpha()).toBe(1);
             await act(async () => {
                 store.setState({ settings: { ...previous, glassBlurEnabled: true, glassSurfaceMaterials: null } });
-                screen.tree.update(<NewSessionComposerCard panelProps={panelProps()} layout="screen" attachments={false} />);
+                screen.tree.update(<GlassRuntimeEnvironmentProvider value={{ nativeRenderer: true }}>
+                    <NewSessionComposerCard panelProps={panelProps()} layout="screen" attachments={false} />
+                </GlassRuntimeEnvironmentProvider>);
             });
             expect(Color(flattenTestStyle(screen.findByTestId('agent-input-material-surface')?.props.style).backgroundColor as string).alpha()).toBe(1);
         } finally {
@@ -178,7 +193,9 @@ describe('New workflow entry', () => {
             await picker.pressByTestIdAsync('workflow-choice:builtin:plan-with-a-panel');
             const composer = hook.getCurrent().composer;
             if (composer === null) throw new Error('Selected workflow composer is missing');
-            const screen = await renderScreen(composer);
+            const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ nativeRenderer: true }}>
+                {composer}
+            </GlassRuntimeEnvironmentProvider>);
             expect(Color(flattenTestStyle(screen.findByTestId('agent-input-material-surface')?.props.style).backgroundColor as string).alpha()).toBe(0.02);
             expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
         } finally {

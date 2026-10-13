@@ -100,22 +100,22 @@ export const AskHappierNote = React.memo(function AskHappierNote(
 
 const stylesheet = StyleSheet.create((theme) => ({
   root: {
-    gap: 12,
-    paddingHorizontal: 16,
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
     paddingVertical: 14,
   },
   rootCompact: {
-    paddingHorizontal: 12,
+    paddingHorizontal: theme.space.s12,
   },
   head: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
+    gap: theme.space.s12,
   },
   text: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: theme.space.s2,
   },
   title: {
     ...Typography.default('semiBold'),
@@ -131,7 +131,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: theme.space.s8,
   },
   // The buttons start under the text, as the lab's card does.
   actionsUnderText: {
@@ -140,8 +140,8 @@ const stylesheet = StyleSheet.create((theme) => ({
   note: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    padding: 12,
+    gap: theme.space.s10,
+    padding: theme.space.s12,
     borderRadius: 14,
     backgroundColor: theme.colors.surface.selected,
   },

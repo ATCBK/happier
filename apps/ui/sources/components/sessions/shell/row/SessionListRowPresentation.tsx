@@ -11,6 +11,7 @@ import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     SESSION_LIST_ROW_IDENTITY_METRICS,
     SESSION_LIST_ROW_SELECTION_RADIUS,
+    SESSION_LIST_ROW_STATUS_TEXT_METRICS,
     SESSION_LIST_ROW_TITLE_TEXT_METRICS,
     shouldUseReadablePhoneMinimalSessionRow,
     type SessionListRowDensity,
@@ -51,8 +52,8 @@ const styles = StyleSheet.create((theme) => ({
         borderBottomWidth: 2,
     },
     separator: { borderBottomWidth: 1, borderBottomColor: theme.colors.border.default },
-    compact: { height: SESSION_LIST_ROW_HEIGHT_COMPACT, paddingHorizontal: 13 },
-    minimal: { height: SESSION_LIST_ROW_HEIGHT_MINIMAL, paddingHorizontal: 8 },
+    compact: { height: SESSION_LIST_ROW_HEIGHT_COMPACT, paddingHorizontal: theme.space.s12 },
+    minimal: { height: SESSION_LIST_ROW_HEIGHT_MINIMAL, paddingHorizontal: theme.space.s8 },
     minimalNativePhone: { height: SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE },
     // The open row is a rounded fill inside its group's sheet, the sheet's paper showing around it.
     selected: {
@@ -80,10 +81,10 @@ const styles = StyleSheet.create((theme) => ({
         height: SESSION_LIST_ROW_IDENTITY_METRICS.minimalNativePhone.slotSize,
     },
     content: { flex: 1, marginLeft: 14, justifyContent: 'center' },
-    contentCompact: { marginLeft: 12 },
+    contentCompact: { marginLeft: theme.space.s12 },
     contentMinimal: { marginLeft: 0 },
-    contentMinimalWithIdentity: { marginLeft: 8 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 1, gap: 6 },
+    contentMinimalWithIdentity: { marginLeft: theme.space.s8 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 1, gap: theme.space.s6 },
     title: {
         ...SESSION_LIST_ROW_TITLE_TEXT_METRICS.default,
         flex: 1,
@@ -94,10 +95,10 @@ const styles = StyleSheet.create((theme) => ({
     titleMinimal: SESSION_LIST_ROW_TITLE_TEXT_METRICS.minimal,
     titleMinimalNativePhone: SESSION_LIST_ROW_TITLE_TEXT_METRICS.minimalNativePhone,
     emphasized: { ...Typography.default('semiBold') },
-    subtitle: { fontSize: 12, color: theme.colors.text.secondary, lineHeight: 16, ...Typography.default() },
-    subtitleCompact: { fontSize: 11, lineHeight: 14 },
-    subtitleMinimal: { fontSize: 10, lineHeight: 12 },
-    trailing: { marginLeft: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+    subtitle: { ...Typography.variant('meta'), color: theme.colors.text.secondary,   },
+    subtitleCompact: SESSION_LIST_ROW_STATUS_TEXT_METRICS.compact,
+    subtitleMinimal: SESSION_LIST_ROW_STATUS_TEXT_METRICS.minimal,
+    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
     // The row's press target: everything left of the trailing slot, the row's full height.
     pressTarget: { flex: 1, minWidth: 0, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' },
 }));

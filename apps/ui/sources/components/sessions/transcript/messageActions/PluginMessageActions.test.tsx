@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PluginProjectedActionV2Schema, type MessageActionReferenceV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -9,17 +9,23 @@ import type {
     PluginProjectionAction,
     PluginProjectionEntry,
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
-import {
+const network = await installSessionOpsNetworkBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { fetchAndApplyMachines } = await import('@/sync/engine/machines/syncMachines');
+const { runtimeFetch } = await import('@/utils/system/runtimeFetch');
+const {
     createPluginMessageActionHost,
     PluginMessageActionHostProvider,
     PluginMessageActions,
-} from './PluginMessageActions';
+} = await import('./PluginMessageActions');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const machinePluginStructuredMessageActionExecuteMock = vi.hoisted(() => vi.fn());
+let serverId = '';
+const executeRequests = () => network.requests.filter(request => request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE);
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -43,30 +49,6 @@ vi.mock('react-native-unistyles', async () => {
         },
     });
 });
-
-vi.mock('@/components/ui/icons/Icon', () => ({
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
-    ICON_SIZE: { xs: 14 },
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('Text', props, props.children),
-}));
-
-// Keep the projection/schema/dispatch owners real; only daemon RPC leaves the process.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async (request: { machineId: string; serverId?: string | null; signal?: AbortSignal;
-        method: string; payload: Record<string, unknown> }) => {
-        if (request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return { ok: true, inputSchema: {} };
-        if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) {
-            const { machineId, ...payload } = request.payload;
-            return machinePluginStructuredMessageActionExecuteMock(request.machineId,
-                { ...payload, serverId: request.serverId, signal: request.signal });
-        }
-        throw new Error(`Unexpected daemon RPC: ${request.method}`);
-    },
-}));
 
 const messageReference: MessageActionReferenceV1 = {
     v: 1,
@@ -112,16 +94,33 @@ function entry(actions: readonly PluginProjectionAction[]): PluginProjectionEntr
 }
 
 describe('PluginMessageActions', () => {
-    beforeEach(() => {
-        machinePluginStructuredMessageActionExecuteMock.mockReset();
-        machinePluginStructuredMessageActionExecuteMock.mockResolvedValue({
-            ok: true, result: null,
+    beforeEach(async () => {
+        network.resetRequests();
+        const home = await network.addHome('https://message-actions.test', 'message-account');
+        serverId = home.id;
+        const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: home.accountId });
+        network.setHttpResponder(async input => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/machines') return Response.json([machine]);
+            if (path === '/v1/machines/machine-1') return Response.json({ machine });
+            return null;
         });
+        storage.setState({ profileScope: { serverId, accountId: home.accountId }, machines: {},
+            machineListByServerId: {}, machineListStatusByServerId: {} });
+        await fetchAndApplyMachines({ credentials: { token: home.token }, expectedAccountMode: 'plain', encryption: null,
+            machineDataKeys: new Map(), sourceServerId: serverId, throwOnError: true, replace: true,
+            request: (path, init) => runtimeFetch(new URL(path, home.serverUrl), init),
+            applyMachines: (rows, replace) => storage.getState().applyMachines(rows, replace, { sourceServerId: serverId }),
+        });
+        network.respond(RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ, { ok: true, inputSchema: {} });
+        network.respond(RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE, { ok: true, result: null });
     });
 
     afterEach(() => {
         standardCleanup();
     });
+    afterAll(() => network.dispose());
 
     it('preserves legacy message Actions and presents semantic menu Actions with current Message intent', async () => {
         const projection = entry([
@@ -147,7 +146,7 @@ describe('PluginMessageActions', () => {
             },
             host: {
                 machineId: 'machine-1',
-                serverId: 'server-1',
+                serverId,
                 expectedContributorOccurrenceId: 7,
                 sessionId: 'session-1',
                 isCurrent: () => true,
@@ -177,20 +176,18 @@ describe('PluginMessageActions', () => {
 
         await act(async () => {
             screen.pressByTestId('plugin-message-action:acme.preview/open-preview');
-            await vi.waitFor(() => expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalled());
+            await vi.waitFor(() => expect(executeRequests()).toHaveLength(1));
         });
 
         expect(resolveCurrent.mock.calls.length).toBeGreaterThan(currentReadsBeforeRowPress);
-        expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalledWith('machine-1', {
-            serverId: 'server-1',
+        expect(executeRequests().at(-1)).toMatchObject({ targetId: 'machine-1', payload: {
             expectedContributorOccurrenceId: '7',
             qualifiedActionId: 'acme.preview/open-preview',
             input: {},
             executionSurface: 'ui',
             sessionId: 'session-1',
             messageActionReference: messageReference,
-            signal: abortController.signal,
-        });
+        } });
 
         await act(async () => {
             screen.pressByTestId('plugin-message-actions-overflow');
@@ -206,21 +203,19 @@ describe('PluginMessageActions', () => {
 
         await act(async () => {
             screen.pressByTestId('plugin-message-action-menu:acme.preview/menu-only');
-            await vi.waitFor(() => expect(machinePluginStructuredMessageActionExecuteMock.mock.calls.at(-1)?.[1])
+            await vi.waitFor(() => expect(executeRequests().at(-1)?.payload)
                 .toMatchObject({ qualifiedActionId: 'acme.preview/menu-only' }));
         });
 
-        expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenLastCalledWith('machine-1', {
-            serverId: 'server-1',
+        expect(executeRequests().at(-1)).toMatchObject({ targetId: 'machine-1', payload: {
             expectedContributorOccurrenceId: '7',
             qualifiedActionId: 'acme.preview/menu-only',
             input: {},
             executionSurface: 'ui',
             sessionId: 'session-1',
             messageActionReference: messageReference,
-            signal: abortController.signal,
-        });
-        const legacyRequest = machinePluginStructuredMessageActionExecuteMock.mock.calls.at(-1)?.[1];
+        } });
+        const legacyRequest = executeRequests().at(-1)?.payload;
         expect(legacyRequest).not.toHaveProperty('invocation');
 
         await act(async () => {
@@ -229,12 +224,11 @@ describe('PluginMessageActions', () => {
         });
         await act(async () => {
             screen.pressByTestId('plugin-message-action-menu:acme.preview/semantic-menu-only');
-            await vi.waitFor(() => expect(machinePluginStructuredMessageActionExecuteMock.mock.calls.at(-1)?.[1])
+            await vi.waitFor(() => expect(executeRequests().at(-1)?.payload)
                 .toMatchObject({ qualifiedActionId: 'acme.preview/semantic-menu-only' }));
         });
 
-        expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenLastCalledWith('machine-1', {
-            serverId: 'server-1',
+        expect(executeRequests().at(-1)).toMatchObject({ targetId: 'machine-1', payload: {
             expectedContributorOccurrenceId: '7',
             qualifiedActionId: 'acme.preview/semantic-menu-only',
             input: {},
@@ -245,8 +239,7 @@ describe('PluginMessageActions', () => {
                 kind: 'hostPresentedMessage',
                 currentMessageIntent: messageReference,
             },
-            signal: abortController.signal,
-        });
+        } });
     });
 
     it('fails closed when the row reference is not current for the mounted transcript host', async () => {
@@ -268,7 +261,7 @@ describe('PluginMessageActions', () => {
 
         expect(screen.findAllByType('Pressable')).toHaveLength(0);
         expect(resolveCurrent).not.toHaveBeenCalled();
-        expect(machinePluginStructuredMessageActionExecuteMock).not.toHaveBeenCalled();
+        expect(executeRequests()).toHaveLength(0);
     });
 
 });

@@ -1,11 +1,20 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    WorkflowRunListRequestV1Schema,
+    WorkflowRunRecipientCensusResponseV1Schema,
+    materializeWorkflowAcceptedSnapshotV1,
+    sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+    serializeWorkflowStoredContentEnvelopeV1,
+} from '@happier-dev/protocol';
 
-import { collectHostText, createDeferred, flushHookEffects, makeToolCall, renderWithSessionTranscriptSource, createTestSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
-import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { storage } from '@/sync/domains/state/storage';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { collectHostText, createDeferred, createRootLayoutFeaturesResponse, flushHookEffects, makeToolCall, renderWithSessionTranscriptSource, createTestSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 /**
  * The agent-origin managed workflow card at the real transcript row.
@@ -17,98 +26,60 @@ import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
  * change stream or a list page happened to mention it.
  *
  * These tests mount the REAL tool rows and the REAL Account-scoped Run store.
- * Only the Action transport (`createFrontDoorActionExecute`) and the Account
- * lifetime capture are replaced, exactly as the Run-now controller tests do.
+ * Action admission, feature availability, private-content opening and Account
+ * retirement stay real; only HTTP, Socket.IO and device credentials are replaced.
  */
 
 const RUN_ID = '0f2cf13d-4ad7-4f4b-b5e0-cc3b7dce7f11';
-const ACTIVE_SCOPE = { serverId: 'home-a', accountId: 'account-a' } as const;
-
-const executeMock = vi.hoisted(() => vi.fn());
+const ACCOUNT_ID = 'account-a';
+const STORAGE_ROUTE = '/v3/automations/runs/workflow-storage';
 const pushSpy = vi.hoisted(() => vi.fn());
 function renderScreen(element: React.ReactElement) {
-    return renderWithSessionTranscriptSource(element, createTestSessionTranscriptSource({ sessionId: 'session-1', serverId: 'home-a', navigate: pushSpy }));
+    return renderWithSessionTranscriptSource(
+        <InjectedAuthProvider credentials={credentials}>{element}</InjectedAuthProvider>,
+        createTestSessionTranscriptSource({ sessionId: 'session-1', serverId, navigate: pushSpy }),
+    );
 }
-const accountLifetime = vi.hoisted(() => ({
-    value: null as null | Readonly<{
-        scope: { serverId: string; accountId: string };
-        isCurrent: () => boolean;
-        onRetire: (cancel: () => void) => Readonly<{ dispose(): void }>;
-    }>,
-    retire: null as null | (() => void),
-}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: pushSpy } }).module;
 });
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
-});
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ refreshFromActiveServer: vi.fn(async () => undefined) }),
-}));
-vi.mock('@/sync/sync', () => ({
-    sync: { ensureSidechainMessagesLoaded: vi.fn() },
-}));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => ({ kind: 'appExact', readFile: vi.fn(async () => null) }),
-}));
-vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
-    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(() => null),
-    createPluginAccountAvailabilityReaderStore: vi.fn(() => ({ get: vi.fn(() => null), subscribe: vi.fn(() => () => {}) })),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(() => null),
-}));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => true }));
-/** The canonical server feature-decision seam; Workflows are steered per case. */
-const featureDecisions = vi.hoisted(() => ({
-    workflows: { state: 'enabled' } as Record<string, unknown> | null,
+// The installed vendor omits this web leaf; preserve text at that external
+// rendering boundary while the app's StreamingTextReveal stays real.
+vi.doMock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: ({ text, startOffset }: { text: string; startOffset: number }) => [
+        { text, startOffset, animated: false },
+    ],
 }));
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: string) => (
-        featureId === 'workflows' ? featureDecisions.workflows : { state: 'enabled' }
-    ),
-}));
-vi.mock('@/components/ui/code/editor/CodeEditor', () => ({ CodeEditor: () => null }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => executeMock,
-}));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => accountLifetime.value,
-}));
-
-import { ToolTimelineRow } from '@/components/tools/shell/views/ToolTimelineRow';
-import { ToolView } from '@/components/tools/shell/views/ToolView';
-
-function installAccountLifetime(scope: { serverId: string; accountId: string }): void {
-    let retired = false;
-    const cancellations = new Set<() => void>();
-    accountLifetime.value = Object.freeze({
-        scope,
-        isCurrent: () => !retired,
-        onRetire: (cancel: () => void) => {
-            cancellations.add(cancel);
-            return { dispose: () => { cancellations.delete(cancel); } };
-        },
-    });
-    accountLifetime.retire = () => {
-        retired = true;
-        for (const cancel of cancellations) cancel();
-    };
-}
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+await import('react-native-enriched-markdown/lib/module/web/streamingReveal.js');
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { deleteServerFeaturesSnapshot, primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { ToolTimelineRow } = await import('@/components/tools/shell/views/ToolTimelineRow');
+const { ToolView } = await import('@/components/tools/shell/views/ToolView');
+let serverId: string;
+let credentials: Awaited<ReturnType<typeof TokenStorage.getCredentialsForServerUrl>>;
+let previousState = storage.getState();
+let previousSnapshot = getActiveServerSnapshot();
 
 function startResult(overrides: Record<string, unknown> = {}) {
     return JSON.stringify({
         run: createWorkflowRunSummaryFixture({
             id: RUN_ID,
+            ownerAccountId: ACCOUNT_ID,
             origin: { kind: 'direct', originSessionId: 'session-1' },
         }),
         admission: 'created',
@@ -126,37 +97,43 @@ function startToolCall(overrides: Record<string, unknown> = {}) {
     });
 }
 
-function getResult(
+async function getResult(
     state: 'running' | 'succeeded' | 'interrupted',
     revision = 2,
-    metadata: Readonly<{ title: string }> | null = { title: 'Release audit' },
+    metadata: Readonly<{ title: string }> | null | false = { title: 'Release audit' },
 ) {
-    // The lean exact-Run list projection: one Run summary plus the sparse
-    // private sidecar. `null` metadata is an explicit `unavailable` entry;
-    // an omitted key (see the untitled test below) is a readable Run with no
-    // authored title. Neither carries definitions, checkpoints, usage or
-    // invocation history.
-    return {
-        ok: true,
-        result: {
-            runs: [createWorkflowRunSummaryFixture({
-                id: RUN_ID,
-                origin: { kind: 'direct', originSessionId: 'session-1' },
-                state,
-                revision,
-            })],
-            metadataByRunId: {
-                [RUN_ID]: metadata === null
-                    ? { kind: 'unavailable' }
-                    : { kind: 'available', value: metadata },
-            },
-        },
-    };
+    const run = createWorkflowRunSummaryFixture({ id: RUN_ID, ownerAccountId: ACCOUNT_ID,
+        origin: { kind: 'direct', originSessionId: 'session-1' }, state, revision });
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({
+        definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+            document: { text: 'Continue', references: [], attachments: [] } }] }),
+        admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+        context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+            executionTarget: { kind: 'session' },
+            workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+            origin: run.origin, authorization: { principal: { kind: 'host' } },
+            ...(metadata ? { metadata } : {}) },
+    });
+    if (!accepted.ok) throw new Error(`fixture_materialization_failed:${accepted.error.code}`);
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId: ACCOUNT_ID, runId: RUN_ID }, acceptedSnapshot: accepted.snapshot }));
+    const keyCensus = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: RUN_ID, ownerAccountId: ACCOUNT_ID,
+        access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null,
+        recipients: [], visibleTeamId: null, ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+    // Missing accepted bytes is an authoritative unavailable projection; an
+    // opened snapshot without metadata is a readable untitled Run.
+    return { runs: [run], acceptedEnvelopesByRunId: metadata === null ? {} : { [RUN_ID]: acceptedEnvelope },
+        keyCensusByRunId: { [RUN_ID]: keyCensus } };
+}
+
+async function answerRun(state: 'running' | 'succeeded' | 'interrupted', revision = 2,
+    metadata: Readonly<{ title: string }> | null | false = { title: 'Release audit' }) {
+    home.answer(serverId, STORAGE_ROUTE, { body: await getResult(state, revision, metadata) });
 }
 
 async function renderCardRow(
     tool = startToolCall(),
-    serverId: string | null = 'home-a',
+    targetServerId: string | null = serverId,
 ) {
     return renderScreen(
         <ToolView
@@ -164,7 +141,7 @@ async function renderCardRow(
             metadata={null}
             messages={[]}
             sessionId="session-1"
-            {...(serverId === null ? {} : { serverId })}
+            {...(targetServerId === null ? {} : { serverId: targetServerId })}
             messageId="message-1"
         />,
     );
@@ -177,7 +154,7 @@ async function renderTimelineRow(tool = startToolCall()) {
             metadata={null}
             messages={[]}
             sessionId="session-1"
-            serverId="home-a"
+            serverId={serverId}
             messageId="message-1"
         />,
     );
@@ -185,34 +162,44 @@ async function renderTimelineRow(tool = startToolCall()) {
 
 async function settle(): Promise<void> {
     await act(async () => {
-        await flushHookEffects();
+        await flushHookEffects({ cycles: 40 });
     });
 }
 
-beforeEach(() => {
-    standardCleanup();
-    executeMock.mockReset();
+beforeEach(async () => {
+    previousState = storage.getState();
+    previousSnapshot = getActiveServerSnapshot();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Transcript Home', serverUrl: 'https://transcript-workflow.test', accountId: ACCOUNT_ID });
+    credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl);
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     pushSpy.mockReset();
-    installAccountLifetime(ACTIVE_SCOPE);
-    featureDecisions.workflows = { state: 'enabled' };
-    storage.setState((state) => ({
-        ...state,
-        profileScope: ACTIVE_SCOPE,
-        workflowRunsById: {},
-    }));
+    storage.setState({ workflowRunsById: {}, workflowRunInvocationsByRunId: {}, workflowRunListWindows: {},
+        settings: { ...storage.getState().settings, experiments: true, featureToggles: { automations: true } } });
+    storage.getState().activateProfileScope({ serverId, accountId: ACCOUNT_ID });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
+});
+
+afterEach(async () => {
+    await standardCleanup();
+    await home.reset();
+    storage.setState(previousState, true);
+    publishAppliedActiveServerSnapshot(previousSnapshot);
+    resetServerFeaturesClientForTests();
 });
 
 describe('inline transcript workflow Run result', () => {
     it('mounts the exact Run card and refreshes that Run into the Account store once', async () => {
-        executeMock.mockResolvedValueOnce(getResult('running'));
+        await answerRun('running');
         const screen = await renderCardRow();
         await settle();
 
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}`)).toBeTruthy();
-        // One lean exact-Run read through the Action front door, by `runId`
-        // alone — the list projection, never full detail, usage or history.
-        expect(executeMock.mock.calls.map(([actionId, input]) => [actionId, input])).toEqual([
-            ['workflow.run.list', { runId: RUN_ID, limit: 1 }],
+        // The observed HTTP request comes through real Account Action admission.
+        // It remains the exact lean list, without detail or invocation history.
+        expect(home.requestsFor(STORAGE_ROUTE).map(request => request.input)).toEqual([
+            expect.objectContaining({ operation: 'list', request: WorkflowRunListRequestV1Schema.parse({ runId: RUN_ID, limit: 1 }) }),
         ]);
         expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.state).toBe('running');
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}-state`)).toBeTruthy();
@@ -230,21 +217,37 @@ describe('inline transcript workflow Run result', () => {
      * nor reads it: unresolved and unknown fail closed exactly like disabled.
      */
     it.each([
-        ['disabled', { state: 'disabled', blockedBy: 'server' }],
-        ['unknown', { state: 'unknown' }],
+        ['disabled', { status: 'ready', features: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: false } } }) }],
+        ['unknown', { status: 'error', reason: 'network' }],
         ['unresolved', null],
     ] as const)('renders no card and reads nothing on a %s Workflows decision', async (_label, decision) => {
-        featureDecisions.workflows = decision as Record<string, unknown> | null;
-        executeMock.mockResolvedValue(getResult('running'));
-        const screen = await renderCardRow();
-        await settle();
+        const pendingFeatures = decision === null ? createDeferred<void>() : null;
+        if (decision === null) {
+            deleteServerFeaturesSnapshot({ serverId });
+            for (const path of ['/v1/features', '/v1/features/authenticated']) {
+                home.answer(serverId, path, { body: createRootLayoutFeaturesResponse(), respondAfter: pendingFeatures?.promise });
+            }
+        } else {
+            primeServerFeaturesSnapshot({ serverId, snapshot: decision });
+        }
+        try {
+            await answerRun('running');
+            const screen = await renderCardRow();
+            await settle();
 
-        expect(screen.findAllByProps({ testID: `transcript-workflow-run-${RUN_ID}` })).toHaveLength(0);
-        expect(executeMock).not.toHaveBeenCalled();
+            expect(screen.findAllByProps({ testID: `transcript-workflow-run-${RUN_ID}` })).toHaveLength(0);
+            expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(0);
+        } finally {
+            if (pendingFeatures) {
+                await standardCleanup();
+                pendingFeatures.resolve();
+                await settle();
+            }
+        }
     });
 
     it('says private content is unavailable only when the owner says so', async () => {
-        executeMock.mockResolvedValueOnce(getResult('running', 2, null));
+        await answerRun('running', 2, null);
         const screen = await renderCardRow();
         await settle();
 
@@ -254,23 +257,12 @@ describe('inline transcript workflow Run result', () => {
     });
 
     it('names a readable Run without an authored title untitled instead of unavailable', async () => {
-        executeMock.mockResolvedValueOnce({
-            ok: true,
-            result: {
-                runs: [createWorkflowRunSummaryFixture({
-                    id: RUN_ID,
-                    origin: { kind: 'direct', originSessionId: 'session-1' },
-                    state: 'running',
-                    revision: 2,
-                })],
-                // The sparse sidecar omits the key when the accepted snapshot
-                // opened cleanly but carries no authored title.
-                metadataByRunId: {},
-            },
-        });
+        await answerRun('running', 2, false);
         const screen = await renderCardRow();
         await settle();
 
+        expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.state).toBe('running');
+        expect(storage.getState().workflowRunsById[RUN_ID]?.metadata).toBeNull();
         const text = collectHostText(screen.tree);
         expect(text).toContain('workflows.run.untitled');
         expect(text).not.toContain('workflows.contentUnavailable');
@@ -279,6 +271,7 @@ describe('inline transcript workflow Run result', () => {
     it('reads a Run the store already holds without another request and follows its live updates', async () => {
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
             id: RUN_ID,
+            ownerAccountId: ACCOUNT_ID,
             origin: { kind: 'direct', originSessionId: 'session-1' },
             state: 'running',
             revision: 3,
@@ -286,7 +279,7 @@ describe('inline transcript workflow Run result', () => {
         const screen = await renderCardRow();
         await settle();
 
-        expect(executeMock).not.toHaveBeenCalled();
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(0);
         expect(collectHostText(screen.tree)).toContain('workflows.runState.running');
 
         // The canonical invalidation owner upserts the newer revision; the
@@ -294,6 +287,7 @@ describe('inline transcript workflow Run result', () => {
         await act(async () => {
             storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
                 id: RUN_ID,
+                ownerAccountId: ACCOUNT_ID,
                 origin: { kind: 'direct', originSessionId: 'session-1' },
                 state: 'succeeded',
                 revision: 4,
@@ -306,7 +300,7 @@ describe('inline transcript workflow Run result', () => {
     });
 
     it('opens the exact Run route, never a latest-run lookup', async () => {
-        executeMock.mockResolvedValueOnce(getResult('running'));
+        await answerRun('running');
         const screen = await renderCardRow();
         await settle();
 
@@ -315,19 +309,20 @@ describe('inline transcript workflow Run result', () => {
     });
 
     it('mirrors the same row-level outcome in the timeline chrome', async () => {
-        executeMock.mockResolvedValueOnce(getResult('running'));
+        await answerRun('running');
         const screen = await renderTimelineRow();
         await settle();
 
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}`)).toBeTruthy();
-        expect(executeMock).toHaveBeenCalledTimes(1);
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(1);
     });
 
     it('stays truthful when the exact read fails: the link remains, no status is invented', async () => {
-        executeMock.mockResolvedValueOnce({ ok: false, errorCode: 'offline', error: 'offline' });
+        home.answer(serverId, STORAGE_ROUTE, { dispatchThenFail: true });
         const screen = await renderCardRow();
         await settle();
 
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(1);
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}`)).toBeTruthy();
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}-open`)).toBeTruthy();
         expect(screen.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}-state`)).toHaveLength(0);
@@ -343,7 +338,7 @@ describe('inline transcript workflow Run result', () => {
         const screen = await renderCardRow(startToolCall(), 'home-b');
         await settle();
 
-        expect(executeMock).not.toHaveBeenCalled();
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(0);
         expect(screen.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}`)).toHaveLength(0);
     });
 
@@ -351,24 +346,22 @@ describe('inline transcript workflow Run result', () => {
         const screen = await renderCardRow(startToolCall(), null);
         await settle();
 
-        expect(executeMock).not.toHaveBeenCalled();
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(0);
         expect(screen.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}`)).toHaveLength(0);
     });
 
     it('discards an exact read that completes after the Account lifetime retired', async () => {
-        const deferred = createDeferred<unknown>();
-        executeMock.mockImplementationOnce((_actionId: string, _input: unknown, context?: { signal?: AbortSignal }) => {
-            context?.signal?.addEventListener('abort', () => deferred.resolve(getResult('running')));
-            return deferred.promise;
-        });
+        const deferred = createDeferred<void>();
+        home.answer(serverId, STORAGE_ROUTE, { body: await getResult('running'), respondAfter: deferred.promise });
         await renderCardRow();
         await settle();
-        expect(executeMock).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(1));
 
         await act(async () => {
-            accountLifetime.retire?.();
+            storage.getState().activateProfileScope({ serverId, accountId: 'account-b' });
+            deferred.resolve();
             await deferred.promise;
-            await flushHookEffects();
+            await flushHookEffects({ cycles: 40 });
         });
         expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
     });
@@ -385,7 +378,7 @@ describe('inline transcript workflow Run result', () => {
             name: 'mcp__happier__workflow_run_get',
             state: 'completed',
             input: { runId: RUN_ID },
-            result: JSON.stringify(getResult('running').result),
+            result: JSON.stringify(await getResult('running')),
         }));
         await settle();
         expect(read.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}`)).toHaveLength(0);
@@ -394,6 +387,6 @@ describe('inline transcript workflow Run result', () => {
         const unrelated = await renderCardRow(makeToolCall({ name: 'Read', input: { file_path: '/a' }, result: 'ok' }));
         await settle();
         expect(unrelated.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}`)).toHaveLength(0);
-        expect(executeMock).not.toHaveBeenCalled();
+        expect(home.requestsFor(STORAGE_ROUTE)).toHaveLength(0);
     });
 });

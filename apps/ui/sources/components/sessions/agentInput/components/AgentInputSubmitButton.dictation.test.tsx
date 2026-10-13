@@ -50,6 +50,11 @@ vi.mock('@/components/ui/buttons/RoundButton', () => ({
     RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
 }));
 
+// The armed route's cancel is the shared plain icon button; held at its prop boundary like the shapes.
+vi.mock('@/components/ui/buttons/IconButton', () => ({
+    IconButton: (props: Record<string, unknown>) => React.createElement('IconButton', props),
+}));
+
 vi.mock('@/components/ui/buttons/PrimaryCircleIconButton', () => ({
     PrimaryCircleIconButton: (
         props: Record<string, unknown> & { children?: React.ReactNode },

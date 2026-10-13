@@ -107,23 +107,23 @@ const stylesheet = StyleSheet.create((theme) => ({
      * (`SessionRightPanel` mounts it inside a `RetainedPanelSurface` overlay), so this is the owner.
      */
     scrollContent: {
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
     },
     /** A whole-pane state that still has plugin surfaces below it: the state keeps the pane's height. */
     stateScrollContent: {
         flexGrow: 1,
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
     },
     scopeToggle: {
-        marginHorizontal: 16,
-        marginBottom: 8,
+        marginHorizontal: theme.space.s16,
+        marginBottom: theme.space.s8,
     },
     /** On the Services page the scope sits under the purpose at its own width, not across the column. */
     scopeTogglePage: {
         alignSelf: 'flex-start',
     },
     offlineLine: {
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     /** The list stays mounted under a pushed detail, so Back returns to the same scroll position. */
     listHidden: {
@@ -132,13 +132,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     detailBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingTop: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingTop: theme.space.s4,
     },
     /** A pending effect review discloses above what it decides (lab s-scripts Approval motion). */
     effectReview: {
-        marginHorizontal: 16,
-        marginBottom: 12,
+        marginHorizontal: theme.space.s16,
+        marginBottom: theme.space.s12,
     },
 }));
 

@@ -41,7 +41,7 @@ export const SessionHeaderIconWithCount = React.memo((props: SessionHeaderIconWi
                         right: -10,
                         minWidth: BADGE_HEIGHT_PX,
                         height: BADGE_HEIGHT_PX,
-                        paddingHorizontal: 4,
+                        paddingHorizontal: theme.space.s4,
                         borderRadius: BADGE_HEIGHT_PX / 2,
                         alignItems: 'center',
                         justifyContent: 'center',

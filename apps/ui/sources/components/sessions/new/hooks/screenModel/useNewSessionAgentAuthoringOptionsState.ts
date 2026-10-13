@@ -38,6 +38,38 @@ type TargetScopedState<Value> = Readonly<{
     value: Value;
 }>;
 
+function useTargetScopedAuthoringState<Value>(backendTargetKey: string | null, resolvedValue: Value) {
+    const signature = JSON.stringify(resolvedValue);
+    const [source, setSource] = React.useState(() => ({ backendTargetKey, signature }));
+    const [state, setState] = React.useState<TargetScopedState<Value> & Readonly<{ authored: boolean }>>(() => ({
+        backendTargetKey,
+        value: resolvedValue,
+        authored: false,
+    }));
+    const setAuthoredState = React.useCallback<React.Dispatch<React.SetStateAction<TargetScopedState<Value>>>>((next) => {
+        setState((current) => ({
+            ...(typeof next === 'function' ? next(current) : next),
+            authored: true,
+        }));
+    }, []);
+    let value = state.backendTargetKey === backendTargetKey ? state.value : resolvedValue;
+    if (source.backendTargetKey !== backendTargetKey || source.signature !== signature) {
+        setSource({ backendTargetKey, signature });
+        // A picker may author this field before its draft arrives, or stage it
+        // for the next target. Remembered/draft echoes must not replace that
+        // choice. Untouched fields hydrate before autosave can commit.
+        const shouldHydrate = source.backendTargetKey !== backendTargetKey
+            ? state.backendTargetKey !== backendTargetKey
+            : state.backendTargetKey === backendTargetKey && !state.authored;
+        if (shouldHydrate
+            && (state.backendTargetKey !== backendTargetKey || JSON.stringify(state.value) !== signature)) {
+            value = resolvedValue;
+            setState({ backendTargetKey, value, authored: false });
+        }
+    }
+    return [value, setAuthoredState] as const;
+}
+
 type TargetScopedEngineSelection = Readonly<{
     modelMode: ModelMode;
     modelSelection?: SessionModelSelectionV1 | null;
@@ -209,9 +241,6 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
     setCapabilitySelection: React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>;
 }> {
     const currentBackendTargetKey = params.backendTargetKey ?? null;
-    const previousBackendTargetKeyRef = React.useRef(currentBackendTargetKey);
-    const backendTargetChanged = previousBackendTargetKeyRef.current !== currentBackendTargetKey;
-    previousBackendTargetKeyRef.current = currentBackendTargetKey;
     const targetScopedTempAuthoringDraft = React.useMemo(() => resolveTargetScopedAuthoringDraft({
         draft: params.hydratedTempAuthoringDraft,
         backendTargetKey: currentBackendTargetKey,
@@ -255,22 +284,9 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         targetScopedTempAuthoringDraft?.modelId,
         targetScopedTempAuthoringDraft?.modelSelection,
     ]);
-    const [modelState, setModelState] = React.useState<TargetScopedState<ResolvedAuthoringModelState>>(() => ({
-        backendTargetKey: currentBackendTargetKey,
-        value: resolvedModelState,
-    }));
-    const currentModelState = modelState.backendTargetKey === currentBackendTargetKey
-        ? modelState.value
-        : resolvedModelState;
+    const [currentModelState, setModelState] = useTargetScopedAuthoringState(currentBackendTargetKey, resolvedModelState);
     const modelMode = currentModelState.modelMode;
     const modelSelection = currentModelState.modelSelection;
-
-    if (backendTargetChanged && modelState.backendTargetKey !== currentBackendTargetKey) {
-        setModelState({
-            backendTargetKey: currentBackendTargetKey,
-            value: resolvedModelState,
-        });
-    }
 
     const setModelMode = React.useCallback<React.Dispatch<React.SetStateAction<ModelMode>>>((next) => {
         setModelState((current) => {
@@ -347,20 +363,7 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         targetScopedPersistedAuthoringDraft?.acpSessionModeId,
         targetScopedTempAuthoringDraft?.acpSessionModeId,
     ]);
-    const [acpSessionModeIdState, setAcpSessionModeIdState] = React.useState<TargetScopedState<string | null>>(() => ({
-        backendTargetKey: currentBackendTargetKey,
-        value: resolvedAcpSessionModeId,
-    }));
-    const acpSessionModeId = acpSessionModeIdState.backendTargetKey === currentBackendTargetKey
-        ? acpSessionModeIdState.value
-        : resolvedAcpSessionModeId;
-
-    if (backendTargetChanged && acpSessionModeIdState.backendTargetKey !== currentBackendTargetKey) {
-        setAcpSessionModeIdState({
-            backendTargetKey: currentBackendTargetKey,
-            value: resolvedAcpSessionModeId,
-        });
-    }
+    const [acpSessionModeId, setAcpSessionModeIdState] = useTargetScopedAuthoringState(currentBackendTargetKey, resolvedAcpSessionModeId);
 
     const setAcpSessionModeId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
         setAcpSessionModeIdState((current) => {
@@ -392,23 +395,9 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
     ]);
 
     const [
-        sessionConfigOptionOverridesState,
+        sessionConfigOptionOverrides,
         setSessionConfigOptionOverridesState,
-    ] = React.useState<TargetScopedState<AcpConfigOptionOverridesV1 | null>>(() => ({
-        backendTargetKey: currentBackendTargetKey,
-        value: initialSessionConfigOptionOverrides,
-    }));
-    let sessionConfigOptionOverrides = sessionConfigOptionOverridesState.backendTargetKey === currentBackendTargetKey
-        ? sessionConfigOptionOverridesState.value
-        : initialSessionConfigOptionOverrides;
-
-    if (backendTargetChanged && sessionConfigOptionOverridesState.backendTargetKey !== currentBackendTargetKey) {
-        sessionConfigOptionOverrides = initialSessionConfigOptionOverrides;
-        setSessionConfigOptionOverridesState({
-            backendTargetKey: currentBackendTargetKey,
-            value: initialSessionConfigOptionOverrides,
-        });
-    }
+    ] = useTargetScopedAuthoringState(currentBackendTargetKey, initialSessionConfigOptionOverrides);
 
     const setSessionConfigOptionOverrides = React.useCallback<React.Dispatch<React.SetStateAction<AcpConfigOptionOverridesV1 | null>>>((next) => {
         setSessionConfigOptionOverridesState((current) => {
@@ -472,20 +461,7 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         targetScopedPersistedAuthoringDraft?.capabilitySelection,
         targetScopedTempAuthoringDraft?.capabilitySelection,
     ]);
-    const [capabilitySelectionState, setCapabilitySelectionState] = React.useState<TargetScopedState<SessionCapabilitySelectionV1>>(() => ({
-        backendTargetKey: currentBackendTargetKey,
-        value: resolvedCapabilitySelection,
-    }));
-    const capabilitySelection = capabilitySelectionState.backendTargetKey === currentBackendTargetKey
-        ? capabilitySelectionState.value
-        : resolvedCapabilitySelection;
-
-    if (backendTargetChanged && capabilitySelectionState.backendTargetKey !== currentBackendTargetKey) {
-        setCapabilitySelectionState({
-            backendTargetKey: currentBackendTargetKey,
-            value: resolvedCapabilitySelection,
-        });
-    }
+    const [capabilitySelection, setCapabilitySelectionState] = useTargetScopedAuthoringState(currentBackendTargetKey, resolvedCapabilitySelection);
 
     const setCapabilitySelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>>((next) => {
         setCapabilitySelectionState((current) => {

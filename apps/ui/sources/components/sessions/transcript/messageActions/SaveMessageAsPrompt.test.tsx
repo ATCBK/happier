@@ -6,13 +6,23 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRecordV1Schema,
+    PromptLibraryRowMutationV1Schema, openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PromptDocArtifactHeaderV1Schema, PromptDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptDocV2';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
-installSettingsViewCommonModuleMocks();
-vi.doUnmock('@/sync/domains/state/storage');
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@expo/vector-icons/Ionicons', async () => {
+    const { Ionicons } = (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock();
+    return { default: Ionicons, Ionicons };
+});
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 installDisconnectedServerSocketBoundary();
@@ -55,6 +65,17 @@ async function mount() {
 }
 
 describe('Save a committed message through the prompt library and Account writer', () => {
+    it('keeps Save behind prompt_doc.create admission rather than bypassing the Action with a direct Artifact write', async () => {
+        const { screen, serverId, saved, catalog } = await mount();
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'prompt_doc.create': { disabledSurfaces: ['ui'] } } });
+        act(() => storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1 } }));
+        await screen.pressByTestIdAsync('save-message-prompt-save');
+        expect(saved).toEqual([]);
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+        expect(catalog.read('invocations').value).toMatchObject({ entries: [] });
+    });
+
     it('admits one Save across the name, shortcut and button while the Account boundary is pending', async () => {
         const { screen, serverId, saved, catalog } = await mount();
         await screen.pressByTestIdAsync('save-message-prompt-shortcut-toggle');
@@ -103,7 +124,27 @@ describe('Save a committed message through the prompt library and Account writer
         const artifact = storage.getState().artifacts[saved[0]];
         expect(artifact.header).toMatchObject({ kind: 'prompt_doc.v2', title: 'First line', favorite: true });
         if (typeof artifact.body !== 'string') throw new Error('Expected the saved prompt body to be text');
-        expect(JSON.parse(artifact.body).markdown).toBe('  First line  \n\nKeep these spaces.  ');
+        expect(PromptDocArtifactHeaderV1Schema.parse(artifact.header)).toMatchObject({ favorite: true });
+        expect(PromptDocBodyV1Schema.parse(JSON.parse(artifact.body)).markdown).toBe('  First line  \n\nKeep these spaces.  ');
+        // Use the actual Action producer's HTTP bytes, then the strict catalog and stored reader.
+        const write = harness.requestsFor(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/invocations`).find(request => request.input !== null);
+        expect(write).toBeDefined();
+        const mutation = PromptLibraryRowMutationV1Schema.parse(write!.input);
+        if (mutation.content?.t !== 'plain') throw new Error('Expected a plain prompt catalog write');
+        expect(PromptLibraryRecordV1Schema.parse(mutation.content.v)).toEqual(catalog.read('invocations'));
+        expect(openPromptLibraryContentV1({ key: 'invocations', mode: 'plain', material: null, content: mutation.content }))
+            .toEqual({ status: 'opened', record: catalog.read('invocations') });
+        expect(PromptLibraryRowMutationV1Schema.safeParse({ ...mutation, artifactId: saved[0] }).success).toBe(false);
+        expect(PromptLibraryRecordV1Schema.safeParse({ ...mutation.content.v, artifactId: saved[0] }).success).toBe(false);
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+        const listed = await createDefaultActionExecutor().execute('prompts.library.list', { query: 'First line' },
+            { surface: 'ui', serverId, expectedAccountId: 'prompt-owner' });
+        expect(listed).toMatchObject({ ok: true, result: { coverage: 'complete', items: [
+            { artifactId: saved[0], title: 'First line', favorite: true },
+        ] } });
+        if (!listed.ok) throw new Error('Saved prompt was not admitted to the Library');
+        expect(getActionSpec('prompts.library.list').outputSchema!.parse(listed.result)).toEqual(listed.result);
         expect(catalog.read('invocations').value).toMatchObject({ entries: [
             expect.objectContaining({ token: '/release-notes', target: { kind: 'doc', artifactId: saved[0], serverId }, availableIn: 'global' }),
         ] });

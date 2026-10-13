@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderHook } from '@/dev/testkit';
@@ -21,6 +22,7 @@ import { managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machin
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import type { NewSessionLaunchAttempt } from '../modules/newSessionLaunchAttempt';
+import type { NewSessionConnectedServicesSelectionContentProps } from '../components/NewSessionConnectedServicesSelectionContent';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalogRowMutationV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -310,6 +312,109 @@ async function createManagedDraft(archiveEffect: 'keep' | 'stop' | 'delete' = 'k
 }
 
 describe('useCreateNewSession (projection currentness admission)', () => {
+    it('sends the reopened connected selection after configuration seeding and a controlled editor change', async () => {
+        const inputs = await readCurrentProjection();
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        const targetKey = `agent:${agentId}`;
+        const serviceId = 'acme.review/auth';
+        const { ConnectedServiceBindingsV2Schema } = await import('@happier-dev/protocol/connect/connected-service-bindings');
+        const { buildNewSessionConfigurationDraft } = await import('@/components/sessions/authoring/draft/sessionConfigurationSeed');
+        const { seedNewSessionDraftV1 } = await import('../newSessionDraftSeed');
+        const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const { resetSessionDraftRepositoryForTests, flushSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { buildNewSessionAuthoringDraftFromPersistedDraft, buildNewSessionAuthoringDraftFromResolvedInputs,
+            buildNewSessionTempDataFromAuthoringDraft } = await import('@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters');
+        const { useNewSessionConnectedServicesAgentOptions } = await import('./screenModel/useNewSessionConnectedServicesAgentOptions');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const declarations = inputs?.mergedProviderProjectionById[agentId]?.connectedAccounts;
+        if (!declarations) throw new Error('Expected admitted Machine Agent declarations');
+        storage.setState({ profile: AccountProfileSchema.parse({ id: scope.accountId,
+            connectedAccountsV4: ['seed-account', 'editor-account'].map(accountId => ({
+                revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`,
+                ref: { service: connectedAccountDeclaration.service, accountId }, status: 'connected',
+                authenticationModeId: 'manual', configurationReady: true, configurationRevision: null,
+                kind: 'token', scopes: [], displayName: accountId,
+            })),
+        }) });
+        const seededBindings = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: {
+            [serviceId]: { source: 'connected', selection: 'profile', profileId: 'seed-account' },
+        } });
+        // Configuration handoffs share this producer with existing-Session seeding;
+        // installed Agent identity comes from authored targets, not arbitrary metadata.
+        const configuration = buildNewSessionTempDataFromAuthoringDraft({
+            draft: buildNewSessionAuthoringDraftFromResolvedInputs({
+                directory: '/tmp', prompt: '', agentTarget, connectedServices: seededBindings,
+            }), machineId: 'm1',
+        });
+        const draftId = seedNewSessionDraftV1({ scope, createDraftId: () => 'connected-seam',
+            seed: { prompt: { text: 'Keep my connected selection', mode: 'replace' },
+                placement: { kind: 'exactTarget', serverId: scope.serverId, machineId: 'm1', directory: '/tmp' } },
+            configurationDraft: buildNewSessionConfigurationDraft(configuration),
+        });
+        if (!draftId) throw new Error('Expected seeded draft');
+        const seeded = readNewSessionDraftFromRepository({ scope, draftId });
+        if (!seeded) throw new Error('Expected repository seed');
+        expect(ConnectedServiceBindingsV2Schema.parse(seeded.backendNewSessionOptionStateByTargetKey?.[targetKey]?.connectedServices)).toEqual(seededBindings);
+        const editor = await renderHook(() => {
+            const [options, setOptions] = React.useState(seeded.backendNewSessionOptionStateByTargetKey ?? {});
+            return { options, ...useNewSessionConnectedServicesAgentOptions({
+                runtimeCarrierAgentId: agentId, selectedMachineId: 'm1', targetServerId: runtime.serverId,
+                selectedBackendTargetKey: targetKey, connectedAccounts: declarations, agentIdentity: identity,
+                agentOptionState: options[targetKey] ?? null, settings: storage.getState().settings,
+                router: { push() {} }, setBackendNewSessionOptionStateByTargetKey: setOptions,
+            }) };
+        }, { wrapper: runtime.Wrapper });
+        let sendHook: Awaited<ReturnType<typeof mount>> | undefined;
+        let reopenedEditor: { unmount: () => Promise<void> } | undefined;
+        try {
+            expect(editor.getCurrent().connectedServicesBindingsPayload).toEqual(seededBindings);
+            const popover = editor.getCurrent().connectedServicesAuthChip?.collapsedContentPopover;
+            if (!popover || typeof popover.renderContent !== 'function') throw new Error('Expected real connected selection popover');
+            const selection = popover.renderContent({ requestClose() {}, maxHeight: 420 }) as React.ReactElement<NewSessionConnectedServicesSelectionContentProps>;
+            await act(async () => { await selection.props.setBindingForService(serviceId,
+                { source: 'connected', selection: 'profile', profileId: 'editor-account' }); });
+            const editedBindings = ConnectedServiceBindingsV2Schema.parse(editor.getCurrent().connectedServicesBindingsPayload);
+            expect(editedBindings.bindingsByServiceId[serviceId]).toEqual({ source: 'connected', selection: 'profile', profileId: 'editor-account' });
+            writeNewSessionDraftToRepository({ scope, draftId, draft: { ...seeded,
+                backendNewSessionOptionStateByTargetKey: editor.getCurrent().options } });
+            await flushSessionDraft({ scope, address: { kind: 'newSession', draftId } });
+            resetSessionDraftRepositoryForTests();
+            const reopened = readNewSessionDraftFromRepository({ scope, draftId });
+            if (!reopened) throw new Error('Expected retained editor draft');
+            const authoringDraft = buildNewSessionAuthoringDraftFromPersistedDraft(reopened);
+            expect(authoringDraft.connectedServices).toEqual(editedBindings);
+            const recoveredOptions = reopened.backendNewSessionOptionStateByTargetKey ?? {};
+            const recovered = await renderHook(() => useNewSessionConnectedServicesAgentOptions({
+                runtimeCarrierAgentId: agentId, selectedMachineId: 'm1', targetServerId: runtime.serverId,
+                selectedBackendTargetKey: targetKey, connectedAccounts: declarations, agentIdentity: identity,
+                agentOptionState: recoveredOptions[targetKey] ?? null, settings: storage.getState().settings,
+                router: { push() {} }, setBackendNewSessionOptionStateByTargetKey() {},
+            }), { wrapper: runtime.Wrapper });
+            reopenedEditor = recovered;
+            expect(recovered.getCurrent().connectedServicesBindingsPayload).toEqual(editedBindings);
+            expect(recovered.getCurrent().agentNewSessionOptions).toMatchObject({ connectedServices: editedBindings });
+            sendHook = await mount(inputs, false, { authoringDraft,
+                agentNewSessionOptions: recovered.getCurrent().agentNewSessionOptions,
+                promptStore: createNewSessionPromptStore(reopened.input),
+                requireConnectedAccountDefaultsReady: recovered.getCurrent().requireConnectedAccountDefaultsReady,
+            });
+            let send: Promise<void> | undefined;
+            await act(async () => { send = sendHook!.getCurrent().handleCreateSession({ initialMessage: 'skip' }); });
+            await vi.waitFor(() => expect(spawnRequests).toHaveLength(1));
+            // The transport parses the real Send producer with the daemon's exact strict schema.
+            expect(spawnRequests[0]).toMatchObject({ agentTarget, connectedServices: editedBindings,
+                executionTarget: { serverId: runtime.serverId, machineId: 'm1' } });
+            spawnResult.resolve(SessionSpawnNewResultV1Schema.parse({ type: 'success', disposition: 'created', sessionId: 'created-session',
+                executionTarget: { serverId: runtime.serverId, machineId: 'm1' },
+                organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } }));
+            await act(async () => { await send; });
+        } finally {
+            await sendHook?.unmount();
+            await reopenedEditor?.unmount();
+            await editor.unmount();
+            resetSessionDraftRepositoryForTests();
+        }
+    });
     it('submits the authored Session continuation to managed admission before acquiring a fresh target', async () => {
         observeFreshManagedAcquire = true;
         const selection = await createManagedDraft();

@@ -14,8 +14,8 @@ import { projectSessionAccessLevelLabel } from './projectSessionAccessLevelLabel
 import type { SessionAccessEditorActions, SessionAccessEditorModel, SessionAccessGrantRowModel, SessionAccessEncryptionRecipientRowModel } from './sessionAccessEditorTypes';
 
 const styles = StyleSheet.create((theme) => ({
-    contextActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    delegation: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+    contextActions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 },
+    delegation: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s8 },
     text: { color: theme.colors.text.primary },
     secondary: { color: theme.colors.text.secondary },
 }));

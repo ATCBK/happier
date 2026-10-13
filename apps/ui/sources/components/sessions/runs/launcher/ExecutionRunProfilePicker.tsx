@@ -22,11 +22,11 @@ export const ExecutionRunProfilePicker = React.memo((props: Readonly<{
     if (props.choices.length === 0) return null;
 
     return (
-        <View style={{ gap: 8 }}>
-            <Text accessibilityRole="header" style={{ ...Typography.default('semiBold'), color: theme.colors.text.primary, fontSize: 14 }}>
+        <View style={{ gap: theme.space.s8 }}>
+            <Text accessibilityRole="header" style={{  color: theme.colors.text.primary, ...Typography.variant('label', 'semiBold') }}>
                 {props.sectionLabel}
             </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s10 }}>
                 {props.choices.map((choice) => {
                     const selected = choice.id === props.selectedId;
                     return (
@@ -43,8 +43,8 @@ export const ExecutionRunProfilePicker = React.memo((props: Readonly<{
                                 minHeight: interactiveTargetSize,
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                paddingVertical: 8,
-                                paddingHorizontal: 10,
+                                paddingVertical: theme.space.s8,
+                                paddingHorizontal: theme.space.s10,
                                 borderRadius: 10,
                                 borderWidth: 1,
                                 borderColor: theme.colors.border.default,
@@ -54,8 +54,7 @@ export const ExecutionRunProfilePicker = React.memo((props: Readonly<{
                         >
                             <Text style={{
                                 color: selected ? theme.colors.text.primary : theme.colors.text.secondary,
-                                fontSize: 12,
-                                fontWeight: '600',
+                                ...Typography.variant('meta', 'semiBold'),
                             }}>
                                 {choice.title}
                             </Text>

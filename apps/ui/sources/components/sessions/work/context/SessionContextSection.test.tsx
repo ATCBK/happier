@@ -47,11 +47,11 @@ beforeEach(async () => {
         sourceSettingsVersion: 1,
     }, true);
 });
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
-    home?.dispose();
+    await home?.dispose();
     vi.restoreAllMocks();
     navigation.push.mockClear();
     execute.mockReset();

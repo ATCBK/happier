@@ -366,6 +366,13 @@ export function buildSessionListTreeRows(params: BuildSessionListTreeRowsParams)
 
         if (item.type === 'session') {
             const folderId = typeof item.folderId === 'string' && item.folderId.trim() ? item.folderId.trim() : null;
+            // The list projection owns the order scope. Without folder projection, Project rows
+            // keep their Project group key; inventing a folder-root key writes an invisible order.
+            const groupKey = typeof item.groupKey === 'string' ? item.groupKey.trim() : '';
+            if (!folderId && groupKey && activeRoot.groupKey !== groupKey) {
+                activeRoot = { ...activeRoot, groupKey };
+                registerContainer(containerMetadataById, activeRoot);
+            }
             const serverId = typeof item.serverId === 'string'
                 ? item.serverId.trim()
                 : item.workspace?.serverId?.trim() ?? '';

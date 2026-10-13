@@ -131,9 +131,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     scrollContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
     },
     optionButton: {
         height: PICKER_OPTION_TOUCH_TARGET_SIZE,
@@ -141,8 +141,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: PICKER_OPTION_TOUCH_TARGET_SIZE,
         flexShrink: 0,
         flexDirection: 'row',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.md,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
         borderRadius: AGENT_INPUT_CHIP_PICKER_OPTION_ROW_RADIUS,
         alignItems: 'center',
         justifyContent: 'center',
@@ -158,7 +158,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     groupDivider: {
         width: StyleSheet.hairlineWidth,
         height: 26,
-        marginHorizontal: 4,
+        marginHorizontal: theme.space.s4,
         backgroundColor: theme.colors.border.default,
     },
     statusBadge: {

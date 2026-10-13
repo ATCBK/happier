@@ -5,6 +5,7 @@ import {
 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 
 import type { AgentInputStatusBadgeTone } from '@/components/sessions/agentInput/agentInputContracts';
+import { readCapabilityLaunchRestartFromMetadataV1, readSessionCapabilityAgentFactsV1, resolveCapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 
 export type McpSelectionRestartOperationStatus = 'pending' | 'failed' | 'restarted' | null;
 
@@ -39,6 +40,10 @@ export function buildMcpSelectionRestartNoticePresentation(input: Readonly<{
     if (!desiredSelection || !marker || areSessionMcpSelectionsEquivalent(desiredSelection, marker.appliedSelection)) {
         return null;
     }
+    const agent = readSessionCapabilityAgentFactsV1(input.metadata);
+    // Older runners have no host timing facet and keep their released manual notice.
+    if (agent && resolveCapabilityApplyTimingV1({ kind: 'mcp_server', sessionRunning: input.sessionActive,
+        agent, launchRestart: readCapabilityLaunchRestartFromMetadataV1(input.metadata) }).t !== 'restart_to_apply') return null;
 
     const pending = input.operationStatus === 'pending';
     const actionLabel = input.translate(pending

@@ -132,7 +132,7 @@ describe('useServicesOpenInBrowser', () => {
         await fixture.hydrateAccountSettings();
         account = await (await import('@/sync/ops/actions/actionAccountContext')).captureLazyActionAccountContext(fixture.home.id);
     });
-    afterEach(() => { standardCleanup(); account?.dispose(); account = undefined; fixture?.dispose(); fixture = undefined; });
+    afterEach(async () => { standardCleanup(); account?.dispose(); account = undefined; await fixture?.dispose(); fixture = undefined; });
 
     it.each(['sessionDetails', 'workspaceDetails', 'sessionMobile'] as const)('opens a browser-surface details tab in the %s pane scope', async scope => {
         const captured: Captured = { open: null };

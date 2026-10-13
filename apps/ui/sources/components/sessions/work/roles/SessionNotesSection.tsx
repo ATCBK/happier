@@ -156,7 +156,7 @@ const styles = StyleSheet.create((theme) => ({
     // Text is not an `Item`, so it takes the Work rows' text edge itself.
     inset: {
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        gap: 4,
+        gap: theme.space.s4,
     },
     text: {
         ...Typography.default(),
@@ -174,7 +174,7 @@ const styles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
-        paddingTop: 4,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s4,
     },
 }));

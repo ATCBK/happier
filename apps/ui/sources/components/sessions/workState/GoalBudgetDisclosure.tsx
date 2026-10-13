@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -93,8 +94,7 @@ const styles = StyleSheet.create(() => ({
         alignSelf: 'flex-start',
     },
     disclosureText: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
     },
     editor: {
         gap: 8,
@@ -107,16 +107,14 @@ const styles = StyleSheet.create(() => ({
         minHeight: 24,
     },
     label: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     removeButton: {
         minHeight: 32,
         justifyContent: 'center',
     },
     removeText: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     input: {
         minHeight: 40,
@@ -127,7 +125,6 @@ const styles = StyleSheet.create(() => ({
         fontVariant: ['tabular-nums'],
     },
     errorText: {
-        fontSize: 11,
-        fontWeight: '600',
+        ...Typography.variant('micro', 'semiBold'),
     },
 }));

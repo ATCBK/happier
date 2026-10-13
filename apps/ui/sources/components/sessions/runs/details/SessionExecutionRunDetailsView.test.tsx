@@ -38,6 +38,11 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import type { SessionTranscriptSource } from '@/components/sessions/transcript/source/types';
+import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProvider';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { Stack } from '@/components/appShell/workspace/destinationRoute';
+import { resolveCompactAppDestinations, useDestinationInstanceTitles } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -60,9 +65,10 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+const routeBoundary = vi.hoisted(() => ({ pathname: '/' }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
+    return createExpoRouterMock({ pathname: () => routeBoundary.pathname }).module;
 });
 vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
     const { createBrowserRecordStorageModuleMock } = await import('@/dev/testkit/mocks/browserRecordStorage');
@@ -281,15 +287,61 @@ beforeEach(async ({ task }) => {
     await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account-1' });
 });
 afterEach(async () => {
+    routeBoundary.pathname = '/';
     standardCleanup();
     for (const timer of animationFrames) clearTimeout(timer);
     animationFrames.clear();
     restorePopoverWebGlobals?.();
     await disconnectActiveServerConnection();
-    home?.dispose();
+    await home?.dispose();
 });
 
 describe('SessionExecutionRunDetailsView — real Home, transcript and interaction owners', () => {
+    it('publishes the loaded Run identity and its rename to the workspace, not the parent Agents chrome', async () => {
+        routeBoundary.pathname = '/session/s1/runs/run_1';
+        // The popover fixture supplies measurement, not a browser URL. Install
+        // the actual route at the browser boundary before the Provider reads it.
+        const events = new EventTarget();
+        Object.assign(window, { location: { pathname: routeBoundary.pathname, search: '', hash: '' },
+            history: { state: null, pushState: () => {}, replaceState: () => {} }, sessionStorage: { getItem: () => 'main' },
+            addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
+            dispatchEvent: events.dispatchEvent.bind(events) });
+        runState = createRun({ display: { title: 'Reviewer Atlas' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } });
+        function Body(props: Readonly<{ navigation: WorkspaceNavigationContextValue }>) {
+            const group = props.navigation.state.groups[props.navigation.state.focusedGroupId];
+            const tab = props.navigation.state.tabs[group.activeTabId];
+            const entries = React.useMemo(() => [{ key: tab.id, ref: tab.target }], [tab]);
+            const titles = useDestinationInstanceTitles(catalog, entries);
+            return <>
+                {React.createElement('RunTabTitles', { titles, target: tab.target, navigation: props.navigation, tabId: tab.id })}
+                <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={routeBoundary.pathname} focused visible navigation={props.navigation.navigationForTab(tab.id)}>
+                    <Stack.Screen options={{ headerTitle: 'Agents' }} />
+                    <SessionExecutionRunDetailsView sessionId="s1" serverId={serverId} runId={tab.target.params.runId ?? 'run_1'} presentation="screen" />
+                </DestinationInstanceHost>
+            </>;
+        }
+        screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => <Body navigation={navigation} />}</WorkspaceProvider>);
+        await loaded();
+        expect(screen.root.findByType('RunTabTitles').props.target).toMatchObject({ kind: 'sessions',
+            params: { workspacePathname: routeBoundary.pathname } });
+        const titles = () => [...(screen.root.findByType('RunTabTitles').props.titles as ReadonlyMap<string, string>).values()];
+        expect(titles()).toEqual(['Reviewer Atlas']);
+        runState = createRun({ display: { title: 'Reviewer renamed' } });
+        await refresh();
+        expect(titles()).toEqual(['Reviewer renamed']);
+        let finishRetarget: ((value: unknown) => void) | undefined;
+        getReply = () => new Promise(resolve => { finishRetarget = resolve; });
+        const tab = screen.root.findByType('RunTabTitles').props as { navigation: WorkspaceNavigationContextValue; tabId: string };
+        await act(async () => { tab.navigation.openHref(`/session/s1/runs/run_2?serverId=${serverId}`, { tabId: tab.tabId }); });
+        expect(titles()).toEqual([]);
+        if (!finishRetarget) throw new Error('Retarget must start a new exact Run read');
+        runState = createRun({ runId: 'run_2', display: { title: 'New exact Run' } });
+        await act(async () => { finishRetarget?.(wireResult()); });
+        await vi.waitFor(() => expect(titles()).toEqual(['New exact Run']));
+    });
     async function mountHistorySource() {
         const source: { current: SessionTranscriptSource | null } = { current: null };
         function Probe() { source.current = useSessionTranscriptSource(); return null; }

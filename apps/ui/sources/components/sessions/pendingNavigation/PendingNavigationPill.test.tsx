@@ -8,15 +8,14 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import { clearPendingNavigationState, markSessionPendingAnswer, registerPendingNavigationRuntime } from '@/activity/source/pendingNavigationRuntime';
 import { PendingNavigationPill } from './PendingNavigationPill';
 
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+// Native viewport APIs are the boundary; responsive classification stays real.
+const device = vi.hoisted(() => ({ width: 1440, height: 900 }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    Dimensions: { get: () => ({ ...device, scale: 1, fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
+    useWindowDimensions: () => ({ ...device, scale: 1, fontScale: 1 }),
+}));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-// The device class is a platform adapter boundary; phone cases set it, every other case keeps the real one.
-const device = vi.hoisted(() => ({ value: null as 'phone' | null }));
-vi.mock('@/utils/platform/responsive', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/utils/platform/responsive')>();
-    return { ...actual, useDeviceType: () => device.value ?? actual.useDeviceType() };
-});
 
 const address = { serverId: 'home-a', sessionId: 'same' };
 const initialState = storage.getState();
@@ -46,7 +45,8 @@ function seedWaitingSessions() {
 describe('PendingNavigationPill', () => {
     beforeEach(seedWaitingSessions);
     afterEach(() => {
-        device.value = null;
+        device.width = 1440;
+        device.height = 900;
         standardCleanup();
         unregister?.();
         unregister = undefined;
@@ -79,7 +79,8 @@ describe('PendingNavigationPill', () => {
     });
 
     it('shows one count on a phone: the session nav capsule, not a second header pill', async () => {
-        device.value = 'phone';
+        device.width = 390;
+        device.height = 844;
         const header = await renderScreen(<PendingNavigationPill address={address} presentation="header" />);
         expect(header.findByTestId('pending-navigation-header')).toBeNull();
         const phone = await renderScreen(<PendingNavigationPill address={address} presentation="phone" />);

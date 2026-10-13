@@ -20,7 +20,7 @@ export type PendingMessageVisualState = Readonly<{
     iconName: 'cloud-arrow-up' | 'clock' | 'navigation-arrow' | 'warning-circle';
     deliveryBlockedPresentation?: PendingDeliveryBlockedReasonPresentation;
     deliveryMutationPolicy?: 'effect_possible';
-    queuedRequestedAction?: 'enqueue' | 'steer_if_active' | 'steer_now' | 'send_now';
+    queuedRequestedAction?: NonNullable<PendingMessage['pendingRequestedAction']>['kind'];
     queuedReason?:
         | 'waiting_for_foreground_turn'
         | 'waiting_for_runtime_activity'

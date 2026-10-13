@@ -49,8 +49,8 @@ function GitRemotesAndMergesSheetBody(props: Props) {
         router.push({ pathname: '/(app)/settings/connected-services/[serviceId]', params: { serviceId: 'github' } });
     }, [props, router]);
     return (
-        <ScrollView style={{ maxHeight: 640 }} contentContainerStyle={{ paddingBottom: 12 }}>
-            <View style={{ gap: 4 }}>
+        <ScrollView style={{ maxHeight: 640 }} contentContainerStyle={{ paddingBottom: theme.space.s12 }}>
+            <View style={{ gap: theme.space.s4 }}>
                 <SourceControlPublishRepositorySection
                     theme={theme}
                     snapshot={snapshot}

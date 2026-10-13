@@ -378,7 +378,7 @@ export const SessionFolderFocusBreadcrumbs = React.memo(function SessionFolderFo
                 testID="session-folder-breadcrumb-targets"
                 role="navigation"
                 accessibilityLabel={t('sessionsList.workspaceRoot')}
-                style={[styles.headerLabelRow, { flexWrap: 'wrap', rowGap: 4 }]}
+                style={[styles.headerLabelRow, { flexWrap: 'wrap', rowGap: theme.space.s4 }]}
             >
                 <HappierPressable
                     testID="session-folder-breadcrumb-root"
@@ -389,7 +389,7 @@ export const SessionFolderFocusBreadcrumbs = React.memo(function SessionFolderFo
                         minWidth: HEADER_ACTION_TARGET_SIZE,
                         minHeight: HEADER_ACTION_TARGET_SIZE,
                         maxWidth: '100%',
-                        paddingHorizontal: 8,
+                        paddingHorizontal: theme.space.s8,
                         justifyContent: 'center',
                         borderRadius: 6,
                         borderWidth: 1,
@@ -419,7 +419,7 @@ export const SessionFolderFocusBreadcrumbs = React.memo(function SessionFolderFo
                                 minWidth: HEADER_ACTION_TARGET_SIZE,
                                 minHeight: HEADER_ACTION_TARGET_SIZE,
                                 maxWidth: '100%',
-                                paddingHorizontal: 8,
+                                paddingHorizontal: theme.space.s8,
                                 justifyContent: 'center',
                                 borderRadius: 6,
                                 borderWidth: 1,

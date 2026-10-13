@@ -348,12 +348,12 @@ const styles = StyleSheet.create((theme) => ({
     deliverable: {
         alignItems: 'flex-start',
         alignSelf: 'stretch',
-        gap: theme.margins.xs,
-        marginTop: theme.margins.sm,
+        gap: theme.space.s4,
+        marginTop: theme.space.s8,
     },
     answers: {
         alignSelf: 'stretch',
-        marginTop: theme.margins.sm,
+        marginTop: theme.space.s8,
     },
     fact: {
         ...workTextStyle('cardFact'),

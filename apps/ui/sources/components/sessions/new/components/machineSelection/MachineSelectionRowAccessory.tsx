@@ -99,7 +99,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     favoriteButton: {
         alignItems: 'center',

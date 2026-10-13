@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -58,8 +59,7 @@ const styles = StyleSheet.create(() => ({
         gap: 7,
     },
     groupTitle: {
-        fontSize: 11,
-        fontWeight: '700',
+        ...Typography.variant('micro', 'semiBold'),
         textTransform: 'uppercase',
     },
 }));

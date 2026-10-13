@@ -34,14 +34,14 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,

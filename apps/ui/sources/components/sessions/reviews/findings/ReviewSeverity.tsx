@@ -165,15 +165,15 @@ export function ReviewFindingLine(
 export const REVIEW_SEVERITY_COLUMN_WIDTH_PX = 72;
 
 const styles = StyleSheet.create((theme) => ({
-  severity: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  severity: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
   dot: { width: 6, height: 6, borderRadius: 3 },
   railDot: { width: 7, height: 7, borderRadius: 4 },
-  severityText: { ...Typography.default('semiBold'), fontSize: 13 },
-  summary: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4 },
+  severityText: {  ...Typography.variant('body', 'semiBold') },
+  summary: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: theme.space.s4 },
   line: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: theme.space.s12,
     minHeight: 30,
     borderRadius: 6,
   },
@@ -187,10 +187,9 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   lineReviewer: {
-    ...Typography.default(),
     flexShrink: 0,
     maxWidth: '30%',
-    fontSize: 13,
+    ...Typography.variant('body'),
     color: theme.colors.text.tertiary,
     textAlign: 'right',
   },

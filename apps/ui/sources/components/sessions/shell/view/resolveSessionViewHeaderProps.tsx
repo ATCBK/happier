@@ -1,9 +1,11 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
 import { resolvePluginSessionHeaderActionPresentations } from '@/components/sessions/actions/pluginHeaderActions';
 import { SessionHeaderBrowserButton } from '@/components/sessions/actions/SessionHeaderBrowserButton';
+import { SessionHeaderComputerButton } from '@/components/sessions/actions/SessionHeaderComputerButton';
 import { SessionHeaderIconWithCount } from '@/components/sessions/actions/SessionHeaderIconWithCount';
 import { SessionHeaderInfoButton } from '@/components/sessions/actions/SessionHeaderInfoButton';
 import {
@@ -600,9 +602,7 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
                             numberOfLines={1}
                             style={{
                                 color: input.actionIconColor,
-                                fontSize: 12,
-                                lineHeight: 16,
-                                fontWeight: '600',
+                                ...Typography.variant('meta', 'semiBold'),
                             }}
                         >
                             {t(input.externalSessionRuntime.externalAgent.labelKey)}
@@ -641,6 +641,7 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
                 {!input.actionRailVisible && !input.mobileTerminalTabAvailable ? (
                     <SessionHeaderTerminalButton sessionId={input.sessionId} scopeId={input.paneScopeId} />
                 ) : null}
+                <SessionHeaderComputerButton sessionId={input.sessionId} serverId={session.serverId ?? null} />
                 <SessionHeaderBrowserButton sessionId={input.sessionId} scopeId={input.paneScopeId} />
                 {workspaceSyncAttentionLabel && input.onOpenWorkspaceSyncConflicts ? (
                     <Pressable

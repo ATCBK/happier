@@ -104,11 +104,11 @@ const styles = StyleSheet.create((theme) => ({
     pointer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginHorizontal: 16,
-        marginTop: 8,
-        marginBottom: 4,
+        gap: theme.space.s8,
+        marginHorizontal: theme.space.s16,
+        marginTop: theme.space.s8,
+        marginBottom: theme.space.s4,
     },
-    pointerText: { flex: 1, minWidth: 0, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() },
-    pointerAction: { fontSize: 12, color: theme.colors.text.link, ...Typography.default('semiBold') },
+    pointerText: { flex: 1, minWidth: 0, ...Typography.variant('meta'), color: theme.colors.text.secondary,  },
+    pointerAction: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.link,  },
 }));

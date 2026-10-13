@@ -44,17 +44,17 @@ import {
 const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
 const stylesheet = StyleSheet.create((theme) => ({
-    root: { paddingTop: theme.margins.sm },
+    root: { paddingTop: theme.space.s8 },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minHeight: MINIMUM_TARGET_SIZE,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
     },
     body: {
         flexShrink: 1,
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     title: {
         ...Typography.default('semiBold'),

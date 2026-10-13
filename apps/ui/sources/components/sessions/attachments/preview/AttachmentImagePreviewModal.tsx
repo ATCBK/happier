@@ -63,14 +63,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 10,
-        paddingHorizontal: 24,
+        gap: theme.space.s10,
+        paddingHorizontal: theme.space.s24,
     },
     centeredStateText: {
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
         textAlign: 'center',
-        ...Typography.default('regular'),
     },
     navButton: {
         position: 'absolute',

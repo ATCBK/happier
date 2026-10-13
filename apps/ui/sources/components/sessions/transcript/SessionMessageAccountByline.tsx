@@ -62,9 +62,9 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         alignSelf: 'flex-end',
         maxWidth: '100%',
-        paddingHorizontal: 16,
-        marginBottom: 4,
-        gap: 6,
+        paddingHorizontal: theme.space.s16,
+        marginBottom: theme.space.s4,
+        gap: theme.space.s6,
     },
     name: {
         ...Typography.rowMeta(),

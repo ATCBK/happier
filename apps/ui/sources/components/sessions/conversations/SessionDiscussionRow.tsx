@@ -32,7 +32,7 @@ const styles = StyleSheet.create((theme) => ({
         ...ITEM_SUBTITLE_TEXT_METRICS.compact,
         color: theme.colors.text.secondary,
     },
-    trailing: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 },
+    trailing: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, flexShrink: 0 },
     badge: { position: 'relative', top: 0, right: 0 },
     time: {
         ...Typography.default(),

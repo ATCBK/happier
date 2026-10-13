@@ -99,35 +99,33 @@ export function ReviewFindingThread(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     thread: {
-        gap: 12,
-        marginTop: 6,
-        paddingTop: 12,
+        gap: theme.space.s12,
+        marginTop: theme.space.s6,
+        paddingTop: theme.space.s12,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
     quote: {
-        paddingLeft: 12,
+        paddingLeft: theme.space.s12,
         borderLeftWidth: 2,
         borderLeftColor: theme.colors.border.default,
     },
     quoteText: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     quoteStrong: {
         ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
     },
     entry: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     question: {
         alignSelf: 'flex-end',
         maxWidth: '88%',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderRadius: 14,
         backgroundColor: theme.colors.surface.inset,
     },
@@ -138,12 +136,11 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
     answer: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     answerAuthor: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
     },
     answerText: {
         ...Typography.default(),
@@ -154,21 +151,19 @@ const styles = StyleSheet.create((theme) => ({
     change: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
     },
     changeText: {
-        ...Typography.default(),
         flexShrink: 1,
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
     waiting: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
 }));

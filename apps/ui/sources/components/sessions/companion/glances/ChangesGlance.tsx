@@ -23,16 +23,16 @@ import { t } from '@/text';
 import { resolveChangesGlanceFiles, type ChangesGlanceState } from './glanceModels';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    branch: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4, minWidth: 0 },
+    branch: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, marginBottom: theme.space.s4, minWidth: 0 },
     branchName: { ...Typography.default('medium'), ...happierPageTextMetrics('meta'), color: theme.colors.text.primary, flexShrink: 1 },
     quiet: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
     dot: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
-    file: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28, minWidth: 0 },
-    letter: { ...Typography.default('bold'), width: 14, textAlign: 'center', fontSize: 11, color: theme.colors.text.tertiary },
+    file: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minHeight: 28, minWidth: 0 },
+    letter: {  width: 14, textAlign: 'center', ...Typography.variant('micro', 'semiBold'), color: theme.colors.text.tertiary },
     letterAdded: { color: theme.colors.versionControl.added.foreground },
     path: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.primary, flex: 1, minWidth: 0 },
     directory: { color: theme.colors.text.tertiary },
-    more: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, paddingTop: 2, paddingLeft: 22 },
+    more: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, paddingTop: theme.space.s2, paddingLeft: 22 },
 }));
 
 /**

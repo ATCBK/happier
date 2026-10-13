@@ -12,7 +12,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         // The inviting state's title in a chat-sized container (lab 04 "New chat": 17 / 22).
         ...HAPPIER_STATE_SIZE_METRICS.details.title,
         textAlign: 'center',
-        paddingHorizontal: theme.margins.xl,
+        paddingHorizontal: theme.space.s20,
         color: theme.colors.text.primary,
     },
 }));

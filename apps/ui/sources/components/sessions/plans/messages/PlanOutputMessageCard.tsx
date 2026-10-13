@@ -183,9 +183,8 @@ export function PlanOutputMessageCard(props: Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     headerText: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 15,
+        ...Typography.variant('heading'),
     },
     lead: {
         ...Typography.default(),
@@ -194,30 +193,25 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 22,
     },
     section: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     sectionTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
     },
     sectionItem: {
-        ...Typography.default(),
         color: theme.colors.text.secondary,
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body'),
     },
     milestone: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     milestoneTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 13.5,
+        ...Typography.variant('body', 'semiBold'),
     },
     errorText: {
-        ...Typography.default(),
         color: theme.colors.state.danger.foreground,
-        fontSize: 13,
+        ...Typography.variant('body'),
     },
 }));

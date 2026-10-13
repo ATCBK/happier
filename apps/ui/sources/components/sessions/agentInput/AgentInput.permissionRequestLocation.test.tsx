@@ -67,11 +67,6 @@ vi.mock('@/components/ui/layout/layout', () => ({
     useLayoutMaxWidthStyle: () => ({ maxWidth: 920 }),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    FontWeights: { regular: '400', semiBold: '500', bold: '600' },
-    Typography: { default: () => ({}), mono: () => ({}), header: () => ({}), rowMeta: () => ({}), pillLabel: () => ({}) },
-}));
-
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');

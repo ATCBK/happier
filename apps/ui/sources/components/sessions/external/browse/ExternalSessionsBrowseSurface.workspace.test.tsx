@@ -1,40 +1,54 @@
+// @vitest-environment jsdom
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { ExternalSessionsBrowseSurface } from './ExternalSessionsBrowseModal';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-// Client data is empty; the real Browse selection, capability and content owners remain mounted.
-vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({}));
+// Keep real modal composition beneath the external DOM/Radix renderer adapters.
+vi.mock('@/utils/web/reactDomCjs', () => ({ requireReactDOM: () => ({ createPortal: (children: React.ReactNode) => children }) }));
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+const navigatorBoundary = vi.hoisted(() => ({ rejectAmbient: false }));
 vi.mock('expo-router', async () => {
     const module = (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module;
-    return { ...module, useRouter: () => { throw new Error('Browse body has no Expo navigator'); } };
+    return { ...module, useRouter: () => {
+        if (navigatorBoundary.rejectAmbient) throw new Error('Browse body has no Expo navigator');
+        return module.useRouter();
+    } };
 });
-// Portals and native modal presentation are the boundary, not the Browse content.
-vi.mock('@/modal/components/CustomModal', () => ({
-    CustomModal: () => React.createElement('BrowseModalBoundary'),
-}));
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { ExternalSessionsBrowseSurface } = await import('./ExternalSessionsBrowseModal');
+const { CustomModal } = await import('@/modal/components/CustomModal');
+const { storage } = await import('@/sync/domains/state/storageStore');
+beforeEach(() => {
+    navigatorBoundary.rejectAmbient = false;
+    storage.setState({ machines: {}, machineListByServerId: {}, profileScope: null, settingsScope: null });
+});
+afterAll(() => network.dispose());
 
 afterEach(async () => { await standardCleanup(); });
 
 describe('Browse surface workspace host', () => {
     it('renders the real Browse content inside its destination rather than opening a modal', async () => {
+        navigatorBoundary.rejectAmbient = true;
         const screen = await renderScreen(<DestinationInstanceHost tabId="browse"
             ref={{ kind: 'browseExistingSessions', params: {} }} pathname="/external/browse" focused visible
             navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
             <ExternalSessionsBrowseSurface lockScope={null} onRequestClose={() => {}} />
         </DestinationInstanceHost>);
         expect(screen.findByTestId('direct-sessions-browse-modal')).not.toBeNull();
-        expect(screen.root.findAllByType('BrowseModalBoundary')).toHaveLength(0);
+        expect(screen.root.findAllByType(CustomModal)).toHaveLength(0);
     });
 
     it('keeps the web modal presentation outside a workspace destination', async () => {
         const screen = await renderScreen(<ExternalSessionsBrowseSurface lockScope={null} onRequestClose={() => {}} />);
-        expect(screen.root.findAllByType('BrowseModalBoundary')).toHaveLength(1);
-        expect(screen.findByTestId('direct-sessions-browse-modal')).toBeNull();
+        expect(screen.root.findAllByType(CustomModal)).toHaveLength(1);
+        expect(screen.findByTestId('direct-sessions-browse-modal')).not.toBeNull();
     });
 });

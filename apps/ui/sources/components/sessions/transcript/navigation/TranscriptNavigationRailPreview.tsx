@@ -119,8 +119,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     glass: {
         justifyContent: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 9,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
     },
     previewTitle: {
         color: theme.colors.text.primary,

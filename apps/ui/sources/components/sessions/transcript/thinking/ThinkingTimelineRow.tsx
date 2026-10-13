@@ -88,8 +88,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     containerCard: {
         borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s8,
         backgroundColor: theme.colors.input.background,
     },
     containerPlain: {
@@ -99,7 +99,7 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerPressed: {
         opacity: motionTokens.press.opacitySubtle,
@@ -112,7 +112,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minWidth: 0,
-        gap: 8,
+        gap: theme.space.s8,
     },
     labelGutter: {
         width: 18,
@@ -120,8 +120,7 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     labelText: {
-        fontSize: 13,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     headerRight: {
@@ -132,14 +131,14 @@ const styles = StyleSheet.create((theme) => ({
     summaryInline: {
         flex: 1,
         minWidth: 0,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
         color: theme.colors.text.secondary,
         fontSize: 13,
         fontStyle: 'italic',
         opacity: 0.95,
     },
     body: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
 }));
 

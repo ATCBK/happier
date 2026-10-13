@@ -902,22 +902,22 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
 }
 
 const styles = StyleSheet.create((theme) => ({
-    section: { gap: 6 },
+    section: { gap: theme.space.s6 },
     /** The "Custom…" entry keeps the pane's gap from the last row when it scrolls with them. */
-    bodyFooter: { marginTop: 6 },
+    bodyFooter: { marginTop: theme.space.s6 },
     sectionFill: {
         flex: 1,
         minHeight: 0,
     },
-    titleRowContainer: { flexDirection: 'row', alignItems: 'flex-start', paddingLeft: 7 },
+    titleRowContainer: { flexDirection: 'row', alignItems: 'flex-start', paddingLeft: theme.space.s6 },
     titleRow: { flex: 1, minWidth: 0 },
-    titleRowActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 0, gap: TITLE_ROW_ACTION_GAP_PX, marginLeft: 8 },
+    titleRowActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 0, gap: TITLE_ROW_ACTION_GAP_PX, marginLeft: theme.space.s8 },
     headerAccessory: { flexShrink: 0 },
     /**
      * The pane's own name ("Model"), in sentence case: it heads the pane beside its favourite and
      * refresh controls, so it reads as a title (primary ink, semibold), not as an eyebrow.
      */
-    title: { flex: 1, fontSize: 13, lineHeight: 18, ...Typography.default('semiBold'), color: theme.colors.text.primary },
+    title: { flex: 1, ...Typography.variant('body', 'semiBold'),   color: theme.colors.text.primary },
     effectiveBlock: { gap: 0 },
     notesFooter: { flexShrink: 0, minHeight: Typography.rowMeta().lineHeight },
     noteText: { fontSize: 11, color: theme.colors.text.tertiary },
@@ -928,41 +928,41 @@ const styles = StyleSheet.create((theme) => ({
      */
     refreshProgressSlot: { width: HEADER_GLYPH_BOX_PX, height: HEADER_GLYPH_BOX_PX, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     optionCardIconSlot: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-    optionSelectionStatus: { alignItems: 'center', justifyContent: 'flex-start', gap: 2 },
+    optionSelectionStatus: { alignItems: 'center', justifyContent: 'flex-start', gap: theme.space.s2 },
     optionSelectionMark: { width: 20, height: 14, alignItems: 'center', justifyContent: 'center' },
     optionCardStatusIcon: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
     optionCardTitle: { fontSize: 14, color: theme.colors.text.primary },
     optionCardTitleSelected: { ...Typography.default('semiBold') },
     optionCardDescription: { fontSize: 12, color: theme.colors.text.secondary },
-    optionCardIndicator: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, zIndex: 2, elevation: 2 },
+    optionCardIndicator: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: theme.space.s6, zIndex: 2, elevation: 2 },
     /**
      * Card presentation: the selection mark sits ABOVE the favourite star.
      * Free vertically because the list hosts this node as an absolute corner
      * overlay rather than in the row's flow.
      */
-    optionCardIndicatorStacked: { alignItems: 'flex-end', justifyContent: 'flex-start', gap: 6 },
+    optionCardIndicatorStacked: { alignItems: 'flex-end', justifyContent: 'flex-start', gap: theme.space.s6 },
     /**
      * Continues the selected row's fill downward so the row and its controls read as one
      * card. `Item` keeps its per-density horizontal inset private; the three selectable
      * densities span 12–16px, so this matches the shipped default (`cozy`, 14) and is at
      * worst 2px off the row text. No top padding — the row's own bottom inset is the gap.
      */
-    selectedControlsPanel: { paddingHorizontal: 14, paddingBottom: 10 },
+    selectedControlsPanel: { paddingHorizontal: 14, paddingBottom: theme.space.s10 },
     selectedControlsPanelFill: { backgroundColor: theme.colors.surface.selected },
-    inlineSelectedControls: { gap: 10 },
+    inlineSelectedControls: { gap: theme.space.s10 },
     selectedControlGroup: { gap: 3 },
-    selectedControlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+    selectedControlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s8 },
     selectedControlTextBlock: { flex: 1, gap: 1 },
     /** A model option's name ("Thinking", "Speed") above its segmented control: sentence case, medium. */
-    selectedControlTitle: { fontSize: 12, lineHeight: 16, ...Typography.default('medium'), color: theme.colors.text.secondary },
+    selectedControlTitle: { ...Typography.variant('meta', 'medium'),   color: theme.colors.text.secondary },
     selectedControlDescription: { fontSize: 11, lineHeight: 14, color: theme.colors.text.tertiary },
-    customEntryRow: { borderRadius: 12, paddingHorizontal: 7, paddingVertical: 7, backgroundColor: theme.colors.surface.base, minHeight: 44 },
+    customEntryRow: { borderRadius: 12, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s6, backgroundColor: theme.colors.surface.base, minHeight: 44 },
     customEntrySelected: { backgroundColor: theme.colors.surface.selected },
     customEntryHovered: { backgroundColor: theme.colors.surface.pressed },
     customEntryPressed: { opacity: motionTokens.press.opacitySubtle },
-    customEntryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+    customEntryHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: theme.space.s12 },
     customEntryTextBlock: { flex: 1, minWidth: 0 },
-    customEditor: { paddingTop: 4 },
-    customEditorInput: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border.default, paddingHorizontal: 10, paddingVertical: 7, fontSize: 12, color: theme.colors.text.primary },
-    emptyText: { fontSize: 11, color: theme.colors.text.secondary, paddingHorizontal: 7, paddingVertical: 8 },
+    customEditor: { paddingTop: theme.space.s4 },
+    customEditorInput: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border.default, paddingHorizontal: theme.space.s10, paddingVertical: theme.space.s6, fontSize: 12, color: theme.colors.text.primary },
+    emptyText: { fontSize: 11, color: theme.colors.text.secondary, paddingHorizontal: theme.space.s6, paddingVertical: theme.space.s8 },
 }));

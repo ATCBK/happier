@@ -63,7 +63,7 @@ export function createSessionMessageDetailsStyles(theme: SessionMessageDetailsTh
         },
         fullViewContainer: {
             flex: 1,
-            padding: 16,
+            padding: theme.space.s16,
         },
         toolCallFullViewContainer: {
             flex: 1,

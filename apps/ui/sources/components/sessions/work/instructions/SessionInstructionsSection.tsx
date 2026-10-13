@@ -628,7 +628,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   // Text is not an `Item`, so it takes the Work rows' text edge itself.
   inset: {
     paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-    gap: 6,
+    gap: theme.space.s6,
   },
   clip: {
     overflow: 'hidden',
@@ -648,7 +648,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   invite: {
     paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-    gap: 10,
+    gap: theme.space.s10,
   },
   inviteText: {
     ...Typography.default(),
@@ -656,13 +656,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
   },
   repair: {
-    gap: 6,
+    gap: theme.space.s6,
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: theme.space.s8,
     paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
   },
 }));

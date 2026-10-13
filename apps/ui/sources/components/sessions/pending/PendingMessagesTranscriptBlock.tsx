@@ -945,7 +945,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                         { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
                                     ])}
                                 >
-                                    <Text style={{ color: theme.colors.text.link, fontSize: 12, ...Typography.default('semiBold') }}>
+                                    <Text style={{ color: theme.colors.text.link, ...Typography.variant('meta', 'semiBold'),  }}>
                                         {isExpanded ? t('session.pendingMessages.actions.viewLess') : t('session.pendingMessages.actions.viewMore')}
                                     </Text>
                                 </Pressable>
@@ -1280,7 +1280,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             <Text numberOfLines={collapsedLines} style={{ color: theme.colors.text.primary, ...Typography.default() }}>
                                 {text}
                             </Text>
-                            <Text style={{ marginTop: 6, color: theme.colors.text.secondary, fontSize: 12, ...Typography.default('semiBold') }}>
+                            <Text style={{ marginTop: theme.space.s6, color: theme.colors.text.secondary, ...Typography.variant('meta', 'semiBold'),  }}>
                                 {t('session.pendingMessages.discarded.label')}
                             </Text>
                         </Pressable>
@@ -1472,7 +1472,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             <ScrollView
                                 testID="pendingMessages.scroll"
                                 style={{ height: clampedViewportHeightPx, maxHeight: maxHeight, marginTop: 0 }}
-                                contentContainerStyle={{ paddingTop: 6, paddingBottom: 0 }}
+                                contentContainerStyle={{ paddingTop: theme.space.s6, paddingBottom: 0 }}
                                 ref={scrollRef}
                                 nestedScrollEnabled={true}
                                 scrollEventThrottle={16}
@@ -1502,14 +1502,14 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     renderItem={({ message, index, renderDragHandle }) => renderMessage({ message, index, renderDragHandle })}
                                 />
                                 {displayedDiscarded.length > 0 ? (
-                                    <View style={{ marginTop: 4 }}>
+                                    <View style={{ marginTop: theme.space.s4 }}>
                                         <Text style={[styles.discardedTitle, { color: theme.colors.text.secondary }]}>
                                             {t('session.pendingMessages.discarded.title')}
                                         </Text>
                                         <Text style={[styles.discardedSubtitle, { color: theme.colors.text.secondary }]}>
                                             {t('session.pendingMessages.discarded.subtitle')}
                                         </Text>
-                                        <View style={{ marginTop: 10 }}>
+                                        <View style={{ marginTop: theme.space.s10 }}>
                                             {displayedDiscarded.map(renderDiscardedMessage)}
                                         </View>
                                     </View>
@@ -1580,7 +1580,7 @@ function IconAction(props: {
             accessibilityLabel={props.accessibilityLabel}
             accessibilityState={props.disabled === true ? { disabled: true } : undefined}
             style={({ pressed }) => ({
-                padding: 2,
+                padding: theme.space.s2,
                 borderRadius: 6,
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1655,9 +1655,7 @@ const styles = StyleSheet.create(() => ({
         gap: 5,
     },
     blockedDeliveryNoticeText: {
-        fontSize: 11,
-        lineHeight: 14,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
     },
     nonSteerableNotice: {
         marginTop: 8,
@@ -1671,9 +1669,7 @@ const styles = StyleSheet.create(() => ({
     },
     nonSteerableNoticeText: {
         flexShrink: 1,
-        fontSize: 12,
-        lineHeight: 16,
-        ...Typography.default(),
+        ...Typography.variant('meta'),
     },
     clearComposerButton: {
         marginLeft: 'auto',
@@ -1686,9 +1682,7 @@ const styles = StyleSheet.create(() => ({
         gap: 4,
     },
     clearComposerButtonText: {
-        fontSize: 12,
-        lineHeight: 16,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     userMessageWrapper: {
         maxWidth: '100%',
@@ -1737,12 +1731,10 @@ const styles = StyleSheet.create(() => ({
     },
     discardedTitle: {
         marginTop: 6,
-        fontSize: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     discardedSubtitle: {
         marginTop: 4,
-        fontSize: 12,
-        ...Typography.default(),
+        ...Typography.variant('meta'),
     },
 }));

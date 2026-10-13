@@ -35,7 +35,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     live: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     elapsed: {

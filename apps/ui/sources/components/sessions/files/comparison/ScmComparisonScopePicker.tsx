@@ -143,24 +143,22 @@ const styles = StyleSheet.create((theme) => ({
     trigger: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
+        gap: theme.space.s6,
         minHeight: 32,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         borderRadius: theme.borderRadius.md,
         flexShrink: 1,
         minWidth: 0,
     },
     label: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
         flexShrink: 1,
         minWidth: 0,
     },
     count: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default(),
     },
 }));

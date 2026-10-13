@@ -29,13 +29,11 @@ import { SessionWorkNotifications } from './SessionWorkNotifications';
 const stylesheet = StyleSheet.create((theme) => ({
   root: { flex: 1, minHeight: 0, minWidth: 0 },
   banner: {
-    ...Typography.default(),
     color: theme.colors.text.tertiary,
-    fontSize: 12,
-    lineHeight: 16,
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 10,
+    ...Typography.variant('meta'),
+    paddingHorizontal: theme.space.s16,
+    paddingTop: theme.space.s4,
+    paddingBottom: theme.space.s10,
   },
 }));
 

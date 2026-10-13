@@ -17,7 +17,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
-        gap: 6,
+        gap: theme.space.s6,
     },
     title: {
         ...Typography.default(),

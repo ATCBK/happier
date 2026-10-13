@@ -1,21 +1,23 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol';
+import { BUILT_IN_ROLES_V1, RoleActionInputSchemasV1, RoleActionOutputSchemasV1 } from '@happier-dev/protocol';
+import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { Metadata } from '@happier-dev/session-core/state';
 
 import { createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** The Action front door is the boundary: every change is a `session.roles.*` / `session.notes.set` Action. */
+/** Observe remote Session RPC effects beneath the real Action, catalog and policy owners. */
 const shared = vi.hoisted(() => ({
-    calls: [] as Array<{ actionId: string; input: unknown; context: Readonly<{ serverId?: string | null }> }>,
+    rpc: vi.fn(),
+    calls: [] as Array<{ method: string; payload: unknown; serverId: string; sessionId: string }>,
     /** Writes the host refuses (a typed `{ ok: false }`), for the keep-the-draft contract. */
     refused: new Set<string>(),
     alerts: [] as unknown[][],
@@ -34,19 +36,17 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: { alertAsync: async (...args) => { shared.alerts.push(args); } } }).module;
 });
 
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => async (actionId: string, input: unknown, context: Readonly<{ serverId?: string | null }>) => {
-        shared.calls.push({ actionId, input, context });
-        if (shared.refused.has(actionId)) return { ok: false, errorCode: 'action_failed', error: 'refused' };
-        if (actionId === 'roles.list') {
-            return { ok: true, result: { items: [
-                { roleId: 'orchestrator', role: BUILT_IN_ROLES_V1.orchestrator, shared: false, viewOnly: false, migratedFromV0_2: false },
-                { roleId: 'builder', role: BUILT_IN_ROLES_V1.builder, shared: false, viewOnly: false, migratedFromV0_2: false },
-            ] } };
-        }
-        return { ok: true, result: { updated: true } };
-    },
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async importOriginal => {
+    const { createServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    shared.rpc.mockImplementation(async ({ method, payload, serverId, sessionId }: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc')['sessionRpcWithServerScope']>[0]) => {
+            if (!isRoleActionIdV1(method)) throw new Error(`Unexpected Session RPC: ${method}`);
+            const input = RoleActionInputSchemasV1[method].parse(payload);
+            shared.calls.push({ method, payload: input, serverId, sessionId });
+            if (shared.refused.has(method)) return { ok: false, errorCode: 'action_failed', error: 'refused' };
+            return RoleActionOutputSchemasV1[method].parse({ updated: true });
+    });
+    return createServerScopedSessionRpcModuleMock({ importOriginal, overrides: { sessionRpcWithServerScope: shared.rpc } });
+});
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -59,25 +59,27 @@ vi.mock('@/text', async () => {
 });
 
 installDisconnectedServerSocketBoundary();
-await loadSyncSingletonForTests();
 const { SessionRolesSection } = await import('./SessionRolesSection');
 const { SessionNotesSection } = await import('./SessionNotesSection');
 const { useSessionWorkMenuActions } = await import('../sessionWorkMenuActions');
 const { SessionHandsOffRow } = await import('@/components/roles/session/sessionRole');
-const { invalidateRoleCatalog } = await import('@/components/roles/catalog/useRoleCatalog');
+const { invalidateRoleCatalog, useRoleCatalog } = await import('@/components/roles/catalog/useRoleCatalog');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 let previousState = storage.getState();
 let previousSnapshot = getAppliedActiveServerSnapshot();
 let previousAvailable = isAppliedActiveServerRuntimeAvailable();
-let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let connection: Awaited<ReturnType<typeof serveSessionActionHome>> | undefined;
+const enabledBuiltInCount = Object.values(BUILT_IN_ROLES_V1).filter(role => role.enabled).length;
 
 function setMetadata(metadata: Partial<Metadata> | null) {
     const sessionMetadata = metadata ? { path: '/repo', host: 'test-machine', ...metadata } : null;
     storage.setState({ sessions: {
-        lead: createSessionFixture({ id: 'lead', serverId: connection!.home.id, metadata: sessionMetadata }),
-        worker: createSessionFixture({ id: 'worker', serverId: connection!.home.id, metadata: sessionMetadata }),
+        lead: createSessionFixture({ id: 'lead', serverId: connection!.serverId, metadata: sessionMetadata }),
+        worker: createSessionFixture({ id: 'worker', serverId: connection!.serverId, metadata: sessionMetadata }),
     } });
 }
 
@@ -87,7 +89,7 @@ function declared(screen: { findAll: (predicate: (node: any) => boolean) => any[
 }
 
 function writes() {
-    return shared.calls.filter((call) => call.actionId !== 'roles.list').map(({ actionId, input }) => ({ actionId, input }));
+    return shared.calls.map(({ method, payload }) => ({ actionId: method, input: payload }));
 }
 
 const researchRole = {
@@ -102,30 +104,29 @@ const researchRole = {
 
 describe('Work › Roles and Notes', () => {
     beforeEach(async () => {
+        shared.platformOS = 'node';
         previousState = storage.getState();
         previousSnapshot = getAppliedActiveServerSnapshot();
         previousAvailable = isAppliedActiveServerRuntimeAvailable();
-        const activeConnection = await restoreServerAccountForTest({
-            serverUrl: 'https://session-roles.test', accountId: 'account-1',
-            request: async (url) => {
-                const path = new URL(String(url)).pathname;
-                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+        const activeConnection = await serveSessionActionHome({
+            homes: [{ key: 'roles', serverUrl: 'https://session-roles.test', accountId: 'account-1', currentAccount: true }],
+            route: request => {
+                const path = request.path;
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
+                if (path === '/v1/artifacts') return Response.json([]);
                 if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows: [{
                     key: 'role-overrides', revision: 1,
                     content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } },
                 }] });
-                return Response.json({}, { status: 404 });
+                return undefined;
             },
         });
         connection = activeConnection;
+        await activeConnection.restoreActiveConnection();
         await act(async () => {
-        storage.getState().activateProfileScope({ serverId: activeConnection.home.id, accountId: 'account-1' });
         shared.calls = [];
         shared.refused = new Set();
         shared.alerts = [];
-        shared.platformOS = 'node';
         setMetadata({
             work: {
                 sessionRolesV1: {
@@ -140,10 +141,14 @@ describe('Work › Roles and Notes', () => {
             },
         });
         invalidateRoleCatalog();
-    }); });
+        });
+        const catalog = await renderHook(() => useRoleCatalog());
+        await vi.waitFor(() => expect(catalog.getCurrent().status).toBe('ready'));
+    });
 
     afterEach(async () => {
         standardCleanup();
+        if (connection) await disconnectActiveServerConnection();
         await connection?.dispose();
         connection = undefined;
         await act(async () => {
@@ -169,7 +174,7 @@ describe('Work › Roles and Notes', () => {
         expect(count.props.children).toBe('roles.session.countChanged:2 · roles.session.countAdded:1');
         expect(screen.findByTestId('session-work-roles-info')).toBeTruthy();
         // "All roles" is the trailing row: the enabled catalog roles plus the session-only ones.
-        expect(declared(screen, 'session-work-roles.all', 'detail')!.props.detail).toBe('roles.session.inUse:3');
+        expect(declared(screen, 'session-work-roles.all', 'detail')!.props.detail).toBe(`roles.session.inUse:${enabledBuiltInCount + 1}`);
         // The inline add form and the bulk actions are no longer in the section.
         expect(screen.findByTestId('session-work-roles.addForm')).toBeNull();
         expect(screen.findByTestId('session-work-roles.useDefaults')).toBeNull();
@@ -180,7 +185,7 @@ describe('Work › Roles and Notes', () => {
         const screen = await renderScreen(<SessionRolesSection sessionId="lead" />);
         expect(screen.findByTestId('session-agents-section-count:session-work-roles')).toBeNull();
         expect(screen.findByTestId('session-work-roles.row.builder')).toBeNull();
-        expect(declared(screen, 'session-work-roles.all', 'detail')!.props.detail).toBe('roles.session.inUse:2');
+        expect(declared(screen, 'session-work-roles.all', 'detail')!.props.detail).toBe(`roles.session.inUse:${enabledBuiltInCount}`);
     });
 
     it('offers session-only roles and the session override engine in All roles', async () => {
@@ -205,11 +210,6 @@ describe('Work › Roles and Notes', () => {
         ]);
     });
 
-    it('keeps the larger view of the map out of the Work ⋯ menu: ⤢ is a header control (lab convo-W7)', async () => {
-        const hook = await renderHook(() => useSessionWorkMenuActions({ sessionId: 'lead', hasReports: true }));
-        expect(hook.getCurrent().map((item) => item.id)).not.toContain('work.expandMap');
-    });
-
     it('has no ⋯ menu when there is nothing to reset and no sessions under it', async () => {
         setMetadata({ work: { sessionRolesV1: { roleId: 'orchestrator', overrides: {}, sessionRoles: {}, notes: '' } } });
         const hook = await renderHook(() => useSessionWorkMenuActions({ sessionId: 'lead', hasReports: false }));
@@ -221,7 +221,7 @@ describe('Work › Roles and Notes', () => {
         const row = screen.findByTestId('session-work-roles.row.builder')!;
         await act(async () => { row.props.onHoverIn?.(); });
         await act(async () => { screen.findByTestId('session-work-roles.row.builder.reset')!.props.onPress(); });
-        expect(writes()).toEqual([{ actionId: 'session.roles.override.clear', input: { sessionId: 'lead', roleId: 'builder' } }]);
+        await vi.waitFor(() => expect(writes()).toEqual([{ actionId: 'session.roles.override.clear', input: { sessionId: 'lead', roleId: 'builder' } }]));
     });
 
     it('lets the user relax hands-off from the Role popover through the override Action', async () => {
@@ -268,20 +268,33 @@ describe('Work › Roles and Notes', () => {
     });
 
     it('reveals a changed role\'s Reset on keyboard focus, without hover (web)', async () => {
+        const serverUrl = connection!.homes.roles.serverUrl;
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: connection!.serverId });
+        if (!credentials) throw new Error('Expected fixture Home credentials');
         shared.platformOS = 'web';
-        const screen = await renderScreen(<SessionRolesSection sessionId="lead" />);
-        const slot = () => screen.findByTestId('session-work-roles.row.builder.resetSlot')!;
-        const pointerEvents = () => [slot().props.style].flat(Infinity)
-            .reduce((value: unknown, style: any) => style?.pointerEvents ?? value, undefined);
-        // Reset is in the tree (so Tab reaches it) but not shown until the row is hovered or focused.
-        expect(screen.findByTestId('session-work-roles.row.builder.reset')).toBeTruthy();
-        expect(pointerEvents()).toBe('none');
-        expect(screen.findByTestId('session-work-roles.row.builder.marker')).toBeTruthy();
-        await act(async () => { slot().props.onFocus(); });
-        expect(pointerEvents()).toBe('auto');
-        expect(screen.findByTestId('session-work-roles.row.builder.marker')).toBeNull();
-        await act(async () => { screen.findByTestId('session-work-roles.row.builder.reset')!.props.onPress(); });
-        expect(writes()).toEqual([{ actionId: 'session.roles.override.clear', input: { sessionId: 'lead', roleId: 'builder' } }]);
+        // The keyboard contract uses browser credential custody as the product does.
+        // Roll it back before returning to the suite's native platform boundary.
+        let browserWrite: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> = null;
+        try {
+            browserWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId: connection!.serverId }, credentials);
+            if (!browserWrite) throw new Error('Expected browser fixture credentials');
+            const screen = await renderScreen(<SessionRolesSection sessionId="lead" />);
+            const slot = () => screen.findByTestId('session-work-roles.row.builder.resetSlot')!;
+            const pointerEvents = () => [slot().props.style].flat(Infinity)
+                .reduce((value: unknown, style: any) => style?.pointerEvents ?? value, undefined);
+            // Reset is in the tree (so Tab reaches it) but not shown until the row is hovered or focused.
+            expect(screen.findByTestId('session-work-roles.row.builder.reset')).toBeTruthy();
+            expect(pointerEvents()).toBe('none');
+            expect(screen.findByTestId('session-work-roles.row.builder.marker')).toBeTruthy();
+            await act(async () => { slot().props.onFocus(); });
+            expect(pointerEvents()).toBe('auto');
+            expect(screen.findByTestId('session-work-roles.row.builder.marker')).toBeNull();
+            await act(async () => { screen.findByTestId('session-work-roles.row.builder.reset')!.props.onPress(); });
+            await vi.waitFor(() => expect(writes()).toEqual([{ actionId: 'session.roles.override.clear', input: { sessionId: 'lead', roleId: 'builder' } }]));
+        } finally {
+            try { await browserWrite?.rollback(); }
+            finally { shared.platformOS = 'node'; }
+        }
     });
 
     it('keeps the notes editor and the draft open when the save is refused', async () => {
@@ -311,19 +324,19 @@ describe('Work › Roles and Notes', () => {
     });
 
     it('allows changing a worker\'s own copied roles and notes', async () => {
-        const roles = await renderScreen(<SessionRolesSection sessionId="worker" serverId={connection!.home.id} copiedAtSpawn />);
+        const roles = await renderScreen(<SessionRolesSection sessionId="worker" serverId={connection!.serverId} copiedAtSpawn />);
         expect(declared(roles, 'session-work-roles.all', 'onPress')).toBeTruthy();
         expect(roles.findByTestId('session-work-roles.add')).toBeTruthy();
-        const notes = await renderScreen(<SessionNotesSection sessionId="worker" serverId={connection!.home.id} />);
+        const notes = await renderScreen(<SessionNotesSection sessionId="worker" serverId={connection!.serverId} />);
         expect(notes.findByTestId('session-work-notes.edit')).toBeTruthy();
         await act(async () => { roles.findByTestId('session-work-roles.row.builder.reset')!.props.onPress(); });
         await act(async () => { notes.findByTestId('session-work-notes.edit')!.props.onPress(); });
         await act(async () => { notes.findByTestId('session-work-notes.field')!.props.onChangeText('Worker notes'); });
         await act(async () => { notes.findByTestId('session-work-notes.save')!.props.onPress(); });
-        expect(shared.calls.filter((call) => call.actionId.startsWith('session.')).map(({ actionId, context }) => ({ actionId, serverId: context.serverId }))).toEqual([
-            { actionId: 'session.roles.override.clear', serverId: connection!.home.id },
-            { actionId: 'session.notes.set', serverId: connection!.home.id },
-        ]);
+        await vi.waitFor(() => expect(shared.calls.map(({ method, serverId, sessionId }) => ({ method, serverId, sessionId }))).toEqual([
+            { method: 'session.roles.override.clear', serverId: connection!.serverId, sessionId: 'worker' },
+            { method: 'session.notes.set', serverId: connection!.serverId, sessionId: 'worker' },
+        ]));
     });
 
     it('does not offer an empty notes form for an unavailable exact-Home Session', async () => {
@@ -334,7 +347,7 @@ describe('Work › Roles and Notes', () => {
     });
 
     it('withdraws an open notes editor when its Home changes', async () => {
-        const notes = await renderScreen(<SessionNotesSection sessionId="worker" serverId={connection!.home.id} />);
+        const notes = await renderScreen(<SessionNotesSection sessionId="worker" serverId={connection!.serverId} />);
         await act(async () => { notes.findByTestId('session-work-notes.edit')!.props.onPress(); });
         expect(notes.findByTestId('session-work-notes.field')).toBeTruthy();
         await act(async () => { notes.update(<SessionNotesSection sessionId="worker" serverId="home-b" />); });

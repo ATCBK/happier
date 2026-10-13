@@ -7,18 +7,18 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 import type { UserMessageHistoryEntriesSnapshot } from '@/hooks/session/useUserMessageHistoryEntries';
 
 // Real save owner and Account writer (prompt_doc.create through the artifact boundary); only portal
 // and window measurement are replaced, so the real menu and selection list stay mounted.
 // Native platform: the keyboard provider's web window listeners have no DOM under this runner.
-installSettingsViewCommonModuleMocks({
-    reactNative: async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
         Platform: { OS: 'ios', select: (value: Record<string, unknown>) => value.ios ?? value.native ?? value.default },
-    }),
-});
-vi.doUnmock('@/sync/domains/state/storage');
+    }));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/components/ui/popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 const harness = createHomeGovernanceHarness();

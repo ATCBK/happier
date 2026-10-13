@@ -46,10 +46,6 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
-vi.mock('./ExternalSessionsResumeIdPickerModal', () => ({
-    ExternalSessionsResumeIdPickerModal: () => null,
-}));
-
 describe('openExternalSessionsResumeIdPickerModal', () => {
     beforeEach(() => {
         showMock.mockReset();
@@ -57,7 +53,6 @@ describe('openExternalSessionsResumeIdPickerModal', () => {
 
     afterEach(() => {
         vi.clearAllMocks();
-        vi.resetModules();
     });
 
     it('opens the browse modal with fixed chrome and resolves the selected session id', async () => {

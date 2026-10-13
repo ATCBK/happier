@@ -37,7 +37,7 @@ export function SessionPresenceViewerList({ target }: Readonly<{ target: Session
     const emptyStatus = presence.status === 'live' ? t('session.collaboration.justYou')
         : presence.status === 'connecting' ? t('session.collaboration.connecting')
             : t('session.collaboration.unavailable');
-    const statusStyle = { ...Typography.default(), ...ITEM_SUBTITLE_TEXT_METRICS.comfortable, color: theme.colors.text.secondary, padding: 16 };
+    const statusStyle = { ...Typography.default(), ...ITEM_SUBTITLE_TEXT_METRICS.comfortable, color: theme.colors.text.secondary, padding: theme.space.s16 };
     return <View testID="session-presence-viewers" style={{ flex: 1, minHeight: 0 }}
         {...(Platform.OS === 'web' ? ({ onWheel: wheelScrollHandlers.onWheel } as any) : {})}>
         {presence.status === 'stale' ? <Text style={statusStyle}>{t('session.collaboration.stale')}</Text> : null}

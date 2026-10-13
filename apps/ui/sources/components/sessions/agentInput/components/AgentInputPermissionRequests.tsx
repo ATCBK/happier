@@ -40,8 +40,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     permissionRequestTitle: {
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     chrome: {
         borderTopLeftRadius: Platform.select({ default: 16, android: 20 }),

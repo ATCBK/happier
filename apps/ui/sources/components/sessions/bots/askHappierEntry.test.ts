@@ -30,9 +30,9 @@ vi.mock('@/modal', async () => {
 let home:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
-afterEach(() => {
+afterEach(async () => {
   standardCleanup();
-  home?.dispose();
+  await home?.dispose();
   home = undefined;
   resetSessionDraftRepositoryForTests();
   boundary.push.mockReset();

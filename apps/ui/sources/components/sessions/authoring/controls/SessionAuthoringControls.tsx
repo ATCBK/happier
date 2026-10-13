@@ -72,7 +72,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     fields: {
         alignSelf: 'stretch',
@@ -83,11 +83,11 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         borderRadius: Platform.select({ default: 16, android: 20 }),
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         minHeight: MINIMUM_TARGET_SIZE,
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         // Reserved, so the changed state and the focus ring never move a neighbour.
         borderWidth: 1,
         borderColor: 'transparent',
@@ -103,18 +103,16 @@ const styles = StyleSheet.create((theme) => ({
         opacity: motionTokens.press.opacity,
     },
     chipText: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.composer.chipTint,
     },
     unavailableText: {
-        ...Typography.default('regular'),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
     },
     preservedChip: {
         alignSelf: 'flex-start',
-        gap: 2,
+        gap: theme.space.s2,
     },
     fieldAnchor: {
         alignSelf: 'stretch',
@@ -123,8 +121,8 @@ const styles = StyleSheet.create((theme) => ({
     textInput: {
         ...Typography.default('regular'),
         color: theme.colors.text.primary,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
+        paddingVertical: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
         minHeight: MINIMUM_TARGET_SIZE,
         minWidth: 160,
     },

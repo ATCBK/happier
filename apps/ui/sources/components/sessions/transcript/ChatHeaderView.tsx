@@ -191,10 +191,7 @@ export const ChatHeaderView = React.memo(function ChatHeaderView({
                                         numberOfLines={1}
                                         style={[
                                             styles.badgeText,
-                                            {
-                                                color: theme.colors.state.neutral.foreground,
-                                                ...Typography.default('semiBold'),
-                                            },
+                                            { color: theme.colors.state.neutral.foreground },
                                         ]}
                                     >
                                         {badge}
@@ -341,8 +338,7 @@ const styles = StyleSheet.create(() => ({
     },
     // The inset lives on the label so a collapsed badge leaves no empty capsule behind.
     badgeText: {
-        fontSize: 10,
-        lineHeight: 14,
+        ...Typography.variant('micro', 'semiBold'),
         paddingHorizontal: 8,
         paddingVertical: 2,
     },

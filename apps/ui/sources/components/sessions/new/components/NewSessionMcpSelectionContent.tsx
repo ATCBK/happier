@@ -446,8 +446,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     groupActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginLeft: 12,
+        gap: theme.space.s8,
+        marginLeft: theme.space.s12,
         flexShrink: 0,
     },
     groupActionButton: {
@@ -464,7 +464,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
     },
     scrollContent: {
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
     },
     list: {
         backgroundColor: 'transparent',

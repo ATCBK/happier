@@ -1,164 +1,115 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
-    mergeWorkflowRunBodies,
-    workflowRunRowFromSummary,
-    type WorkflowRunsById,
-} from '@/sync/store/domains/workflowRuns';
+    WorkflowRunListRequestV1Schema,
+    WorkflowRunRecipientCensusResponseV1Schema,
+    materializeWorkflowAcceptedSnapshotV1,
+    sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+    serializeWorkflowStoredContentEnvelopeV1,
+} from '@happier-dev/protocol';
 
+import { createDeferred, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
 import type { SessionManagedWorkflowRunsState } from './useSessionManagedWorkflowRuns';
 
-/**
- * The Session-managed Run rows read the one Account-scoped Run row owner and
- * the one Account-change wake that the Workflows collection reads. A control
- * settled on the Run screen, or progress the server woke this Home about,
- * therefore reaches a mounted Session row without a second store, poller or
- * local bus.
- */
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
 
-const listRuns = vi.hoisted(() => vi.fn<(params: { filter?: Record<string, unknown> }) => Promise<WorkflowRunListPage>>());
+const accountId = 'account-a';
+const route = '/v3/automations/runs/workflow-storage';
+// Supplies only the HTTP Home's answer; list parsing, Action admission, Account scope and store stay real.
+const readPage = vi.fn<(params: { filter?: Record<string, unknown> }) => Promise<WorkflowRunListPage>>();
+let serverId: string;
+let previousState = storage.getState();
+let previousSnapshot = getActiveServerSnapshot();
 
-const storeState = vi.hoisted(() => {
-    const listeners = new Set<() => void>();
-    const state = { workflowRunsById: {} as Record<string, unknown> };
-    return {
-        state,
-        listeners,
-        emit(): void { for (const listener of listeners) listener(); },
-        reset(): void { state.workflowRunsById = {}; },
-    };
+beforeEach(async () => {
+    previousState = storage.getState();
+    previousSnapshot = getActiveServerSnapshot();
+    await home.reset();
+    serverId = await home.addHome({ name: 'Managed runs Home', serverUrl: 'https://session-managed-runs.test', accountId });
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    readPage.mockReset();
+    storage.setState({ workflowRunsById: {}, workflowRunListWindows: {}, workflowRunInvocationsByRunId: {},
+        settings: { ...storage.getState().settings, experiments: true, featureToggles: { automations: true } } });
+    storage.getState().activateProfileScope({ serverId, accountId });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse() } });
+    home.answer(serverId, route, { select: async (input) => {
+        if (!input || typeof input !== 'object' || !('operation' in input) || input.operation !== 'list' || !('request' in input)) {
+            throw new Error('Unexpected Workflow storage operation');
+        }
+        const request = WorkflowRunListRequestV1Schema.parse(input.request);
+        const page = await readPage({ filter: request });
+        const acceptedEnvelopesByRunId: Record<string, string> = {};
+        const keyCensusByRunId: Record<string, ReturnType<typeof WorkflowRunRecipientCensusResponseV1Schema.parse>> = {};
+        for (const run of page.runs) {
+            if (run.origin.kind !== 'direct') throw new Error('Managed Session fixture requires direct Run provenance');
+            const metadata = page.metadataByRunId[run.id];
+            const materialized = await materializeWorkflowAcceptedSnapshotV1({
+                definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                    document: { text: 'Continue', references: [], attachments: [] } }] }),
+                admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+                context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+                    executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                    origin: run.origin, authorization: { principal: { kind: 'host' } },
+                    ...(metadata?.kind === 'available' ? { metadata: metadata.value } : {}) },
+            });
+            if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+            acceptedEnvelopesByRunId[run.id] = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+                binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+            keyCensusByRunId[run.id] = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+                access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+                ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        }
+        return { body: { runs: page.runs, acceptedEnvelopesByRunId, keyCensusByRunId,
+            ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) } };
+    } });
+    latest = null;
+    probeRenders = 0;
 });
 
-const accountScope = vi.hoisted(() => {
-    const listeners = new Set<() => void>();
-    const state = { current: { serverId: 'server-a', accountId: 'account-a' } as { serverId: string; accountId: string } | null };
-    return {
-        state,
-        subscribe(listener: () => void) {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-        },
-        switchTo(next: { serverId: string; accountId: string } | null) {
-            state.current = next;
-            for (const listener of listeners) listener();
-        },
-    };
-});
-
-/** The canonical Workflows decision this contextual reader answers. */
-const featureDecisions = vi.hoisted(() => ({
-    workflows: { state: 'enabled' } as Record<string, unknown> | null,
-}));
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: string) => (
-        featureId === 'workflows' ? featureDecisions.workflows : { state: 'enabled' }
-    ),
-}));
-vi.mock('@/sync/domains/workflows/workflowRunListActions', () => ({
-    listWorkflowRuns: listRuns,
-}));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>(),
-    captureActiveServerAccountScopeLifetime: () => {
-        const captured = accountScope.state.current;
-        if (captured === null) return null;
-        const retirements = new Set<() => void>();
-        const lifetime = {
-            scope: captured,
-            isCurrent: () => accountScope.state.current?.serverId === captured.serverId
-                && accountScope.state.current?.accountId === captured.accountId,
-            onRetire: (cancel: () => void) => {
-                retirements.add(cancel);
-                return { dispose: () => retirements.delete(cancel) };
-            },
-        };
-        accountScope.subscribe(() => {
-            if (lifetime.isCurrent()) return;
-            for (const cancel of [...retirements]) cancel();
-            retirements.clear();
-        });
-        return lifetime;
-    },
-}));
-vi.mock('@/sync/domains/state/storage', async () => {
-    // The real Account store narrows a window read with a shallow comparison.
-    // The fake mirrors that contract with the same owners rather than a looser
-    // one, so what these cases observe about render scope is what ships.
-    const { useShallow } = await import('zustand/react/shallow');
-    const { resolveWorkflowRunRows } = await import('@/sync/store/domains/workflowRuns');
-    const useStore = (selector: (state: unknown) => unknown) => React.useSyncExternalStore(
-        (listener: () => void) => {
-            storeState.listeners.add(listener);
-            return () => storeState.listeners.delete(listener);
-        },
-        () => selector(storeState.state),
-        () => selector(storeState.state),
-    );
-    return {
-        getStorage: () => Object.assign(useStore, {
-            getState: () => ({
-                upsertWorkflowRuns: (rows: ReadonlyArray<ReturnType<typeof workflowRunRowFromSummary>>) => {
-                    const next = mergeWorkflowRunBodies(storeState.state.workflowRunsById as WorkflowRunsById, rows);
-                    if (next === storeState.state.workflowRunsById) return;
-                    storeState.state.workflowRunsById = next;
-                    storeState.emit();
-                },
-            }),
-        }),
-        useActiveServerAccountScope: () => React.useSyncExternalStore(
-            accountScope.subscribe,
-            () => accountScope.state.current,
-            () => accountScope.state.current,
-        ),
-        useWorkflowRunRows: (runIds: readonly string[]) => useStore(
-            useShallow((state: unknown) => resolveWorkflowRunRows(
-                (state as { workflowRunsById: WorkflowRunsById }).workflowRunsById,
-                runIds,
-            )),
-        ),
-    };
+afterEach(async () => {
+    await standardCleanup();
+    await home.reset();
+    storage.setState(previousState, true);
+    publishAppliedActiveServerSnapshot(previousSnapshot);
+    resetServerFeaturesClientForTests();
 });
 
 let latest: SessionManagedWorkflowRunsState | null = null;
 let probeRenders = 0;
 
-async function renderHook(sessionId: string | null = 'session-1', serverId: string | null = 'server-a') {
+async function renderHook(sessionId: string | null = 'session-1', targetServerId: string | null = serverId) {
     const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
     function Probe(): null {
         probeRenders += 1;
-        latest = useSessionManagedWorkflowRuns({ sessionId, serverId });
+        latest = useSessionManagedWorkflowRuns({ sessionId, serverId: targetServerId });
         return null;
     }
     const screen = await renderScreen(React.createElement(Probe));
-    await act(async () => {});
+    await flushHookEffects({ cycles: 40 });
     return screen;
 }
-
-beforeEach(() => {
-    featureDecisions.workflows = { state: 'enabled' };
-    latest = null;
-    probeRenders = 0;
-    storeState.reset();
-    accountScope.switchTo({ serverId: 'server-a', accountId: 'account-a' });
-    listRuns.mockReset();
-});
-
-afterEach(async () => {
-    await standardCleanup();
-});
 
 describe('useSessionManagedWorkflowRuns', () => {
     it('reflects a control settled through the shared Run row owner without asking the server again', async () => {
         const running = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-1', state: 'running', revision: 1, origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
+        readPage.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
             params.filter?.attention === 'required'
                 ? { runs: [], metadataByRunId: {}, nextCursor: undefined }
                 : { runs: [running], metadataByRunId: { 'run-1': { kind: 'available', value: { title: 'Nightly review' } } }, nextCursor: undefined }
@@ -168,7 +119,7 @@ describe('useSessionManagedWorkflowRuns', () => {
         expect(latest?.phase).toBe('loaded');
         expect(latest?.runs.map((run) => [run.id, run.state])).toEqual([['run-1', 'running']]);
         expect(latest?.metadataByRunId?.['run-1']).toEqual({ kind: 'available', value: { title: 'Nightly review' } });
-        expect(listRuns).toHaveBeenCalledTimes(2);
+        expect(readPage).toHaveBeenCalledTimes(2);
 
         // The Run screen settles Pause into the one shared row owner.
         const { getStorage } = await import('@/sync/domains/state/storage');
@@ -180,7 +131,7 @@ describe('useSessionManagedWorkflowRuns', () => {
 
         expect(latest?.runs.map((run) => [run.id, run.state])).toEqual([['run-1', 'paused']]);
         expect(latest?.metadataByRunId?.['run-1']).toEqual({ kind: 'available', value: { title: 'Nightly review' } });
-        expect(listRuns).toHaveBeenCalledTimes(2);
+        expect(readPage).toHaveBeenCalledTimes(2);
     });
 
     /**
@@ -191,16 +142,16 @@ describe('useSessionManagedWorkflowRuns', () => {
      * Session's ordinary one-shot Automations are untouched.
      */
     it.each([
-        ['disabled', { state: 'disabled', blockedBy: 'server' }],
-        ['unknown', { state: 'unknown' }],
-        ['unresolved', null],
+        ['disabled', { status: 'ready', features: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: false } } }) }],
+        ['unknown', { status: 'unsupported', reason: 'invalid_payload' }],
+        ['unresolved', { status: 'error', reason: 'network' }],
     ] as const)('reads no managed Run on a %s Workflows decision', async (_label, decision) => {
-        featureDecisions.workflows = decision as Record<string, unknown> | null;
-        listRuns.mockResolvedValue({ runs: [], metadataByRunId: {}, nextCursor: undefined });
+        primeServerFeaturesSnapshot({ serverId, snapshot: decision });
+        readPage.mockResolvedValue({ runs: [], metadataByRunId: {}, nextCursor: undefined });
 
         await renderHook();
 
-        expect(listRuns).not.toHaveBeenCalled();
+        expect(readPage).not.toHaveBeenCalled();
         expect(latest?.runs).toEqual([]);
     });
 
@@ -211,9 +162,10 @@ describe('useSessionManagedWorkflowRuns', () => {
      */
     it('keeps an unrelated Account Run refresh out of this mounted Session section', async () => {
         const running = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-1', state: 'running', revision: 1, origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
+        readPage.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
             params.filter?.attention === 'required'
                 ? { runs: [], metadataByRunId: {}, nextCursor: undefined }
                 : {
@@ -252,41 +204,42 @@ describe('useSessionManagedWorkflowRuns', () => {
 
     it('re-reads membership and attention on the Account-change wake the collection also observes', async () => {
         const running = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-1', state: 'running', revision: 1, origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
+        readPage.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
             params.filter?.attention === 'required'
                 ? { runs: [], metadataByRunId: {}, nextCursor: undefined }
                 : { runs: [running], metadataByRunId: {}, nextCursor: undefined }
         ));
         await renderHook();
         expect(latest?.attentionRunIds.has('run-1')).toBe(false);
-        expect(listRuns).toHaveBeenCalledTimes(2);
+        expect(readPage).toHaveBeenCalledTimes(2);
 
         // A later approval on an off-page invocation: the server's attention
         // predicate is the only owner of that fact, and the wake is how the
         // client learns to ask again.
-        listRuns.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
+        readPage.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
             params.filter?.attention === 'required'
                 ? { runs: [running], metadataByRunId: {}, nextCursor: undefined }
                 : { runs: [running], metadataByRunId: {}, nextCursor: undefined }
         ));
         await act(async () => {
-            publishHomeAccountChange('server-a', ['workflow-run:run-1']);
+            publishHomeAccountChange(serverId, ['workflow-run:run-1']);
         });
-        await act(async () => {});
+        await flushHookEffects({ cycles: 40 });
 
-        expect(listRuns).toHaveBeenCalledTimes(4);
+        expect(readPage).toHaveBeenCalledTimes(4);
         expect(latest?.phase).toBe('loaded');
         expect(latest?.attentionRunIds.has('run-1')).toBe(true);
 
         // Wakes about other Homes or unrelated entities do not refetch.
         await act(async () => {
             publishHomeAccountChange('server-b', ['workflow-run:run-1']);
-            publishHomeAccountChange('server-a', ['session:other']);
+            publishHomeAccountChange(serverId, ['session:other']);
         });
-        await act(async () => {});
-        expect(listRuns).toHaveBeenCalledTimes(4);
+        await flushHookEffects({ cycles: 40 });
+        expect(readPage).toHaveBeenCalledTimes(4);
     });
 
     /**
@@ -298,14 +251,16 @@ describe('useSessionManagedWorkflowRuns', () => {
      */
     it('renders an actionable Run the general page did not contain', async () => {
         const onPage = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-on-page', state: 'running', revision: 1,
             origin: { kind: 'direct', originSessionId: 'session-1' },
         });
         const offPage = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-off-page', state: 'interrupted', revision: 4,
             origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
+        readPage.mockImplementation(async (params): Promise<WorkflowRunListPage> => (
             params.filter?.attention === 'required'
                 ? {
                     runs: [offPage],
@@ -330,16 +285,17 @@ describe('useSessionManagedWorkflowRuns', () => {
 
         // The attention body landed in the one Account-scoped row owner, so the
         // exact Run route resolves the same body without another read.
-        expect(Object.keys(storeState.state.workflowRunsById).sort())
+        expect(Object.keys(storage.getState().workflowRunsById).sort())
             .toEqual(['run-off-page', 'run-on-page']);
     });
 
     it('does not duplicate a Run that both pages returned', async () => {
         const shared = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-1', state: 'interrupted', revision: 2,
             origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async () => ({
+        readPage.mockImplementation(async () => ({
             runs: [shared], metadataByRunId: {}, nextCursor: undefined,
         }));
 
@@ -356,10 +312,11 @@ describe('useSessionManagedWorkflowRuns', () => {
      */
     it('keeps last-known-good membership when a refresh fails and surfaces the failure separately', async () => {
         const running = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-1', state: 'running', revision: 1,
             origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async (params) => (
+        readPage.mockImplementation(async (params) => (
             params.filter?.attention === 'required'
                 ? { runs: [], metadataByRunId: {}, nextCursor: undefined }
                 : { runs: [running], metadataByRunId: {}, nextCursor: undefined }
@@ -368,11 +325,11 @@ describe('useSessionManagedWorkflowRuns', () => {
         expect(latest?.runs.map((run) => run.id)).toEqual(['run-1']);
         expect(latest?.refreshFailed).toBe(false);
 
-        listRuns.mockImplementation(async () => { throw new Error('offline'); });
+        readPage.mockImplementation(async () => { throw new Error('offline'); });
         await act(async () => {
-            publishHomeAccountChange('server-a', ['workflow-run:run-1']);
+            publishHomeAccountChange(serverId, ['workflow-run:run-1']);
         });
-        await act(async () => {});
+        await flushHookEffects({ cycles: 40 });
 
         expect(latest?.phase).toBe('loaded');
         expect(latest?.refreshFailed).toBe(true);
@@ -380,7 +337,7 @@ describe('useSessionManagedWorkflowRuns', () => {
     });
 
     it('reports a first read that failed as failed, because nothing is known yet', async () => {
-        listRuns.mockImplementation(async () => { throw new Error('offline'); });
+        readPage.mockImplementation(async () => { throw new Error('offline'); });
 
         await renderHook();
 
@@ -391,26 +348,28 @@ describe('useSessionManagedWorkflowRuns', () => {
 
     it("retires rows and refetches when the Account changes rather than showing another Account's Runs", async () => {
         const accountARun = createWorkflowRunSummaryFixture({
+            ownerAccountId: accountId,
             id: 'run-a', state: 'running', revision: 1, origin: { kind: 'direct', originSessionId: 'session-1' },
         });
-        listRuns.mockImplementation(async () => ({ runs: [accountARun], metadataByRunId: {}, nextCursor: undefined }));
+        readPage.mockImplementation(async () => ({ runs: [accountARun], metadataByRunId: {}, nextCursor: undefined }));
         await renderHook();
         expect(latest?.runs.map((run) => run.id)).toEqual(['run-a']);
 
         const accountBRun = createWorkflowRunSummaryFixture({
+            ownerAccountId: 'account-b',
             id: 'run-b', state: 'succeeded', revision: 1, origin: { kind: 'direct', originSessionId: 'session-1' },
         });
         const accountB = createDeferred<WorkflowRunListPage>();
-        listRuns.mockImplementation(() => accountB.promise);
+        readPage.mockImplementation(() => accountB.promise);
         await act(async () => {
-            // The Account lifetime owner clears the shared rows on a switch.
-            storeState.reset();
-            accountScope.switchTo({ serverId: 'server-a', accountId: 'account-b' });
+            await home.switchAccount(serverId, 'account-b');
+            storage.getState().activateProfileScope({ serverId, accountId: 'account-b' });
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         });
         // Nothing of Account A survives the switch, before B has answered.
         expect(latest?.runs).toEqual([]);
         accountB.resolve({ runs: [accountBRun], metadataByRunId: {}, nextCursor: undefined });
-        await act(async () => {});
+        await flushHookEffects({ cycles: 40 });
         expect(latest?.runs.map((run) => run.id)).toEqual(['run-b']);
     });
 });

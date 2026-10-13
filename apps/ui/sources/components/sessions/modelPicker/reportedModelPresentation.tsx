@@ -96,7 +96,7 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
     label: {
         fontSize: 12,

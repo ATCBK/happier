@@ -1,10 +1,16 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileForPortableIdentity, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     PluginProjectionV2Schema,
     RPC_ERROR_CODES,
@@ -13,24 +19,17 @@ import {
     type ExternalSessionsCandidatesListResponse,
     type PluginProjectionV2,
 } from '@happier-dev/protocol';
-import { createCapturingLegendListMock, createDeferred, createMachineFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createPassThroughModule } from '@/dev/testkit/mocks/components';
+import { createCapturingLegendListMock, createDeferred, createMachineFixture, flushHookEffects, renderHook, renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { MachineMetadataSchema } from '@/sync/domains/state/storageTypes';
-import {
-    createMachineAdministrationTargetSelectionMock,
-    installMachineAdministrationTargetSelectionBoundary,
-} from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
 import type {
     MergedBackendProjectionEntry,
     MergedProviderProjectionEntry,
 } from '@/agents/backendCatalog/mergedProjectionTypes';
-import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
-import { SessionContextChips } from '@/components/sessions/context/SessionContextChips';
 import { installNewSessionComponentsCommonModuleMocks } from '../../new/components/newSessionComponentsTestHelpers';
 
 
@@ -60,16 +59,6 @@ const linkEnsureSpy = vi.hoisted(() => vi.fn(async (_input?: unknown, _options?:
     created: true,
 })));
 const memoryRpcSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (call: { method: string; payload: unknown; signal?: AbortSignal; serverId?: string }) => {
-        const options = { serverId: call.serverId, ...(call.signal ? { signal: call.signal } : {}) };
-        if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST
-            || call.method === RPC_METHODS.DAEMON_DIRECT_SESSIONS_CANDIDATES_LIST_LEGACY) return candidatesListSpy(call.payload, options);
-        if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_CANDIDATE_DELETE) return candidateDeleteSpy(call.payload, options);
-        if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE) return linkEnsureSpy(call.payload, options);
-        return memoryRpcSpy(call);
-    },
-}));
 const routerPushSpy = vi.hoisted(() => vi.fn());
 // Navigation may load through the destination host before the shared component
 // overrides are installed. Bind the real router boundary during module collection.
@@ -81,11 +70,7 @@ const modalAlertSpy = vi.hoisted(() => vi.fn());
 const accountSettingsState = vi.hoisted(() => ({
     current: {} as Record<string, unknown>,
 }));
-const mutateAccountSettingsSpy = vi.hoisted(() => vi.fn(async (
-    mutate: (raw: Record<string, unknown>) => Record<string, unknown>,
-) => {
-    accountSettingsState.current = mutate(accountSettingsState.current);
-}));
+const settingsPostSpy = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => ({
     connectedServicesV2: [
         {
@@ -99,25 +84,27 @@ const settingsMock = vi.hoisted(() => ({
         'openai-codex/work': 'Work Profile',
     },
 }));
-const daemonProjectionHookSpy = vi.hoisted(() => vi.fn());
-const serverA = (await upsertServerProfile({ serverUrl: 'https://browse-screen-a.test' })).id;
-const serverB = (await upsertServerProfile({ serverUrl: 'https://browse-screen-b.test' })).id;
-const administrationTargetSelection = createMachineAdministrationTargetSelectionMock({
-    serverId: serverA,
-    serverIdentityId: 'server-identity-a',
-    machines: [
-        { machineId: 'machine-1', displayName: 'MacBook Pro' },
-        {
-            machineId: 'machine-2',
-            displayName: 'Linux Box',
-            serverId: serverB,
-            serverIdentityId: 'server-identity-b',
-            serverLabel: 'Other server',
-        },
-    ],
-    selectedMachineId: 'machine-1',
-});
-installMachineAdministrationTargetSelectionBoundary(administrationTargetSelection);
+const serverA = 'srv_browse_screen_a';
+const serverB = 'srv_browse_screen_b';
+// Drive the real preference and inventory producers, not a replacement selector.
+const administrationTargetSelection = { controller: {
+    select(machineId: string | null, identity = serverA) {
+        const serverIdentityId = resolveServerProfileScopeIdForIdentifier(identity === serverB ? serverB : serverA);
+        const state = fixtureStorage.getState();
+        const targets = machineId === null
+            ? clearMachineAdministrationTargetPreference(state.settings.machineAdministrationTargetsLocalV1, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.externalSessions)
+            : setMachineAdministrationTargetPreference(state.settings.machineAdministrationTargetsLocalV1,
+                MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.externalSessions, { machineId, serverIdentityId });
+        fixtureStorage.setState({ settings: { ...state.settings, machineAdministrationTargetsLocalV1: targets } });
+    },
+    reset() { this.select('machine-1'); },
+    async setMachines(machines: readonly Readonly<{ machineId: string; displayName?: string; homeDir?: string }>[]) {
+        machinesState = machines.map(machine => ({ id: machine.machineId, active: true,
+            metadata: { displayName: machine.displayName ?? machine.machineId, host: 'tester.local',
+                ...(machine.homeDir ? { homeDir: machine.homeDir } : {}) } }));
+        await publishMachinesState();
+    },
+} };
 const daemonProjectionState = vi.hoisted((): {
     current: {
         phase: 'loading' | 'ready' | 'unsupported' | 'error';
@@ -239,7 +226,7 @@ let machinesState: Array<{
     };
 }> = [
     { id: 'machine-1', active: true, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
-    { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+    { id: 'machine-2', active: true, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
 ];
 
 async function publishMachinesState(): Promise<void> {
@@ -249,19 +236,32 @@ async function publishMachinesState(): Promise<void> {
     if (!metadata) throw new Error('The canonical unlocked machine fixture must supply metadata');
     const machines = machinesState.map((machine) => createMachineFixture({
         ...machine,
+        activeAt: Date.now(),
         metadata: MachineMetadataSchema.parse({ ...metadata, ...machine.metadata }),
     }));
     const activeServerId = getActiveServerSnapshot().serverId;
     // These are the two Home inventories represented by the Administration fixture.
     // Legacy locked callers without a server id still use the real active Home.
     getStorage().setState({
+        machines: Object.fromEntries(machines.filter(machine => machine.id === 'machine-1').map(machine => [machine.id, machine])),
         machineListByServerId: {
-            ...getStorage().getState().machineListByServerId,
             ...(activeServerId ? { [activeServerId]: machines } : {}),
             [serverA]: machines.filter((machine) => machine.id === 'machine-1'),
             [serverB]: machines.filter((machine) => machine.id === 'machine-2'),
         },
+        machineListStatusByServerId: {
+            ...(activeServerId ? { [activeServerId]: 'idle' as const } : {}),
+            [serverA]: 'idle', [serverB]: 'idle',
+        },
     });
+}
+
+function machineCensusRow(machineId: string, accountId: string) {
+    const row = createPlainMachineRowFixture({ id: machineId, accountId });
+    const machine = machinesState.find(machine => machine.id === machineId);
+    return machine ? { ...row, metadata: encodePlainMachineStoredContent(MachineMetadataSchema.parse({
+        ...createMachineFixture().metadata, ...machine.metadata,
+    })) } : row;
 }
 
 const expoRouterMock = createExpoRouterMock({
@@ -276,29 +276,12 @@ installNewSessionComponentsCommonModuleMocks({
         Pressable: 'Pressable',
         ScrollView: 'ScrollView',
     }),
-    unistyles: () => createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000',
-                textSecondary: '#666',
-                textTertiary: '#444',
-                divider: '#ddd',
-                surface: '#fff',
-                surfaceHigh: '#f5f5f5',
-                surfacePressedOverlay: '#eee',
-                success: '#0f0',
-                accent: { orange: '#f90' },
-                modal: { border: '#ddd' },
-                shadow: { color: '#000' },
-                groupped: { background: '#fff' },
-                header: { tint: '#000' },
-            },
-        },
-    }),
+    unistyles: () => createUnistylesMock(),
     router: () => expoRouterMock.module,
     text: () => createTextModuleMock({
         translate: (key: string, params?: Record<string, unknown>) => {
             if (key === 'agentInput.agent.codex') return 'Codex';
+            if (key === 'externalSessions.browseSourceCodexUserHome') return 'My Codex home';
             if (key === 'time.nowShort') return 'now';
             if (key === 'time.minutesAgoShort') return `${String(params?.count)}m ago`;
             if (key === 'time.hoursAgoShort') return `${String(params?.count)}h ago`;
@@ -317,67 +300,6 @@ installNewSessionComponentsCommonModuleMocks({
 // deadlock their dependency cycle and cannot characterize the content boundary.
 vi.unmock('@/sync/domains/state/storage');
 vi.unmock('@/sync/store/hooks');
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        mutateAccountSettingsOnce: vi.fn(async ({ mutate }: Readonly<{
-            mutate: (raw: Record<string, unknown>) => Readonly<{
-                settings: Record<string, unknown>;
-                value: unknown;
-            }>;
-        }>) => {
-            const proposal = mutate(accountSettingsState.current);
-            await mutateAccountSettingsSpy((raw) => proposal.settings ?? raw);
-            return { status: 'applied', value: proposal.value };
-        }),
-    },
-}));
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: (params: unknown) => {
-        daemonProjectionHookSpy(params);
-        return daemonProjectionState.current;
-    },
-}));
-
-vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList']));
-vi.mock('@/components/ui/lists/ItemGroup', () => createPassThroughModule(['ItemGroup']));
-// Same pass-through host element as its siblings, plus the row accessory
-// mounted as a child. The real `Item` renders `rightElement` into the tree, so
-// a mock that only forwards it as an inert prop would hide every accessory
-// control — the candidate delete overflow among them — from this screen.
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement(
-            'Item',
-            props,
-            props.rightElement as React.ReactNode,
-            props.children,
-        ),
-}));
-// The row overflow is asserted by type, so it needs a host element with that
-// name; the real component only renders generic Views and would be invisible.
-vi.mock('@/components/ui/lists/ItemRowActions', () => createPassThroughModule(['ItemRowActions']));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => createPassThroughModule(['DropdownMenu']));
-vi.mock('@/components/ui/forms/Switch', () => createPassThroughModule(['Switch']));
-vi.mock('@/components/ui/popover', () => ({
-    ...createPassThroughModule(['PopoverScope']),
-    // Filter chips anchor a popover; its content is exercised by the SelectionList filter owner's tests.
-    Popover: () => null,
-    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {},
-}));
-vi.mock('@/components/ui/text/Text', () => createPassThroughModule(['Text', 'TextInput']));
-vi.mock('@/components/ui/status/StatusPill', () => ({
-    StatusPill: (props: Record<string, unknown>) => React.createElement('StatusPill', props),
-    resolveStatusPillVariantForState: (state: string) => state === 'live'
-        ? 'success'
-        : state === 'needsAttention'
-            ? 'warning'
-            : 'neutral',
-}));
-vi.mock('@/agents/registry/AgentIcon', () => ({
-    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
-}));
-
 const { module: capturedLegendList, state: legendListState } = createCapturingLegendListMock({
     renderItems: true,
 });
@@ -392,7 +314,82 @@ vi.mock('@legendapp/list/react-native', () => ({
         React.createElement(capturedLegendList.LegendList, { ...props, ref })),
 }));
 
+const network = await installSessionOpsNetworkBoundary();
+// The real scoped pool may retain a Socket across per-case ledger resets.
+const observedSockets = new Set<(typeof network.socketBoundaries)[number]>();
+function socketBoundaries() {
+    for (const socket of network.socketBoundaries) observedSockets.add(socket);
+    return [...observedSockets];
+}
+const httpHomes = createHomeGovernanceHarness();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { Item } = await import('@/components/ui/lists/Item');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
+// React's renderer exposes the memoized function, not the memo wrapper.
+const ItemRender = (Item as unknown as { readonly type: React.ElementType }).type;
+const ItemGroupRender = (ItemGroup as unknown as { readonly type: React.ElementType }).type;
+const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { PopoverScope } = await import('@/components/ui/popover');
+const { AgentCatalogIdentityIcon } = await import('@/agents/presentation/AgentCatalogIdentityIcon');
+const { SessionContextChips } = await import('@/components/sessions/context/SessionContextChips');
+const { getStorage: getFixtureStorage } = await import('@/sync/domains/state/storageStore');
+const fixtureStorage = getFixtureStorage();
+const { clearMachineAdministrationTargetPreference, setMachineAdministrationTargetPreference, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } =
+    await import('@/sync/domains/machines/administration/selectionPreferences');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { publishMachineContributionRegistryProjectionReconnect } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+// This fixture drives the daemon's response and genuine invalidation producer;
+// the hook, cache, catalog adapter and authority fences all remain real.
+let projectionAnswer = daemonProjectionState.current;
+const pendingProjectionReads = new Set<() => void>();
+Object.defineProperty(daemonProjectionState, 'current', {
+    get: () => projectionAnswer,
+    set: (next: typeof projectionAnswer) => {
+        const wasLoading = projectionAnswer.phase === 'loading';
+        projectionAnswer = next;
+        if (next.phase !== 'loading' && pendingProjectionReads.size > 0) {
+            for (const resume of pendingProjectionReads) resume();
+            pendingProjectionReads.clear();
+        }
+        if (!wasLoading || next.phase === 'loading') publishMachineContributionRegistryProjectionReconnect();
+    },
+});
+async function readDaemonProjectionAnswer(): Promise<unknown> {
+    if (projectionAnswer.phase === 'loading') await new Promise<void>(resolve => pendingProjectionReads.add(resolve));
+    if (projectionAnswer.phase === 'unsupported') return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+    if (projectionAnswer.phase === 'error') throw new Error('Fixture daemon projection transport failed');
+    const projection = projectionAnswer.inputs?.pluginProjectionV2;
+    if (!projection) throw new Error('A ready daemon must supply a real projection');
+    return { protocolVersion: 1, projection };
+}
+function requestIdFor(payload: unknown): string {
+    const request = socketBoundaries().flatMap(item => item.socket.emitWithAck.mock.calls)
+        .map(([event, raw]) => event === SOCKET_RPC_EVENTS.CALL && raw !== null && typeof raw === 'object'
+            ? raw as SocketRpcRequestPayload : null)
+        .reverse().find(request => request?.params === payload);
+    if (!request?.requestId) throw new Error('Expected a cancellable native Browse request');
+    return request.requestId;
+}
+afterAll(() => network.dispose());
 const externalSessionsBrowseScreenModulePromise = import('./ExternalSessionsBrowseScreen');
+async function renderScreen(...args: Parameters<typeof renderScreenWithTestkit>) {
+    const screen = await renderScreenWithTestkit(...args);
+    return { ...screen, findByTestId(testID: string) {
+        // Row-content assertions observe the genuine Item, whose native
+        // Pressable deliberately does not forward subtitle/icon React props.
+        return screen.findAllByType(ItemRender).find(node => node.props.testID === testID)
+            ?? screen.findByTestId(testID);
+    } };
+}
+
+function expectScopedSessionNavigation(sessionId: string, serverIdentityId: string) {
+    const home = resolveServerProfileForPortableIdentity(serverIdentityId);
+    expect(home.kind).toBe('resolved');
+    if (home.kind !== 'resolved') throw new Error('Expected one fixture Home for the portable identity');
+    expect(routerPushSpy).toHaveBeenCalledWith(`/session/${sessionId}?serverId=${home.profile.id}`);
+}
 
 type DropdownTriggerPresentation = Readonly<{
     title: string;
@@ -432,6 +429,7 @@ type BrowseFilterTestNode = Readonly<{
     valueLabel?: string;
     testID?: string;
     ownerProps?: any;
+    renderPopoverContent?: (input: Readonly<{ close: () => void; maxHeight: number }>) => React.ReactNode;
 }>;
 
 /** The browse scope's SelectionList filter with this chip testID (machine, Agent, source). */
@@ -446,33 +444,90 @@ function findBrowseFilter(
 const MACHINE_FILTER_TEST_ID = 'external-sessions.browse.administration.target.chip';
 
 function findDropdownMenuByTriggerTestId(
-    screen: { findAllByType: (type: unknown) => DropdownMenuTestNode[] },
+    screen: Pick<Awaited<ReturnType<typeof renderScreen>>, 'findAllByType'>,
     testID: string,
 ): DropdownMenuTestNode | undefined {
-    return screen.findAllByType('DropdownMenu').find((node) => (
+    return screen.findAllByType(DropdownMenu).find((node) => (
         node.props?.testID === testID || node.props?.itemTrigger?.itemProps?.testID === testID
     ));
 }
 
 describe('ExternalSessionsBrowseScreen', () => {
     let home: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>>;
+    let disconnectHome: (() => Promise<void>) | undefined;
     beforeEach(async () => {
         vi.useRealTimers();
+        accountSettingsState.current = { ...settingsMock, experiments: true, featureToggles: { 'memory.search': true } };
+        await httpHomes.reset();
         home = await serveExternalSessionBrowseHome({ homes: [
             { key: 'foreign', serverUrl: 'https://browse-consent-foreign.test', accountId: 'foreign-account' },
             { key: 'foregroundOther', serverUrl: 'https://browse-consent-foreground.test', accountId: 'foreground-account' },
             { key: 'other', serverUrl: 'https://browse-screen-b.test', accountId: 'browse-account' },
             { key: 'focused', serverUrl: 'https://browse-screen-a.test', accountId: 'browse-account' },
-        ], route: () => undefined });
+        ], route: request => request.path.startsWith('/v1/machines/')
+            ? Response.json({ machine: createPlainMachineRowFixture({
+                id: request.path.slice('/v1/machines/'.length), accountId: request.accountId ?? 'browse-account',
+            }) })
+            : undefined });
+        for (const boundary of socketBoundaries()) {
+            boundary.socket.emitWithAck.mockClear();
+            boundary.socket.emit.mockClear();
+        }
+        network.resetRequests();
+        settingsPostSpy.mockReset();
+        for (const [key, profile] of Object.entries(home.homes)) {
+            const accountId = key === 'foreign' ? 'foreign-account' : key === 'foregroundOther' ? 'foreground-account' : 'browse-account';
+            await network.addHome(profile.serverUrl, accountId);
+            await httpHomes.addHome({ name: key, serverUrl: profile.serverUrl, accountId, active: false,
+                ...(key === 'focused' || key === 'other' ? { serverIdentityId: key === 'focused' ? serverA : serverB } : {}) });
+            for (const machineId of ['machine-1', 'machine-2']) httpHomes.answer(profile.id, `/v1/machines/${machineId}`, {
+                select: () => ({ body: { machine: machineCensusRow(machineId, accountId) } }),
+            });
+            httpHomes.answer(profile.id, '/v1/machines', { select: () => ({ body: [machineCensusRow(
+                key === 'other' ? 'machine-2' : 'machine-1', accountId,
+            )] }) });
+            httpHomes.answer(profile.id, 'GET /v2/account/settings', { select: () => ({
+                body: { content: { t: 'plain', v: accountSettingsState.current }, version: 1 },
+            }) });
+            httpHomes.answer(profile.id, 'POST /v2/account/settings', { select: input => {
+                const request = input as Readonly<{ content: Readonly<{ t: string; v: Record<string, unknown> }>; expectedVersion: number }>;
+                settingsPostSpy(request);
+                if (request.content.t !== 'plain') throw new Error('Fixture Home requires plaintext Account settings');
+                accountSettingsState.current = request.content.v;
+                return { body: { success: true, version: request.expectedVersion + 1 } };
+            } });
+        }
+        network.setHttpResponder(async (input, init) => httpHomes.request(String(input), init));
+        network.setRpcAckResponder(async call => {
+            try {
+                const result = await (async () => {
+                    const serverId = resolveServerProfileScopeIdForIdentifier(Object.values(home.homes).find(profile => profile.serverUrl === call.serverUrl)?.id);
+                    if (!serverId) throw new Error(`Unexpected Browse Home ${call.serverUrl}`);
+                    if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return readDaemonProjectionAnswer();
+                    if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST
+                        || call.method === RPC_METHODS.DAEMON_DIRECT_SESSIONS_CANDIDATES_LIST_LEGACY) return candidatesListSpy(call.payload, {
+                            serverId, requestId: requestIdFor(call.payload),
+                        });
+                    if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_CANDIDATE_DELETE) return candidateDeleteSpy(call.payload, { serverId });
+                    if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE) return linkEnsureSpy(call.payload, { serverId });
+                    return memoryRpcSpy({ ...call, machineId: call.targetId, serverId });
+                })();
+                return { ok: true, result };
+            } catch (error) {
+                if (error instanceof Error && 'rpcErrorCode' in error && typeof error.rpcErrorCode === 'string') {
+                    return { ok: false, error: error.message, errorCode: error.rpcErrorCode };
+                }
+                throw error;
+            }
+        });
         machinesState = [
             { id: 'machine-1', active: true, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
-            { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+            { id: 'machine-2', active: true, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
         ];
-        await publishMachinesState();
         memoryRpcSpy.mockReset().mockResolvedValue({ v: 1, enabled: false });
-        administrationTargetSelection.controller.reset();
+        network.requests.length = 0;
         candidatesListSpy.mockReset();
-        daemonProjectionHookSpy.mockClear();
+        clearDaemonMergedProjectionCacheForTests();
         daemonProjectionState.current = {
             phase: 'ready',
             inputs: {
@@ -505,15 +560,23 @@ describe('ExternalSessionsBrowseScreen', () => {
         modalConfirmSpy.mockResolvedValue(true);
         routerPushSpy.mockClear();
         modalAlertSpy.mockClear();
-        mutateAccountSettingsSpy.mockClear();
-        accountSettingsState.current = {};
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        const restored = await restoreServerAccountForTest({ serverUrl: home.homes.focused!.serverUrl,
+            serverIdentityId: serverA, accountId: 'browse-account', request: httpHomes.request,
+            additionalRequestOrigins: Object.values(home.homes).map(profile => profile.serverUrl),
+        });
+        disconnectHome = () => restored.dispose();
+        (await import('@/sync/domains/machines/reachability/machineReachability')).clearMachineRequestReachabilityForTest();
+        await publishMachinesState();
         const { getStorage } = await import('@/sync/domains/state/storageStore');
         const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        getStorage().setState(state => ({ profile: AccountProfileSchema.parse({ ...state.profile, ...profileMock }),
+        getStorage().setState(state => ({ isDataReady: true, profile: AccountProfileSchema.parse({ ...state.profile, ...profileMock }),
+            settingsScope: state.profileScope,
             settingsVersion: 1,
             settings: { ...settingsDefaults, ...settingsMock,
                 backendEnabledByTargetKey: {}, experiments: true, featureToggles: { 'memory.search': true } },
         }));
+        administrationTargetSelection.controller.reset();
     });
 
 
@@ -586,7 +649,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             },
             sourcePolicyId: `es-source-policy:v1:${'a'.repeat(64)}` as const,
         };
-        candidatesListSpy.mockResolvedValueOnce({
+        candidatesListSpy.mockResolvedValue({
             ok: true,
             candidates: [],
             nextCursor: null,
@@ -606,10 +669,9 @@ describe('ExternalSessionsBrowseScreen', () => {
         await act(async () => {
             await menu.props.onSelect('auto-link');
         });
-        expect(mutateAccountSettingsSpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(settingsPostSpy).toHaveBeenCalledTimes(1));
         expect(linkEnsureSpy).not.toHaveBeenCalled();
-        const updateSettings = mutateAccountSettingsSpy.mock.calls[0]?.[0];
-        expect(updateSettings?.({}).externalSessionsSettingsV1).toEqual(
+        expect(accountSettingsState.current.externalSessionsSettingsV1).toEqual(
             expect.objectContaining({
                 autoLinkSourcePolicies: [
                     expect.objectContaining({
@@ -630,11 +692,12 @@ describe('ExternalSessionsBrowseScreen', () => {
 
         const menu = findDropdownMenuByTriggerTestId(screen, 'external-sessions-browse-menu') as any;
         expect(menu?.props?.items?.some((item: { id: string }) => item.id === 'auto-link')).toBe(false);
-        expect(mutateAccountSettingsSpy).not.toHaveBeenCalled();
+        expect(settingsPostSpy).not.toHaveBeenCalled();
         expect(linkEnsureSpy).not.toHaveBeenCalled();
     });
 
     it('does not grant foreground Account consent to a foreign locked credential scope', async () => {
+        const initialSettings = structuredClone(accountSettingsState.current);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const { upsertAndActivateServer, upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
         const { getStorage } = await import('@/sync/domains/state/storageStore');
@@ -644,23 +707,28 @@ describe('ExternalSessionsBrowseScreen', () => {
         const foreign = await upsertServerProfileOnly({ serverUrl: 'https://browse-consent-foreign.test' });
         const foregroundScope = { serverId: foreground.id, accountId: 'foreground-account' };
         const previous = getStorage().getState();
-        // Secure storage and applied connection identity are the genuine boundaries;
-        // credential lifetime, currentness, and settings scope readers stay real.
+        // Device credential custody is the boundary; applied connection identity
+        // is published through its real lifecycle producer.
         const credentialsSpy = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (_url, options) => (
             options?.serverId === foreign.id
                 ? { token: `header.${Buffer.from(JSON.stringify({ sub: 'foreign-account' })).toString('base64')}.signature` }
                 : null
         ));
-        const appliedSnapshotSpy = vi.spyOn(connectionManager, 'getAppliedActiveServerSnapshot').mockReturnValue({
+        const previousAppliedSnapshot = connectionManager.getAppliedActiveServerSnapshot();
+        const previousAppliedAvailability = connectionManager.isAppliedActiveServerRuntimeAvailable();
+        connectionManager.publishAppliedActiveServerSnapshot({
             serverId: foreground.id, serverUrl: foreground.serverUrl, generation: 0,
         });
-        const appliedAvailableSpy = vi.spyOn(connectionManager, 'isAppliedActiveServerRuntimeAvailable').mockReturnValue(true);
+        connectionManager.publishAppliedActiveServerRuntimeAvailability(true);
         try {
             const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
             const bindings = await renderHook(() => useServerCredentialAccountScopes([foreign.id]));
             await vi.waitFor(() => expect(bindings.getCurrent().get(foreign.id)?.accountId).toBe('foreign-account'));
             const accountLifetime = bindings.getCurrent().get(foreign.id)!;
-            getStorage().setState({ profileScope: foregroundScope, settingsScope: foregroundScope });
+            getStorage().setState(state => ({ profileScope: foregroundScope, settingsScope: foregroundScope,
+                machineListByServerId: { ...state.machineListByServerId,
+                    [foreign.id]: [createMachineFixture({ id: 'machine-1', activeAt: Date.now() })] },
+            }));
             expect(getActiveServerAccountScope()).toEqual(foregroundScope);
             expect(accountLifetime.isCurrent()).toBe(true);
             expect(accountLifetime.scope).not.toEqual(foregroundScope);
@@ -689,17 +757,17 @@ describe('ExternalSessionsBrowseScreen', () => {
             const consent = menu?.props?.items?.find((item) => item.id === 'auto-link');
             // Even a direct dispatch cannot grant a foreign policy in the foreground Account.
             await act(async () => { await menu?.props?.onSelect?.('auto-link'); });
-            expect(mutateAccountSettingsSpy).not.toHaveBeenCalled();
+            expect(settingsPostSpy).not.toHaveBeenCalled();
             expect(consent === undefined || consent.disabled === true).toBe(true);
-            expect(accountSettingsState.current).toEqual({});
+            expect(accountSettingsState.current).toEqual(initialSettings);
             expect(accountLifetime.isCurrent()).toBe(true);
         } finally {
             await act(async () => {
                 getStorage().setState({ profileScope: previous.profileScope, settingsScope: previous.settingsScope });
             });
             credentialsSpy.mockRestore();
-            appliedSnapshotSpy.mockRestore();
-            appliedAvailableSpy.mockRestore();
+            connectionManager.publishAppliedActiveServerSnapshot(previousAppliedSnapshot);
+            connectionManager.publishAppliedActiveServerRuntimeAvailability(previousAppliedAvailability);
         }
     });
 
@@ -711,10 +779,8 @@ describe('ExternalSessionsBrowseScreen', () => {
             updatedAtMs: 1_700_000_000_000,
         }] as ExternalSessionCandidateV1[];
 
-        function findCandidateActions(screen: Readonly<{
-            findAllByType: (type: string) => ReadonlyArray<Readonly<{ props: Record<string, unknown> }>>;
-        }>) {
-            return screen.findAllByType('ItemRowActions').find(
+        function findCandidateActions(screen: Pick<Awaited<ReturnType<typeof renderScreen>>, 'findAllByType'>) {
+            return screen.findAllByType(ItemRowActions).find(
                 (node) => Array.isArray(node.props.actions),
             );
         }
@@ -729,7 +795,8 @@ describe('ExternalSessionsBrowseScreen', () => {
             const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
             await flushHookEffects();
 
-            expect(screen.findAllByType('ItemRowActions')).toHaveLength(0);
+
+            expect(screen.findAllByType(ItemRowActions)).toHaveLength(0);
             expect(candidateDeleteSpy).not.toHaveBeenCalled();
         });
 
@@ -864,7 +931,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             await flushHookEffects();
 
             const readDeleteActionDisabledByRow = () => new Map(
-                screen.findAllByType('ItemRowActions')
+                screen.findAllByType(ItemRowActions)
                     .map((node) => [
                         node.props.overflowTriggerTestID as string,
                         (node.props.actions as ReadonlyArray<Readonly<{
@@ -875,7 +942,7 @@ describe('ExternalSessionsBrowseScreen', () => {
                     ] as const),
             );
             const readRowLoadingByTestId = () => new Map(
-                screen.findAllByType('Item')
+                screen.findAllByType(ItemRender)
                     .filter((node) => typeof node.props.testID === 'string'
                         && (node.props.testID as string).startsWith('direct-session-candidate:'))
                     .map((node) => [node.props.testID as string, node.props.loading === true] as const),
@@ -990,6 +1057,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
             const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
             await flushHookEffects();
+            await vi.waitFor(() => expect(readDeleteAction()).toBeDefined());
 
             // The scope moves while the confirmation is still on screen.
             const pendingConfirmation = createDeferred<boolean>();
@@ -999,7 +1067,7 @@ describe('ExternalSessionsBrowseScreen', () => {
                 await Promise.resolve();
             });
             await act(async () => {
-                administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+                administrationTargetSelection.controller.select('machine-2', serverB);
             });
             await flushHookEffects();
             await act(async () => {
@@ -1028,7 +1096,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             );
 
             await act(async () => {
-                administrationTargetSelection.controller.select('machine-1', 'server-identity-a');
+                administrationTargetSelection.controller.select('machine-1', serverA);
             });
             await flushHookEffects();
             await act(async () => {
@@ -1055,10 +1123,12 @@ describe('ExternalSessionsBrowseScreen', () => {
         });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         vi.useRealTimers();
         standardCleanup();
-        home.dispose();
+        await disconnectHome?.();
+        disconnectHome = undefined;
+        await home.dispose();
     });
 
     it('loads candidates for the persisted Administration target and default provider', async () => {
@@ -1072,15 +1142,17 @@ describe('ExternalSessionsBrowseScreen', () => {
             agentId: 'codex',
             source: { kind: 'codexHome', home: 'user' },
             limit: 50,
-        }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }, expect.objectContaining({ requestId: expect.any(String) }));
 
         const providerFilter = findBrowseFilter(screen, 'direct-session-provider-picker');
         const sourceFilter = findBrowseFilter(screen, 'direct-session-source-picker');
         const machineFilter = findBrowseFilter(screen, MACHINE_FILTER_TEST_ID);
-        const popoverScopes = screen.findAllByType('PopoverScope' as any);
+        const popoverScopes = screen.findAllByType(PopoverScope);
 
-        expect(machineFilter?.ownerProps.selection.selectedTarget).toEqual({
-            serverIdentityId: 'server-identity-a',
+        const machinePicker = machineFilter?.renderPopoverContent?.({ close: vi.fn(), maxHeight: 300 });
+        if (!React.isValidElement<{ selection: { selectedTarget: unknown } }>(machinePicker)) throw new Error('Machine picker did not render');
+        expect(machinePicker.props.selection.selectedTarget).toEqual({
+            serverIdentityId: serverA,
             machineId: 'machine-1',
         });
         // The scope is SelectionList filters beside the search band — the machine (through its
@@ -1091,7 +1163,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(providerFilter?.selectedId).toBe('codex');
         expect(providerFilter?.options?.length).toBeGreaterThan(0);
         expect(providerFilter?.options?.every((option) => option.icon?.type === AgentCatalogIdentityIcon)).toBe(true);
-        expect(screen.findAllByType('ItemGroup' as any)).toHaveLength(0);
+        expect(screen.findAllByType(ItemGroupRender)).toHaveLength(0);
 
         const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
         expect(candidateItem).toBeTruthy();
@@ -1165,7 +1237,7 @@ describe('ExternalSessionsBrowseScreen', () => {
     });
 
     it('uses the selected machine home directory for candidate project presentation', async () => {
-        administrationTargetSelection.controller.setMachines([{
+        await administrationTargetSelection.controller.setMachines([{
             machineId: 'machine-1',
             displayName: 'Windows PC',
             homeDir: 'C:\\Users\\alice',
@@ -1180,7 +1252,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             },
         }];
         await publishMachinesState();
-        candidatesListSpy.mockResolvedValueOnce({
+        candidatesListSpy.mockResolvedValue({
             ok: true,
             candidates: [{
                 remoteSessionId: 'windows-session-1',
@@ -1232,7 +1304,7 @@ describe('ExternalSessionsBrowseScreen', () => {
 
         expect(candidatesListSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({
             cursor: 'cursor-after-empty-page',
-        }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(screen.findByTestId('direct-session-candidate:candidate-after-empty-page')).not.toBeNull();
     });
 
@@ -1283,20 +1355,21 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(findBrowseFilter(screen, MACHINE_FILTER_TEST_ID)).toBeTruthy();
         expect(candidatesListSpy).not.toHaveBeenCalled();
         expect(linkEnsureSpy).not.toHaveBeenCalled();
-        expect(mutateAccountSettingsSpy).not.toHaveBeenCalled();
+        expect(settingsPostSpy).not.toHaveBeenCalled();
     });
 
     it('uses the exact Administration machine and server target for candidate reads', async () => {
-        administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+        administrationTargetSelection.controller.select('machine-2', serverB);
         const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
 
         const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
         await flushHookEffects();
 
         expect(findBrowseFilter(screen, MACHINE_FILTER_TEST_ID)).toBeTruthy();
-        expect(daemonProjectionHookSpy).toHaveBeenLastCalledWith(expect.objectContaining({
-            machineId: 'machine-2',
-            serverId: serverB,
+        expect(network.requests).toContainEqual(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+            targetId: 'machine-2',
+            serverUrl: 'https://browse-screen-b.test',
         }));
         expect(candidatesListSpy).toHaveBeenCalledWith({
             machineId: 'machine-2',
@@ -1305,7 +1378,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             limit: 50,
         }, expect.objectContaining({
             serverId: serverB,
-            signal: expect.any(AbortSignal),
+            requestId: expect.any(String),
         }));
     });
 
@@ -1322,8 +1395,8 @@ describe('ExternalSessionsBrowseScreen', () => {
 
         await flushHookEffects();
 
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('newSession.daemonRpcUnavailableBody'));
         const text = screen.getTextContent();
-        expect(text).toContain('newSession.daemonRpcUnavailableBody');
         expect(text).not.toContain('RPC method not available');
     });
 
@@ -1470,7 +1543,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             limit: 50,
             searchTerm: 'codex-hidden-session-9',
             searchMode: 'fast',
-        }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }, expect.objectContaining({ requestId: expect.any(String) }));
         expect(candidatesListSpy).toHaveBeenNthCalledWith(3, {
             machineId: 'machine-1',
             agentId: 'codex',
@@ -1478,7 +1551,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             limit: 50,
             searchTerm: 'codex-hidden-session-9',
             searchMode: 'full',
-        }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }, expect.objectContaining({ requestId: expect.any(String) }));
         expect(screen.findByTestId('direct-session-candidates-search-augmenting')).toBeTruthy();
         expect(screen.findByTestId('direct-session-candidates-search-incomplete')).toBeTruthy();
 
@@ -1557,7 +1630,7 @@ describe('ExternalSessionsBrowseScreen', () => {
                 { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
             ];
             await publishMachinesState();
-            screen.tree.update(<ExternalSessionsBrowseScreen key="offline" />);
+            screen.tree.update(<ExternalSessionsBrowseScreen />);
         });
         await flushHookEffects();
 
@@ -1571,7 +1644,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         // Opening a session that is already linked is local navigation and stays usable.
         expect(screen.findByTestId('direct-session-candidate:codex-session-linked')?.props.disabled).toBe(false);
         await screen.pressByTestIdAsync('direct-session-candidate:codex-session-linked');
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-session-linked?serverId=${serverA}`);
+        expectScopedSessionNavigation('happy-session-linked', serverA);
 
         // And the footer must not claim the stale listing is complete.
         const paginated = screen
@@ -1599,7 +1672,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             directoryHint: '/tmp/worktree',
             source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' },
         }), { serverId: serverA });
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-session-1?serverId=${serverA}`);
+        expectScopedSessionNavigation('happy-session-1', serverA);
     });
 
     it('links a candidate the still-building index has already served', async () => {
@@ -1641,7 +1714,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             titleHint: 'Existing Codex Session',
             directoryHint: '/tmp/worktree',
         }), { serverId: serverA });
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-session-1?serverId=${serverA}`);
+        expectScopedSessionNavigation('happy-session-1', serverA);
     });
 
     it('keeps a served candidate actionable after the index build is cancelled', async () => {
@@ -1699,7 +1772,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         await act(async () => {
             const first = candidateItem!.props.onPress?.();
             const second = candidateItem!.props.onPress?.();
-            expect(linkEnsureSpy).toHaveBeenCalledTimes(1);
+            await vi.waitFor(() => expect(linkEnsureSpy).toHaveBeenCalledTimes(1));
             resolveLink({
                 ok: true,
                 sessionId: 'happy-session-1',
@@ -1737,8 +1810,9 @@ describe('ExternalSessionsBrowseScreen', () => {
         const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
         await flushHookEffects();
 
-        expect(daemonProjectionHookSpy).toHaveBeenLastCalledWith(expect.objectContaining({
-            retainInputsAcrossScopeChange: true,
+        expect(network.requests).toContainEqual(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+            targetId: 'machine-1',
         }));
         const retainedInputs = daemonProjectionState.current.inputs;
         candidatesListSpy.mockClear();
@@ -1829,7 +1903,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             await pendingPress;
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-session-1?serverId=${serverA}`);
+        expectScopedSessionNavigation('happy-session-1', serverA);
     });
 
     it('fences an in-flight candidate link when the selected machine changes', async () => {
@@ -1851,7 +1925,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(linkEnsureSpy).toHaveBeenCalledTimes(1);
 
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+            administrationTargetSelection.controller.select('machine-2', serverB);
         });
         await flushHookEffects();
 
@@ -1895,7 +1969,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(typeof staleUnlinkedPress).toBe('function');
 
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+            administrationTargetSelection.controller.select('machine-2', serverB);
         });
         await flushHookEffects();
 
@@ -1925,7 +1999,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         const stalePress = screen.findByTestId('direct-session-candidate:codex-session-1')?.props.onPress;
 
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+            administrationTargetSelection.controller.select('machine-2', serverB);
         });
         await flushHookEffects();
 
@@ -1962,7 +2036,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         });
 
         expect(linkEnsureSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-session-1?serverId=${serverA}`);
+        expectScopedSessionNavigation('happy-session-1', serverA);
     });
 
     it('keeps retained candidates inert until the post-projection refresh is authoritative', async () => {
@@ -2115,7 +2189,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             agentId: 'codex',
             source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' },
             limit: 50,
-        }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }, expect.objectContaining({ requestId: expect.any(String) }));
 
         const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
         expect(candidateItem).toBeTruthy();
@@ -2195,7 +2269,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             agentId: 'ohMyPi',
             source: { kind: 'ohMyPiAgentDir' },
             limit: 50,
-        }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+        }, expect.objectContaining({ requestId: expect.any(String) }));
 
         await screen.pressByTestIdAsync('direct-session-candidate:omp-session-1');
 
@@ -2219,7 +2293,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         await flushHookEffects();
 
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+            administrationTargetSelection.controller.select('machine-2', serverB);
         });
         await flushHookEffects();
 
@@ -2230,20 +2304,22 @@ describe('ExternalSessionsBrowseScreen', () => {
             limit: 50,
         }, expect.objectContaining({
             serverId: serverB,
-            signal: expect.any(AbortSignal),
+            requestId: expect.any(String),
         }));
 
         candidatesListSpy.mockClear();
         await act(async () => {
-            administrationTargetSelection.controller.setMachines([
+            await administrationTargetSelection.controller.setMachines([
                 { machineId: 'machine-1', displayName: 'MacBook Pro' },
             ]);
         });
         await flushHookEffects();
 
-        const targetSelection = findBrowseFilter(screen, MACHINE_FILTER_TEST_ID)?.ownerProps.selection;
+        const machinePicker = findBrowseFilter(screen, MACHINE_FILTER_TEST_ID)?.renderPopoverContent?.({ close: vi.fn(), maxHeight: 300 });
+        if (!React.isValidElement<{ selection: { selectedTarget: unknown; state: { kind: string } } }>(machinePicker)) throw new Error('Machine picker did not render');
+        const targetSelection = machinePicker.props.selection;
         expect(targetSelection.selectedTarget).toEqual({
-            serverIdentityId: 'server-identity-b',
+            serverIdentityId: serverB,
             machineId: 'machine-2',
         });
         expect(targetSelection.state.kind).toBe('missing');
@@ -2252,7 +2328,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(screen.findByTestId('direct-session-candidates:no-agents')).toBeNull();
         const text = screen.getTextContent();
         expect(text).not.toContain('machine-2');
-        expect(text).not.toContain('server-identity-b');
+        expect(text).not.toContain(serverB);
         expect(candidatesListSpy).not.toHaveBeenCalled();
         expect(linkEnsureSpy).not.toHaveBeenCalled();
     });
@@ -2302,7 +2378,7 @@ describe('ExternalSessionsBrowseScreen', () => {
 
         // Switch to machine-2 (this starts a slow request)
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
+            administrationTargetSelection.controller.select('machine-2', serverB);
         });
 
         // Immediately switch back to machine-1 (this completes quickly)
@@ -2321,7 +2397,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         });
 
         await act(async () => {
-            administrationTargetSelection.controller.select('machine-1', 'server-identity-a');
+            administrationTargetSelection.controller.select('machine-1', serverA);
         });
 
         await flushHookEffects();
@@ -2379,7 +2455,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             limit: 50,
         }, expect.objectContaining({
             serverId: serverB,
-            signal: expect.any(AbortSignal),
+            requestId: expect.any(String),
         }));
 
         // A locked scope shows its machine and Agent as fixed filter chips: nothing to change.
@@ -2409,8 +2485,8 @@ describe('ExternalSessionsBrowseScreen', () => {
     });
 
     it('opens an annotated linked or imported candidate without relinking it', async () => {
-        administrationTargetSelection.controller.select('machine-2', 'server-identity-b');
-        candidatesListSpy.mockResolvedValueOnce({
+        administrationTargetSelection.controller.select('machine-2', serverB);
+        candidatesListSpy.mockResolvedValue({
             ok: true,
             candidates: [{
                 remoteSessionId: 'codex-imported-1',
@@ -2437,7 +2513,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             await candidateItem?.props.onPress?.();
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith(`/session/happy-existing-1?serverId=${serverB}`);
+        expectScopedSessionNavigation('happy-existing-1', serverB);
         expect(linkEnsureSpy).not.toHaveBeenCalled();
     });
 
@@ -2485,33 +2561,38 @@ describe('ExternalSessionsBrowseScreen', () => {
     });
 
     it('renders locked dynamic Agents through the merged catalog projection', async () => {
+        const builtIns = createExternalSessionsBrowsePluginProjection();
+        const dynamicProjection = PluginProjectionV2Schema.parse({
+            ...builtIns,
+            generation: 7,
+            installedPackagesById: {
+                'happier.agent.acme': {
+                    id: 'happier.agent.acme', displayName: 'Acme Agents', enabled: true,
+                    source: { kind: 'localPath', locator: '/tmp/acme-agent' },
+                    immutableGenerationId: 'acme-generation-7',
+                },
+            },
+            agentsById: {
+                'happier.agent.acme/dynamic': {
+                    ...builtIns.agentsById.codex,
+                    id: 'happier.agent.acme/dynamic', title: 'Acme Dynamic', iconAgentId: 'codex',
+                    identity: { pluginId: 'happier.agent.acme', localId: 'dynamic' },
+                    channel: 'plugin', isBuiltIn: false,
+                    externalSessions: {
+                        ...builtIns.agentsById.codex?.externalSessions,
+                        agent: { pluginId: 'happier.agent.acme', localId: 'dynamic' },
+                        generation: 7,
+                    },
+                },
+            },
+        });
         daemonProjectionState.current = {
             phase: 'ready',
             inputs: {
-                mergedProviderProjectionById: {
-                    'acme.dynamic': {
-                        agentId: 'acme.dynamic',
-                        qualifiedId: 'happier.agent.acme/dynamic',
-                        identity: {
-                            pluginId: 'happier.agent.acme',
-                            localId: 'dynamic',
-                        },
-                        installedPackage: {
-                            id: 'happier.agent.acme',
-                            displayName: 'Acme Agents',
-                            enabled: true,
-                            source: { kind: 'path', locator: '/tmp/acme-agent' },
-                            immutableGenerationId: 'acme-generation-7',
-                        },
-                        projectionGeneration: 7,
-                        title: 'Acme Dynamic',
-                        iconAgentId: 'codex',
-                        channel: 'plugin',
-                        isBuiltIn: false,
-                    },
-                },
+                mergedProviderProjectionById: {},
                 mergedBackendProjectionById: {},
                 discoveredBackendIds: [],
+                pluginProjectionV2: dynamicProjection,
             },
         };
         const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
@@ -2519,7 +2600,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             <ExternalSessionsBrowseScreen
                 lockScope={{
                     machineId: 'machine-1',
-                    providerId: 'acme.dynamic',
+                    providerId: 'happier.agent.acme/dynamic',
                     source: { kind: 'codexHome', home: 'user' },
                 }}
             />,

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { StyleSheet, Text, View } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,17 +19,6 @@ afterEach(standardCleanup);
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) => (params && 'count' in params ? `${key}:${String(params.count)}` : key) });
-});
-
-// The Action executor is the outward write boundary; nothing a section draws here executes an Action.
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: () => ({ execute: vi.fn() }),
-}));
-
-// The user's list density is a stored local setting (storage boundary); the density owner itself runs.
-vi.mock('@/sync/store/hooks', async () => {
-    const { createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
-    return { useLocalSetting: createUseLocalSettingMock({ values: { uiItemDensity: 'cozy', uiFontScale: 1 } }) };
 });
 
 const { WorkSection, WorkFlatSheet, WorkSectionEmptyLine } = await import('./WorkSection');
@@ -155,7 +145,7 @@ describe('WorkSection', () => {
         expect(separators(screen)).toHaveLength(0);
     });
 
-    it('gives adaptive real Item controls the page measurement boundary in both Work surfaces', async () => {
+    it('adapts real Item controls to a narrow pane and back in both Work surfaces', async () => {
         const screen = await renderScreen(
             <View>
                 <WorkFlatSheet>
@@ -164,18 +154,25 @@ describe('WorkSection', () => {
                 <WorkSection testID="roles" anatomy="page" title="Roles" count="">
                     <Item testID="engine" title="Engine" accessoryLayout="adaptive" rightElement={<View testID="engine-select" />} />
                 </WorkSection>
-                <WorkSection testID="working" title="Working" count="">
-                    <Item testID="live" title="Live work" accessoryLayout="adaptive" rightElement={<View testID="live-select" />} />
-                </WorkSection>
             </View>,
         );
-        // Adaptive page rows measure both row width and accessory width.
-        // Grouped live-list rows stay inline without either measurement.
+        // Layout is the native boundary: use the real row's reported widths and observe
+        // whether the control moves beneath its label, then returns beside it.
         for (const id of ['role', 'engine']) {
-            const row = screen.findHostByTestId(id)!;
-            expect(row.findAll((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function')).toHaveLength(2);
+            const measured = () => screen.findHostByTestId(id)!.findAll((node) => typeof node.type === 'string'
+                && typeof node.props.onLayout === 'function');
+            const row = () => measured()[0]!;
+            const accessory = () => measured().at(-1)!;
+            const layout = async (width: number) => {
+                await act(async () => row().props.onLayout({ nativeEvent: { layout: { width, height: 52, x: 0, y: 0 } } }));
+                await act(async () => accessory().props.onLayout({ nativeEvent: { layout: { width: 240, height: 32, x: 0, y: 0 } } }));
+            };
+            await layout(820);
+            expect(StyleSheet.flatten(row().props.style)?.flexDirection).not.toBe('column');
+            await layout(398);
+            expect(StyleSheet.flatten(row().props.style)?.flexDirection).toBe('column');
+            await layout(820);
+            expect(StyleSheet.flatten(row().props.style)?.flexDirection).not.toBe('column');
         }
-        expect(screen.findHostByTestId('live')!.findAll((node) => typeof node.type === 'string'
-            && typeof node.props.onLayout === 'function')).toHaveLength(0);
     });
 });

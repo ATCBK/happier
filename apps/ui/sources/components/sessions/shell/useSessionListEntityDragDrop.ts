@@ -1,5 +1,4 @@
 import type { ActionId } from '@happier-dev/protocol';
-import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type {
     EntityDragItemV1,
     EntityDragScopeV1,
@@ -20,7 +19,8 @@ import {
     type WindowBounds,
     type WindowPointer,
 } from '@/components/ui/treeDragDrop';
-import { describeReportsToRefusal } from '@/components/sessions/work/putSessionUnderLead';
+import { projectActionOutcome } from './dropPreview/sessionListActionOutcome';
+export { projectActionOutcome } from './dropPreview/sessionListActionOutcome';
 import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderCandidates';
 import { selectSessionRelationRecords } from '@/components/sessions/work/reportSubtree';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -92,7 +92,6 @@ export type SessionListCarry = Readonly<{
 
 const NO_GEOMETRY: TreeDropVisualGeometry = Object.freeze({ kind: 'none' });
 const ACCEPTED_KINDS = Object.freeze(['session', 'session-folder', 'session-workspace'] as const);
-const RELATION_REFUSAL_CODES = new Set(['reports_to_cycle', 'reports_to_cas_conflict', 'reports_to_forbidden']);
 
 function sessionsRecord(serverId: string | null): Readonly<Record<string, Session>> {
     const state = getStorage().getState();
@@ -176,23 +175,6 @@ function previewForAdmission(admission: Extract<SessionListDragAdmission, { ok: 
     const instruction = admission.result.instruction;
     const target = 'targetId' in instruction ? admission.tree.rowMetadataById.get(instruction.targetId) ?? null : null;
     return previewForDestination({ instructionKind: instruction.kind }, target);
-}
-
-/** Acknowledged applied/refused or unknown, in the owner's words; never a rewritten cancellation. */
-export function projectActionOutcome(actionId: string, result: ActionExecuteResult): EntityDropOutcomeV1 {
-    if (!result.ok) {
-        if (RELATION_REFUSAL_CODES.has(result.errorCode)) {
-            return { status: 'refused', reason: { code: result.errorCode, message: describeReportsToRefusal(result.errorCode) } };
-        }
-        return { status: 'unknown', reason: { code: result.errorCode || 'unknown', message: t('entityDragDrop.preview.unknownDetail') } };
-    }
-    if (actionId !== 'session.organization.move') return { status: 'applied' };
-    const output = result.result as Readonly<{ status?: string; reason?: string }> | null;
-    if (output?.status === 'applied') return { status: 'applied' };
-    if (output?.status === 'refused' || output?.status === 'unavailable') {
-        return { status: 'refused', reason: describeSessionListDropReason(output.reason ?? 'unavailable') };
-    }
-    return { status: 'unknown', reason: { code: output?.reason ?? 'unknown', message: t('entityDragDrop.preview.unknownDetail') } };
 }
 
 export function sessionListDropTargetId(scope: EntityDragScopeV1): string {
@@ -388,7 +370,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
         factsRef.current = null;
         if (item.kind === 'session') {
             const candidateSessionIds = Object.values(sessionsRecord(item.address.serverId))
-                .filter((session) => (session.serverId ?? null) === item.address.serverId && session.id !== item.address.sessionId)
+                .filter((session) => session.id !== item.address.sessionId)
                 .map((session) => session.id);
             void loadSessionReportsToEligibility({ serverId: item.address.serverId, sessionId: item.address.sessionId,
                 candidateSessionIds, signal: abort.signal }).then((facts) => {

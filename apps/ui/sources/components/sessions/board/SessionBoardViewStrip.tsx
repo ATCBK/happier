@@ -32,13 +32,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 12,
-        paddingTop: 4,
-        paddingBottom: 6,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s6,
     },
     view: {
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         justifyContent: 'center',
         borderRadius: 999,
     },
@@ -46,8 +46,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.selected,
     },
     label: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     labelActive: {
@@ -55,8 +54,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     renameInput: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
         minWidth: 96,
         paddingVertical: 0,

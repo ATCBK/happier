@@ -80,8 +80,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
-        marginTop: 8,
+        gap: theme.space.s8,
+        marginTop: theme.space.s8,
         maxWidth: '100%',
         minWidth: 0,
     },
@@ -93,7 +93,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     description: {
         color: theme.colors.text.secondary,
         flexShrink: 1,
-        marginTop: 2,
+        marginTop: theme.space.s2,
         minWidth: 0,
     },
 }));

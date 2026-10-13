@@ -233,22 +233,20 @@ const OriginMarker = React.memo(function OriginMarker(props: Readonly<{ name: st
 
 const stylesheet = StyleSheet.create((theme) => ({
     section: {
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingTop: 14,
-        paddingBottom: 8,
+        paddingBottom: theme.space.s8,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     groupLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginTop: 10,
-        marginBottom: 2,
+        marginTop: theme.space.s10,
+        marginBottom: theme.space.s2,
     },
     nowRow: {
         flexDirection: 'row',
@@ -256,18 +254,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     nowBody: {
         flex: 1,
-        paddingBottom: 12,
+        paddingBottom: theme.space.s12,
     },
     nowTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     nowDetail: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     originRow: {
         flexDirection: 'row',
@@ -277,29 +273,27 @@ const stylesheet = StyleSheet.create((theme) => ({
     originChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 8,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
         height: 22,
         borderRadius: 11,
         borderWidth: StyleSheet.hairlineWidth * 2,
         backgroundColor: theme.colors.surface.base,
     },
     originText: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
     },
     originRule: {
         flex: 1,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth * 2,
         borderStyle: 'dashed',
         borderColor: theme.colors.border.default,
     },
     beyond: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        marginTop: 6,
+        marginTop: theme.space.s6,
         marginLeft: 74,
     },
 }));

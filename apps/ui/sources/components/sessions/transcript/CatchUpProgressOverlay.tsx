@@ -103,9 +103,9 @@ export const CatchUpProgressOverlay = React.memo((props: CatchUpProgressOverlayP
     const rowStyle: ViewStyle = {
         alignItems: 'center',
         flexDirection: 'row',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s6,
     };
 
     return (

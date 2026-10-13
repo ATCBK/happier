@@ -31,7 +31,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     partOf: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 11,
+        gap: theme.space.s10,
         minWidth: 0,
     },
     copy: {

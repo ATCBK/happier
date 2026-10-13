@@ -27,13 +27,11 @@ import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     activity: {
-        ...Typography.default(),
         marginTop: 3,
         // Aligned under the title: past the 30px mark and its 10px gap.
-        marginLeft: 40,
+        marginLeft: theme.space.s40,
         color: theme.colors.text.tertiary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
 }));
 

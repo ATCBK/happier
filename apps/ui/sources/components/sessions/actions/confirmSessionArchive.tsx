@@ -29,8 +29,8 @@ export type SessionArchiveConfirmation = Readonly<{ confirmed: boolean; alsoArch
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
         gap: 14,
     },
     message: {
@@ -43,7 +43,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     optionLabel: {
         ...Typography.default(),
@@ -55,7 +55,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));
 

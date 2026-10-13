@@ -131,27 +131,25 @@ export function ChangedFilesList({
                     <View
                         style={{
                             backgroundColor: theme.colors.surface.inset,
-                            paddingHorizontal: 16,
-                            paddingVertical: 12,
+                            paddingHorizontal: theme.space.s16,
+                            paddingVertical: theme.space.s12,
                             borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                             borderBottomColor: theme.colors.border.default,
                         }}
                     >
                         <Text
                             style={{
-                                fontSize: 14,
+                                ...Typography.variant('label', 'semiBold'),
                                 color: theme.colors.text.primary,
-                                ...Typography.default('semiBold'),
                             }}
                         >
                             {t('files.latestTurnChanges', { count: filteredTurnAttributedFiles.length })}
                         </Text>
                         <Text
                             style={{
-                                marginTop: 4,
-                                fontSize: 12,
+                                marginTop: theme.space.s4,
+                                ...Typography.variant('meta'),
                                 color: theme.colors.text.secondary,
-                                ...Typography.default(),
                             }}
                         >
                             {checkpointAttributionDescription(turnCheckpointMetadata) ?? t('files.latestTurnDescription')}
@@ -160,8 +158,8 @@ export function ChangedFilesList({
                 ) : null}
 
                 {filteredTurnAttributedFiles.length === 0 ? (
-                    <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 12, ...Typography.default() }}>
+                    <View style={{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }}>
+                        <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('meta'),  }}>
                             {t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))}
                         </Text>
                     </View>
@@ -201,17 +199,16 @@ export function ChangedFilesList({
                     <View
                         style={{
                             backgroundColor: theme.colors.surface.inset,
-                            paddingHorizontal: 16,
-                            paddingVertical: 12,
+                            paddingHorizontal: theme.space.s16,
+                            paddingVertical: theme.space.s12,
                             borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                             borderBottomColor: theme.colors.border.default,
                         }}
                     >
                         <Text
                             style={{
-                                fontSize: 14,
+                                ...Typography.variant('label', 'semiBold'),
                                 color: theme.colors.text.primary,
-                                ...Typography.default('semiBold'),
                             }}
                         >
                             {isCheckpointMode
@@ -220,10 +217,9 @@ export function ChangedFilesList({
                         </Text>
                         <Text
                             style={{
-                                marginTop: 4,
-                                fontSize: 12,
+                                marginTop: theme.space.s4,
+                                ...Typography.variant('meta'),
                                 color: theme.colors.text.secondary,
-                                ...Typography.default(),
                             }}
                         >
                             {isCheckpointMode
@@ -234,8 +230,8 @@ export function ChangedFilesList({
                 ) : null}
 
                 {files.length === 0 && !checkpointUnavailable ? (
-                    <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 12, ...Typography.default() }}>
+                    <View style={{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }}>
+                        <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('meta'),  }}>
                             {t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))}
                         </Text>
                     </View>
@@ -269,17 +265,16 @@ export function ChangedFilesList({
                 <View
                     style={{
                         backgroundColor: theme.colors.surface.inset,
-                        paddingHorizontal: 16,
-                        paddingVertical: 12,
+                        paddingHorizontal: theme.space.s16,
+                        paddingVertical: theme.space.s12,
                         borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                         borderBottomColor: theme.colors.border.default,
                     }}
                 >
                     <Text
                         style={{
-                            fontSize: 14,
+                            ...Typography.variant('label', 'semiBold'),
                             color: theme.colors.text.primary,
-                            ...Typography.default('semiBold'),
                         }}
                     >
                         {t('files.sessionAttributedChanges', { count: sessionAttributedFiles.length })}
@@ -288,8 +283,8 @@ export function ChangedFilesList({
             ) : null}
 
             {filteredSessionAttributedFiles.length === 0 ? (
-                <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                    <Text style={{ color: theme.colors.text.secondary, fontSize: 12, ...Typography.default() }}>
+                <View style={{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }}>
+                    <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('meta'),  }}>
                         {t('files.noSessionAttributedChanges')}
                     </Text>
                 </View>

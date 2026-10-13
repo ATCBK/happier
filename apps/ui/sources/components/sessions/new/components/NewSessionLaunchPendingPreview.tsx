@@ -37,15 +37,15 @@ export function NewSessionLaunchPendingPreview(props: Readonly<{
                 borderRadius: 8,
                 borderColor: theme.colors.border.default,
                 backgroundColor: theme.colors.surface.elevated,
-                padding: 12,
-                gap: 10,
+                padding: theme.space.s12,
+                gap: theme.space.s10,
             }}
         >
             <View
                 style={{
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 8,
+                    gap: theme.space.s8,
                 }}
             >
                 <ActivitySpinner
@@ -66,8 +66,8 @@ export function NewSessionLaunchPendingPreview(props: Readonly<{
                 style={{
                     borderRadius: 8,
                     backgroundColor: theme.colors.surface.base,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
+                    paddingHorizontal: theme.space.s12,
+                    paddingVertical: theme.space.s10,
                 }}
             >
                 <Text

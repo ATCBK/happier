@@ -142,16 +142,16 @@ export function ReviewExplainFindingsButton(props: Readonly<{ running: boolean; 
 }
 
 const styles = StyleSheet.create((theme) => ({
-    notice: { fontSize: 13.5, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },
+    notice: { ...Typography.variant('body'),  color: theme.colors.text.secondary,  },
     noticeStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
     explaining: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
+        gap: theme.space.s6,
         height: 34,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 10,
         backgroundColor: theme.colors.surface.inset,
     },
-    explainingText: { fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    explainingText: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary,  },
 }));

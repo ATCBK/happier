@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { AgentTextMessage } from '@happier-dev/session-core/messages';
 
 import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 
 import { findStructuredMessageRenderer } from './structuredMessageRegistry';
 
 const failClosedInteraction = deriveTranscriptInteraction({ kind: 'public' });
+const message: AgentTextMessage = { kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'x' };
 
 describe('structured message registry (voice agent turn)', () => {
   it('registers voice_agent_turn.v1 but does not render a transcript card', () => {
@@ -13,10 +15,11 @@ describe('structured message registry (voice agent turn)', () => {
 
     const parsed = entry!.schema.safeParse({ v: 1, epoch: 0, role: 'assistant', voiceAgentId: 'va_1', ts: 1 });
     expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('voice_agent_turn_fixture_schema_rejected');
 
-    const el = entry!.render(parsed.success ? parsed.data : (null as any), {
+    const el = entry!.render(parsed.data, {
       sessionId: 's1',
-      message: { kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'x' } as any,
+      message,
       interaction: failClosedInteraction,
       onJumpToAnchor: () => {},
     });
@@ -29,10 +32,11 @@ describe('structured message registry (voice agent turn)', () => {
 
     const parsed = entry!.schema.safeParse({ v: 1, seqTo: 10, updatedAtMs: 1, synopsis: 'hello' });
     expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('session_synopsis_fixture_schema_rejected');
 
-    const el = entry!.render(parsed.success ? parsed.data : (null as any), {
+    const el = entry!.render(parsed.data, {
       sessionId: 's1',
-      message: { kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'x' } as any,
+      message,
       interaction: failClosedInteraction,
       onJumpToAnchor: () => {},
     });
@@ -55,10 +59,11 @@ describe('structured message registry (voice agent turn)', () => {
       decisions: [],
     });
     expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('session_summary_shard_fixture_schema_rejected');
 
-    const el = entry!.render(parsed.success ? parsed.data : (null as any), {
+    const el = entry!.render(parsed.data, {
       sessionId: 's1',
-      message: { kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'x' } as any,
+      message,
       interaction: failClosedInteraction,
       onJumpToAnchor: () => {},
     });

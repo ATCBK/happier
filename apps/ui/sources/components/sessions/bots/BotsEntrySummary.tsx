@@ -54,13 +54,13 @@ const styles = StyleSheet.create((theme) => ({
   detail: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.margins.sm,
+    gap: theme.space.s8,
     flexShrink: 1,
   },
   summary: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.margins.xs,
+    gap: theme.space.s4,
     flexShrink: 1,
   },
   summaryText: {

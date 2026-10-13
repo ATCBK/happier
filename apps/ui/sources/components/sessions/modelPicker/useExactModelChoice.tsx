@@ -76,6 +76,9 @@ export function useExactModelChoice(
     selected: ProviderBoundModelRef | null;
     title: string;
     fallbackLabel: string;
+    /** Offers clearing the choice as the picker's first row (it selects `null`). */
+    clearOptionLabel?: string;
+    clearOptionDescription?: string;
     enabled?: boolean;
   }>,
 ) {
@@ -101,17 +104,20 @@ export function useExactModelChoice(
     refresh: projection.refresh,
   });
   const nativeModels = React.useMemo(() => {
-    if (!params.agentId) return [];
+    // The picker reads a native `default` row as "no explicit model" and selects `null`.
+    const clear = params.clearOptionLabel ? [{ value: 'default', label: params.clearOptionLabel,
+      ...(params.clearOptionDescription ? { description: params.clearOptionDescription } : {}) }] : [];
+    if (!params.agentId) return clear;
     try {
-      return getAgentStaticModels(params.agentId).map((model) => ({
+      return [...clear, ...getAgentStaticModels(params.agentId).map((model) => ({
         value: model.id,
         label: model.name || model.id,
         ...(model.description ? { description: model.description } : {}),
-      }));
+      }))];
     } catch {
-      return [];
+      return clear;
     }
-  }, [params.agentId]);
+  }, [params.agentId, params.clearOptionDescription, params.clearOptionLabel]);
   const hiddenNativeModelKeys = React.useMemo(
     () =>
       hiddenModelVisibilityKeys(providerSettings, {

@@ -83,6 +83,9 @@ describe('newSessionDraftRepositoryAdapter', () => {
         const connectedServices = { v: 2 as const, bindingsByServiceId: {
             'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
         } };
+        const retainedConnectedServices = { v: 2 as const, bindingsByServiceId: {
+            'happier.agent.claude/claude-subscription': { source: 'connected' as const, profileId: 'work' },
+        } };
         const draft = authoringDraft({ agentType: 'claude',
             agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
             selectedPath: '/repo/authored', selectedProfileId: 'launch-profile',
@@ -97,14 +100,15 @@ describe('newSessionDraftRepositoryAdapter', () => {
         const retained = readNewSessionDraftFromRepository({ scope, draftId });
         if (!retained) throw new Error('Expected retained authoring');
         expect(buildNewSessionAuthoringDraftFromPersistedDraft(retained)).toMatchObject({
-            connectedServices, directory: draft.selectedPath, profileId: draft.selectedProfileId, modelSelection: draft.modelSelection,
+            connectedServices: retainedConnectedServices, directory: draft.selectedPath,
+            profileId: draft.selectedProfileId, modelSelection: draft.modelSelection,
         });
         // A configuration handoff consumes the same recovered authoring, rather
         // than silently producing a native credential seed.
         const seed = buildNewSessionTempDataFromAuthoringDraft({
             draft: buildNewSessionAuthoringDraftFromPersistedDraft(retained), machineId: draft.selectedMachineId ?? null,
         });
-        expect(buildNewSessionAuthoringDraftFromTempData(seed).connectedServices).toEqual(connectedServices);
+        expect(buildNewSessionAuthoringDraftFromTempData(seed).connectedServices).toEqual(retainedConnectedServices);
     });
     it('restores retained authoring fields and attachments with unknown nested metadata', () => {
         const draftId = 'retained-fields';

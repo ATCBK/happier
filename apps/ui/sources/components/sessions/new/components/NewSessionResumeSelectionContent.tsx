@@ -17,9 +17,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         width: '100%',
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         // Match the path popover header padding more closely.
-        paddingVertical: 12,
+        paddingVertical: theme.space.s12,
     },
     inputSection: {
         width: '100%',
@@ -28,14 +28,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     inputContainer: {
         flex: 1,
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         minHeight: 40,
         justifyContent: 'center',
         borderWidth: 0.5,
@@ -51,20 +51,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     buttonRow: {
         flexDirection: 'row',
-        marginTop: 12,
+        marginTop: theme.space.s12,
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 10,
+        gap: theme.space.s10,
     },
     buttonRowLeft: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         flexShrink: 1,
     },
     button: {
-        paddingHorizontal: 10,
-        paddingVertical: 7,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
@@ -78,8 +78,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     buttonText: {
-        fontSize: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     buttonTextPrimary: {
         color: theme.colors.button.primary.tint,
@@ -91,15 +90,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
     },
     clearButton: {
-        paddingVertical: 7,
-        paddingHorizontal: 6,
+        paddingVertical: theme.space.s6,
+        paddingHorizontal: theme.space.s6,
     },
     helpText: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        marginTop: 12,
-        lineHeight: 20,
-        ...Typography.default(),
+        marginTop: theme.space.s12,
     },
 }));
 
@@ -199,7 +196,7 @@ export function NewSessionResumeSelectionContent(props: NewSessionResumeSelectio
                                 { opacity: pressed ? motionTokens.press.opacity : 1 },
                             ]}
                         >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
                                 <Icon name="clipboard" size={16} color={theme.colors.text.primary} />
                                 <Text style={[styles.buttonText, styles.buttonTextSecondary]}>
                                     {t('newSession.resume.paste')}
@@ -229,7 +226,7 @@ export function NewSessionResumeSelectionContent(props: NewSessionResumeSelectio
                                 { opacity: pressed ? motionTokens.press.opacity : 1 },
                             ]}
                         >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
                                 <Icon name="x-circle" size={16} color={theme.colors.state.danger.foreground} />
                                 <Text style={[styles.buttonText, styles.buttonTextDestructive]}>
                                     {t('newSession.resume.clearAndRemove')}

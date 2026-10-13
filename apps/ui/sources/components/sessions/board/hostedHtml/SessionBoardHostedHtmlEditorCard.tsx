@@ -24,20 +24,20 @@ import { resolveSessionBoardFailurePresentation } from '../sessionBoardFailurePr
 
 const stylesheet = StyleSheet.create((theme) => ({
     title: { ...Typography.default('semiBold'), fontSize: 16, color: theme.colors.text.primary },
-    titleInput: { ...Typography.default('semiBold'), fontSize: 17, color: theme.colors.text.primary, paddingVertical: 6 },
-    editorLabel: { ...Typography.default('semiBold'), fontSize: 13, color: theme.colors.text.secondary, paddingTop: 8 },
-    editor: { minHeight: 240, paddingTop: 8 },
+    titleInput: {  ...Typography.variant('heading'), color: theme.colors.text.primary, paddingVertical: theme.space.s6 },
+    editorLabel: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary, paddingTop: theme.space.s8 },
+    editor: { minHeight: 240, paddingTop: theme.space.s8 },
     review: {
-        marginTop: 12,
-        paddingTop: 12,
+        marginTop: theme.space.s12,
+        paddingTop: theme.space.s12,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
-        gap: 6,
+        gap: theme.space.s6,
     },
-    reviewHeading: { ...Typography.default('semiBold'), fontSize: 13, color: theme.colors.text.secondary },
+    reviewHeading: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
     reviewEditor: { minHeight: 160 },
-    footer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, paddingTop: 12 },
-    notice: { ...Typography.default(), fontSize: 13, color: theme.colors.state.danger.foreground, flex: 1, minWidth: 160 },
+    footer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: theme.space.s8, paddingTop: theme.space.s12 },
+    notice: {  ...Typography.variant('body'), color: theme.colors.state.danger.foreground, flex: 1, minWidth: 160 },
 }));
 
 export type SessionBoardHostedHtmlEditorCardProps = Omit<SessionBoardHostedHtmlEditorInput, 'flushHtml'> & Readonly<{

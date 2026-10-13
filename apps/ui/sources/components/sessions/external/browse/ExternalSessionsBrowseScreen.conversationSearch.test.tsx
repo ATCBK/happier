@@ -1,29 +1,22 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { createMachineFixture, flushHookEffects, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { ExternalSessionBrowseCandidatesList } from './ExternalSessionBrowseCandidatesList';
-import { readExternalSessionBrowseCandidateKey } from './useExternalSessionBrowseCandidates';
-import { AppPaneProvider, useOptionalAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { FileFindSeedHandoff } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 
 const rpc = vi.hoisted(() => vi.fn());
 const homes = createHomeGovernanceHarness();
 let serverId: string;
+let connection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness').restoreServerAccountForTest>> | undefined;
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -35,12 +28,24 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     return createCapturingLegendListMock({ original: await importOriginal<typeof import('@legendapp/list/react-native')>() }).module;
 });
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
-
 // The app entry publishes the real Sync tuning before Account-bound search.
 // Bridge its Node require through the canonical loader; keep sockets external.
-installDisconnectedServerSocketBoundary();
+const network = await installSessionOpsNetworkBoundary();
+installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { isMachineOnline } = await import('@/utils/sessions/machineUtils');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
+const { readExternalSessionBrowseCandidateKey } = await import('./useExternalSessionBrowseCandidates');
+const { AppPaneProvider, useOptionalAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
+const { parseToken } = await import('@/utils/auth/parseToken');
+const { ExternalSessionsBrowseScreen } = await import('./ExternalSessionsBrowseScreen');
+afterAll(() => network.dispose());
 
 const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
     agentsById: { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE.agentsById, 'acme.archive': {
@@ -55,11 +60,24 @@ const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PR
 
 beforeEach(async () => {
     await homes.reset();
-    serverId = resolveServerProfileScopeIdForIdentifier(await homes.addHome({ serverUrl: 'https://history-index.example.test', serverIdentityId: 'srv_history_index', name: 'History Home', accountId: 'history-account' }));
+    const homeId = await homes.addHome({ serverUrl: 'https://history-index.example.test', serverIdentityId: 'srv_history_index', name: 'History Home', accountId: 'history-account' });
+    serverId = resolveServerProfileScopeIdForIdentifier(homeId);
+    installHomeGovernanceBoundaries(homes);
+    homes.answer(homeId, '/v1/machines/machine-1', { body: { machine:
+        createPlainMachineRowFixture({ id: 'machine-1', accountId: 'history-account' }) } });
+    homes.answer(homeId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'history-account' })] });
+    network.requests.length = 0;
+    network.setRpcResponder(async call => rpc({ ...call, machineId: call.targetId,
+        serverId: resolveServerProfileScopeIdForIdentifier(homes.findByServerUrl(call.serverUrl)?.serverId),
+        accountId: call.token ? parseToken(call.token) : null,
+    }));
     vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async url => {
         const token = homes.findByServerUrl(url)?.token;
         return token ? { token } : null;
     });
+    const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://history-index.example.test', serverIdentityId: serverId,
+        accountId: 'history-account', request: homes.request });
     const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
     const scope = { serverId, accountId: 'history-account' };
     storage.setState(state => ({ isDataReady: true, settingsVersion: 1, profile: { ...state.profile, id: scope.accountId }, profileScope: scope, settingsScope: scope,
@@ -68,9 +86,10 @@ beforeEach(async () => {
     }));
     clearDaemonMergedProjectionCacheForTests();
     rpc.mockReset();
-    vi.useFakeTimers();
+    // Advance the search scheduler without aging fresh Machine presence.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 });
-afterEach(async () => { standardCleanup(); vi.useRealTimers(); vi.restoreAllMocks(); await homes.reset(); });
+afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?.dispose(); connection = undefined; vi.restoreAllMocks(); await homes.reset(); });
 
 async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
 
@@ -85,7 +104,6 @@ describe('History unified conversation search', () => {
                 : { ok: true, candidates: [], contentCoverage: 'partial', nextCursor: 'remaining-file' };
             throw new Error(`Unexpected History scan transport ${call.method}`);
         });
-        const { ExternalSessionsBrowseScreen } = await import('./ExternalSessionsBrowseScreen');
         const screen = await renderScreen(<ExternalSessionsBrowseScreen
             lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
         { flushOptions: { runOnlyPendingTimers: true } });
@@ -134,7 +152,6 @@ describe('History unified conversation search', () => {
         await waitForHomeGovernance(async () => { await flush(); expect(scopes.getCurrent().get(serverId)?.isCurrent()).toBe(true); });
         const lifetime = scopes.getCurrent().get(serverId);
         expect(lifetime?.isCurrent()).toBe(true);
-        const { ExternalSessionsBrowseScreen } = await import('./ExternalSessionsBrowseScreen');
         const handoff: { current: FileFindSeedHandoff | undefined } = { current: undefined };
         function HandoffProbe() { handoff.current = useOptionalAppPaneContext()?.fileFindSeedHandoff; return null; }
         const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={lifetime}

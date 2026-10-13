@@ -37,19 +37,18 @@ export function SourceControlOperationsLogSection(props: SourceControlOperations
     }
 
     return (
-        <View style={{ marginTop: 10 }}>
+        <View style={{ marginTop: theme.space.s10 }}>
             <Text
                 style={{
-                    fontSize: 12,
+                    ...Typography.variant('meta', 'semiBold'),
                     color: theme.colors.text.secondary,
-                    marginBottom: 6,
-                    ...Typography.default('semiBold'),
+                    marginBottom: theme.space.s6,
                 }}
             >
                 {t('files.sourceControlOperationsLog.title')}
             </Text>
             {hasCrossSessionLogEntries && (
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', gap: theme.space.s8, marginBottom: theme.space.s8 }}>
                     <ToolbarButton
                         onPress={() => setOperationLogScope('all')}
                         active={operationLogScope === 'all'}
@@ -65,10 +64,9 @@ export function SourceControlOperationsLogSection(props: SourceControlOperations
             {visibleOperationLog.length === 0 ? (
                 <Text
                     style={{
-                        fontSize: 11,
+                        ...Typography.variant('micro'),
                         color: theme.colors.text.secondary,
-                        marginBottom: 4,
-                        ...Typography.default(),
+                        marginBottom: theme.space.s4,
                     }}
                 >
                     {t('files.sourceControlOperationsLog.emptyThisSession')}
@@ -82,29 +80,29 @@ export function SourceControlOperationsLogSection(props: SourceControlOperations
                             borderColor: theme.colors.border.default,
                             borderRadius: 10,
                             backgroundColor: theme.colors.surface.inset ?? theme.colors.input.background,
-                            paddingHorizontal: 10,
-                            paddingVertical: 8,
-                            marginBottom: 6,
+                            paddingHorizontal: theme.space.s10,
+                            paddingVertical: theme.space.s8,
+                            marginBottom: theme.space.s6,
                         }}
                     >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                            <Text style={{ flex: 1, fontSize: 11, color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s10 }}>
+                            <Text style={{ flex: 1, ...Typography.variant('micro', 'semiBold'), color: theme.colors.text.primary,  }}>
                                 {entry.operation} · {formatOperationActor(entry.sessionId)}
                             </Text>
                             <View
                                 style={{
-                                    paddingHorizontal: 6,
-                                    paddingVertical: 2,
+                                    paddingHorizontal: theme.space.s6,
+                                    paddingVertical: theme.space.s2,
                                     borderRadius: 999,
                                     backgroundColor: entry.status === 'success' ? theme.colors.state.success.foreground : theme.colors.state.neutral.foreground,
                                 }}
                             >
-                                <Text style={{ fontSize: 10, color: 'white', ...Typography.default('semiBold') }}>
+                                <Text style={{ ...Typography.variant('micro', 'semiBold'), color: 'white' }}>
                                     {entry.status.toUpperCase()}
                                 </Text>
                             </View>
                         </View>
-                        <Text style={{ fontSize: 11, color: theme.colors.text.secondary, marginTop: 2, ...Typography.default() }}>
+                        <Text style={{ ...Typography.variant('micro'), color: theme.colors.text.secondary, marginTop: theme.space.s2,  }}>
                             {new Date(entry.timestamp).toLocaleTimeString()}
                             {entry.detail ? ` · ${entry.detail}` : ''}
                         </Text>

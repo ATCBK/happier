@@ -17,10 +17,10 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
         alignItems: 'center',
-        rowGap: 6,
+        rowGap: theme.space.s6,
         // The line starts on the card's content edge (0.2): its dot sits over the field's first
         // letter and the chips' first glyph, and the right cluster ends where the card's content does.
-        paddingHorizontal: theme.margins.xl,
+        paddingHorizontal: theme.space.s20,
     },
     rootCollapsed: {
         minHeight: 0,
@@ -30,7 +30,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexShrink: 1,
         minWidth: 0,
-        gap: 6,
+        gap: theme.space.s6,
     },
     connectionDot: {
         marginRight: 0,
@@ -57,8 +57,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
     },
     /** The guard's countdown inside the line: its own ink weight, tabular so the digits never shift. */
     connectionCountdown: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         fontVariant: ['tabular-nums'],
     },
     spacer: {
@@ -72,18 +71,18 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         // Only shrinks when it is alone on a line narrower than itself; a long badge then wraps its words.
         flexShrink: 1,
         minWidth: 0,
-        gap: 10,
+        gap: theme.space.s10,
     },
     trailingActions: {
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 0,
-        marginLeft: 10,
+        marginLeft: theme.space.s10,
     },
     instrumentSlot: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     /** The opt-in name beside a gauge ("Context", "5-hour"): smaller than the values. */
     instrumentLabelText: {
@@ -108,7 +107,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         minHeight: 20,
         minWidth: 28,
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         borderRadius: 999,
     },
     overflowChipText: {
@@ -117,7 +116,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     overflowPopover: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         gap: 14,
         minWidth: 220,
@@ -125,7 +124,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
     overflowPopoverRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     overflowPopoverRowLabel: {
         fontSize: 13,

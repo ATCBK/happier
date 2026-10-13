@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -169,12 +170,9 @@ const styles = StyleSheet.create(() => ({
         gap: 2,
     },
     title: {
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
     },
     description: {
-        fontSize: 12,
-        fontWeight: '400',
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
 }));

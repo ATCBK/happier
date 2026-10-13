@@ -79,6 +79,6 @@ export function ReviewWalkthroughEntryHint(props: Readonly<{ continues: boolean;
 }
 
 const styles = StyleSheet.create((theme) => ({
-    hint: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-    hintText: { flex: 1, fontSize: 13.5, lineHeight: 19, color: theme.colors.text.tertiary, ...Typography.default() },
+    hint: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
+    hintText: { flex: 1, ...Typography.variant('body'),  color: theme.colors.text.tertiary,  },
 }));

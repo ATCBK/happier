@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -68,7 +69,7 @@ export const GitDeltaInstrument = React.memo(function GitDeltaInstrument(props: 
                             format={formatAdded}
                             emphasisPulse
                             emphasisColor={addedColor}
-                            textStyle={{ fontSize: 12, fontWeight: '600', color: addedColor }}
+                            textStyle={{ ...Typography.variant('meta', 'semiBold'),  color: addedColor }}
                             testID="session-instrument-git-added"
                         />
                     ) : null}
@@ -78,7 +79,7 @@ export const GitDeltaInstrument = React.memo(function GitDeltaInstrument(props: 
                             format={formatRemoved}
                             emphasisPulse
                             emphasisColor={removedColor}
-                            textStyle={{ fontSize: 12, fontWeight: '600', color: removedColor }}
+                            textStyle={{ ...Typography.variant('meta', 'semiBold'),  color: removedColor }}
                             testID="session-instrument-git-removed"
                         />
                     ) : null}

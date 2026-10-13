@@ -42,7 +42,7 @@ export function CapturedComparisonFilesView(props: Readonly<{
         const reason = projected.unavailableByPath.get(path);
         const notes = providedNotes?.(path, placement);
         return reason || notes ? <View>
-            {reason ? <Text testID={`captured-file-unavailable-${path}`} style={{ color: theme.colors.text.secondary, ...Typography.default(), padding: 12 }}>
+            {reason ? <Text testID={`captured-file-unavailable-${path}`} style={{ color: theme.colors.text.secondary, ...Typography.default(), padding: theme.space.s12 }}>
                 {t('walkthrough.evidence.unavailable', { reason })}
             </Text> : null}
             {notes}

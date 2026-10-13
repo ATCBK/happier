@@ -49,11 +49,8 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
         pick: async (request): Promise<HappierInputPickerResult> => {
             const inputType = request.field.inputType;
             if (inputType === undefined) return { status: 'error', message: describePickerError('input_type_unavailable') };
-            // Host semantic pickers have no discovery Resource. The shared select control's
-            // empty presentation list is not an authoritative empty inventory.
-            const presentedOptions = 'hostType' in inputType && inputType.hostType === 'usageQuery'
-                && request.options?.length === 0 ? undefined : request.options;
-            const options = presentedOptions?.flatMap((option): InputOption[] => {
+            const field = { ...request.field, widget: 'select' as const };
+            const options = request.options?.flatMap((option): InputOption[] => {
                 const value = readActionInputOptionValue(option.value);
                 return value === undefined ? [] : [{
                     value,
@@ -65,11 +62,10 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
             const current = readActionInputOptionValue(request.value);
             const result = await invokeInputTypePicker({
                 field: {
-                    path: request.field.path,
-                    title: request.field.title,
-                    widget: 'select',
-                    inputType,
-                    ...(options === undefined ? {} : { options }),
+                    ...field,
+                    // Preserve declared empty constraints. An empty presentation list alone
+                    // invents no static constraint; Protocol still enforces declared sources.
+                    ...(field.options === undefined && request.options?.length ? { options } : {}),
                 },
                 ...(current === undefined ? {} : { value: current }),
                 signal: request.signal,

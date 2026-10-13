@@ -376,13 +376,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderBottomLeftRadius: SESSION_LIST_ROW_CORNER_RADIUS,
         borderBottomRightRadius: SESSION_LIST_ROW_CORNER_RADIUS,
         borderBottomWidth: StyleSheet.hairlineWidth,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     sessionItemContainerSingle: {
         borderRadius: SESSION_LIST_ROW_CORNER_RADIUS,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderBottomWidth: StyleSheet.hairlineWidth,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     avatarLoading: {
         width: SESSION_LIST_ROW_IDENTITY_METRICS.default.slotSize,
@@ -487,21 +487,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: 9,
         borderRadius: 999,
         backgroundColor: theme.colors.surface.inset,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     serverBadgeContainer: {
         borderRadius: 999,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s2,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.background.canvas,
         maxWidth: 140,
     },
     serverBadgeText: {
-        fontSize: 10,
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
     },
     // The `reportsTo` tree: a report sits one step in, joined to its lead by a hairline elbow.
     reportsGutter: {
@@ -511,7 +510,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     reportsConnector: {
         width: 10,
         height: '50%',
-        marginRight: 6,
+        marginRight: theme.space.s6,
         borderLeftWidth: StyleSheet.hairlineWidth,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomLeftRadius: 6,
@@ -521,12 +520,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        gap: 2,
+        gap: theme.space.s2,
     },
     rowActionsRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     rowActionButton: {
         width: 24,
@@ -542,7 +541,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'nowrap',
         overflow: 'hidden',
-        gap: 4,
+        gap: theme.space.s4,
         marginTop: 3,
     },
     tagsRowCompact: {
@@ -554,25 +553,25 @@ const stylesheet = StyleSheet.create((theme) => ({
     tagsInlineRow: {
         alignItems: 'center',
         marginTop: 0,
-        marginRight: 4,
+        marginRight: theme.space.s4,
         maxWidth: 82,
     },
     tagChip: {
         borderRadius: 999,
-        paddingHorizontal: 7,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s6,
+        paddingVertical: theme.space.s2,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.background.canvas,
         maxWidth: 120,
     },
     tagChipCompact: {
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         paddingVertical: 1,
         maxWidth: 110,
     },
     tagChipMinimal: {
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         paddingVertical: 1,
         maxWidth: 96,
     },
@@ -580,27 +579,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: 74,
     },
     tagChipText: {
-        fontSize: 10,
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
-    },
-    tagChipTextCompact: {
-        fontSize: 9,
-    },
-    tagChipTextMinimal: {
-        fontSize: 9,
     },
     tagChipInlineText: {
         borderRadius: 999,
-        paddingHorizontal: 7,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s6,
+        paddingVertical: theme.space.s2,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.background.canvas,
         color: theme.colors.text.secondary,
         fontSize: 13,
         lineHeight: 18,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
         overflow: 'hidden',
     },
     sessionPathSubtitleWeb: {
@@ -613,7 +605,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minHeight: 16,
-        gap: 4,
+        gap: theme.space.s4,
     },
     secondaryLineRowMinimal: {
         minHeight: 12,
@@ -647,13 +639,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     // The row's meta: the shared right-aligned tabular column, so times scan down the list.
     activityTime: {
-        fontSize: 10,
+        ...Typography.variant('micro'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
         ...HAPPIER_META_COLUMN_STYLE,
-    },
-    activityTimeMinimal: {
-        fontSize: 10,
     },
     swipeAction: {
         width: 112,
@@ -663,11 +651,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.status.error,
     },
     swipeActionText: {
-        marginTop: 4,
-        fontSize: 12,
+        marginTop: theme.space.s4,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.primary.tint,
         textAlign: 'center',
-        ...Typography.default('semiBold'),
     },
 }));
 
@@ -1572,14 +1559,7 @@ const SessionItemContent = React.memo(
                             placement === 'inline' ? styles.tagChipInline : null,
                         ]}
                     >
-                        <Text
-                            style={[
-                                styles.tagChipText,
-                                tagChipDensity === 'compact' ? styles.tagChipTextCompact : null,
-                                tagChipDensity === 'minimal' ? styles.tagChipTextMinimal : null,
-                            ]}
-                            numberOfLines={1}
-                        >
+                        <Text style={styles.tagChipText} numberOfLines={1}>
                             {tag.label}
                         </Text>
                     </View>
@@ -1846,7 +1826,7 @@ const SessionItemContent = React.memo(
                                         createItemDisplay={(query) => ({
                                             title: `${t('dropdown.createItem.prefix')} ${query}`,
                                             leftGap: 8,
-                                            rowContainerStyle: { paddingVertical: 6 },
+                                            rowContainerStyle: { paddingVertical: theme.space.s6 },
                                             titleStyle: { fontSize: 14, lineHeight: 20 },
                                             titleNode: (
                                                 <>
@@ -1981,10 +1961,10 @@ const SessionItemContent = React.memo(
                             {showTrailingActivityTime || showTrailingGuardWord ? (
                                 <SessionRowTrailingWordFade wordKey={showTrailingGuardWord && guardState ? guardState.kind : 'time'}>
                                     {showTrailingGuardWord && guardState ? (
-                                        <SessionRowGuardWord guardState={guardState} minimal={isMinimal} />
+                                        <SessionRowGuardWord guardState={guardState} />
                                     ) : (
                                         <Text
-                                            style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
+                                            style={styles.activityTime}
                                             numberOfLines={1}
                                         >
                                             {activityTimeLabel}
@@ -2053,7 +2033,7 @@ const SessionItemContent = React.memo(
                         createItemDisplay={(query) => ({
                             title: `${t('dropdown.createItem.prefix')} ${query}`,
                             leftGap: 8,
-                            rowContainerStyle: { paddingVertical: 6 },
+                            rowContainerStyle: { paddingVertical: theme.space.s6 },
                             titleStyle: { fontSize: 14, lineHeight: 20 },
                             titleNode: (
                                 <>
@@ -2155,19 +2135,19 @@ function SessionRowTrailingWordFade(props: Readonly<{ wordKey: string; children:
 }
 
 /** The row's guard word (lab `rg` G3-2): amber "Stops in 4:52" while Keep running is still possible; a quiet moon after. */
-function SessionRowGuardWord(props: Readonly<{ guardState: SessionListGuardState; minimal: boolean }>) {
+function SessionRowGuardWord(props: Readonly<{ guardState: SessionListGuardState }>) {
     const { theme } = useUnistyles();
     if (props.guardState.kind === 'stopping') {
         return (
             <GuardCountdown stopAt={props.guardState.stopAt} testID="session-row-guard-stops"
-                style={[stylesheet.activityTime, props.minimal ? stylesheet.activityTimeMinimal : null, { color: theme.colors.state.attention.textForeground }]}
+                style={[stylesheet.activityTime, { color: theme.colors.state.attention.textForeground }]}
                 format={duration => t('machineGuard.session.stopsIn', { duration })} />
         );
     }
     return (
         <View testID="session-row-guard-stopped" style={stylesheet.trailingMetaRow}>
             <Icon name="moon" size={11} color={theme.colors.text.tertiary} />
-            <Text style={[stylesheet.activityTime, props.minimal ? stylesheet.activityTimeMinimal : null]} numberOfLines={1}>{t('machineGuard.session.stopped')}</Text>
+            <Text style={stylesheet.activityTime} numberOfLines={1}>{t('machineGuard.session.stopped')}</Text>
         </View>
     );
 }

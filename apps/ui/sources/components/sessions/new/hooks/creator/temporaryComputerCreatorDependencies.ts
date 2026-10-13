@@ -4,14 +4,20 @@ import type {
     TeamCredentialResourceCatalogEntryV1,
 } from '@happier-dev/protocol/teams';
 import { SessionInitialAccessMaterializedV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
+import { PluginMarketplaceCapabilityDataV1Schema, type InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
+import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
+import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type {
     PluginProjectedAgentV2,
     PluginProjectionInstalledPackageV2,
 } from '@happier-dev/protocol';
 import {
+    ExpectedMarketplaceListingV1Schema,
     projectExpectedMarketplaceListing,
     type ExpectedMarketplaceListingV1,
 } from '@happier-dev/protocol/marketplace/internal';
+import { decideMarketplaceListingReviewV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/catalog';
 import type { TemporaryComputerCreatorDependencies } from '../useNewSessionScreenModel';
@@ -30,7 +36,7 @@ export type TemporaryComputerCreatorProducerGap =
     /**
      * The Agent comes from an installed plugin whose exact distribution a fresh
      * Temporary computer cannot acquire: it was installed from a path or an
-     * archive, or its machine's marketplace index carries no listing for it.
+     * archive, or no current registry listing matches its installed bytes.
      */
     | 'agent_plugin_distribution_unacquirable'
     /** No current, brokerable Team credential resource offers a model for the selected Agent. */
@@ -75,21 +81,24 @@ export function createTemporaryComputerCreatorDependencies(facts: Readonly<{
     /**
      * The machine whose open Agent catalog this screen is showing — the
      * creator's focused, or most recently used, machine. A Temporary computer
-     * has no machine of its own, so an externally installed Agent and the
-     * marketplace index that resolves its exact distribution both come from
-     * this one machine. Absent identity fails every external decision closed.
+     * has no machine of its own, so the installed generation comes from this
+     * machine. Its exact listing is read through the qualified Account registry
+     * Actions. Absent identity fails every external decision closed.
      */
     agentCatalogMachineId: string | null;
     /** That machine's projected Agent contributions, keyed by projected Agent id. */
     projectedAgentsById: Readonly<Record<string, PluginProjectedAgentV2>>;
     /** That machine's installed plugin packages, keyed by plugin id. */
     installedPluginPackagesById: Readonly<Record<string, PluginProjectionInstalledPackageV2>>;
-    /** The machine-scoped marketplace index read. Injected only to test this producer. */
-    queryMarketplaceIndex?: (input: Readonly<{
+    /** The mounted authoring owner's qualified Home/Account Action lifetime. */
+    registryActionExecution?: Pick<ReturnType<typeof useMountedActionExecution>, 'execute' | 'isCurrent'>
+        & Readonly<{ scope: ServerAccountScope }>;
+    /** Existing machine inventory transport boundary, loaded only for external acquisition. */
+    readInstalledPlugins?: (input: Readonly<{
         machineId: string;
-        pluginId: string;
+        scope: ServerAccountScope;
         signal?: AbortSignal;
-    }>) => Promise<Readonly<{ items: readonly unknown[] }>>;
+    }>) => Promise<readonly InstalledPluginCapabilityEntryV1[]>;
 }>): TemporaryComputerCreatorComposition {
     const gaps = new Set<TemporaryComputerCreatorProducerGap>();
     const note = (gap: TemporaryComputerCreatorProducerGap): false => {
@@ -97,17 +106,16 @@ export function createTemporaryComputerCreatorDependencies(facts: Readonly<{
         return false;
     };
     const qualifiedHomeServerId = facts.teamCredentialServerId?.trim() ?? '';
-    const queryMarketplaceIndex = facts.queryMarketplaceIndex
-        // Loaded only when an external Agent is actually launched. This pure
-        // producer is composed on every New Session render, and the machine RPC
-        // owner pulls the whole sync runtime behind it.
-        ?? (async ({ machineId, pluginId }) => await (
-            await import('@/sync/ops/machineMarketplaceSources')
-        ).machineMarketplaceIndexQuery(
-            machineId,
-            { text: '', cursor: null, limit: 1, filters: { pluginIds: [pluginId], includeUnavailable: true } },
-            { serverId: qualifiedHomeServerId || null },
-        ));
+    const readInstalledPlugins = facts.readInstalledPlugins ?? (async ({ machineId, scope, signal }) => {
+        const { machineCapabilitiesDetect } = await import('@/sync/ops/capabilities');
+        const result = await machineCapabilitiesDetect(machineId, { requests: [{ id: 'tool.plugins' }], bypassCache: true },
+            { serverId: scope.serverId, accountId: scope.accountId, signal });
+        signal?.throwIfAborted();
+        if (!result.supported) return [];
+        const capability = result.response.results['tool.plugins'];
+        if (!capability?.ok) return [];
+        return PluginMarketplaceCapabilityDataV1Schema.parse(capability.data).installedPlugins ?? [];
+    });
 
     const brokerableModelExistsFor = (agentTargetKey: string): boolean => (
         facts.teamCredentialResources.some((resource) => (
@@ -232,16 +240,52 @@ export function createTemporaryComputerCreatorDependencies(facts: Readonly<{
                 return null;
             }
             signal?.throwIfAborted();
-            const result = await queryMarketplaceIndex({
-                machineId,
-                pluginId: agentTarget.identity.pluginId,
-                ...(signal ? { signal } : {}),
-            });
+            const execution = facts.registryActionExecution;
+            if (!execution?.isCurrent() || execution.scope.serverId !== qualifiedHomeServerId) {
+                note('agent_plugin_distribution_unacquirable');
+                return null;
+            }
+            const projected = facts.installedPluginPackagesById[agentTarget.identity.pluginId];
+            const inventory = await readInstalledPlugins({ machineId, scope: execution.scope, signal });
             signal?.throwIfAborted();
-            const listing = result.items.find((item) => (
-                (item as Readonly<{ pluginId?: unknown }>).pluginId === agentTarget.identity.pluginId
-            )) ?? null;
-            if (!listing) {
+            const installed = inventory.find(item => item.pluginId === agentTarget.identity.pluginId);
+            const distribution = installed?.install.trust?.distribution;
+            if (!execution.isCurrent() || !projected?.immutableGenerationId || !installed?.enabled
+                || installed.version !== projected.version || installed.desiredGeneration !== projected.immutableGenerationId
+                || installed.appliedGeneration !== projected.immutableGenerationId
+                || distribution?.kind !== 'npm' || distribution.packageName !== projected.source.locator || !installed.admittedIntegrity) {
+                note('agent_plugin_distribution_unacquirable');
+                return null;
+            }
+            const sourcesResult = await execution.execute('registries.sources.list', { kind: 'plugin' }, { signal });
+            signal?.throwIfAborted();
+            if (!sourcesResult.ok || !execution.isCurrent()) {
+                note('agent_plugin_distribution_unacquirable');
+                return null;
+            }
+            const sources = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.list'].parse(sourcesResult.result).sources;
+            const matches: ExpectedMarketplaceListingV1[] = [];
+            for (const source of sources) {
+                if (!source.enabled || !source.kinds.includes('plugin')
+                    || source.format !== 'happier-catalog' && source.format !== 'happier-npm') continue;
+                const result = await execution.execute('registries.items.read', { kind: 'plugin', sourceId: source.id,
+                    itemId: source.format === 'happier-npm' ? distribution.packageName : agentTarget.identity.pluginId,
+                    version: installed.version }, { signal });
+                signal?.throwIfAborted();
+                if (!execution.isCurrent()) return null;
+                if (!result.ok) continue;
+                const { item } = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.read'].parse(result.result);
+                if (item.payload.kind !== 'plugin' || item.summary.problem) continue;
+                const { listing, source: listingSource } = item.payload;
+                if (listing.pluginId !== agentTarget.identity.pluginId || listing.distribution.packageName !== distribution.packageName
+                    || listing.distribution.registryOrigin !== distribution.registryOrigin || listing.distribution.version !== installed.version
+                    || listing.distribution.integrity !== installed.admittedIntegrity || item.summary.sourceId !== source.id
+                    || listingSource.id !== source.id) continue;
+                const candidate = { ...listing, source: listingSource };
+                if (!decideMarketplaceListingReviewV1(candidate).installable) continue;
+                matches.push(ExpectedMarketplaceListingV1Schema.parse(projectExpectedMarketplaceListing(candidate, null)));
+            }
+            if (matches.length !== 1) {
                 note('agent_plugin_distribution_unacquirable');
                 return null;
             }
@@ -249,7 +293,7 @@ export function createTemporaryComputerCreatorDependencies(facts: Readonly<{
             // Private-registry authentication is an endpoint-side selection, so
             // the creator never carries a registry profile binding into the
             // sealed commitment.
-            return projectExpectedMarketplaceListing(listing as never, null) satisfies ExpectedMarketplaceListingV1;
+            return matches[0]!;
         },
 
         isLaunchReady: ({ backendTargetKey, agentTarget }) => (
