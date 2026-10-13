@@ -1284,6 +1284,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             },
         },
         quota: {
+            refreshing: '正在重新整理用量…',
             loading: '載入中…',
             error: ({ message }: { message: string }) => `錯誤：${message}`,
             lastUpdated: ({ time }: { time: string }) => `最後更新：${time}`,

@@ -3077,6 +3077,7 @@ export const it: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Aggiornamento dell’utilizzo…",
       loading: "Caricamento…",
       error: ({ message }: { message: string }) => `Errore: ${message}`,
       lastUpdated: ({ time }: { time: string }) =>
