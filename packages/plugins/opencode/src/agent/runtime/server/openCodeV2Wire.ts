@@ -420,10 +420,12 @@ export function normalizeOpenCodeV2Message(params: Readonly<{
   // Accounting belongs to the native assistant/compaction message, including
   // messages deliberately omitted from the user-facing transcript.
   const modelId = readNonBlankOpaqueIdentifier(asRecord(record.model)?.modelID);
+  const providerId = readNonBlankOpaqueIdentifier(asRecord(record.model)?.providerID);
   const accounting = {
     ...(record.tokens === undefined ? {} : { tokens: record.tokens }),
     ...(record.cost === undefined ? {} : { cost: record.cost }),
     ...(modelId ? { modelID: modelId } : {}),
+    ...(providerId ? { providerID: providerId } : {}),
     ...(['completed', 'failed'].includes(String(record.status)) ? { nativeAccountingComplete: true } : {}),
   };
 

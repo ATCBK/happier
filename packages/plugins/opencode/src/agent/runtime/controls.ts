@@ -65,6 +65,8 @@ export function createOpenCodeNativeSessionControls() {
           const description = string(skill?.description);
           const path = string(skill?.path);
           return [{
+            v: 1 as const,
+            origin: 'vendor' as const,
             id: name,
             name,
             displayName,

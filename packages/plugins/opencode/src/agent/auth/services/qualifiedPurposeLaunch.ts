@@ -1,4 +1,4 @@
-import { isPluginError } from '@happier-dev/plugin-sdk';
+import { isPluginError, isRecord, type PluginContributionRef } from '@happier-dev/plugin-sdk';
 import {
   CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1,
   CLAUDE_SUBSCRIPTION_SETUP_TOKEN_ENVIRONMENT_REQUEST_V1,
@@ -6,10 +6,13 @@ import {
 import type {
   AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntime,
+  AgentExecutionRunEvent,
   AgentRuntimeContext,
   AgentSessionOpenRequest,
   AgentSessionRuntime,
+  AgentSessionRuntimeEvent,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentRuntimeJsonValueSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { buildOpenCodeQualifiedAuthContent } from './materialize/index.js';
 import {
@@ -228,7 +231,7 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
     const anthropicRequestAuthBinding = bindings[OPEN_CODE_ANTHROPIC_REQUEST_AUTH_PURPOSE_ID];
     const anthropicBinding = bindings[OPEN_CODE_ANTHROPIC_API_KEY_PURPOSE_ID];
 
-    const directApiKeys: Partial<Record<'openai' | 'anthropic', string>> = {};
+    const directAccountCredentials: Partial<Record<'openai' | 'anthropic', Readonly<{ key: string; service: PluginContributionRef }>>> = {};
     const requiredRequestAuthProviders: Array<'openai' | 'anthropic'> = [];
     let usedBinding = false;
 
@@ -242,11 +245,11 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
         { kind: 'environment', keys: ['OPENAI_API_KEY'] },
         { signal: context.signal, expectedAccount: openAiBinding.account },
       );
-      directApiKeys.openai = readExactEnvironmentValue(
+      directAccountCredentials.openai = { key: readExactEnvironmentValue(
         OPEN_CODE_OPENAI_API_KEY_PURPOSE_ID,
         materialized,
         'OPENAI_API_KEY',
-      );
+      ), service: openAiBinding.service };
     }
 
     if (anthropicRequestAuthBinding) {
@@ -265,7 +268,7 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
           materialized,
           CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.setupToken.environmentKey,
         );
-        directApiKeys.anthropic = setupToken;
+        directAccountCredentials.anthropic = { key: setupToken, service: anthropicRequestAuthBinding.service };
       } catch (error) {
         if (
           !isPluginError(error)
@@ -284,31 +287,57 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
         { kind: 'environment', keys: ['ANTHROPIC_API_KEY'] },
         { signal: context.signal, expectedAccount: anthropicBinding.account },
       );
-      directApiKeys.anthropic = readExactEnvironmentValue(
+      directAccountCredentials.anthropic = { key: readExactEnvironmentValue(
         OPEN_CODE_ANTHROPIC_API_KEY_PURPOSE_ID,
         materialized,
         'ANTHROPIC_API_KEY',
-      );
+      ), service: anthropicBinding.service };
     }
 
-    const preparedRequest = usedBinding
+    const qualifiedAuth = usedBinding ? buildOpenCodeQualifiedAuthContent({
+      baseAuthContent: request.launchEnvironment?.values.OPENCODE_AUTH_CONTENT,
+      directAccountCredentials,
+      requiredRequestAuthProviders,
+    }) : null;
+    const preparedRequest = qualifiedAuth
       ? mergeQualifiedLaunchEnvironment({
           request,
-          authContent: buildOpenCodeQualifiedAuthContent({
-            baseAuthContent: request.launchEnvironment?.values.OPENCODE_AUTH_CONTENT,
-            directApiKeys,
-            requiredRequestAuthProviders,
-          }),
+          authContent: qualifiedAuth.authContent,
         })
       : request;
+
+    function projectNativeAccountFailure<Event extends AgentSessionRuntimeEvent | AgentExecutionRunEvent>(event: Event): Event {
+      if (invalidated || disposed || context.signal?.aborted || !qualifiedAuth
+        || (event.kind !== 'turn-failed' && event.kind !== 'run-failed')) return event;
+      const diagnostic = event.diagnostic;
+      if (!diagnostic || !isRecord(diagnostic.details)) return event;
+      const evidence = diagnostic.details.nativeProviderFailure;
+      if (!isRecord(evidence) || evidence.httpStatus !== 429
+        || (evidence.providerId !== 'openai' && evidence.providerId !== 'anthropic')) return event;
+      const service = qualifiedAuth.nativeAccountServicesByProvider[evidence.providerId];
+      if (!service) return event; // Proxy slots already report exact failures at their request-auth leaf.
+      const classification = {
+        kind: 'rate_limit', limitCategory: 'rate_limit', quotaScope: 'unknown',
+        serviceId: `${service.pluginId}/${service.localId}`, profileId: null, groupId: null,
+        resetsAtMs: null, retryAfterMs: null, planType: null, rateLimits: null,
+        source: 'structured_provider_error',
+      };
+      return { ...event, diagnostic: { ...diagnostic, details: {
+        ...diagnostic.details, runtimeAuthClassification: AgentRuntimeJsonValueSchema.parse(classification),
+      } } };
+    }
+    const hasDirectAccountSource = qualifiedAuth
+      && Object.keys(qualifiedAuth.nativeAccountServicesByProvider).length > 0;
 
     return Object.freeze({
       request: preparedRequest,
       isInvalidated: () => invalidated || context.signal?.aborted === true,
       bindSession(session) {
         let sessionDisposed = false;
+        const watch: AgentSessionRuntime['watch'] = listener => session.watch(event => listener(projectNativeAccountFailure(event)));
         const preparedSession: AgentSessionRuntime = {
           ...session,
+          watch: hasDirectAccountSource ? watch : session.watch,
           async dispose(reason) {
             if (sessionDisposed) return;
             sessionDisposed = true;
@@ -322,8 +351,10 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
       },
       bindExecutionRun(runtime) {
         let runtimeDisposed = false;
+        const watch: AgentExecutionRunRuntime['watch'] = listener => runtime.watch(event => listener(projectNativeAccountFailure(event)));
         const preparedRuntime: AgentExecutionRunRuntime = {
           ...runtime,
+          watch: hasDirectAccountSource ? watch : runtime.watch,
           async dispose() {
             if (runtimeDisposed) return;
             runtimeDisposed = true;

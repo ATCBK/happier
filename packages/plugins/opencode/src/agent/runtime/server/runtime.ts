@@ -1,4 +1,5 @@
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { OpenCodeRuntimeTurnOperations } from './operations.js';
 import type { OpenCodeServerClient } from './openCodeServerClient.js';
@@ -17,6 +18,7 @@ export function createOpenCodeServerRuntime(params: Readonly<{
   client: OpenCodeServerClient;
   env?: Readonly<Record<string, string>>;
   permissionMode?: string | null;
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
   dialect?: OpenCodeServerDialect;
   readManagedServiceSnapshot?: () => ManagedServiceSnapshot | null | undefined;
   mcpRegistration: Promise<OpenCodeMcpRegistrationResult>;

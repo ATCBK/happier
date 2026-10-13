@@ -18,13 +18,13 @@ import {
 import type { OpenCodeRuntimeTurnOperations } from './operations.js';
 import { asRecord, normalizeString, readNonBlankOpaqueIdentifier } from './openCodeParsing.js';
 import { normalizeOpenCodeSkills } from './skills.js';
-import type { OpenCodeRuntimeEvent, OpenCodeRuntimeIssue } from './runtimeEvents.js';
+import type { OpenCodeRuntimeEvent } from './runtimeEvents.js';
 import {
   buildOpenCodePromptParts,
   OpenCodePromptProjectionError,
 } from './promptParts.js';
 import { projectOpenCodeSessionConfiguration } from './promptConfig.js';
-import { projectOpenCodeTurnCancellationCause } from './openCodeRuntimeEvents.js';
+import { projectOpenCodeTurnCancellationCause, projectOpenCodeRuntimeIssueDiagnostic } from './openCodeRuntimeEvents.js';
 import type { OpenCodeActiveSkillsReaderRegistrar } from '../controls.js';
 import { OPEN_CODE_TURN_COMPLETION_FALLBACK_INTERVAL_MS } from './timeoutPolicy.js';
 
@@ -53,17 +53,6 @@ function toRuntimeJson(value: unknown) {
   return parsed.success ? parsed.data : null;
 }
 
-function mapIssue(issue: OpenCodeRuntimeIssue) {
-  return {
-    ...diagnostic(issue.code, issue.sanitizedPreview),
-    details: {
-      v: issue.v,
-      source: issue.source,
-      agentId: issue.agentId,
-    },
-  };
-}
-
 function mapRuntimeEvent(
   event: Exclude<OpenCodeRuntimeEvent, { kind: 'model-catalog-observed' | 'mode-catalog-observed' }>,
 ): NativeEventInput | null {
@@ -88,7 +77,7 @@ function mapRuntimeEvent(
     return {
       kind: 'turn-failed',
       turnId: event.turnId,
-      diagnostic: mapIssue(event.issue),
+      diagnostic: projectOpenCodeRuntimeIssueDiagnostic(event.issue),
     };
   }
   if (event.kind === 'turn-cancelled') {

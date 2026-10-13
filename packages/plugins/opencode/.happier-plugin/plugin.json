@@ -40,6 +40,46 @@
               }
             ]
           },
+          "skills": {
+            "delivery": "none",
+            "liveReload": "unsupported",
+            "nativeDisable": "unsupported",
+            "nativeRoots": {
+              "project": [
+                [
+                  ".opencode",
+                  "skills"
+                ],
+                [
+                  ".opencode",
+                  "skill"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ],
+              "user": [
+                [
+                  ".config",
+                  "opencode",
+                  "skills"
+                ],
+                [
+                  ".claude",
+                  "skills"
+                ],
+                [
+                  ".agents",
+                  "skills"
+                ]
+              ]
+            }
+          },
           "surfaces": [
             "externalSessions"
           ],
@@ -48,6 +88,9 @@
           }
         },
         "catalog": {
+          "acpRegistryIds": [
+            "opencode"
+          ],
           "agentCliSystemTool": {
             "toolId": "opencode-cli"
           },
@@ -320,6 +363,7 @@
       "discoverySources": [
         {
           "id": "config",
+          "loadedInHappierSessions": true,
           "metadata": {
             "agentId": "opencode"
           },
@@ -335,6 +379,7 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
     "resources": [],
     "roles": [],

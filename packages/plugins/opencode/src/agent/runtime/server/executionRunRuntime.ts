@@ -6,7 +6,7 @@ import type {
 
 import type { OpenCodeRuntimeTurnOperations } from './operations.js';
 import { asRecord, normalizeString } from './openCodeParsing.js';
-import { projectOpenCodeTurnCancellationCause } from './openCodeRuntimeEvents.js';
+import { projectOpenCodeTurnCancellationCause, projectOpenCodeRuntimeIssueDiagnostic } from './openCodeRuntimeEvents.js';
 import { buildOpenCodePromptParts, OpenCodePromptProjectionError } from './promptParts.js';
 
 function diagnostic(code: string, message?: string | null) {
@@ -73,7 +73,7 @@ export function createOpenCodeExecutionRunConversation(params: Readonly<{
         kind: 'turn-failed',
         turnId: event.turnId,
         emittedAtMs: event.emittedAtMs,
-        diagnostic: diagnostic(event.issue.code, event.issue.sanitizedPreview),
+        diagnostic: projectOpenCodeRuntimeIssueDiagnostic(event.issue),
       });
       return;
     }

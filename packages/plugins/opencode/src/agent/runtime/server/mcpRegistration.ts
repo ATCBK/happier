@@ -4,6 +4,7 @@ import { asRecord, normalizeString, readStringRecord } from './openCodeParsing.j
 import type { OpenCodeServerClient } from './openCodeServerClient.js';
 import { isOpenCodeServerUnsupportedOperation } from './openCodeServerClient.js';
 import type { OpenCodeRuntimeContext } from './runtimeContext.js';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type OpenCodeMcpRegistration = Readonly<{
   originalName: string;
@@ -22,7 +23,7 @@ export type OpenCodeRegisteredMcpServer = Readonly<{ directory: string; name: st
 const OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH = 64;
 const OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH = 16;
 
-function sanitizeOpenCodeMcpName(value: string): string {
+export function sanitizeOpenCodeMcpName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
@@ -133,7 +134,8 @@ export function buildOpenCodeSessionMcpProjection(
 
 export function canonicalizeOpenCodeProjectedMcpToolName(
   rawToolName: string,
-  projection: OpenCodeSessionMcpProjection,
+  projection: Readonly<{ registrations: readonly Readonly<{ originalName: string; projectedName: string }>[] }>,
+  policy?: AgentSessionOpenRequest['mcpToolPolicy'],
 ): string {
   const trimmed = rawToolName.trim();
   const match = projection.registrations
@@ -142,8 +144,12 @@ export function canonicalizeOpenCodeProjectedMcpToolName(
     .sort((left, right) => right.alias.length - left.alias.length)[0];
   if (!match) return rawToolName;
   const suffix = trimmed.slice(match.alias.length + 1).trim();
+  const knownTools = Object.prototype.hasOwnProperty.call(policy ?? {}, match.registration.originalName)
+    ? Object.keys(policy![match.registration.originalName]!.tools).filter((name) => sanitizeOpenCodeMcpName(name) === suffix)
+    : [];
+  if (knownTools.length > 1) return rawToolName;
   return suffix
-    ? `mcp__${sanitizeOpenCodeMcpName(match.registration.originalName)}__${suffix}`
+    ? `mcp__${match.registration.originalName}__${knownTools[0] ?? suffix}`
     : rawToolName;
 }
 

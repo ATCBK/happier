@@ -22,7 +22,7 @@ export async function openOpenCodeServerExecutionRun(
   }
   const runtimeContext = createOpenCodeRuntimeContext(request, context);
   const env = request.launchEnvironment?.values ?? {};
-  return await createExecutionRunHostBackendFromConversationRuntime({
+  const runtime = await createExecutionRunHostBackendFromConversationRuntime({
     request,
     openConversation: async () => {
       const assembly = await createOpenCodeServerRuntimeAssembly({
@@ -42,4 +42,5 @@ export async function openOpenCodeServerExecutionRun(
       ? event.providerSessionId
       : null,
   });
+  return { ...runtime, ...(request.skills ? { skillsDelivered: false } : {}) };
 }

@@ -149,6 +149,7 @@ export const OPENCODE_PLUGIN = definePlugin({
         },
         primary: 'sessions',
         catalog: {
+          acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
           agentCliSystemTool: { toolId: OPEN_CODE_SYSTEM_TOOL_ID },
         },
@@ -186,7 +187,12 @@ export const OPENCODE_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: {
+              user: [['.config', 'opencode', 'skills'], ['.claude', 'skills'], ['.agents', 'skills']],
+              project: [['.opencode', 'skills'], ['.opencode', 'skill'], ['.claude', 'skills'], ['.agents', 'skills']],
+            },
+          },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],

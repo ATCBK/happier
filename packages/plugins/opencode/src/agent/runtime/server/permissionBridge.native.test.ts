@@ -12,6 +12,7 @@ import {
   readOpenCodePermissionRequestId,
 } from './permissionBridge.js';
 import { normalizeOpenCodeV2PermissionRequest } from './openCodeV2Wire.js';
+import { buildOpenCodeSessionMcpProjection } from './mcpRegistration.js';
 
 const ASK = {
   requestId: 'permission-1',
@@ -22,6 +23,25 @@ const ASK = {
 } as const;
 
 describe('OpenCode native tool approval bridge', () => {
+  it('translates native MCP aliases to the exact open-request server key', () => {
+    const projection = buildOpenCodeSessionMcpProjection('session-a', {
+      'docs.team__prod': { command: '/fixture/mcp' },
+    });
+    const alias = projection.registrations[0]!.projectedName;
+    expect(buildOpenCodePermissionApprovalRequest({ ...ASK, permission: `${alias}_search` }, projection).subject)
+      .toMatchObject({ kind: 'tool', name: 'mcp__docs.team__prod__search' });
+  });
+  it('does not turn a host MCP session grant into a vendor grant that bypasses future policy edits', () => {
+    expect(mapOpenCodeApprovalResultToReply({ requestId: 'approval', kind: 'approval', status: 'approved', persistence: 'session' }, true)).toBe('once');
+  });
+  it('recovers named MCP tools from native sanitized spellings and refuses ambiguous aliases', () => {
+    const projection = buildOpenCodeSessionMcpProjection('session-a', { docs: { command: '/fixture/mcp' } });
+    const ask = { ...ASK, permission: `${projection.registrations[0]!.projectedName}_file_read` };
+    expect(buildOpenCodePermissionApprovalRequest(ask, projection, { docs: { unlisted: 'ask', tools: { 'file.read': 'off' } } }).subject)
+      .toMatchObject({ name: 'mcp__docs__file.read' });
+    expect(buildOpenCodePermissionApprovalRequest(ask, projection, { docs: { unlisted: 'ask', tools: { 'file.read': 'off', 'file/read': 'allow' } } }).subject)
+      .toMatchObject({ name: ask.permission });
+  });
   it('builds only the public tool-approval intent and requests session persistence explicitly', () => {
     expect(buildOpenCodePermissionApprovalRequest(ASK)).toEqual({
       kind: 'approval',

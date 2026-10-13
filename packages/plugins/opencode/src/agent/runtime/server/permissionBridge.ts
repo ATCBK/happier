@@ -8,6 +8,8 @@ import type {
 
 import type { OpenCodeServerPermissionReply } from './openCodeServerClient.js';
 import { asRecord, readNonBlankOpaqueIdentifier } from './openCodeParsing.js';
+import { canonicalizeOpenCodeProjectedMcpToolName, type OpenCodeSessionMcpProjection } from './mcpRegistration.js';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type OpenCodePermissionAsk = Readonly<{
   requestId: string;
@@ -115,8 +117,10 @@ export function readOpenCodePermissionAsk(
 
 export function buildOpenCodePermissionApprovalRequest(
   ask: OpenCodePermissionAsk,
+  mcpProjection?: OpenCodeSessionMcpProjection,
+  policy?: AgentSessionOpenRequest['mcpToolPolicy'],
 ): InteractionTransientApprovalAuthorRequestV1 {
-  const toolName = ask.permission;
+  const toolName = mcpProjection ? canonicalizeOpenCodeProjectedMcpToolName(ask.permission, mcpProjection, policy) : ask.permission;
   return {
     kind: 'approval',
     title: `Allow OpenCode to use ${toolName}?`,
@@ -137,9 +141,10 @@ export function buildOpenCodePermissionApprovalRequest(
 
 export function mapOpenCodeApprovalResultToReply(
   result: InteractionTransientApprovalResultV1,
+  isMcpTool = false,
 ): OpenCodeServerPermissionReply {
   if (result.status === 'approved') {
-    return result.persistence === 'session' ? 'always' : 'once';
+    return result.persistence === 'session' && !isMcpTool ? 'always' : 'once';
   }
   return 'reject';
 }

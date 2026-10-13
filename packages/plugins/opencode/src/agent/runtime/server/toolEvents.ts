@@ -1,4 +1,5 @@
 import type { OpenCodeToolPart } from './foregroundToolTracker.js';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import { isTerminalOpenCodeToolPartStatus } from './foregroundToolTracker.js';
 import { asRecord, normalizeString } from './openCodeParsing.js';
 import { readOpenCodeToolCallKey, type OpenCodeServerRuntimeState } from './state.js';
@@ -37,6 +38,7 @@ export function publishOpenCodeToolPartRuntimeEvents(params: Readonly<{
   scope: OpenCodeRuntimeScope;
   publishRuntimeEvent: (event: OpenCodeRuntimeEvent) => void;
   mcpProjection: OpenCodeSessionMcpProjection;
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
   nowMs?: () => number;
 }>): void {
   const turnId = params.state.activeTurnId;
@@ -55,7 +57,7 @@ export function publishOpenCodeToolPartRuntimeEvents(params: Readonly<{
       ...projectOpenCodeRuntimeScope(params.scope),
       ...outputScope,
       toolCallId: params.part.callID,
-      toolName: canonicalizeOpenCodeProjectedMcpToolName(params.part.tool, params.mcpProjection),
+      toolName: canonicalizeOpenCodeProjectedMcpToolName(params.part.tool, params.mcpProjection, params.mcpToolPolicy),
       toolInput,
       emittedAtMs,
     });

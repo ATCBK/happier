@@ -29,6 +29,8 @@ import { buildOpenCodeConfigLaunchEnvironment } from './server/spawnSpec.js';
 import { prepareOpenCodeQualifiedConnectedAccounts } from '../auth/services/qualifiedPurposeLaunch.js';
 import { openCodeHandoffSurface } from '../surfaces/sessions/handoff/descriptor.js';
 import { resolveOpenCodeReplayChildLaunch } from '../surfaces/sessions/fork/descriptor.js';
+import { buildOpenCodeMcpPermissionRules } from '../permissions/policy.js';
+import { canonicalizeOpenCodeProjectedMcpToolName } from './server/mcpRegistration.js';
 
 export {
   openCodeExternalSessionsContribution,
@@ -43,6 +45,22 @@ const OPEN_CODE_ACP_RUNTIME_DEFINITION = {
     idleWithoutAssistantMessageMs: 10_000,
   },
 } satisfies AgentAcpRuntimeDefinition;
+
+function openCodeAcpDefinition(request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest): AgentAcpRuntimeDefinition {
+  const projection = { registrations: Object.keys(request.mcpServers ?? {}).map((key) => ({ originalName: key, projectedName: key })) };
+  return {
+    ...OPEN_CODE_ACP_RUNTIME_DEFINITION,
+    toolNameResolver({ toolName, input }) {
+      const acp = input._acp !== null && typeof input._acp === 'object' ? input._acp as Readonly<Record<string, unknown>> : undefined;
+      for (const name of [toolName, acp?.title]) {
+        if (typeof name !== 'string') continue;
+        const canonical = canonicalizeOpenCodeProjectedMcpToolName(name, projection, request.mcpToolPolicy);
+        if (canonical !== name) return canonical;
+      }
+      return toolName;
+    },
+  };
+}
 
 function readOpenCodeNativeMode(
   request: Parameters<NonNullable<AgentSessionRuntimeFactory['resolveTerminalPresentation']>>[0],
@@ -67,10 +85,15 @@ async function withOpenCodeConfigLaunchEnvironment<
   Request extends AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
 >(request: Request): Promise<Request> {
   const providerConfigPart = await readOpenCodeProviderConfigPart(request);
-  if (providerConfigPart === undefined) return request;
+  const mcpRules = buildOpenCodeMcpPermissionRules(request.mcpToolPolicy,
+    Object.keys(request.mcpServers ?? {}).map((key) => ({ originalName: key, projectedName: key })));
+  if (providerConfigPart === undefined && mcpRules.length === 0) return request;
   const values = buildOpenCodeConfigLaunchEnvironment(
     request.launchEnvironment?.values,
-    [providerConfigPart],
+    [
+      ...(providerConfigPart === undefined ? [] : [providerConfigPart]),
+      ...(mcpRules.length === 0 ? [] : [{ permission: Object.fromEntries(mcpRules.map(({ permission, action }) => [permission, action])) }]),
+    ],
   );
   return {
     ...request,
@@ -94,7 +117,7 @@ async function openOpenCodeAcpExecutionRun(
       env: { NODE_ENV: 'production', DEBUG: '' },
       timeouts: { initializeMs: 60_000, toolCallMs: 120_000, idleMs: 1_500 },
     },
-    definition: OPEN_CODE_ACP_RUNTIME_DEFINITION,
+    definition: openCodeAcpDefinition(request),
   });
 }
 
@@ -144,7 +167,7 @@ async function openOpenCodeAcpSession(
         idleMs: 1_500,
       },
     },
-    definition: OPEN_CODE_ACP_RUNTIME_DEFINITION,
+    definition: openCodeAcpDefinition(request),
   });
 }
 

@@ -11,6 +11,13 @@ import { OPENCODE_PROVIDER_CONFIG_RELATIVE_PATH } from '../../providerBinding/ad
 import { buildOpenCodeV2ConnectedAuthConfigPart, resolveOpenCodeRequestAuthV2PluginDir } from '../../auth/services/requestAuth/assets.js';
 
 describe('OpenCode config composition', () => {
+  it('keeps later native permission overlays last even when ambient keys were already present', () => {
+    const config = JSON.parse(mergeOpenCodeConfigContent([
+      { permission: { docs_delete: 'allow', 'docs_*': 'allow', unrelated: 'ask' } },
+      { permission: { 'docs_*': 'ask', docs_delete: 'deny' } },
+    ]));
+    expect(Object.keys(config.permission)).toEqual(['unrelated', 'docs_*', 'docs_delete']);
+  });
   it('preserves provider-binding settings and connected auth in the spawned child', async () => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-opencode-config-'));
     try {

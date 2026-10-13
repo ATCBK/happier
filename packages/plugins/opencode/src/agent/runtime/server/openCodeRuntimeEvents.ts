@@ -33,6 +33,7 @@ export function buildOpenCodeRuntimeIssue(params: Readonly<{
   message?: string | null;
   occurredAt: number;
   usageLimit?: OpenCodeRuntimeIssue['usageLimit'];
+  nativeProviderFailure?: OpenCodeRuntimeIssue['nativeProviderFailure'];
 }>): OpenCodeRuntimeIssue {
   return {
     v: 1,
@@ -42,6 +43,23 @@ export function buildOpenCodeRuntimeIssue(params: Readonly<{
     agentId: 'opencode',
     sanitizedPreview: params.message ?? null,
     ...(params.usageLimit ? { usageLimit: params.usageLimit } : {}),
+    ...(params.nativeProviderFailure ? { nativeProviderFailure: params.nativeProviderFailure } : {}),
+  };
+}
+
+/** Both native scopes preserve the same normalized provider evidence. */
+export function projectOpenCodeRuntimeIssueDiagnostic(issue: OpenCodeRuntimeIssue) {
+  return {
+    code: issue.code,
+    severity: 'error' as const,
+    ...(issue.sanitizedPreview ? { message: issue.sanitizedPreview } : {}),
+    details: {
+      v: issue.v,
+      source: issue.source,
+      agentId: issue.agentId,
+      ...(issue.usageLimit ? { usageLimit: issue.usageLimit } : {}),
+      ...(issue.nativeProviderFailure ? { nativeProviderFailure: issue.nativeProviderFailure } : {}),
+    },
   };
 }
 

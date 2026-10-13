@@ -97,6 +97,7 @@ const OPENCODE_RUNTIME_DESCRIPTOR_READER_PROJECTION = {
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: 'opencode',
+  acpRegistryIds: ['opencode'] as const,
   core: OPENCODE_AGENT_CORE,
   sessionModeDescriptor: OPENCODE_AGENT_SESSION_MODE_DESCRIPTOR,
   sessionModesKind: 'acpAgentModes',

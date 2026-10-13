@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import {
@@ -7,8 +8,37 @@ import {
   buildOpenCodeSessionScopedPermissionRuleset,
   resolveOpenCodePermissionConfig,
 } from './policy.js';
+import { buildOpenCodeManagedLaunchEnvironment } from '../runtime/server/spawnSpec.js';
 
 describe('OpenCode permission policy', () => {
+  it('spawns with the composed default launch environment and retains native safe-tool approval', () => {
+    const env = buildOpenCodeManagedLaunchEnvironment(undefined, 'default');
+    const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(process.env.OPENCODE_PERMISSION)'], { env, encoding: 'utf8' });
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    const policy = JSON.parse(child.stdout);
+    for (const name of listHappierToolAutoApprovedNamesV1()) expect(policy[`happier_${name}`], name).toBe('allow');
+    expect(policy.happier_daemon_filesystem_delete).not.toBe('allow');
+    expect(policy.mcp__happier__action_execute).toBeUndefined();
+  });
+  it('projects MCP policies after mode rules without letting native Allow bypass live host decisions', () => {
+    const rules = buildOpenCodeSessionScopedPermissionRuleset('yolo', {
+      registrations: [{ originalName: 'docs__team', projectedName: 'session-docs' }],
+      requiredHappierServerName: null,
+    }, { docs__team: { unlisted: 'allow', tools: { search: 'allow', delete: 'off', inspect: 'ask' } } });
+    expect(rules.slice(-4)).toEqual([
+      { permission: 'session-docs_*', pattern: '*', action: 'ask' },
+      { permission: 'session-docs_search', pattern: '*', action: 'ask' },
+      { permission: 'session-docs_delete', pattern: '*', action: 'deny' },
+      { permission: 'session-docs_inspect', pattern: '*', action: 'ask' },
+    ]);
+  });
+  it('denies a native alias shared by distinct tool names', () => {
+    const rules = buildOpenCodeSessionScopedPermissionRuleset('yolo', {
+      registrations: [{ originalName: 'docs', projectedName: 'session-docs' }], requiredHappierServerName: null,
+    }, { docs: { unlisted: 'ask', tools: { 'file.read': 'off', 'file/read': 'allow' } } });
+    expect(rules.at(-1)).toEqual({ permission: 'session-docs_file_read', pattern: '*', action: 'deny' });
+  });
   it('keeps read-only intent fail-closed while preserving safe aliases', () => {
     const config = resolveOpenCodePermissionConfig('read-only');
 
@@ -16,8 +46,8 @@ describe('OpenCode permission policy', () => {
     expect(config.read).toBe('allow');
     expect(config.edit).toBe('deny');
     expect(config.write).toBe('deny');
-    expect(config.change_title).toBe('allow');
-    expect(config.session_title_set).toBe('allow');
+    expect(config.happier_change_title).toBe('allow');
+    expect(config.happier_session_title_set).toBe('allow');
     expect(config.happier_action_execute).toBe('allow');
   });
 
@@ -29,7 +59,7 @@ describe('OpenCode permission policy', () => {
     expect(byPermission.get('read')).toBe('allow');
     expect(byPermission.get('edit')).toBe('allow');
     expect(byPermission.get('write')).toBe('allow');
-    expect(byPermission.get('mcp__happier__action_execute')).toBe('allow');
+    expect(byPermission.get('happier_action_execute')).toBe('allow');
   });
 
   it('serializes OpenCode permission env from the canonical policy', () => {

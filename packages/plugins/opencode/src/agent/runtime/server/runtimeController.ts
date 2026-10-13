@@ -66,6 +66,7 @@ import { buildOpenCodeSessionScopedPermissionRuleset } from '../../permissions/p
 import type { OpenCodeRuntimeEvent, OpenCodeRuntimeScope } from './runtimeEvents.js';
 import type { OpenCodeServerDialect } from './dialect.js';
 import { normalizeSlashCommandName, readLeadingSlashCommandName } from '@happier-dev/plugin-sdk/sessions';
+import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
 function readOpenCodeProviderErrorMessage(error: unknown): string {
   const record = asRecord(error);
@@ -196,13 +197,14 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
   client: OpenCodeServerClient;
   env?: Readonly<Record<string, string>>;
   permissionMode?: string | null;
+  mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
   dialect?: OpenCodeServerDialect;
   readManagedServiceSnapshot?: () => ManagedServiceSnapshot | null | undefined;
   mcpRegistration: Promise<OpenCodeMcpRegistrationResult>;
   mcpProjection: OpenCodeSessionMcpProjection;
 }>): OpenCodeRuntimeTurnOperations {
   const client = params.client;
-  const sessionPermissions = buildOpenCodeSessionScopedPermissionRuleset(params.permissionMode, params.mcpProjection);
+  const sessionPermissions = buildOpenCodeSessionScopedPermissionRuleset(params.permissionMode, params.mcpProjection, params.mcpToolPolicy);
   const state = createOpenCodeServerRuntimeState();
   const foregroundToolTracker = createOpenCodeForegroundToolTracker();
   const messageHandlers = new Set<(message: OpenCodeRuntimeEvent) => void>();
@@ -651,6 +653,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     terminalAssistantMessageCount: number;
     publishedAssistantMessageCount: number;
     providerSessionError: unknown | null;
+    providerSessionErrorProviderId: string | null;
   }>;
 
   const EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT: AssistantHistoryProjectionResult = {
@@ -659,6 +662,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     terminalAssistantMessageCount: 0,
     publishedAssistantMessageCount: 0,
     providerSessionError: null,
+    providerSessionErrorProviderId: null,
   };
 
   const publishObservedAssistantMessagesFromHistory = async (
@@ -674,6 +678,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     let terminalAssistantMessageCount = 0;
     let publishedAssistantMessageCount = 0;
     let providerSessionError: unknown | null = null;
+    let providerSessionErrorProviderId: string | null = null;
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
       const projection = classifyOpenCodeMessageForProjection(message);
@@ -708,6 +713,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           scope: params.scope,
           publishRuntimeEvent,
           mcpProjection: params.mcpProjection,
+          mcpToolPolicy: params.mcpToolPolicy,
         });
       }
       if (providerSessionError === null) {
@@ -715,6 +721,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         const error = info?.error;
         if (error !== undefined && error !== null) {
           providerSessionError = error;
+          providerSessionErrorProviderId = readNonBlankOpaqueIdentifier(info?.providerID);
         }
       }
       if (parts.length > 0) currentTurnAssistantWithPartsCount += 1;
@@ -755,6 +762,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       terminalAssistantMessageCount,
       publishedAssistantMessageCount,
       providerSessionError,
+      providerSessionErrorProviderId,
     };
   };
 
@@ -1210,7 +1218,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
 
   const failCurrentTurnForProviderSessionError = async (
     error: unknown,
-    options: Readonly<{ historyAlreadyInspected?: boolean }> = {},
+    options: Readonly<{ historyAlreadyInspected?: boolean; providerId?: string | null }> = {},
   ): Promise<boolean> => {
     if (options.historyAlreadyInspected !== true) {
       await markCurrentProviderUserMessageFromHistoryBestEffort('agent_session_error');
@@ -1220,6 +1228,12 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     const emittedAtMs = Date.now();
     const message = formatOpenCodeServerPromptErrorMessage(error);
     const isAuthFailure = openCodeProviderSessionErrorLooksAuthFailure({ error, formattedMessage: message });
+    const nativeError = asRecord(error);
+    const nativeHttpStatus = typeof nativeError?.type === 'string' ? nativeError.status
+      : nativeError?.name === 'APIError' ? asRecord(nativeError.data)?.statusCode : undefined;
+    const nativeProviderFailure = options.providerId && typeof nativeHttpStatus === 'number'
+      && Number.isInteger(nativeHttpStatus) && nativeHttpStatus >= 100 && nativeHttpStatus <= 599
+      ? { providerId: options.providerId, httpStatus: nativeHttpStatus } : null;
     foregroundToolTracker.reset();
     resetCurrentTurnObservations();
     await publishOpenCodeTurnFailed({
@@ -1232,6 +1246,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         source: isAuthFailure ? 'auth_error' : 'agent_session_error',
         message,
         occurredAt: emittedAtMs,
+        ...(nativeProviderFailure ? { nativeProviderFailure } : {}),
       }),
     });
     return true;
@@ -1243,7 +1258,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     if (historyProjection.providerSessionError === null) return false;
     return await failCurrentTurnForProviderSessionError(
       historyProjection.providerSessionError,
-      { historyAlreadyInspected: true },
+      { historyAlreadyInspected: true, providerId: historyProjection.providerSessionErrorProviderId },
     );
   };
 
@@ -1481,8 +1496,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       : null;
     try {
       try {
+        const approvalRequest = buildOpenCodePermissionApprovalRequest(ask, params.mcpProjection, params.mcpToolPolicy);
         const decision = await params.ctx.sessions.current.permissions.requestDecision(
-          buildOpenCodePermissionApprovalRequest(ask),
+          approvalRequest,
           {
             signal: permissionDecisionSignal?.signal ?? (childAttention
               ? params.ctx.abort.compose([params.ctx.abort.signal, childAttention.signal])
@@ -1490,7 +1506,8 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
             ...(childAttention ? { lifetime: 'occurrence' as const } : {}),
           },
         );
-        reply = mapOpenCodeApprovalResultToReply(decision);
+        reply = mapOpenCodeApprovalResultToReply(decision,
+          approvalRequest.subject.kind === 'tool' && approvalRequest.subject.name !== ask.permission);
         message = readOpenCodeApprovalReplyMessage(decision);
       } catch (error) {
         if (permissionDecisionSignal?.isAborted() || !permissionRequestIsStillCurrent()) return;
@@ -1914,6 +1931,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         scope: params.scope,
         publishRuntimeEvent,
         mcpProjection: params.mcpProjection,
+        mcpToolPolicy: params.mcpToolPolicy,
       });
       return;
     }

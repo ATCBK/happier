@@ -6,14 +6,22 @@ import {
 } from '@happier-dev/plugin-sdk/testing';
 import type { AgentRuntimeContext, AgentSessionModelsSource } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema, type AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { createExecutionRunHostBackendFromConversationRuntime, type AgentExecutionRunEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
+import type { ConnectedAccountBindingSummary, ConnectedAccountsService } from '@happier-dev/plugin-sdk/connected-accounts';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import { CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1 } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
+import { prepareOpenCodeQualifiedConnectedAccounts } from '../../auth/services/qualifiedPurposeLaunch.js';
+import { buildOpenCodeRequestAuthMarker } from '../../auth/services/requestAuth/source.js';
 
 import type { OpenCodeRuntimeTurnOperations } from './operations.js';
 import type { OpenCodeRuntimeEvent } from './runtimeEvents.js';
 import { createOpenCodeSessionRuntime } from './sessionRuntime.js';
+import { createOpenCodeExecutionRunConversation } from './executionRunRuntime.js';
 import { createOpenCodeServerRuntime } from './runtime.js';
 import type { OpenCodeServerClient } from './openCodeServerClient.js';
 import { normalizeOpenCodeV2Event } from './openCodeV2EventAdapter.js';
+import { normalizeOpenCodeV2Messages } from './openCodeV2Wire.js';
 import { OpenCodeSseHttpError } from './openCodeSse.js';
 import { OpenCodeServerUnsupportedOperationError } from './openCodeServerClient.js';
 import { createOpenCodeRuntimeContext, type OpenCodeRuntimeContext } from './runtimeContext.js';
@@ -284,6 +292,7 @@ async function createStartedRuntime(params?: Readonly<{
   ctx?: OpenCodeRuntimeContext;
   env?: Readonly<Record<string, string>>;
   harness?: AgentSessionRuntimeHarness;
+  executionRunId?: string;
   readManagedServiceSnapshot?: () => ManagedServiceSnapshot | null;
   mcpRegistration?: Promise<Readonly<{
     requiredHappier: Readonly<
@@ -297,7 +306,7 @@ async function createStartedRuntime(params?: Readonly<{
   const runtimeParams = {
     ctx: params?.ctx ?? createContextFixture().ctx,
     directory: '/repo',
-    happierSessionId: 'happy-session-1',
+    ...(params?.executionRunId ? { executionRunId: params.executionRunId } : { happierSessionId: 'happy-session-1' }),
     baseUrl: 'http://127.0.0.1:49196',
     client: params?.client ?? createClientFixture(),
     env: params?.env,
@@ -5154,10 +5163,15 @@ describe('createOpenCodeServerRuntime', () => {
     expect(runtimeEvents.some((event) => event.kind === 'turn-complete')).toBe(false);
   });
 
-  it('fails active turns when OpenCode reports usage-limit retry status from provider events', async () => {
+  it.each(['session', 'run'] as const)('preserves native usage-limit retry evidence for the $0 runtime scope', async (scope) => {
     const { ctx, harness, runtimeEvents, transcriptAppends } = createContextFixture();
     const client = createClientFixture();
-    const runtime = await createStartedRuntime({ ctx, client, harness });
+    const runtime = await createStartedRuntime({ ctx, client, harness, ...(scope === 'run' ? { executionRunId: 'run-limit' } : {}) });
+    const native = scope === 'run'
+      ? createOpenCodeExecutionRunConversation({ operations: runtime, executionRunId: 'run-limit', disposeOperations: () => runtime.resetOrDisposeRuntime() })
+      : createNativeSessionRuntimeForTest(runtime);
+    const nativeEvents: Array<{ kind: string }> = [];
+    native.watch(event => nativeEvents.push(event));
     runtime.beginTurnLifecycle('test-turn');
 
     await expect(runtime.handleProviderEvent({
@@ -5191,6 +5205,13 @@ describe('createOpenCodeServerRuntime', () => {
         }),
       }),
     ]));
+    expect(nativeEvents).toContainEqual(expect.objectContaining({
+      kind: 'turn-failed', diagnostic: expect.objectContaining({
+        details: expect.objectContaining({ usageLimit: expect.objectContaining({
+          limitCategory: 'usage_limit', quotaScope: 'account', retryAfterMs: expect.any(Number),
+        }) }),
+      }),
+    }));
     expect(transcriptAppends).toHaveLength(0);
     expect(runtimeEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -5203,6 +5224,123 @@ describe('createOpenCodeServerRuntime', () => {
     ]));
     expect(client.sessionAbort).toHaveBeenCalledOnce();
     expect(client.sessionAbort).toHaveBeenCalledWith({ sessionId: 'ses-1' });
+  });
+
+  it.each(['session', 'run'] as const)('preserves exact-parent native provider HTTP failure evidence for the %s scope', async scope => {
+    const { ctx, harness } = createContextFixture();
+    const client = createClientFixture();
+    let providerUserMessageId = '';
+    vi.mocked(client.sessionPromptImplementation).mockImplementationOnce(async input => { providerUserMessageId = input.messageId ?? ''; });
+    const operations = await createStartedRuntime({ ctx, harness, client, ...(scope === 'run' ? { executionRunId: 'native-limit-run' } : {}) });
+    const native = scope === 'run'
+      ? createOpenCodeExecutionRunConversation({ operations, executionRunId: 'native-limit-run', disposeOperations: () => operations.resetOrDisposeRuntime() })
+      : createNativeSessionRuntimeForTest(operations);
+    const events: Array<{ kind: string }> = [];
+    native.watch(event => { events.push(event); });
+    beginTestHostTurn(operations);
+    await operations.sendTurnPrompt('hello');
+    // Released OpenCode v2.0.15 (6f3639d82...) SessionMessage.Assistant owns model
+    // and SessionError.Error { type, message, status }; this is the external server boundary.
+    client.setMessages(normalizeOpenCodeV2Messages([
+      { id: providerUserMessageId, type: 'user', text: 'hello', time: { created: '2026-10-13T01:00:00.000Z' } },
+      { id: 'msg_native_limit', type: 'assistant', content: [],
+        model: { providerID: 'openai', id: 'native-model' }, time: { created: '2026-10-13T01:00:01.000Z', completed: '2026-10-13T01:00:02.000Z' },
+        error: { type: 'api_error', message: 'Provider rejected request', status: 429, token: 'private-provider-token' } },
+    ], 'ses-1'));
+    await operations.handleProviderEvent({ payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } } });
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-failed', diagnostic: expect.objectContaining({
+      details: expect.objectContaining({ nativeProviderFailure: { providerId: 'openai', httpStatus: 429 } }),
+    }) }));
+    expect(JSON.stringify(events)).not.toContain('private-provider-token');
+    await native.dispose();
+  });
+
+  it.each([
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'openai', status: 429, classify: true, proxy: false, resync: false },
+    { purpose: 'anthropic-api-key', service: { pluginId: 'happier.agent.claude', localId: 'anthropic' }, slot: 'anthropic', providerId: 'anthropic', status: 429, classify: true, proxy: false, resync: false },
+    { purpose: 'anthropic-model-request', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, slot: 'anthropic', providerId: 'anthropic', status: 429, classify: true, proxy: false, resync: false },
+    { purpose: 'openai-codex-model-request', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, slot: 'openai', providerId: 'openai', status: 429, classify: false, proxy: true, resync: false },
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'custom-provider', status: 429, classify: false, proxy: false, resync: false },
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'openai', status: 500, classify: false, proxy: false, resync: false },
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'openai', status: 429, classify: false, proxy: false, resync: true },
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'openai', status: 429, classify: true, proxy: false, resync: false, scope: 'run' },
+    { purpose: 'openai-api-key', service: { pluginId: 'happier.voice.openai', localId: 'openai' }, slot: 'openai', providerId: 'openai', status: 429, classify: true, proxy: false, resync: false, wire: 'v1' },
+  ] as const)('attributes native HTTP evidence only to the actually materialized direct Account ($purpose, $providerId, $status, proxy=$proxy, resync=$resync)', async row => {
+    const { ctx, harness } = createContextFixture();
+    const client = createClientFixture();
+    const listeners = new Map<string, (event: { kind: 'resync' }) => void>();
+    const binding = { purpose: row.purpose, service: row.service,
+      account: { service: row.service, accountId: 'actual-source-account' },
+      target: { kind: 'account', displayName: 'Actual source' },
+    } satisfies ConnectedAccountBindingSummary;
+    // These are typed snapshots at the plugin capsule's external host SDK contract.
+    // Plugin preparation, auth-content construction, native projectors and classifiers stay real.
+    const connectedAccounts = {
+      async getBinding(purpose) { return purpose === row.purpose ? binding : null; },
+      async materialize(_purpose, request) {
+        if (row.proxy) throw new PluginError(CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.oauth.requestAuthRequiredErrorCode, 'OAuth requires request-auth');
+        if (request.kind !== 'environment') throw new Error('Expected the qualified environment contract');
+        return { kind: 'environment', env: Object.fromEntries(request.keys.map(key => [key, 'fixture-native-key'])) };
+      },
+      watch(purpose, listener) { listeners.set(purpose, listener); listener({ kind: 'resync' }); return { dispose() {} }; },
+    } satisfies Pick<ConnectedAccountsService, 'getBinding' | 'materialize' | 'watch'>;
+    const sourceContext = { signal: new AbortController().signal, services: { connectedAccounts } } as unknown as AgentRuntimeContext;
+    const isRun = 'scope' in row && row.scope === 'run';
+    const launchEnvironment = { values: { OPENCODE_AUTH_CONTENT: JSON.stringify({ [row.slot]: { type: 'api', key: buildOpenCodeRequestAuthMarker(row.slot) } }) }, unset: [] };
+    const runRequest = { kind: 'create' as const, runId: 'native-account-run', cwd: '/repo',
+      profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' }, input: { text: 'hello' }, localInputId: 'native-account-input', launchEnvironment };
+    const prepared = isRun
+      ? await prepareOpenCodeQualifiedConnectedAccounts(runRequest, sourceContext)
+      : await prepareOpenCodeQualifiedConnectedAccounts({ kind: 'create', sessionId: 'happy-session-1', cwd: '/repo', launchEnvironment }, sourceContext);
+    const auth = JSON.parse(prepared.request.launchEnvironment!.values.OPENCODE_AUTH_CONTENT) as Record<string, { key: string }>;
+    expect(auth[row.slot].key).toBe(row.proxy ? buildOpenCodeRequestAuthMarker(row.slot) : 'fixture-native-key');
+    let providerUserMessageId = '';
+    vi.mocked(client.sessionPromptImplementation).mockImplementationOnce(async input => { providerUserMessageId = input.messageId ?? ''; });
+    const operations = await createStartedRuntime({ ctx, harness, client, env: prepared.request.launchEnvironment?.values,
+      ...(isRun ? { executionRunId: runRequest.runId } : {}) });
+    const native = isRun
+      ? prepared.bindExecutionRun(await createExecutionRunHostBackendFromConversationRuntime({ request: runRequest,
+          async openConversation() { return createOpenCodeExecutionRunConversation({ operations, executionRunId: runRequest.runId, disposeOperations: () => operations.resetOrDisposeRuntime() }); },
+          readCheckpointId(event) { return event.kind === 'provider-session-id' ? event.providerSessionId : null; },
+        }))
+      : prepared.bindSession(createNativeSessionRuntimeForTest(operations));
+    const events: Array<AgentSessionRuntimeEvent | AgentExecutionRunEvent> = [];
+    const subscription = native.watch(event => { events.push(event); });
+    try {
+      if (!isRun) { beginTestHostTurn(operations); await operations.sendTurnPrompt('hello'); }
+      else { await vi.waitFor(() => expect(providerUserMessageId).not.toBe('')); }
+      if (row.resync) { listeners.get(row.purpose)?.({ kind: 'resync' }); await flushMicrotasks(); }
+      // V1 v1.2.27 uses Assistant.providerID and APIError.data.statusCode. V2
+      // v2.0.15 uses Assistant.model.providerID and SessionError.status.
+      client.setMessages('wire' in row && row.wire === 'v1' ? [
+        { info: { id: providerUserMessageId, role: 'user', sessionID: 'ses-1', time: { created: 10 } }, parts: [{ type: 'text', text: 'hello' }] },
+        { info: { id: 'msg_native_account_failure', role: 'assistant', sessionID: 'ses-1', parentID: providerUserMessageId,
+          providerID: row.providerId, modelID: 'native-model', time: { created: 11, completed: 12 },
+          error: { name: 'APIError', data: { message: 'Provider rejected request', statusCode: row.status, isRetryable: true } } }, parts: [] },
+      ] : normalizeOpenCodeV2Messages([
+        { id: providerUserMessageId, type: 'user', text: 'hello', time: { created: '2026-10-13T01:00:00.000Z' } },
+        { id: 'msg_native_account_failure', type: 'assistant', content: [],
+          model: { providerID: row.providerId, id: 'native-model' }, time: { created: '2026-10-13T01:00:01.000Z', completed: '2026-10-13T01:00:02.000Z' },
+          error: { type: 'api_error', message: 'Provider rejected request', status: row.status } },
+      ], 'ses-1'));
+      await operations.handleProviderEvent({ payload: { type: 'session.idle', properties: { sessionID: 'ses-1' } } });
+      const failure = events.find(event => event.kind === 'turn-failed' || event.kind === 'run-failed');
+      if (row.classify) {
+        expect(failure).toMatchObject({ kind: isRun ? 'run-failed' : 'turn-failed',
+          ...(isRun ? { runId: runRequest.runId } : { sessionId: 'happy-session-1' }),
+          diagnostic: { details: { runtimeAuthClassification: {
+          kind: 'rate_limit', limitCategory: 'rate_limit', serviceId: `${row.service.pluginId}/${row.service.localId}`,
+          profileId: null, groupId: null, quotaScope: 'unknown', source: 'structured_provider_error',
+        } } } });
+      } else {
+        expect(failure?.diagnostic.details ?? {}).not.toHaveProperty('runtimeAuthClassification');
+      }
+      if (isRun) expect(events.every(event => !('sessionId' in event))).toBe(true);
+      if (row.resync) {
+        expect(prepared.isInvalidated()).toBe(true);
+        await expect(native.send({ inputIds: ['late'], input: { text: 'late' }, delivery: { kind: 'newTurn', turnId: 'late' } })).resolves.toMatchObject({ status: 'unavailable' });
+      }
+    } finally { subscription.dispose(); await native.dispose(); await prepared.dispose(); }
   });
 
   it('defers a live session.error until exact-parent terminal history follows idle', async () => {

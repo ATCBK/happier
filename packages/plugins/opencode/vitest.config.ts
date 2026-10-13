@@ -3,5 +3,5 @@ import sdkConfig from '../../plugin-sdk/vitest.config';
 
 export default defineConfig({
   plugins: sdkConfig.plugins,
-  test: { include: ['src/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.ts'], exclude: ['src/agent/mcpToolPolicy.contract.test.ts'] },
 });

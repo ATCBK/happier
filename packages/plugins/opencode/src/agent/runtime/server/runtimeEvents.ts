@@ -15,6 +15,7 @@ export type OpenCodeRuntimeIssue = Readonly<{
     recoverability: string;
     limitCategory: string;
   }>;
+  nativeProviderFailure?: Readonly<{ providerId: string; httpStatus: number }>;
 }>;
 
 export type OpenCodeRuntimeScope =

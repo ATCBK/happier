@@ -311,6 +311,7 @@ export async function createOpenCodeServerRuntimeAssembly(
       readManagedServiceSnapshot: () => server.readSnapshot(),
       mcpRegistration,
       mcpProjection,
+      mcpToolPolicy: params.request.mcpToolPolicy,
     });
     await operations.openSession(params.executionRunId === undefined
       ? params.request.kind === 'create'
@@ -397,7 +398,7 @@ export async function createOpenCodeServerRuntimeAssembly(
         });
 
     return {
-      runtime,
+      runtime: { ...runtime, ...(params.request.skills ? { skillsDelivered: false } : {}) },
       dispose,
     };
   } catch (error) {

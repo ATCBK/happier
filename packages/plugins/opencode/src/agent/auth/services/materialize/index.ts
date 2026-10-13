@@ -7,6 +7,7 @@ import type {
     OauthCredentialRecord,
     TokenCredentialRecord,
 } from '@happier-dev/plugin-sdk/connected-accounts';
+import type { PluginContributionRef } from '@happier-dev/plugin-sdk';
 
 import { OPENCODE_CONNECTED_SERVICE_SELECTION_IDENTITY_ENV } from '../../../runtime/server/managedServerState.js';
 import type { OpenCodeConfigPart } from '../../../runtime/server/opencodeConfigContent.js';
@@ -191,11 +192,12 @@ function hasExactRequestAuthMarker(
 
 export function buildOpenCodeQualifiedAuthContent(input: Readonly<{
   baseAuthContent?: unknown;
-  directApiKeys?: Readonly<Partial<Record<OpenCodeRequestAuthProvider, string>>>;
+  directAccountCredentials?: Readonly<Partial<Record<OpenCodeRequestAuthProvider, Readonly<{ key: string; service: PluginContributionRef }>>>>;
   requiredRequestAuthProviders?: readonly OpenCodeRequestAuthProvider[];
-}>): string {
+}>) {
   const base = readAuthContentRecord(input.baseAuthContent);
   const auth: Record<string, unknown> = {};
+  const nativeAccountServicesByProvider: Partial<Record<OpenCodeRequestAuthProvider, PluginContributionRef>> = {};
   for (const provider of ['openai', 'anthropic'] as const) {
     if (hasExactRequestAuthMarker(base, provider)) {
       auth[provider] = {
@@ -210,10 +212,13 @@ export function buildOpenCodeQualifiedAuthContent(input: Readonly<{
     }
   }
   for (const provider of ['openai', 'anthropic'] as const) {
-    const key = input.directApiKeys?.[provider] ?? '';
-    if (key.trim()) auth[provider] = { type: 'api', key };
+    const credential = input.directAccountCredentials?.[provider];
+    if (credential?.key.trim()) {
+      auth[provider] = { type: 'api', key: credential.key };
+      nativeAccountServicesByProvider[provider] = Object.freeze({ ...credential.service });
+    }
   }
-  return JSON.stringify(auth);
+  return Object.freeze({ authContent: JSON.stringify(auth), nativeAccountServicesByProvider: Object.freeze(nativeAccountServicesByProvider) });
 }
 
 export function buildOpenCodeAuthContent(input: OpenCodeAuthMaterializationInput): string {

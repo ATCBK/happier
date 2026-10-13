@@ -26,6 +26,33 @@ afterEach(() => {
 });
 
 describe('OpenCode server managed-service assembly', () => {
+  it('carries open-request MCP policy to the real session permission transport', async () => {
+    let permissions: unknown;
+    const ctx = createContextFixture({
+      managedServerBaseUrl: 'http://127.0.0.1:49213',
+      managedServerRequest: async (input) => {
+        const path = input.pathAndQuery.split('?')[0];
+        const posted = input.body === undefined ? {} : JSON.parse(new TextDecoder().decode(input.body));
+        if (path === '/session') permissions = posted.permission;
+        const body = path === '/session' ? { id: 'oc-policy' }
+          : path === '/mcp' ? { [posted.name]: { status: 'connected' } } : {};
+        return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
+      },
+    });
+    const mcpServers = { docs: { command: '/fixture/mcp' } };
+    const assembly = await createOpenCodeServerRuntimeAssembly({
+      ctx, directory: '/repo', happierSessionId: 'happy-policy',
+      endpoint: { mode: 'managed-spawn' }, mcpServers,
+      request: { kind: 'create', sessionId: 'happy-policy', cwd: '/repo', mcpServers,
+        mcpToolPolicy: { docs: { unlisted: 'ask', tools: { search: 'allow', delete: 'off' } } } },
+    });
+    try {
+      expect(permissions).toEqual(expect.arrayContaining([
+        { permission: 'happier-session-happy-policy--docs_search', pattern: '*', action: 'ask' },
+        { permission: 'happier-session-happy-policy--docs_delete', pattern: '*', action: 'deny' },
+      ]));
+    } finally { await assembly.dispose(); }
+  });
   it('keeps V1 controls staged for the next prompt rather than claiming native zero-turn application', async () => {
     const requests: Array<{ path: string; method: string }> = [];
     const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213', managedServerRequest: async (input) => {

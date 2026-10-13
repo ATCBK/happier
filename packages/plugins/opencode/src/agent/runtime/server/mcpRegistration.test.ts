@@ -30,6 +30,15 @@ function projection(mcpServers: unknown) {
 }
 
 describe('registerOpenCodeMcpServers', () => {
+  it('uses the longest projected alias while preserving original server and known tool names', () => {
+    const result = buildOpenCodeSessionMcpProjection('session-a', {
+      docs: { command: '/fixture' }, 'docs.team__prod': { command: '/fixture' },
+    });
+    const alias = result.registrations[1]!.projectedName;
+    const policy = { 'docs.team__prod': { unlisted: 'ask' as const, tools: { 'file.read': 'off' as const } } };
+    expect(canonicalizeOpenCodeProjectedMcpToolName(`${alias}_file_read`, result, policy)).toBe('mcp__docs.team__prod__file.read');
+    expect(canonicalizeOpenCodeProjectedMcpToolName('unknown_search', result, policy)).toBe('unknown_search');
+  });
   it('projects every injected server into distinct stable session namespaces', () => {
     const first = buildOpenCodeSessionMcpProjection('session-a', {
       happier: { command: '/bin/happier-mcp' },

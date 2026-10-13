@@ -10,14 +10,14 @@ export function readOpenCodeConfigPart(content: string): OpenCodeConfigPart {
   return parsed;
 }
 
-function mergeValue(previous: unknown, next: unknown): unknown {
+function mergeValue(previous: unknown, next: unknown, orderedPermissions = false): unknown {
   if (Array.isArray(previous) && Array.isArray(next)) {
     return [...previous, ...next];
   }
   if (isObject(previous) && isObject(next)) {
     return Object.fromEntries([
-      ...Object.entries(previous),
-      ...Object.entries(next).map(([key, value]) => [key, mergeValue(previous[key], value)]),
+      ...Object.entries(previous).filter(([key]) => !orderedPermissions || !Object.prototype.hasOwnProperty.call(next, key)),
+      ...Object.entries(next).map(([key, value]) => [key, mergeValue(previous[key], value, orderedPermissions)]),
     ]);
   }
   return next;
@@ -27,6 +27,9 @@ function mergeValue(previous: unknown, next: unknown): unknown {
 export function mergeOpenCodeConfigContent(parts: readonly OpenCodeConfigPart[]): string {
   return JSON.stringify(parts.reduce<OpenCodeConfigPart>((merged, part) => {
     if (!isObject(part)) throw new Error('OpenCode config content must be a JSON object');
-    return mergeValue(merged, part) as OpenCodeConfigPart;
+    return Object.fromEntries([
+      ...Object.entries(merged),
+      ...Object.entries(part).map(([key, value]) => [key, mergeValue(merged[key], value, key === 'permission')]),
+    ]);
   }, {}));
 }
