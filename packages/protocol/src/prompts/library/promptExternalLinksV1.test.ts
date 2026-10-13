@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { PromptExternalLinksV1Schema } from './promptExternalLinksV1.js';
 
 describe('promptExternalLinksV1 schemas', () => {
+  it.each([undefined, 'manual', 'export_on_save', 'read_only'])('folds predecessor mode %s to the sole current manual shape', syncMode => {
+    const parsed = PromptExternalLinksV1Schema.parse({ v: 1, links: [{
+      id: 'legacy', artifactId: 'artifact', assetTypeId: 'claude.command', scope: 'user',
+      machineId: 'machine', externalRef: { relativePath: 'guide.md' }, syncMode,
+    }] });
+    expect(parsed.links[0]?.syncMode).toBe('manual');
+  });
   it('preserves additive fields on external link payloads', () => {
     const parsed = PromptExternalLinksV1Schema.parse({
       v: 1,

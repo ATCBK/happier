@@ -5,6 +5,10 @@ import { LEGACY_ROLE_GUIDANCE_SETTINGS_ROOTS_V1 } from '../../account/settings/r
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PromptStackEntryV1StoredSchema, PromptLibraryStackUpdateInputV1Schema, PromptLibraryStackUpdateResultV1Schema, applyPromptStackIntentV1, type PromptStackEntryV1 } from './promptStacksV1.js';
 import type { ArtifactFolderActionPortV1 } from './promptFolderActionsV1.js';
+import type { RegistrySourcesMutationV1, RegistrySourcesMutationResultV1 } from '../../registries/registrySourcesMutationV1.js';
+import { FIRST_PARTY_SKILLS_V1, buildFirstPartySkillSeedRuleV1 } from './skills/firstPartySkillsV1.js';
+import { readStackSkillIdsV1, convertStackSkillEntriesV1, migrateStackSkillRulesV1, unconsumedStackSkillEntriesV1 } from './skills/convertStackSkillEntriesV1.js';
+import { isPromptStackSystemAppendPlacementV1 } from './promptPlacementV1.js';
 import { PromptLibraryCatalogKeyV1Schema, StoredPromptLibraryRecordV1Schema, openPromptLibraryContentV1,
   type PromptLibraryCatalogKeyV1, type PromptLibraryRecordV1, type PromptLibraryRowsListResponseV1Schema,
   type PromptLibraryRowMutationResponseV1Schema } from './promptLibraryRowsV1.js';
@@ -43,6 +47,12 @@ type PromptLibraryLoadInputV1 = Readonly<{
   mode: 'plain' | 'e2ee'; material: AccountScopedCryptoMaterial | null; signal?: AbortSignal;
   readRows(): Promise<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>>;
   transfer?: PromptLibrarySourceTransferV1;
+  nowMs?: () => number;
+  skillMigration?: Readonly<{
+    readArtifact: Parameters<typeof readStackSkillIdsV1>[1]['readArtifact'];
+    writeRecord(input: Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number }>):
+      Promise<ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>>;
+  }>;
   /** Readable destination authority precedes optional source/history maintenance. */
   onReadyBeforeCleanup?: (catalog: Extract<PromptLibraryCatalogSnapshotV1, { rows: unknown }>) => Promise<void>;
   /** An incumbent captured-lifetime cleanup may already own this maintenance. */
@@ -75,11 +85,16 @@ async function readCatalog(input: PromptLibraryLoadInputV1): Promise<PromptLibra
 /** Fixed small domains activate in their sole-row CAS; presence or deletion can never reseed. */
 export async function loadPromptLibraryCatalogV1(input: PromptLibraryLoadInputV1): Promise<PromptLibraryCatalogSnapshotV1> {
   let catalog = await readCatalog(input);
-  if (catalog.status !== 'ready' && catalog.status !== 'partial' || !input.transfer) return catalog;
+  if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
+  if (!input.transfer) return migrateStackSkills(input, catalog);
   const transfer = input.transfer;
   const occupied = new Set([...catalog.rows.map(row => row.record.key), ...catalog.tombstones.map(row => row.key),
     ...catalog.diagnostics.map(row => row.key)]);
   const missing = PromptLibraryCatalogKeyV1Schema.options.filter(key => !occupied.has(key));
+  if (missing.length === 0) {
+    catalog = await migrateStackSkills(input, catalog);
+    if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
+  }
   // Complete destination authority needs no retained source to be readable.
   // Publish it before optional Settings/history maintenance can block a demand.
   const publishedBeforeSource = missing.length === 0 && input.onReadyBeforeCleanup !== undefined;
@@ -124,10 +139,78 @@ export async function loadPromptLibraryCatalogV1(input: PromptLibraryLoadInputV1
         reason: failures.get(key) ?? 'authority-not-confirmed' as const }))] };
   }
   if (malformed.length) catalog = { ...catalog, status: 'partial', diagnostics: [...catalog.diagnostics, ...malformed] };
+  if (missing.length) catalog = await migrateStackSkills(input, catalog);
+  if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
   if (!transfer.replaceSource) return catalog;
   if (!publishedBeforeSource) await input.onReadyBeforeCleanup?.(catalog);
   if (input.hasPendingCleanup?.()) return catalog;
   return { ...catalog, cleanup: await cleanupSource(input, catalog, source) };
+}
+
+/** Account adds rules while its kept rows retain entry identities; Voice has no destination. */
+async function migrateStackSkills(input: PromptLibraryLoadInputV1,
+  initial: Extract<PromptLibraryCatalogSnapshotV1, { rows: unknown }>): Promise<PromptLibraryCatalogSnapshotV1> {
+  const migration = input.skillMigration;
+  if (!migration) return initial;
+  let catalog: PromptLibraryCatalogSnapshotV1 = initial;
+  let codingMigrationDiagnostic: PromptLibraryCatalogDiagnosticV1 | undefined;
+  const source = initial.rows.find(row => row.record.key === 'coding');
+  if (source?.record.key === 'coding' && source.record.value.entries.some(entry =>
+    entry.ref.kind === 'bundle' && isPromptStackSystemAppendPlacementV1(entry.placement))) {
+    const destination = readPromptLibraryCatalogRecordV1({ catalog: initial, key: 'skill-rules' });
+    const unavailable = (): PromptLibraryCatalogSnapshotV1 => {
+      codingMigrationDiagnostic = { key: 'coding', revision: source.revision,
+        reason: input.signal?.aborted ? 'cancelled' : 'unreachable' };
+      return { ...initial, status: 'partial', diagnostics: [...initial.diagnostics, codingMigrationDiagnostic] };
+    };
+    if (destination.status !== 'ready' || destination.record.key !== 'skill-rules' || destination.revision === 'absent') catalog = unavailable();
+    else {
+      const entries = unconsumedStackSkillEntriesV1(source.record.value.entries, { kind: 'account' }, destination.record.value.consumedLegacyEntryIds);
+      const classified = await readStackSkillIdsV1(entries, migration);
+      if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+      if (classified.status !== 'ready') catalog = unavailable();
+      else {
+        const value = migrateStackSkillRulesV1(destination.record.value, entries,
+          { kind: 'account' }, { ...classified, nowMs: (input.nowMs ?? Date.now)() });
+        if (value !== destination.record.value) {
+          try {
+            const receipt = await migration.writeRecord({ record: { key: 'skill-rules', value },
+              expectedRevision: destination.revision });
+            catalog = receipt.status === 'updated' ? await readCatalog(input) : unavailable();
+          } catch { catalog = unavailable(); }
+        }
+      }
+    }
+  }
+  if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
+  const result = await dropVoiceStackSkills(input, catalog);
+  if (!codingMigrationDiagnostic || (result.status !== 'ready' && result.status !== 'partial')) return result;
+  // A successful independent Voice CAS rereads rows, not the failed coding migration.
+  return { ...result, status: 'partial', diagnostics: [...result.diagnostics.filter(item => item.key !== 'coding'), codingMigrationDiagnostic] };
+}
+
+/** D32 has no destination identity: drop voice skills through the existing load/transfer CAS. */
+async function dropVoiceStackSkills(input: PromptLibraryLoadInputV1, initial: Extract<PromptLibraryCatalogSnapshotV1, { rows: unknown }>): Promise<PromptLibraryCatalogSnapshotV1> {
+  const migration = input.skillMigration;
+  if (!migration) return initial;
+  const source = initial.rows.find(row => row.record.key === 'voice');
+  if (!source || source.record.key !== 'voice') return initial;
+  const entries = source.record.value.entries;
+  if (!entries.some(entry => entry.ref.kind === 'bundle' && isPromptStackSystemAppendPlacementV1(entry.placement))) return initial;
+  const read = await readStackSkillIdsV1(entries, migration);
+  if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+  const unavailable = (): PromptLibraryCatalogSnapshotV1 => ({ ...initial, status: 'partial',
+    diagnostics: [...initial.diagnostics, { key: 'voice', revision: source.revision,
+      reason: input.signal?.aborted ? 'cancelled' : 'unreachable' }] });
+  if (read.status !== 'ready') return unavailable();
+  const converted = convertStackSkillEntriesV1(entries, { kind: 'voice' }, read);
+  if (converted.remainingEntries.length === entries.length) return initial;
+  try {
+    const receipt = await migration.writeRecord({ record: { key: 'voice', value: { ...source.record.value, entries: converted.remainingEntries } }, expectedRevision: source.revision });
+    return receipt.status === 'updated' ? readCatalog(input) : initial;
+  } catch {
+    return unavailable();
+  }
 }
 
 async function cleanupSource(input: PromptLibraryLoadInputV1, catalog: Extract<PromptLibraryCatalogSnapshotV1, { rows: unknown }>,
@@ -188,7 +271,7 @@ async function cleanupSource(input: PromptLibraryLoadInputV1, catalog: Extract<P
 export const PROMPT_LIBRARY_RETAINED_ROOTS_V1 = {
   coding: 'promptStacksV1', voice: 'promptStacksV1', folders: 'promptFoldersV1', invocations: 'promptInvocationsV1',
   'external-links': 'promptExternalLinksV1', 'registry-sources': 'promptRegistrySourcesV1', contexts: 'contextSelectionsV1',
-  'role-overrides': 'rolesV1', 'skill-rules': null,
+  'role-overrides': 'rolesV1', 'skill-rules': null, 'skill-usage': null,
 } as const satisfies Readonly<Record<PromptLibraryCatalogKeyV1, string | null>>;
 
 /** Exact source contraction shared by live cleanup and the canonical history owner. */
@@ -219,16 +302,18 @@ const retainedStacks = createStoredReadSchema(z.object({ v: z.literal(1), surfac
   profilesById: z.record(z.string(), z.array(PromptStackEntryV1StoredSchema)).default({}),
 }).strict() }).strict());
 
-export function emptyPromptLibraryRecordV1(key: PromptLibraryCatalogKeyV1): PromptLibraryRecordV1 {
+export function emptyPromptLibraryRecordV1(key: PromptLibraryCatalogKeyV1, nowMs = Date.now()): PromptLibraryRecordV1 {
   switch (key) {
     case 'coding': case 'voice': return { key, value: { v: 1, scope: { kind: key }, entries: [] } };
     case 'folders': return { key, value: { v: 1, folders: [] } };
     case 'invocations': return { key, value: { v: 1, entries: [] } };
     case 'external-links': return { key, value: { v: 1, links: [] } };
-    case 'registry-sources': return { key, value: { v: 1, sources: [] } };
+    case 'registry-sources': return { key, value: { v: 2, sources: [], disabledSourceIds: [] } };
     case 'contexts': return { key, value: { v: 1, selectionsByKey: {} } };
     case 'role-overrides': return { key, value: { v: 1, overrides: {} } };
-    case 'skill-rules': return { key, value: { v: 1, rules: [] } };
+    case 'skill-usage': return { key, value: { v: 1, lastUsedAt: {} } };
+    case 'skill-rules': return { key, value: { v: 1,
+      rules: FIRST_PARTY_SKILLS_V1.map(skill => buildFirstPartySkillSeedRuleV1(skill.skillId, nowMs)) } };
   }
 }
 
@@ -276,7 +361,8 @@ export function readPromptLibraryCatalogRecordV1(input: Readonly<{
   const row = catalog.rows.find(row => row.record.key === key);
   if (row) return { status: 'ready', ...row, authority: 'active' };
   const deleted = catalog.tombstones.find(row => row.key === key);
-  if (deleted) return { status: 'ready', record: emptyPromptLibraryRecordV1(key), revision: deleted.revision, authority: 'active' };
+  if (deleted) return { status: 'ready', record: key === 'skill-rules'
+    ? { key, value: { v: 1, rules: [] } } : emptyPromptLibraryRecordV1(key), revision: deleted.revision, authority: 'active' };
   if (!input.rawSettings) return { status: 'unavailable', reason: 'invalid-stored-content' };
   const retained = readRetainedPromptLibraryRecordV1(input.rawSettings, key);
   return retained.status === 'ready' ? { ...retained, revision: 'absent', authority: 'inactive' } : retained;
@@ -284,6 +370,44 @@ export function readPromptLibraryCatalogRecordV1(input: Readonly<{
 
 export type PromptLibraryStackActionPortV1 = Pick<ArtifactFolderActionPortV1,
   'serverId' | 'matchesServerId' | 'assertCurrent' | 'readCatalog' | 'writeRecord'>;
+
+/** Registry edits share the incumbent Account catalog and its single-row revision CAS. */
+export async function updatePromptLibraryRegistrySourcesV1(port: PromptLibraryStackActionPortV1,
+  mutation: RegistrySourcesMutationV1, signal?: AbortSignal): Promise<RegistrySourcesMutationResultV1> {
+  signal?.throwIfAborted(); port.assertCurrent();
+  const projection = await port.readCatalog(signal, 'registry-sources');
+  signal?.throwIfAborted(); port.assertCurrent();
+  const read = readPromptLibraryCatalogRecordV1({...projection,key:'registry-sources'});
+  if(read.status !== 'ready') return read;
+  if(read.record.key !== 'registry-sources') return {status:'unavailable',reason:'invalid-stored-content'};
+  if(read.authority === 'inactive' && projection.sourceSettingsVersion === undefined) return {status:'unavailable',reason:'source-currentness-unavailable'};
+  const value = { ...read.record.value, sources:[...read.record.value.sources], disabledSourceIds:[...read.record.value.disabledSourceIds] };
+  if(mutation.kind === 'create') {
+    if(!value.sources.some(source=>source.id===mutation.source.id || source.url===mutation.source.url)) value.sources.push(mutation.source);
+    else return {status:'updated',revision:read.revision === 'absent' ? 0 : read.revision};
+  } else if(mutation.kind === 'setBuiltInEnabled') {
+    value.disabledSourceIds=value.disabledSourceIds.filter(id=>id !== mutation.sourceId);
+    if(!mutation.enabled) value.disabledSourceIds.push(mutation.sourceId);
+  } else {
+    const index=value.sources.findIndex(source=>source.id === mutation.sourceId);
+    if(index<0) return {status:'invalid',reason:'not_found'};
+    if(mutation.kind === 'delete') value.sources.splice(index,1);
+    else if(mutation.kind === 'setToken') {
+      const source=value.sources[index]!;
+      const {token,npmRegistryProfileId,...rest}=source;
+      value.sources[index]={...rest,
+        ...((mutation.token === undefined ? token : mutation.token) ? {token:(mutation.token === undefined ? token : mutation.token)!}:{}),
+        ...((mutation.npmRegistryProfileId === undefined ? npmRegistryProfileId : mutation.npmRegistryProfileId)
+          ? {npmRegistryProfileId:(mutation.npmRegistryProfileId === undefined ? npmRegistryProfileId : mutation.npmRegistryProfileId)!}:{}),
+      };
+    }
+    else value.sources[index]={...value.sources[index]!,...(mutation.title !== undefined ? {title:mutation.title} : {}),...(mutation.enabled !== undefined ? {enabled:mutation.enabled} : {})};
+  }
+  signal?.throwIfAborted(); port.assertCurrent();
+  const result=await port.writeRecord({record:{key:'registry-sources',value},expectedRevision:read.revision,
+    ...(read.authority==='inactive'?{sourceSettingsVersion:projection.sourceSettingsVersion}:{})},signal);
+  return result.status==='updated'||result.status==='conflict' ? result : {status:'unavailable',reason:result.status};
+}
 
 /** The existing catalog authority supplies source admission and sole-row CAS, not a new stack store. */
 export async function updatePromptLibraryStackV1(port: PromptLibraryStackActionPortV1,

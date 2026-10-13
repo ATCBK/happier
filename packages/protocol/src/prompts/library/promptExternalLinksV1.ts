@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { PromptAssetExternalRefV1Schema, PromptAssetScopeV1Schema } from './promptAssetsV1.js';
 import { MachineAdministrationTargetV1Schema, type MachineAdministrationTargetV1 } from '../../account/settings/machineAdministrationSelectionsV1.js';
 
-export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => z.enum(['manual', 'export_on_save', 'read_only']));
+/** Predecessor export modes are inert; current receipts have one manual mode. */
+export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => z.preprocess(
+  value => value === 'export_on_save' || value === 'read_only' ? 'manual' : value,
+  z.literal('manual'),
+));
 export type PromptExternalLinkSyncModeV1 = z.infer<typeof PromptExternalLinkSyncModeV1Schema>;
 
 export const PromptExternalLinkEntryV1Schema = lazyZodSchema(() => z.object({
@@ -27,7 +31,10 @@ export type PromptExternalLinkEntryV1 = z.infer<typeof PromptExternalLinkEntryV1
 export const PromptExternalLinksV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   links: z.array(PromptExternalLinkEntryV1Schema).default([]),
-}).passthrough());
+}).passthrough().transform((value): typeof value => ({
+  ...value,
+  links: value.links.map(link => ({ ...link, syncMode: link.syncMode ?? 'manual' })),
+})));
 export type PromptExternalLinksV1 = z.infer<typeof PromptExternalLinksV1Schema>;
 
 /** Bare predecessor links belong only to their original library Home. */

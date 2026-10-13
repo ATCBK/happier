@@ -6,6 +6,7 @@ import { MemoryDocArtifactHeaderV1StoredSchema, MemoryDocBodyV1StoredSchema, ren
 import type { PromptStackEntryV1, PromptStacksV1 } from './promptStacksV1.js';
 import type { PromptArtifactRefV1 } from './promptArtifactRefsV1.js';
 import type { PromptLibraryStoredArtifact } from './promptLibraryActionOperations.js';
+import { isPromptStackSystemAppendPlacementV1 } from './promptPlacementV1.js';
 
 export type PromptStackPreparationReason = 'not_found' | 'wrong_kind' | 'malformed' | 'locked' | 'unavailable';
 
@@ -93,8 +94,10 @@ function parseJson(body: string | null): unknown {
   try { return JSON.parse(body); } catch { return null; }
 }
 
-/** Account → Profile → Project → Session is shared by coding and bound Voice. */
-export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSystemAppendInputV1): Promise<PromptStackSystemAppendResultV1> {
+/** One eligibility owner for preparation and remembered requiredness facts. */
+export function selectPromptStackSystemAppendEntriesV1(args: Pick<PromptStackSystemAppendInputV1,
+  'surface' | 'promptStacksV1' | 'profileId' | 'accountEntries' | 'profileEntries' | 'projectEntries' | 'sessionEntries' | 'disabledInheritedEntryIds'>):
+  readonly Readonly<{ entry: PromptStackEntryV1; layer: PromptStackLayerV1 }>[] {
   const stacks = args.promptStacksV1;
   const account = args.accountEntries ?? (args.surface === 'voice' ? stacks?.surfaces.voice : stacks?.surfaces.coding) ?? [];
   const profile = args.profileEntries ?? (args.profileId ? stacks?.surfaces.profilesById?.[args.profileId.trim()] : undefined) ?? [];
@@ -105,10 +108,38 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     { layer: 'project', entries: args.projectEntries ?? [] },
     { layer: 'session', entries: args.sessionEntries ?? [] },
   ] as const;
-  const entries = layers.flatMap(({ layer, entries }) => entries.filter(entry => entry.enabled
+  return layers.flatMap(({ layer, entries }) => entries.filter(entry => entry.enabled
     && (layer === 'session' || !disabled.has(entry.id))
-    && (entry.placement === 'system_append' || entry.placement === 'skill_instructions'))
+    && isPromptStackSystemAppendPlacementV1(entry.placement))
     .map(entry => ({ entry, layer })));
+}
+
+function omittedByMemoryPolicy(ref: PromptArtifactRefV1, header: Readonly<Record<string, unknown>> | null,
+  entry: Readonly<{ layer: PromptStackLayerV1; entryId: string; memoryEnabled?: boolean }>): boolean {
+  if (entry.memoryEnabled !== false || header?.kind !== 'memory_doc.v1') return false;
+  assertPromptStackArtifactHeaderV1(ref, header, entry);
+  return true;
+}
+
+/** Prior entries can prevent omission; they never authorize stale document-body reads. */
+export async function hasRequiredPromptStackSystemAppendEntriesV1(args: Omit<PromptStackSystemAppendInputV1, 'readArtifact'>): Promise<boolean> {
+  for (const { entry, layer } of selectPromptStackSystemAppendEntriesV1(args)) {
+    if (!entry.required) continue;
+    args.signal?.throwIfAborted();
+    if (args.memoryEnabled === false && args.readArtifactHeader) {
+      const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && args.scope ? { serverId: args.scope.serverId } : {}) };
+      const header = await args.readArtifactHeader(ref);
+      args.signal?.throwIfAborted();
+      if (header && omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Account → Profile → Project → Session is shared by coding and bound Voice. */
+export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSystemAppendInputV1): Promise<PromptStackSystemAppendResultV1> {
+  const entries = selectPromptStackSystemAppendEntriesV1(args);
   const out: string[] = [];
   const admittedEntries: PromptStackAdmittedEntryV1[] = [];
   if (entries.length === 0) return { blocks: out, admittedEntries };
@@ -118,6 +149,13 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     try { resolvedScope = await args.readScope(); }
     catch (error) {
       args.signal?.throwIfAborted();
+      if (!entries.some(({ entry }) => entry.required)
+        && (!(error instanceof PromptStackPreparationError) || error.reason === 'unavailable')) {
+        return { blocks: [], admittedEntries: entries.map(({ entry, layer }) => ({
+          entryId: entry.id, layer, scope: null, ref: { ...entry.ref },
+          outcome: 'unavailable', reason: 'unavailable', revision: null,
+        })) };
+      }
       if (error instanceof PromptStackPreparationError) throw error;
       throw new PromptStackPreparationError('unavailable');
     }
@@ -126,6 +164,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
   const scope = resolvedScope ? { ...resolvedScope } : null;
   let preparing: PromptStackAdmittedEntryIdentityV1 | null = null;
   let observedRevision: PromptLibraryStoredArtifact['revision'] | null = null;
+  let optionalReadFailure: PromptStackPreparationReason | null = null;
   const reads = new Map<string, Promise<PromptLibraryStoredArtifact | null>>();
   const headers = new Map<string, Promise<Readonly<{ header: Readonly<Record<string, unknown>> | null }> | null>>();
   const read = async <T>(ref: PromptArtifactRefV1, load: () => Promise<T>): Promise<T> => {
@@ -147,7 +186,11 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     try { return await pending; }
     catch (error) {
       args.signal?.throwIfAborted();
-      if (!entry.required && error instanceof PromptStackPreparationError && error.reason === 'not_found') return null;
+      if (!entry.required && error instanceof PromptStackPreparationError
+        && (error.reason === 'not_found' || error.reason === 'unavailable')) {
+        optionalReadFailure = error.reason;
+        return null;
+      }
       throw error;
     }
   };
@@ -156,6 +199,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && scope ? { serverId: scope.serverId } : {}) };
       preparing = { entryId: entry.id, layer, scope, ref };
       observedRevision = null;
+      optionalReadFailure = null;
       const key = JSON.stringify([ref.serverId ?? null, ref.artifactId]);
       if (args.memoryEnabled === false) {
         if (!args.readArtifactHeader) throw new PromptStackPreparationError('unavailable', ref);
@@ -164,24 +208,24 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
         const header = await readEntry(pending, entry);
         if (!header) {
           if (entry.required) throw new PromptStackPreparationError('not_found', ref);
-          admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
+          admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: optionalReadFailure ?? 'not_found', revision: null });
           continue;
         }
-        if (header.header?.kind === 'memory_doc.v1') {
-          assertPromptStackArtifactHeaderV1(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false });
-          continue;
-        }
+        if (omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) continue;
       }
       let pending = reads.get(key);
       if (!pending) { pending = read(ref, () => args.readArtifact(ref)); reads.set(key, pending); }
       const artifact = await readEntry(pending, entry);
       if (!artifact) {
         if (entry.required) throw new PromptStackPreparationError('not_found', ref);
-        admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
+        admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: optionalReadFailure ?? 'not_found', revision: null });
         continue;
       }
       observedRevision = { ...artifact.revision };
       assertPromptStackArtifactHeaderV1(ref, artifact.header, { layer, entryId: entry.id });
+      // Legacy skill attachments are inert. The skills owner admits their content
+      // and delivers native files or an index; stack preparation never pastes it.
+      if (ref.kind === 'bundle' && artifact.header?.bundleSchemaId === 'skills.skill_md_v1') continue;
       const bodyJson = parseJson(artifact.body);
       const fail = (reason: PromptStackPreparationReason): never => { throw new PromptStackPreparationError(reason, ref); };
       let text: string;

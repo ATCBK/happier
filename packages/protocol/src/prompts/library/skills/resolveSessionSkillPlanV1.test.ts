@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSessionSkillPlanV1, resolveSkillPlanKindV1 } from './resolveSessionSkillPlanV1.js';
+import { resolveSessionSkillPlanV1, resolveSkillPlanKindV1, SessionSkillPlanV1Schema } from './resolveSessionSkillPlanV1.js';
 import type { SkillLibraryItemV1 } from './skillLibraryItemV1.js';
 import type { CapabilityItemStateV1 } from '../../../reach/resolveSessionCapabilitiesV1.js';
 
@@ -11,10 +11,10 @@ const selected = (id: string, enabled = true): CapabilityItemStateV1 => ({
   kind: 'skill', id, name: 'sample', selected: enabled, selectable: true,
   reason: enabled ? 'rule_on' : 'no_rule', decidedBy: null, sessionOverride: null,
 });
-const resolve = (input: Partial<Parameters<typeof resolveSessionSkillPlanV1>[0]> = {}) => resolveSessionSkillPlanV1({
+const resolve = (input: Partial<Parameters<typeof resolveSessionSkillPlanV1>[0]> = {}) => SessionSkillPlanV1Schema.parse(resolveSessionSkillPlanV1({
   items: [item('library')], selected: [selected('library')], excludeNativeSkillNames: [],
   agentSkills: capability, agentHasActionChannel: true, nativeSkills: { status: 'ok', names: [] }, ...input,
-});
+}));
 
 describe('resolveSessionSkillPlanV1', () => {
   it('masks selected library content with a native same-name path', () => {

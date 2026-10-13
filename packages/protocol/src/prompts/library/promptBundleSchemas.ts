@@ -4,6 +4,9 @@ import { decodeBase64 } from '../../crypto/base64.js';
 import { ArtifactRevisionV1Schema } from '../../artifacts/artifactRevisionV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from './promptFolderActionSchemasV1.js';
+import { readSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
+import { computePromptBundleDigestV1 } from './promptLibraryDigests.js';
+import { FIRST_PARTY_SKILLS_V1 } from './skills/firstPartySkillsV1.js';
 
 const PromptBundleSchemaIdV1Schema = lazyZodSchema(() => z.enum(['skills.skill_md_v1', 'bundle.generic_v1']));
 export type PromptBundleSchemaIdV1 = z.infer<typeof PromptBundleSchemaIdV1Schema>;
@@ -17,7 +20,7 @@ export const PromptBundleArtifactHeaderV1Schema = lazyZodSchema(() => z.object({
 export const PromptBundleEntryV1Schema = lazyZodSchema(() => z
   .object({
     path: z.string().min(1),
-    contentBase64: z.string().min(1),
+    contentBase64: z.string(),
     contentKind: z.enum(['utf8', 'binary']),
     unixMode: z.number().int().min(0).max(0o7777).nullable().optional(),
   })
@@ -60,13 +63,41 @@ export const PromptBundleBodyV1Schema = lazyZodSchema(() => z
 
 export type PromptBundleBodyV1 = z.infer<typeof PromptBundleBodyV1Schema>;
 
+export type SkillBundleContentV1 = Readonly<{
+  body: PromptBundleBodyV1; skillMd: string;
+  frontmatter: ReturnType<typeof readSkillFrontmatterV1> & Readonly<{ name: string }>;
+  digest: string;
+}>;
+
+/** The same opened bundle projection supplies discovery, delivery and skill reads. */
+export function readSkillBundleContentV1(artifact: Readonly<{ header: unknown; body?: unknown }>): SkillBundleContentV1 | null {
+  const header = PromptBundleArtifactHeaderV1Schema.safeParse(artifact.header);
+  if (!header.success || header.data.bundleSchemaId !== 'skills.skill_md_v1' || typeof artifact.body !== 'string') return null;
+  let value: unknown;
+  try { value = JSON.parse(artifact.body); } catch { return null; }
+  const body = PromptBundleBodyV1Schema.safeParse(value);
+  if (!body.success || !validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: header.data.bundleSchemaId, body: body.data }).ok) return null;
+  const entry = body.data.entries.find(entry => entry.path === 'SKILL.md' && entry.contentKind === 'utf8');
+  if (!entry) return null;
+  const skillMd = new TextDecoder().decode(decodeBase64(entry.contentBase64, 'base64'));
+  const frontmatter = readSkillFrontmatterV1(skillMd);
+  return frontmatter.name ? { body: body.data, skillMd, frontmatter: { ...frontmatter, name: frontmatter.name },
+    digest: computePromptBundleDigestV1(body.data) } : null;
+}
+
+/** Bundled content passes the same validation/digest owner as stored skill content. */
+export function readFirstPartySkillContentV1(skillId: string): SkillBundleContentV1 | null {
+  const skill = FIRST_PARTY_SKILLS_V1.find(item => item.skillId === skillId);
+  if (!skill) return null;
+  const content = readSkillBundleContentV1({ header: { v: 1, kind: 'prompt_bundle.v2',
+    title: skill.name, bundleSchemaId: 'skills.skill_md_v1' },
+    body: JSON.stringify({ v: 1, entries: skill.files, createdAtMs: 0, updatedAtMs: 0 }) });
+  if (!content) throw new Error('invalid_first_party_skill');
+  return content;
+}
+
 /** Normalize an already-admitted retained body for current writes, preserving the raw read contract. */
 export const PromptBundleBodyV1WriteSchema = createStoredReadSchema(PromptBundleBodyV1Schema);
-
-export const PROMPT_BUNDLE_SCHEMA_LIMITS_V1 = Object.freeze({
-  maxEntries: 128,
-  maxTotalBytes: 1024 * 1024,
-});
 
 export type PromptBundleValidationResult =
   | Readonly<{ ok: true }>
@@ -78,8 +109,9 @@ export type PromptBundleValidationResult =
       requiredPath?: string;
     }>;
 
-function normalizePosixRelativePath(raw: string): { ok: true; normalized: string } | { ok: false; message: string } {
-  const value = String(raw ?? '').trim();
+function normalizePosixRelativePath(raw: string, portable: boolean): { ok: true; normalized: string } | { ok: false; message: string } {
+  // Generic bundles retain their released whitespace normalization; Skills are portable filesystem inputs.
+  const value = portable ? String(raw ?? '') : String(raw ?? '').trim();
   if (!value) return { ok: false, message: 'path is empty' };
   if (value.startsWith('/')) return { ok: false, message: 'path must be relative' };
   if (value.includes('\\')) return { ok: false, message: 'path must use posix separators' };
@@ -89,6 +121,10 @@ function normalizePosixRelativePath(raw: string): { ok: true; normalized: string
   if (segments.some((s) => s.length === 0)) return { ok: false, message: 'path contains empty segment' };
   for (const seg of segments) {
     if (seg === '.' || seg === '..') return { ok: false, message: 'path contains dot segment' };
+    if (portable && (/[<>:"|?*\u0000-\u001f]/.test(seg) || /[. ]$/.test(seg)
+      || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(seg))) {
+      return { ok: false, message: 'path contains a Windows-invalid name' };
+    }
   }
 
   return { ok: true, normalized: segments.join('/') };
@@ -106,18 +142,11 @@ export function validatePromptBundleBodyV1AgainstSchemaId(input: Readonly<{
     return { ok: false, errorCode: 'invalid_request', message: 'invalid_body' };
   }
 
-  if (body.entries.length > PROMPT_BUNDLE_SCHEMA_LIMITS_V1.maxEntries) {
-    return {
-      ok: false,
-      errorCode: 'size_limit_exceeded',
-      message: `bundle exceeds max entry count of ${PROMPT_BUNDLE_SCHEMA_LIMITS_V1.maxEntries}`,
-    };
-  }
-
+  // Artifact document quotas and the containing HTTP/Action transport own byte admission.
+  // Registry skills already exceed the former 1 MiB ceiling; file count has no separate resource boundary.
   const seen = new Set<string>();
-  let totalBytes = 0;
   for (const entry of body.entries) {
-    const normalized = normalizePosixRelativePath(entry.path);
+    const normalized = normalizePosixRelativePath(entry.path, schemaId === 'skills.skill_md_v1');
     if (!normalized.ok) {
       return {
         ok: false,
@@ -136,15 +165,6 @@ export function validatePromptBundleBodyV1AgainstSchemaId(input: Readonly<{
     }
     seen.add(normalized.normalized);
 
-    totalBytes += decodeBase64(entry.contentBase64, 'base64').byteLength;
-    if (totalBytes > PROMPT_BUNDLE_SCHEMA_LIMITS_V1.maxTotalBytes) {
-      return {
-        ok: false,
-        errorCode: 'size_limit_exceeded',
-        message: `bundle exceeds max total bytes of ${PROMPT_BUNDLE_SCHEMA_LIMITS_V1.maxTotalBytes}`,
-        path: normalized.normalized,
-      };
-    }
   }
 
   if (schemaId === 'skills.skill_md_v1') {

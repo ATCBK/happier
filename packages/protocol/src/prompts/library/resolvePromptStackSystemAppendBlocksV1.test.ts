@@ -2,9 +2,35 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionInstructionsContextIntentV1 } from '../../actions/sessionStateFieldActions.js';
 import { writeSessionContextIntentV1ToMetadata } from '../../sessions/context/sessionContextV1.js';
 
-import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1.js';
+import { hasRequiredPromptStackSystemAppendEntriesV1, resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1.js';
+import predecessorPickerStack from '../../../fixtures/0.2-picker-skill-instructions-stack.json';
+import { PromptStackEntryV1StoredSchema } from './promptStacksV1.js';
+import { decodeBase64 } from '../../crypto/base64.js';
 
 describe('resolvePromptStackSystemAppendBlocksV1', () => {
+  it.each(['coding', 'voice'] as const)('skips skill-schema bundles on %s while retaining predecessor generic text and budgets', async surface => {
+    // The fixture captures the actual 0.2 picker producer; its body also satisfies
+    // the inspected generic schema at cd2bb4d853a259ae00ebc3e5981224e3e4bb5380.
+    const captured = predecessorPickerStack.artifacts[1]!;
+    const raw = predecessorPickerStack.stacks.surfaces.coding[1]!;
+    const generic = { ...captured, id: 'generic', header: { ...captured.header, bundleSchemaId: 'bundle.generic_v1' } };
+    const entries = ['system_append', 'skill_instructions', 'provider_asset', 'composer_insert'].map(placement =>
+      PromptStackEntryV1StoredSchema.parse({ ...raw, id: placement, placement }));
+    const genericEntry = PromptStackEntryV1StoredSchema.parse({ ...raw, id: 'generic', ref: { kind: 'bundle', artifactId: 'generic' }, maxChars: 43 });
+    const body: { entries: { contentBase64: string }[] } = JSON.parse(captured.body);
+    const expected = new TextDecoder().decode(decodeBase64(body.entries[0]!.contentBase64, 'base64')).trim().slice(0, 43);
+    const result = await resolvePromptStackSystemAppendBlocksV1({ surface,
+      accountEntries: entries, profileEntries: entries, projectEntries: entries, sessionEntries: [...entries, genericEntry],
+      readArtifact: async ref => ref.artifactId === 'generic' ? generic : captured,
+    });
+    expect(result.blocks).toEqual([expected]);
+    expect(result.admittedEntries.map(entry => entry.entryId)).toEqual(['generic']);
+    // Skills have their own delivery/content admission owner, even when their
+    // old stack attachment remains until conversion completes.
+    await expect(resolvePromptStackSystemAppendBlocksV1({ surface, accountEntries: [entries[0]!],
+      readArtifact: async () => ({ ...captured, body: '{not-json' }),
+    })).resolves.toEqual({ blocks: [], admittedEntries: [] });
+  });
   it('rejects a bundle whose header declares an unsupported schema even when SKILL.md is present', async () => {
     await expect(resolvePromptStackSystemAppendBlocksV1({
       surface: 'coding', sessionEntries: [{ id: 'bundle', ref: { kind: 'bundle', artifactId: 'bundle' }, enabled: true, placement: 'system_append' }],
@@ -22,6 +48,54 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     id, header: { v: 1, kind: 'prompt_doc.v2', title: id },
     body: JSON.stringify({ v: 1, markdown, createdAtMs: 1, updatedAtMs: 1 }),
     revision: { headerVersion: 1, bodyVersion: 1 },
+  });
+
+  it('uses current placement, inherited exclusions and Memory-off policy for required Account eligibility', async () => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    let kind = 'memory_doc.v1';
+    const input = { surface: 'coding' as const, scope, memoryEnabled: false,
+      accountEntries: [
+        { ...entry('disabled'), enabled: false, required: true },
+        { ...entry('excluded'), required: true },
+        { ...entry('provider'), required: true, placement: 'provider_asset' as const },
+        { ...entry('memory'), required: true },
+      ], disabledInheritedEntryIds: ['excluded'],
+      readArtifactHeader: async () => ({ header: { v: 1, kind, title: 'Current document' } }),
+    };
+    expect(await hasRequiredPromptStackSystemAppendEntriesV1(input)).toBe(false);
+    expect(await resolvePromptStackSystemAppendBlocksV1({ ...input,
+      readArtifact: async () => { throw new Error('Memory-off must not demand a body'); },
+    })).toEqual({ blocks: [], admittedEntries: [] });
+    kind = 'prompt_doc.v2';
+    expect(await hasRequiredPromptStackSystemAppendEntriesV1(input)).toBe(true);
+    kind = 'memory_doc.v1';
+    await expect(hasRequiredPromptStackSystemAppendEntriesV1({ ...input, accountEntries: [],
+      sessionEntries: [{ ...entry('session.instructions'), required: true }],
+    })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'wrong_kind' });
+  });
+
+  it('skips unavailable optional entries with typed inventory while retaining required preparation failure', async () => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    const readArtifact = async (ref: { artifactId: string }) => {
+      if (ref.artifactId === 'optional') throw new Error('Home unavailable');
+      return artifact(ref.artifactId);
+    };
+    const input = { surface: 'coding' as const, scope,
+      accountEntries: [entry('optional'), { ...entry('required'), required: true }], readArtifact };
+    await expect(resolvePromptStackSystemAppendBlocksV1(input)).resolves.toMatchObject({
+      blocks: ['required'], admittedEntries: [
+        { entryId: 'optional', outcome: 'unavailable', reason: 'unavailable', revision: null },
+        { entryId: 'required', outcome: 'ready' },
+      ],
+    });
+    await expect(resolvePromptStackSystemAppendBlocksV1({ ...input,
+      accountEntries: [{ ...entry('optional'), required: true }],
+    })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    const cancellation = new AbortController();
+    const failure = new Error('Cancelled by user');
+    await expect(resolvePromptStackSystemAppendBlocksV1({ ...input, signal: cancellation.signal,
+      readArtifact: async () => { cancellation.abort(failure); throw failure; },
+    })).rejects.toBe(failure);
   });
 
   it.each([true, false])('requires repair for retained Session Instructions pointing at memory when memoryEnabled=%s', async (memoryEnabled) => {
@@ -166,12 +240,46 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
   it('retains typed pending failure and its unavailable inventory without publishing prepared blocks', async () => {
     const scope = { serverId: 'home', accountId: 'account' };
     await expect(resolvePromptStackSystemAppendBlocksV1({
-      surface: 'voice', scope, sessionEntries: [entry('selected')],
+      surface: 'voice', scope, sessionEntries: [{ ...entry('selected'), required: true }],
       readArtifact: async () => { throw new Error('transport offline'); },
     })).rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable', admittedEntries: [
       { entryId: 'selected', layer: 'session', scope, ref: { kind: 'doc', artifactId: 'selected', serverId: 'home' },
         outcome: 'unavailable', reason: 'unavailable', revision: null },
     ] });
+  });
+
+  it('skips transient optional header/body reads without hiding required failures or cancellation', async () => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    for (const memoryEnabled of [true, false]) {
+      const args = { surface: 'coding' as const, scope, memoryEnabled,
+        accountEntries: [entry('optional'), { ...entry('required'), required: true }],
+        readArtifactHeader: async (ref: { artifactId: string }) => {
+          if (ref.artifactId === 'optional') throw new Error('offline');
+          return { header: artifact(ref.artifactId).header };
+        },
+        readArtifact: async (ref: { artifactId: string }) => {
+          if (ref.artifactId === 'optional') throw new Error('offline');
+          return artifact(ref.artifactId);
+        } };
+      expect(await resolvePromptStackSystemAppendBlocksV1(args)).toMatchObject({ blocks: ['required'],
+        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' },
+          { entryId: 'required', outcome: 'ready' }] });
+      await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
+        accountEntries: [{ ...entry('optional'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
+      const controller = new AbortController();
+      controller.abort();
+      await expect(resolvePromptStackSystemAppendBlocksV1({ ...args, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    }
+  });
+
+  it('returns unavailable inventory only when failed scope admission has no required input', async () => {
+    const args = { surface: 'coding' as const, accountEntries: [entry('optional')],
+      readScope: async () => { throw new Error('Home offline'); },
+      readArtifact: async () => { throw new Error('Must not read without scope'); } };
+    expect(await resolvePromptStackSystemAppendBlocksV1(args)).toMatchObject({ blocks: [],
+      admittedEntries: [{ entryId: 'optional', scope: null, outcome: 'unavailable', reason: 'unavailable' }] });
+    await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
+      sessionEntries: [{ ...entry('required'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
   });
 
   it('suppresses inherited ids before reads while preserving the Session entry with that id', async () => {

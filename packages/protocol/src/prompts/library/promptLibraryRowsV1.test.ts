@@ -1,8 +1,99 @@
 import { describe, expect, it } from 'vitest';
 import { PromptLibraryRecordV1Schema, PromptLibraryRowMutationV1Schema, PromptLibraryRowMutationResponseV1Schema, StoredPromptLibraryRecordV1Schema, openPromptLibraryContentV1, sealPromptLibraryContentV1 } from './promptLibraryRowsV1.js';
 import { PromptFoldersV1WriteSchema } from './promptFoldersV1.js';
+import { applyReachRulesChangeV1 } from '../../reach/reachRulesChangeV1.js';
+import { PromptLibraryRowReadResponseV1Schema, PromptLibraryRowsListResponseV1Schema } from './promptLibraryRowsV1.js';
+import { migrateStackSkillRulesV1 } from './skills/convertStackSkillEntriesV1.js';
+import { PromptStackEntryV1StoredSchema } from './promptStacksV1.js';
+import { PromptExternalLinksV1Schema } from './promptExternalLinksV1.js';
+import { openAccountScopedBlobCiphertext } from '../../crypto/accountScopedCipher.js';
+import { PROMPT_LIBRARY_ACCOUNT_CIPHER_KIND_V1 } from './promptLibraryRowsV1.js';
 
 describe('Prompt library Account catalog rows', () => {
+  it('reads IR-101a migration output with additive stored fields through both HTTP consumers, keeping writes and routing closed', () => {
+    const entry = PromptStackEntryV1StoredSchema.parse({ id: 'legacy-skill', enabled: true,
+      placement: 'skill_instructions', ref: { kind: 'bundle', artifactId: 'review' } });
+    const value = migrateStackSkillRulesV1({ v: 1, rules: [] }, [entry], { kind: 'account' },
+      { skillIds: new Set(['review']), nowMs: 8 });
+    const record = PromptLibraryRecordV1Schema.parse({ key: 'skill-rules', value });
+    const content = sealPromptLibraryContentV1({ record, mode: 'plain', material: null });
+    expect(value.consumedLegacyEntryIds).toEqual(['migrated-stack:account:legacy-skill']);
+    // A stored producer may add fields; only the persisted record is open, never the HTTP envelope.
+    const stored = { t: 'plain', v: { ...record, futureRecord: true, value: { ...value, futureValue: true,
+      rules: value.rules.map(rule => ({ ...rule, futureRule: true, target: { ...rule.target, futureTarget: true } })) } } };
+    const exact = PromptLibraryRowReadResponseV1Schema.parse({ status: 'present', revision: 9, content: stored });
+    expect(exact).toEqual({ status: 'present', revision: 9, content });
+    const listed = PromptLibraryRowsListResponseV1Schema.parse({ status: 'listed', rows: [{ key: 'skill-rules', revision: 9, content: stored }] });
+    expect(listed).toEqual({ status: 'listed', rows: [{ key: 'skill-rules', revision: 9, content }] });
+    if (listed.status !== 'listed') throw new Error('Expected catalog');
+    expect(openPromptLibraryContentV1({ key: 'skill-rules', mode: 'plain', material: null, content: listed.rows[0]!.content }))
+      .toEqual({ status: 'opened', record });
+    expect(openPromptLibraryContentV1({ key: 'coding', mode: 'plain', material: null, content: listed.rows[0]!.content }))
+      .toEqual({ status: 'unavailable', reason: 'invalid-stored-content' });
+    expect(PromptLibraryRowMutationV1Schema.safeParse({ expectedRevision: 9, content: stored }).success).toBe(false);
+    expect(PromptLibraryRowsListResponseV1Schema.safeParse({ status: 'listed', future: true, rows: [] }).success).toBe(false);
+    expect(PromptLibraryRowReadResponseV1Schema.safeParse({ status: 'present', revision: 9, content, future: true }).success).toBe(false);
+    expect(PromptLibraryRowReadResponseV1Schema.safeParse({ status: 'present', revision: 9, content: { ...content, future: true } }).success).toBe(false);
+    expect(PromptLibraryRowReadResponseV1Schema.safeParse({ status: 'present', revision: 9,
+      content: { t: 'encrypted', c: 'opaque', future: true } }).success).toBe(false);
+    expect(PromptLibraryRowsListResponseV1Schema.safeParse({ status: 'listed', rows: [{ key: 'skill-rules', revision: 9,
+      content: { t: 'plain', v: { key: 'skill-rules', value: { ...value, consumedLegacyEntryIds: [42] } } } }] }).success).toBe(false);
+  });
+  it.each(['plain', 'e2ee'] as const)('omits syncMode from real %s receipt writes while stored reads retain the manual projection', mode => {
+    const value = PromptExternalLinksV1Schema.parse({ v: 1, links: [{
+      id: 'receipt', artifactId: 'skill', assetTypeId: 'agents.skill', scope: 'user', machineId: 'machine',
+      externalRef: { relativePath: 'lint' }, baseDigest: 'sha256:installed',
+    }] });
+    expect(value.links[0]?.syncMode).toBe('manual');
+    const record = PromptLibraryRecordV1Schema.parse({ key: 'external-links', value });
+    const material = mode === 'plain' ? null : { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(21) };
+    const content = sealPromptLibraryContentV1({ record, mode, material });
+    const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: 4, content });
+    const wireRecord = mutation.content?.t === 'plain' ? mutation.content.v
+      : mutation.content?.t === 'encrypted' && material
+        ? openAccountScopedBlobCiphertext({ kind: PROMPT_LIBRARY_ACCOUNT_CIPHER_KIND_V1,
+          material, ciphertext: mutation.content.c })?.value : undefined;
+    expect(wireRecord).toEqual({ key: 'external-links', value: { v: 1, links: [{
+      id: 'receipt', artifactId: 'skill', assetTypeId: 'agents.skill', scope: 'user', machineId: 'machine',
+      externalRef: { relativePath: 'lint' }, baseDigest: 'sha256:installed',
+    }] } });
+    expect(openPromptLibraryContentV1({ key: 'external-links', mode, material, content: mutation.content }))
+      .toEqual({ status: 'opened', record: { key: 'external-links', value } });
+  });
+
+  it.each([undefined, 'manual', 'export_on_save', 'read_only'])('reads retained receipt mode %s as manual and omits it on the next write', syncMode => {
+    const link = { id: 'legacy', artifactId: 'skill', assetTypeId: 'claude.command', scope: 'user', machineId: 'machine',
+      externalRef: { relativePath: 'lint.md' }, ...(syncMode === undefined ? {} : { syncMode }) };
+    const opened = openPromptLibraryContentV1({ key: 'external-links', mode: 'plain', material: null,
+      content: { t: 'plain', v: { key: 'external-links', value: { v: 1, links: [link] } } } });
+    expect(opened).toEqual({ status: 'opened', record: { key: 'external-links', value: { v: 1,
+      links: [{ ...link, syncMode: 'manual' }] } } });
+    if (opened.status !== 'opened') throw new Error('Expected retained receipt to open');
+    const written = sealPromptLibraryContentV1({ record: opened.record, mode: 'plain', material: null });
+    expect(written).not.toHaveProperty('v.value.links.0.syncMode');
+  });
+
+  it.each(['plain', 'e2ee'] as const)('passes real reach-rule output through the strict %s skill-rules row and its opener', mode => {
+    let id = 0;
+    const rules = applyReachRulesChangeV1([], { kind: 'replace', rules: [
+      { target: { t: 'allMachines' }, enabled: true },
+      { target: { t: 'project', projectKey: 'project' }, enabled: false },
+      { target: { t: 'allMachines' }, agentId: 'gemini', enabled: false },
+    ] }, { nowMs: 8, newId: () => `rule-${++id}` });
+    const record = PromptLibraryRecordV1Schema.parse({ key: 'skill-rules', value: { v: 1,
+      rules: rules.map(rule => ({ ...rule, skillId: 'lint' })) } });
+    const material = mode === 'plain' ? null : { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(23) };
+    const content = sealPromptLibraryContentV1({ record, mode, material });
+    expect(PromptLibraryRowMutationV1Schema.parse({ expectedRevision: 4, content })).toEqual({ expectedRevision: 4, content });
+    const row = PromptLibraryRowReadResponseV1Schema.parse({ status: 'present', revision: 5, content });
+    if (row.status !== 'present') throw new Error('Expected produced row to be present');
+    expect(openPromptLibraryContentV1({ key: 'skill-rules', mode, material, content: row.content }))
+      .toEqual({ status: 'opened', record });
+    expect(openPromptLibraryContentV1({ key: 'folders', mode, material, content: row.content }))
+      .toEqual({ status: 'unavailable', reason: 'invalid-stored-content' });
+    expect(PromptLibraryRowReadResponseV1Schema.safeParse({ status: 'present', revision: 5, content, unexpected: true }).success).toBe(false);
+  });
+
   it('admits skill rules and rejects duplicate item/place/agent rules while reading additive stored fields', () => {
     const rule = { id: 'rule', skillId: 'skill', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 };
     const record = { key: 'skill-rules', value: { v: 1, rules: [rule] } };

@@ -1,22 +1,36 @@
 import type { PluginAgentSkillsCapabilityV2 } from '../../../plugins/contributions/v2.js';
 import type { CapabilityItemStateV1 } from '../../../reach/resolveSessionCapabilitiesV1.js';
-import type { CapabilitySelectionReasonV1 } from '../../../reach/sessionCapabilitySelectionV1.js';
 import type { SkillLibraryItemV1 } from './skillLibraryItemV1.js';
+import { z } from 'zod';
+import { lazyZodSchema } from '../../../lazyZodSchema.js';
 
 export type NativeSkillScanV1 = Readonly<{
   status: 'ok'; names: readonly Readonly<{ name: string; path: string; root: string }>[];
 }> | Readonly<{
   status: 'failed'; roots: readonly string[]; names: readonly Readonly<{ name: string; path: string; root: string }>[];
 }>;
-export type SessionSkillPlanV1 = {
-  plan: 'session_dir' | 'index' | 'none';
-  items: { skillId: string; name: string; digest: string;
-    state: 'delivered' | 'masked_by_native' | 'off' | 'excluded' | 'name_conflict' | 'unavailable';
-    reason: CapabilitySelectionReasonV1 | 'native_same_name' | 'duplicate_name' | 'content_unreadable' | 'materialize_failed' | 'native_scan_failed';
-    maskedBy?: { path: string } }[];
-  nativeDisables: { name: string; path: string; state: 'applied' | 'unsupported' }[];
-  diagnostics: { kind: 'native_scan_failed'; root: string }[];
-};
+const identity = lazyZodSchema(() => z.string().min(1));
+export const SessionSkillPlanV1Schema = lazyZodSchema(() => z.object({
+  plan: z.enum(['session_dir', 'index', 'none']),
+  items: z.array(z.object({ skillId: identity, name: identity, digest: z.string(),
+    state: z.enum(['delivered', 'masked_by_native', 'off', 'excluded', 'name_conflict', 'unavailable']),
+    reason: z.enum(['rule_on', 'rule_off', 'no_rule', 'session_added', 'session_removed', 'managed_off', 'not_portable', 'agent_unsupported',
+      'native_same_name', 'duplicate_name', 'content_unreadable', 'materialize_failed', 'native_scan_failed']),
+    maskedBy: z.object({ path: identity }).strict().optional(),
+  }).strict()),
+  nativeDisables: z.array(z.object({ name: identity, path: identity, state: z.enum(['applied', 'unsupported']) }).strict()),
+  diagnostics: z.array(z.object({ kind: z.literal('native_scan_failed'), root: identity }).strict()),
+}).strict());
+export type SessionSkillPlanV1 = z.infer<typeof SessionSkillPlanV1Schema>;
+
+/** Transient Agent SDK delivery, projected from the canonical skill-plan fields. */
+export const AgentSessionSkillDeliveryV1Schema = lazyZodSchema(() => z.object({
+  pluginRoot: identity,
+  skillsRoot: identity,
+  items: z.array(SessionSkillPlanV1Schema.shape.items.element.pick({ name: true, skillId: true, digest: true })),
+  nativeDisables: z.array(SessionSkillPlanV1Schema.shape.nativeDisables.element.pick({ name: true, path: true })),
+}).strict());
+
 export function resolveSkillPlanKindV1(input: {
   agentSkills: PluginAgentSkillsCapabilityV2 | null; agentHasActionChannel: boolean;
 }): SessionSkillPlanV1['plan'] {

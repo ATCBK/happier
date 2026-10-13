@@ -1,6 +1,12 @@
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
-import { readSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
+import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type { SkillReadInputV1, SkillReadResultV1, SessionSkillReadItemV1 } from './skills/skillReadV1.js';
+import type { SkillUsageRowV1 } from './skills/skillUsageV1.js';
+import { readSkillLockV1, isSkillModifiedV1, encodeSkillRevisionV1, type SkillLockV1 } from './skills/skillLibraryItemV1.js';
+import { deriveSkillTrustV1 } from './skills/skillTrustV1.js';
+import { estimateSkillCostV1 } from './skills/skillCostV1.js';
+import type { SkillRuleV1 } from '../../reach/reachRuleV1.js';
 import { normalizeArtifactTagsV1 as normalizePromptTags } from '../../artifacts/artifactOrganizationV1.js';
 import { resolveArtifactOrganizationHeaderV1 } from '../../artifacts/artifactOrganizationV1.js';
 import { ArtifactOrganizationMutationFailureV1, mutateArtifactOrganizationV1, readArtifactFolderCatalogV1, type ArtifactFolderActionPortV1 } from './promptFolderActionsV1.js';
@@ -9,6 +15,8 @@ import {
   PromptBundleBodyV1Schema,
   PromptBundleBodyV1WriteSchema,
   validatePromptBundleBodyV1AgainstSchemaId,
+  readSkillBundleContentV1,
+  readFirstPartySkillContentV1,
   type PromptBundleBodyV1,
   type PromptBundleEntryV1,
   type PromptBundleSchemaIdV1,
@@ -19,14 +27,12 @@ import type {
   PromptAssetInstallModeV1,
   PromptAssetMutationResponseV1,
   PromptAssetScopeV1,
+  PromptAssetWriteBundleRequest,
   PromptAssetWriteRequest,
 } from './promptAssetsV1.js';
-import type {
-  PromptRegistryConfiguredSourceV1,
-  PromptRegistryFetchItemResponseV1,
-  PromptRegistryInstallRequestV1,
-  PromptRegistryInstallResponseV1,
-} from './promptRegistriesV1.js';
+import { PromptAssetMutationSuccessResponseV1Schema } from './promptAssetsV1.js';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillActionFailureResultV1Schema, SkillInstallAcknowledgedEffectsV1Schema } from './skills/skillActionSchemasV1.js';
+import { ActionExecuteFailureSchema } from '../../actions/actionExecutionResult.js';
 import { isPromptExternalLinkForMachine, type PromptExternalLinkEntryV1, type PromptExternalLinksV1 } from './promptExternalLinksV1.js';
 import { MachineAdministrationTargetV1Schema, type MachineAdministrationTargetV1 } from '../../account/settings/machineAdministrationSelectionsV1.js';
 import { MemoryDocArtifactHeaderV1Schema, MemoryDocArtifactHeaderV1StoredSchema, MemoryDocBodyV1Schema, MemoryDocBodyV1StoredSchema,
@@ -69,6 +75,7 @@ export type PromptLibraryArtifactStore = Readonly<{
     body: string;
     signal?: AbortSignal;
   }>): Promise<string>;
+  delete?(input: Readonly<{ artifactId: string; expectedRevision: PromptLibraryStoredArtifact['revision']; signal?: AbortSignal }>): Promise<void>;
 }>;
 
 type PromptLibraryMutationFailure = Readonly<{
@@ -99,6 +106,9 @@ export async function readSkillInLibrary(params: Readonly<{
   store: Pick<PromptLibraryArtifactStore, 'read'>;
   request: SkillReadInputV1;
   sessionItems?: readonly SessionSkillReadItemV1[] | null;
+  rules?: readonly SkillRuleV1[];
+  usage?: SkillUsageRowV1 | null;
+  recordSessionUse?: (item: SessionSkillReadItemV1) => Promise<boolean>;
   signal?: AbortSignal;
 }>): Promise<SkillReadResultV1 | Readonly<{ ok: false; errorCode: 'not_found'; error: 'not_found' }>> {
   const notFound = { ok: false as const, errorCode: 'not_found' as const, error: 'not_found' as const };
@@ -109,31 +119,30 @@ export async function readSkillInLibrary(params: Readonly<{
   if (request.sessionId && !sessionItem) return notFound;
   const skillId = 'skillId' in request ? request.skillId : sessionItem?.skillId;
   if (!skillId) return notFound;
-  const artifact = await params.store.read(skillId, params.signal ? { signal: params.signal } : undefined);
+  const bundled = readFirstPartySkillContentV1(skillId);
+  const artifact = bundled ? null : await params.store.read(skillId, params.signal ? { signal: params.signal } : undefined);
   throwIfAborted(params.signal);
-  if (!artifact) return notFound;
-  const header = PromptBundleArtifactHeaderV1Schema.safeParse(artifact.header);
-  const body = parseArtifactBody(artifact.body, value => {
-    const parsed = PromptBundleBodyV1Schema.safeParse(value);
-    return parsed.success ? parsed.data : null;
-  });
-  if (!header.success || header.data.bundleSchemaId !== 'skills.skill_md_v1' || !body
-    || !validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: header.data.bundleSchemaId, body }).ok) return notFound;
-  if (sessionItem && sessionItem.digest !== computePromptBundleDigestV1(body)) return notFound;
-  const markdownEntry = body.entries.find(entry => entry.path === 'SKILL.md' && entry.contentKind === 'utf8');
-  if (!markdownEntry) return notFound;
-  const skillMd = new TextDecoder().decode(decodeBase64(markdownEntry.contentBase64));
-  const { name } = readSkillFrontmatterV1(skillMd);
-  if (!name || sessionItem && sessionItem.name !== name) return notFound;
+  if (!bundled && (!artifact || artifact.id !== skillId)) return notFound;
+  const content = bundled ?? (artifact ? readSkillBundleContentV1(artifact) : null);
+  if (!content || sessionItem && sessionItem.digest !== content.digest) return notFound;
+  const { body, skillMd, frontmatter: { name } } = content;
+  if (sessionItem && sessionItem.name !== name) return notFound;
   const file = request.file === undefined ? undefined : body.entries.find(entry => entry.path === request.file);
   if (request.file !== undefined && !file) return notFound;
-  return {
+  const lock: SkillLockV1 = bundled ? { provenance: { kind: 'first_party' }, updatePolicy: 'manual' } : readSkillLockV1(artifact?.header);
+  const result: SkillReadResultV1 = {
     skillId, name, skillMd,
+    revision: bundled ? bundled.digest : encodeSkillRevisionV1(artifact!.revision), provenance: lock.provenance, modified: isSkillModifiedV1(lock, content.digest),
+    ...(lock.upstream ? { upstream: lock.upstream } : {}), trust: deriveSkillTrustV1(body.entries), cost: estimateSkillCostV1(skillMd), rules: [...(params.rules ?? [])],
     files: body.entries.map(entry => ({ path: entry.path, bytes: decodeBase64(entry.contentBase64).length,
       ...(entry.unixMode == null ? {} : { unixMode: entry.unixMode }) })),
     ...(file ? { file: { path: file.path, contentBase64: file.contentBase64, contentKind: file.contentKind,
       ...(file.unixMode == null ? {} : { unixMode: file.unixMode }) } } : {}),
+    ...(params.usage && Object.hasOwn(params.usage.lastUsedAt, skillId) ? { lastUsedAt: params.usage.lastUsedAt[skillId] } : {}),
   };
+  throwIfAborted(params.signal);
+  if (sessionItem && params.recordSessionUse && !await params.recordSessionUse(sessionItem)) return notFound;
+  return result;
 }
 
 export type MemoryDocMutationTargetV1 = Readonly<{
@@ -467,7 +476,7 @@ export type PromptLibraryListItem = Readonly<{
 
 export async function listPromptLibrary(params: Readonly<{
   store: PromptLibraryArtifactStore;
-  request: Readonly<{ query?: string; includeBundles?: false }>;
+  request: Readonly<{ query?: string }>;
   signal?: AbortSignal;
 }>): Promise<Readonly<{ items: readonly PromptLibraryListItem[]; coverage: 'complete' | 'partial' | 'unavailable' }>> {
   throwIfAborted(params.signal);
@@ -831,7 +840,6 @@ export async function exportPromptLibraryArtifact(params: Readonly<{
     machineId: params.request.machineId,
     workspacePath: directory,
     externalRef: response.externalRef,
-    syncMode: currentLink?.syncMode ?? 'manual',
     baseDigest: currentLink?.baseDigest ?? response.digest ?? null,
     lastLibraryDigest: artifactState.libraryKind === 'doc'
       ? computePromptDocDigestV1(artifactState.markdown)
@@ -849,153 +857,120 @@ export async function exportPromptLibraryArtifact(params: Readonly<{
   };
 }
 
+export const LegacySkillRegistryInstallEffectsV1Schema = lazyZodSchema(() => z.union([
+  SkillInstallAcknowledgedEffectsV1Schema,
+  z.object({ exported: z.literal(true), response: PromptAssetMutationSuccessResponseV1Schema }).strict(),
+  SkillInstallAcknowledgedEffectsV1Schema.extend({ exported: z.literal(true), response: PromptAssetMutationSuccessResponseV1Schema }).strict(),
+]));
+export type LegacySkillRegistryInstallEffectsV1 = z.infer<typeof LegacySkillRegistryInstallEffectsV1Schema>;
+
+export type LegacySkillRegistryInstallResultV1 = Readonly<{
+  ok: true; artifactId?: string; routeKind: 'bundle'; exported: boolean;
+  response?: Extract<PromptAssetMutationResponseV1, { ok: true }>; nextPromptExternalLinks?: PromptExternalLinksV1;
+  skillIds?: readonly string[]; includedInSessionId?: string | null;
+  incomplete?: readonly Readonly<{ skillId: string; step: 'rules' | 'session_include' }>[];
+}> | (PromptLibraryMutationFailure & Readonly<{ exported?: true; response?: Extract<PromptAssetMutationResponseV1, { ok: true }>; details?: LegacySkillRegistryInstallEffectsV1 }>);
+
+/** Host row settlements cannot turn an acknowledged export into total success.
+ * Node keeps its incumbent persistence receipt; UI can report its existing
+ * typed row failure. This sole Action projection retains the physical effects.
+ */
+export function projectLegacySkillRegistryInstallActionResultV1(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return result;
+  const receipt = result as Readonly<Record<string, unknown>>;
+  if (receipt.ok === false) {
+    const errorCode = typeof receipt.errorCode === 'string' && receipt.errorCode ? receipt.errorCode : 'invalid_parameters';
+    return { ...receipt, errorCode, error: typeof receipt.error === 'string' && receipt.error ? receipt.error : errorCode };
+  }
+  const settlement = receipt.externalLinkPersistence;
+  if (!settlement || typeof settlement !== 'object') return result;
+  const persistence = settlement as Readonly<Record<string, unknown>>;
+  if (persistence.status === 'applied') return result;
+  const failure = ActionExecuteFailureSchema.safeParse(settlement);
+  const errorCode = failure.success ? failure.data.errorCode
+    : persistence.status === 'conflict' ? 'conflict'
+    : persistence.status === 'outcomeUnknown' ? 'outcome_unknown'
+    : persistence.status === 'cancelled' ? 'cancelled'
+    : persistence.status === 'locked' ? persistence.reason === 'modeMismatch' ? 'account-mode-mismatch'
+      : persistence.reason === 'encryptionMaterialUnavailable' ? 'encryption-material-unavailable' : 'invalid-stored-content'
+    : persistence.status === 'invalid' ? 'invalid-stored-content' : 'content_unavailable';
+  const skillEffects = SkillInstallAcknowledgedEffectsV1Schema.safeParse({ skillIds: receipt.skillIds, incomplete: receipt.incomplete ?? [] });
+  const response = PromptAssetMutationSuccessResponseV1Schema.safeParse(receipt.response);
+  const details = {
+    ...(typeof receipt.artifactId === 'string' ? { artifactId: receipt.artifactId } : {}),
+    ...(skillEffects.success ? skillEffects.data : {}),
+    ...(receipt.exported === true ? { exported: true, ...(response.success ? { response: response.data } : {}) } : {}),
+  };
+  return { ok: false, errorCode, error: failure.success ? failure.data.error : errorCode,
+    ...(Object.keys(details).length ? { details } : {}) };
+}
+
 export async function installPromptRegistryItemInLibrary(params: Readonly<{
-  store: PromptLibraryArtifactStore;
-  machineTarget: MachineAdministrationTargetV1;
-  libraryServerIdentityId: string;
-  fetchItem(input: Readonly<{
-    machineId: string;
-    serverId?: string | null;
-    sourceId: string;
-    itemId: string;
-    configuredSources: readonly PromptRegistryConfiguredSourceV1[];
-    signal?: AbortSignal;
-  }>): Promise<PromptRegistryFetchItemResponseV1>;
-  install(input: Readonly<{
-    machineId: string;
-    serverId?: string | null;
-    request: PromptRegistryInstallRequestV1;
-    signal?: AbortSignal;
-  }>): Promise<PromptRegistryInstallResponseV1>;
-  request: Readonly<{
-    machineId: string;
-    serverId?: string | null;
-    sourceId: string;
-    itemId: string;
-    configuredSources: readonly PromptRegistryConfiguredSourceV1[];
-    installTarget?: PromptRegistryInstallRequestV1['installTarget'];
-    promptExternalLinks: PromptExternalLinksV1 | null | undefined;
-    previewOnly?: boolean;
-  }>;
-  randomId: () => string;
-  nowMs?: () => number;
-  signal?: AbortSignal;
-}>): Promise<(PromptLibraryMutationFailure & Readonly<{
-  exported?: true;
-  response?: Extract<PromptRegistryInstallResponseV1, { ok: true }>;
-}>) | Readonly<{
-  ok: true;
-  artifactId?: string;
-  routeKind: 'bundle';
-  exported: boolean;
-  response?: Extract<PromptRegistryInstallResponseV1, { ok: true }>;
-  nextPromptExternalLinks?: PromptExternalLinksV1;
-}>> {
+  machineTarget: MachineAdministrationTargetV1; libraryServerIdentityId: string;
+  fetchItem(input: Readonly<{ sourceId: string; itemId: string; signal?: AbortSignal }>): Promise<Readonly<{
+    item: import('../../registries/registryItemsV1.js').RegistryItemV1; files: readonly import('./skills/skillActionSchemasV1.js').SkillFileInputV1[];
+  }>>;
+  install(input: Readonly<{ machineId: string; serverId?: string | null; request: PromptAssetWriteBundleRequest; signal?: AbortSignal }>): Promise<PromptAssetMutationResponseV1>;
+  installLibrary(pointer: import('../../registries/registryItemsV1.js').RegistryItemPointerV1): Promise<unknown>;
+  request: Readonly<{ machineId: string; serverId?: string | null; sourceId: string; itemId: string;
+    installTarget?: Readonly<{ assetTypeId: string; scope: PromptAssetScopeV1; directory?: string; targetName: string; installMode?: PromptAssetInstallModeV1 }>;
+    promptExternalLinks: PromptExternalLinksV1 | null | undefined; previewOnly?: boolean }>;
+  randomId: () => string; nowMs?: () => number; signal?: AbortSignal;
+}>): Promise<LegacySkillRegistryInstallResultV1> {
   throwIfAborted(params.signal);
   const target = MachineAdministrationTargetV1Schema.safeParse(params.machineTarget);
   const libraryHome = MachineAdministrationTargetV1Schema.shape.serverIdentityId.safeParse(params.libraryServerIdentityId);
-  if (!target.success || target.data.machineId !== params.request.machineId
-    || !libraryHome.success) {
+  if (!target.success || target.data.machineId !== params.request.machineId || !libraryHome.success) {
     return { ok: false, error: 'promptLibrary.saveError', errorCode: 'invalid_parameters' };
   }
-  const fetched = await params.fetchItem({
-    machineId: params.request.machineId,
-    ...(params.request.serverId ? { serverId: params.request.serverId } : {}),
-    sourceId: params.request.sourceId,
-    itemId: params.request.itemId,
-    configuredSources: params.request.configuredSources,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  throwIfAborted(params.signal);
-  if (!fetched.ok) return { ok: false, error: fetched.error, errorCode: fetched.errorCode };
-  if (fetched.item.bundleSchemaId !== 'skills.skill_md_v1') {
-    return { ok: false, error: 'promptLibrary.externalAssetsUnsupportedImport', errorCode: 'unsupported' };
+  const fetched = await params.fetchItem({ sourceId: params.request.sourceId, itemId: params.request.itemId, signal: params.signal });
+  const item = fetched.item;
+  if (item.summary.problem || item.payload.kind !== 'skill' || !item.summary.version) {
+    return { ok: false, error: 'promptLibrary.externalAssetsUnsupportedImport', errorCode: item.summary.problem?.code ?? 'unsupported' };
   }
-
-  let response: Extract<PromptRegistryInstallResponseV1, { ok: true }> | undefined;
-  if (params.request.installTarget) {
-    const installed = await params.install({
-      machineId: params.request.machineId,
-      ...(params.request.serverId ? { serverId: params.request.serverId } : {}),
-      request: {
-        sourceId: params.request.sourceId,
-        itemId: params.request.itemId,
-        configuredSources: [...params.request.configuredSources],
-        installTarget: params.request.installTarget,
-        previewOnly: params.request.previewOnly === true,
-      },
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-    if (!installed.ok) {
-      throwIfAborted(params.signal);
-      return {
-        ok: false,
-        error: installed.error,
-        errorCode: installed.errorCode,
-        ...(Object.prototype.hasOwnProperty.call(installed, 'currentDigest')
-          ? { currentDigest: installed.currentDigest ?? null } : {}),
-      };
-    }
+  const bundleBody = PromptBundleBodyV1Schema.parse({ v: 1, entries: fetched.files, createdAtMs: (params.nowMs ?? Date.now)(), updatedAtMs: (params.nowMs ?? Date.now)() });
+  const validation = validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: 'skills.skill_md_v1', body: bundleBody });
+  if (!validation.ok) return { ok: false, errorCode: validation.errorCode, error: validation.message };
+  let response: Extract<PromptAssetMutationResponseV1, { ok: true }> | undefined;
+  const installTarget = params.request.installTarget;
+  if (installTarget) {
+    const installed = await params.install({ machineId: params.request.machineId, serverId: params.request.serverId, signal: params.signal,
+      request: { ...installTarget, title: item.summary.title, bundleSchemaId: 'skills.skill_md_v1', bundleBody, previewOnly: params.request.previewOnly === true } });
+    if (!installed.ok) return installed;
     response = installed;
-    if (params.request.previewOnly === true) {
-      throwIfAborted(params.signal);
-      if (!installed.externalRef) return { ok: false, error: 'promptLibrary.saveError' };
-      return { ok: true, routeKind: 'bundle', exported: false, response };
-    }
+    if (params.request.previewOnly) return { ok: true, routeKind: 'bundle', exported: false, response };
+    if (!response.externalRef) return { ok: false, errorCode: 'invalid_parameters', error: 'promptLibrary.saveError', exported: true, response,
+      details: LegacySkillRegistryInstallEffectsV1Schema.parse({ exported: true, response }) };
   }
-
-  let artifactId: string | undefined;
   try {
-    throwIfAborted(params.signal);
-    if (response && !response.externalRef) return { ok: false, error: 'promptLibrary.saveError', errorCode: 'invalid_parameters', exported: true, response };
-    if (!params.store.create) throw new Error('prompt_library_artifact_create_unavailable');
-    artifactId = await params.store.create({
-      header: {
-        v: 1,
-        kind: 'prompt_bundle.v2',
-        title: fetched.item.title,
-        bundleSchemaId: fetched.item.bundleSchemaId,
-        origin: 'imported',
-        locked: false,
-      },
-      body: JSON.stringify(fetched.item.bundleBody),
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-    throwIfAborted(params.signal);
-    if (!params.request.installTarget || !response?.externalRef) {
-      return { ok: true, artifactId, routeKind: 'bundle', exported: false };
+    const raw = await params.installLibrary({ sourceId: item.summary.sourceId, itemId: item.summary.itemId, version: item.summary.version });
+    const actionFailure = ActionExecuteFailureSchema.safeParse(raw);
+    if (actionFailure.success) {
+      const effects = SkillInstallAcknowledgedEffectsV1Schema.safeParse(actionFailure.data.details);
+      const details = { ...(effects.success ? effects.data : {}), ...(response ? { exported: true as const, response } : {}) };
+      return { ok: false, errorCode: actionFailure.data.errorCode, error: actionFailure.data.error,
+        ...(response ? { exported: true, response } : {}), ...(effects.success || response ? { details: LegacySkillRegistryInstallEffectsV1Schema.parse(details) } : {}),
+        ...(effects.success && effects.data.skillIds.length === 1 ? { artifactId: effects.data.skillIds[0] } : {}) };
     }
+    const failure = SkillActionFailureResultV1Schema.safeParse(raw);
+    if (failure.success) return { ok: false, errorCode: failure.data.code, error: failure.data.code,
+      ...(response ? { exported: true, response, details: LegacySkillRegistryInstallEffectsV1Schema.parse({ exported: true, response }) } : {}) };
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(raw);
+    if (!('skillIds' in result) || result.skillIds.length !== 1) throw new Error('registry_skill_install_invalid_receipt');
+    const artifactId = result.skillIds[0]!;
+    if (!installTarget || !response?.externalRef) return { ok: true, artifactId, routeKind: 'bundle', exported: false, ...result };
     const nextPromptExternalLinks = upsertPromptExternalLink(params.request.promptExternalLinks, {
-      id: params.randomId(),
-      artifactId,
-      assetTypeId: params.request.installTarget.assetTypeId,
-      scope: params.request.installTarget.scope,
-      machineId: params.request.machineId,
-      workspacePath: params.request.installTarget.scope === 'project'
-        ? (params.request.installTarget.directory ?? null)
-        : null,
-      externalRef: response.externalRef,
-      syncMode: 'manual',
-      baseDigest: response.digest ?? null,
-      lastLibraryDigest: computePromptBundleDigestV1(fetched.item.bundleBody),
-      lastExternalDigest: response.digest ?? null,
-      lastSyncAtMs: (params.nowMs ?? Date.now)(),
+      id: params.randomId(), artifactId, assetTypeId: installTarget.assetTypeId, scope: installTarget.scope,
+      machineId: params.request.machineId, workspacePath: installTarget.scope === 'project' ? installTarget.directory ?? null : null,
+      externalRef: response.externalRef, baseDigest: response.digest ?? null,
+      lastLibraryDigest: computePromptBundleDigestV1(bundleBody), lastExternalDigest: response.digest ?? null, lastSyncAtMs: (params.nowMs ?? Date.now)(),
     }, { target: target.data, libraryServerIdentityId: libraryHome.data });
-    return {
-      ok: true,
-      artifactId,
-      routeKind: 'bundle',
-      exported: true,
-      response,
-      nextPromptExternalLinks,
-    };
+    return { ok: true, artifactId, routeKind: 'bundle', exported: true, response, nextPromptExternalLinks, ...result };
   } catch (error) {
-    // Only a consumed successful commit ACK authorizes an effect receipt.
-    // Cancellation before that ACK remains the transport's unknown outcome.
     if (!response) throw error;
-    const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-      ? error.code : error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'invalid_parameters';
-    return { ok: false, error: 'promptLibrary.saveError', errorCode: code, exported: true, response,
-      ...(artifactId ? { artifactId } : {}) };
+    const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code
+      : error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'invalid_parameters';
+    return { ok: false, error: 'promptLibrary.saveError', errorCode, exported: true, response,
+      details: LegacySkillRegistryInstallEffectsV1Schema.parse({ exported: true, response }) };
   }
 }

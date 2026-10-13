@@ -1,0 +1,386 @@
+import type { ActionExecutorContext } from '../../../actions/actionExecutor.js';
+import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
+import { resolveArtifactOrganizationHeaderV1 } from '../../../artifacts/artifactOrganizationV1.js';
+import { readArtifactFolderCatalogV1 } from '../promptFolderActionsV1.js';
+import { readPromptLibraryCatalogRecordV1 } from '../promptLibraryCatalogV1.js';
+import { computePromptBundleDigestV1 } from '../promptLibraryDigests.js';
+import { createPromptBundleInLibrary, updatePromptBundleInLibrary, type PromptLibraryArtifactStore, type PromptLibraryStoredArtifact } from '../promptLibraryActionOperations.js';
+import { readSkillBundleContentV1, readFirstPartySkillContentV1, validatePromptBundleBodyV1AgainstSchemaId, projectPromptBundleActionEntriesV1 } from '../promptBundleSchemas.js';
+import { mutateSkillRulesV1, removeSkillRulesV1, type SkillRulesActionPortV1 } from '../skillRulesActionsV1.js';
+import { isMigratedReachRuleIdV1, reachRulesToDraftsV1, resolveCreateReachV1 } from '../../../reach/reachRulesChangeV1.js';
+import type { ReachRuleV1 } from '../../../reach/reachRuleV1.js';
+import type { RegistryItemPointerV1, RegistryItemV1, RegistryContentRefV1 } from '../../../registries/registryItemsV1.js';
+import type { RegistrySourceDescriptorV1 } from '../../../registries/registrySourcesV1.js';
+import { RegistryUpstreamV1Schema, registryUpstreamEqualV1, type RegistryUpstreamV1 } from '../../../registries/registryUpstreamV1.js';
+import type { RegistryProvenanceV1 } from '../../../registries/registryItemsV1.js';
+import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, SKILL_NAME_PATTERN_V1,
+  type SkillListItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
+import { deriveSkillTrustV1 } from './skillTrustV1.js';
+import { estimateSkillCostV1 } from './skillCostV1.js';
+import { deriveSkillAccountStatusesV1 } from './skillStatusV1.js';
+import { readSkillUsageRowV1, skillUsageObservedSinceV1, type SkillUsageRowV1 } from './skillUsageV1.js';
+import { exportSkillBundlesAsZipV1, skillFileFromBytesV1 } from './skillZipV1.js';
+import { FoundSkillBundleV1Schema, type FoundSkillBundleV1 } from './foundSkillTransferV1.js';
+import { FIRST_PARTY_SKILLS_V1 } from './firstPartySkillsV1.js';
+import { SKILL_ACTION_INPUT_SCHEMAS_V1 as inputs, SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs,
+  type SkillLibraryActionIdV1, type SkillLibraryActionInputByIdV1, type SkillLibraryActionResultByIdV1, type SkillFileInputV1, type SkillInstallAcknowledgedEffectsV1 } from './skillActionSchemasV1.js';
+
+export type SkillActionCallerV1 = Readonly<{ surface: ActionExecutorContext['surface'] | null; sessionId?: string }>;
+export { SkillInstallAcknowledgedEffectsV1Schema, type SkillInstallAcknowledgedEffectsV1 } from './skillActionSchemasV1.js';
+export type SkillActionPortV1 = Readonly<{
+  store: PromptLibraryArtifactStore; skillRules: SkillRulesActionPortV1;
+  includeInSession(sessionId: string, skillId: string, signal?: AbortSignal): Promise<Readonly<{ ok: boolean }>>;
+  readRegistryItem?(pointer: RegistryItemPointerV1): Promise<RegistryItemV1>;
+  readRegistrySource?(sourceId: string): Promise<RegistrySourceDescriptorV1>;
+  fetchRegistrySkillFiles?(pointer: RegistryItemPointerV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
+  fetchLinkSkillFiles?(url: string, item: RegistryItemV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
+  readLinkSkills?(url: string, ref?: Extract<RegistryContentRefV1, { kind: 'gitTree' }>): Promise<readonly RegistryItemV1[]>;
+  readFoundSkillBundle?(machineId: string, path: string, signal?: AbortSignal): Promise<FoundSkillBundleV1>;
+  randomId(): string; nowMs?(): number;
+}>;
+class SkillActionFailureV1 extends Error {
+  constructor(readonly code: string, readonly current?: SkillListItemV1) { super(code); }
+}
+class SkillAcknowledgedFailureV1 extends Error {
+  constructor(readonly code: string, readonly details: SkillInstallAcknowledgedEffectsV1) { super(code); }
+}
+const fail = (code: string, current?: SkillListItemV1): never => { throw new SkillActionFailureV1(code, current); };
+/** Usage is an optional fact; unavailable content never becomes a fabricated timestamp. */
+export async function readSkillUsageCatalogV1(port: Pick<SkillRulesActionPortV1, 'readCatalog' | 'assertCurrent'>, signal?: AbortSignal):
+  Promise<Readonly<{ row: SkillUsageRowV1; revision: number | 'absent' }> | null> {
+  signal?.throwIfAborted(); port.assertCurrent();
+  try {
+    const projection = await port.readCatalog(signal, 'skill-usage');
+    signal?.throwIfAborted(); port.assertCurrent();
+    const read = readPromptLibraryCatalogRecordV1({ ...projection, key: 'skill-usage' });
+    if (read.status !== 'ready' || read.record.key !== 'skill-usage') return null;
+    const row = readSkillUsageRowV1(read.record.value);
+    return row ? { row, revision: read.revision } : null;
+  } catch {
+    signal?.throwIfAborted(); port.assertCurrent();
+    return null;
+  }
+}
+const text = (file: SkillFileInputV1) => new TextDecoder().decode(decodeBase64(file.contentBase64, 'base64'));
+function skillMarkdown(files: readonly SkillFileInputV1[]): string {
+  const file = files.find(file => file.path === 'SKILL.md' && file.contentKind === 'utf8');
+  return file ? text(file) : fail('missing_required_entry');
+}
+function validateFiles(files: readonly SkillFileInputV1[], now: number): void {
+  const result = validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: 'skills.skill_md_v1',
+    body: { v: 1, entries: [...files], createdAtMs: now, updatedAtMs: now } });
+  if (!result.ok) fail(result.errorCode);
+  if (!readSkillFrontmatterV1(skillMarkdown(files)).name) fail('invalid_skill_name');
+}
+function renameMarkdown(files: readonly SkillFileInputV1[], name?: string, description?: string): SkillFileInputV1[] {
+  if (name !== undefined && !SKILL_NAME_PATTERN_V1.test(name)) fail('invalid_skill_name');
+  if (name === undefined && description === undefined) return [...files];
+  return files.map(file => {
+    if (file.path !== 'SKILL.md') return file;
+    let markdown = text(file);
+    const frontmatter = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+    const fields = (frontmatter?.[1] ?? '').split(/\r?\n/).filter(line => line && !(name !== undefined && /^name\s*:/.test(line)) && !(description !== undefined && /^description\s*:/.test(line)));
+    if (name !== undefined) fields.push(`name: ${name}`);
+    if (description !== undefined) fields.push(`description: ${description.replace(/[\r\n]/g, ' ')}`);
+    markdown = `---\n${fields.join('\n')}\n---\n${frontmatter ? markdown.slice(frontmatter[0].length) : markdown}`;
+    return { ...file, contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64') };
+  });
+}
+
+export function createSkillActionExecuteV1(port: SkillActionPortV1) {
+  const nowMs = port.nowMs ?? Date.now;
+  async function rulesRead(signal?: AbortSignal) {
+    const projection = await port.skillRules.readCatalog(signal, 'skill-rules');
+    const result = readPromptLibraryCatalogRecordV1({ ...projection, key: 'skill-rules' });
+    if (result.status !== 'ready' || result.record.key !== 'skill-rules') return fail('catalog_unavailable');
+    return { rules: result.record.value.rules, revision: result.revision };
+  }
+  async function read(skillId: string, signal?: AbortSignal): Promise<Readonly<{
+    artifact: PromptLibraryStoredArtifact | null; skillId: string; revision: string;
+    content: NonNullable<ReturnType<typeof readSkillBundleContentV1>>; lock: SkillLockV1;
+  }>> {
+    const bundled = readFirstPartySkillContentV1(skillId);
+    if (bundled) {
+      const lock: SkillLockV1 = { provenance: { kind: 'first_party' }, updatePolicy: 'manual' };
+      return { artifact: null, skillId, revision: bundled.digest, content: bundled, lock };
+    }
+    const artifact = await port.store.read(skillId, signal ? { signal } : undefined);
+    if (!artifact) return fail('not_found');
+    const content = readSkillBundleContentV1(artifact);
+    if (!content) return fail('skill_content_unavailable');
+    const lock = readSkillLockV1(artifact.header);
+    return { artifact, skillId, revision: encodeSkillRevisionV1(artifact.revision), content, lock };
+  }
+  async function project(opened: Awaited<ReturnType<typeof read>>, rules: readonly (ReachRuleV1 & { skillId: string })[], folderId: string | null = null): Promise<SkillListItemV1> {
+    const itemRules = rules.filter(rule => rule.skillId === opened.skillId);
+    return { skillId: opened.skillId, name: opened.content.frontmatter.name, description: opened.content.frontmatter.description ?? null,
+      revision: opened.revision, rules: itemRules, trust: deriveSkillTrustV1(opened.content.body.entries),
+      cost: estimateSkillCostV1(opened.content.skillMd), provenance: opened.lock.provenance, modified: isSkillModifiedV1(opened.lock, opened.content.digest),
+      updatePolicy: opened.lock.updatePolicy, ...(opened.lock.upstream ? { upstream: opened.lock.upstream } : {}), createdAt: opened.content.body.createdAtMs,
+      migratedFromContext: itemRules.some(rule => isMigratedReachRuleIdV1(rule.id)), userInvocable: opened.content.frontmatter.userInvocable, folderId };
+  }
+  async function current(skillId: string, signal?: AbortSignal) {
+    const opened = await read(skillId, signal);
+    return { ...opened, item: await project(opened, (await rulesRead(signal)).rules) };
+  }
+  async function reviewed(skillId: string, expectedRevision: string, signal?: AbortSignal) {
+    const opened = await current(skillId, signal);
+    if (expectedRevision !== opened.item.revision) fail('revision_conflict', opened.item);
+    return opened;
+  }
+  async function create(files: readonly SkillFileInputV1[], provenance: SkillProvenanceV1,
+    caller: SkillActionCallerV1, where: SkillLibraryActionInputByIdV1['skills.create']['where'], signal?: AbortSignal) {
+    const reach = resolveCreateReachV1({ kind: 'skill', caller, requested: where, ctx: { nowMs: nowMs(), newId: port.randomId } });
+    if (!reach.ok) return reach;
+    validateFiles(files, nowMs());
+    const name = readSkillFrontmatterV1(skillMarkdown(files)).name!;
+    const imported = provenance.kind === 'registry' || provenance.kind === 'link';
+    const lock: SkillLockV1 = { provenance, updatePolicy: 'manual', ...(imported ? { importedDigest: computePromptBundleDigestV1({ v: 1, entries: [...files], createdAtMs: 0, updatedAtMs: 0 }) } : {}) };
+    const store: PromptLibraryArtifactStore = { ...port.store, create: port.store.create ? input => port.store.create!({ ...input, header: { ...input.header, skillLock: lock } }) : undefined };
+    const created = await createPromptBundleInLibrary({ store, request: { title: name, bundleSchemaId: 'skills.skill_md_v1', entries: files,
+      origin: provenance.kind === 'written' ? 'user' : 'imported' }, nowMs, signal });
+    let artifact: PromptLibraryStoredArtifact | null;
+    const unreadable = () => new SkillAcknowledgedFailureV1('created_skill_unreadable', { skillIds: [created.artifactId],
+      incomplete: reach.rules.length ? [{ skillId: created.artifactId, step: 'rules' }] : reach.includeInSessionId ? [{ skillId: created.artifactId, step: 'session_include' }] : [] });
+    try { artifact = await port.store.read(created.artifactId, signal ? { signal } : undefined); }
+    catch { throw unreadable(); }
+    if (!artifact) throw unreadable();
+    const base = { ok: true as const, skillId: created.artifactId, revision: encodeSkillRevisionV1(artifact.revision), includedInSessionId: null as string | null };
+    if (reach.rules.length) {
+      try { const result = await mutateSkillRulesV1(port.skillRules, { items: [{ skillId: base.skillId }], change: { kind: 'replace', rules: reachRulesToDraftsV1(reach.rules) } }, signal);
+        if (!result.ok) return { ...base, incomplete: 'rules' as const }; }
+      catch { return { ...base, incomplete: 'rules' as const }; }
+    }
+    if (reach.includeInSessionId) {
+      try { if (!(await port.includeInSession(reach.includeInSessionId, base.skillId, signal)).ok) return { ...base, incomplete: 'session_include' as const }; }
+      catch { return { ...base, incomplete: 'session_include' as const }; }
+      return { ...base, includedInSessionId: reach.includeInSessionId };
+    }
+    return base;
+  }
+  async function createMany(items: readonly Readonly<{ files: readonly SkillFileInputV1[]; provenance: SkillProvenanceV1 }>[],
+    caller: SkillActionCallerV1, where: SkillLibraryActionInputByIdV1['skills.create']['where'], signal?: AbortSignal) {
+    const receipts: SkillLibraryActionResultByIdV1['skills.create'][] = [];
+    for (const item of items) {
+      try {
+        const receipt = await create(item.files, item.provenance, caller, where, signal);
+        if (!receipt.ok) return receipt;
+        receipts.push(receipt);
+      } catch (error) {
+        if (!receipts.length) throw error;
+        const record = error && typeof error === 'object' ? error : {};
+        const code = 'code' in record && typeof record.code === 'string' ? record.code : 'content_write_failed';
+        const acknowledged = error instanceof SkillAcknowledgedFailureV1 ? error.details : null;
+        const details: SkillInstallAcknowledgedEffectsV1 = {
+          skillIds: [...receipts.map(receipt => receipt.skillId), ...(acknowledged?.skillIds ?? [])],
+          incomplete: [...receipts.flatMap(receipt => receipt.incomplete ? [{ skillId: receipt.skillId, step: receipt.incomplete }] : []), ...(acknowledged?.incomplete ?? [])],
+        };
+        return { ok: false, errorCode: code, error: code, details };
+      }
+    }
+    const incomplete = receipts.flatMap(receipt => receipt.incomplete ? [{ skillId: receipt.skillId, step: receipt.incomplete }] : []);
+    return { skillIds: receipts.map(receipt => receipt.skillId),
+      includedInSessionId: receipts.find(receipt => receipt.includedInSessionId)?.includedInSessionId ?? null,
+      ...(incomplete.length ? { incomplete } : {}) };
+  }
+  async function readFound(machineId: string, path: string, signal?: AbortSignal) {
+    if (!port.readFoundSkillBundle) return fail('unsupported_source');
+    const bundle = FoundSkillBundleV1Schema.parse(await port.readFoundSkillBundle(machineId, path, signal));
+    signal?.throwIfAborted();
+    // Compare preserves native bytes; library authoring validation belongs to create.
+    skillMarkdown(bundle.files);
+    return bundle;
+  }
+  async function update(opened: Awaited<ReturnType<typeof current>>, files: readonly SkillFileInputV1[], lock: SkillLockV1, signal?: AbortSignal, preserveBody = false) {
+    const artifact = opened.artifact ?? fail('first_party_read_only');
+    validateFiles(files, nowMs());
+    const store: PromptLibraryArtifactStore = { ...port.store, update: input => port.store.update({ ...input,
+      ...(preserveBody && artifact.body !== null ? { body: artifact.body } : {}), header: { ...input.header, skillLock: lock } }) };
+    try { const result = await updatePromptBundleInLibrary({ store, request: { artifactId: artifact.id,
+      expectedRevision: artifact.revision, title: readSkillFrontmatterV1(skillMarkdown(files)).name!, entries: files }, nowMs, signal });
+      const unreadable = () => new SkillAcknowledgedFailureV1('updated_skill_unreadable', { skillIds: [artifact.id], incomplete: [] });
+      let revision = result.revision;
+      if (!revision) {
+        try { revision = (await port.store.read(artifact.id, signal ? { signal } : undefined))?.revision; }
+        catch { throw unreadable(); }
+      }
+      if (!revision) throw unreadable();
+      return { revision: encodeSkillRevisionV1(revision) };
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'version_mismatch') fail('revision_conflict', (await current(artifact.id, signal)).item);
+      throw error;
+    }
+  }
+  async function preview(item: RegistryItemV1, provenance: SkillProvenanceV1, source: RegistryItemPointerV1 | string) {
+    if (item.summary.problem) fail(item.summary.problem.code);
+    if (item.payload.kind !== 'skill') return fail('unsupported_source');
+    const fetched = typeof source === 'string' ? await (port.fetchLinkSkillFiles?.(source, item) ?? fail('unsupported_source'))
+      : await (port.fetchRegistrySkillFiles?.(source) ?? fail('unsupported_source'));
+    const normalized = fetched.map(file => skillFileFromBytesV1(file.path, file.bytes, file.unixMode));
+    validateFiles(normalized, nowMs()); const md = skillMarkdown(normalized), fm = readSkillFrontmatterV1(md);
+    return { path: item.payload.skill.ref.path, name: fm.name!, description: fm.description ?? null, files: normalized,
+      provenance, trust: deriveSkillTrustV1(normalized), cost: estimateSkillCostV1(md) };
+  }
+  async function upstream(opened: Awaited<ReturnType<typeof current>>) {
+    const provenance = opened.lock.provenance;
+    const latest = opened.lock.upstream?.latest;
+    if (!latest || latest.kind !== 'gitTree') return fail('update_unavailable');
+    let item: RegistryItemV1;
+    if (provenance.kind === 'registry' && port.readRegistryItem) item = await port.readRegistryItem({ sourceId: provenance.registry.sourceId, itemId: provenance.registry.itemId, version: latest.commit });
+    else if (provenance.kind === 'link' && port.readLinkSkills) {
+      const candidates = await port.readLinkSkills(provenance.url, latest);
+      item = candidates.find(candidate => candidate.payload.kind === 'skill' && candidate.payload.skill.ref.path === latest.path) ?? fail('update_unavailable');
+    } else return fail('update_unavailable');
+    const nextProvenance: SkillProvenanceV1 = provenance.kind === 'registry' ? { ...provenance, registry: { ...provenance.registry, ref: latest } } : { kind: 'link', url: provenance.kind === 'link' ? provenance.url : '', ref: latest };
+    const next = await preview(item, nextProvenance, provenance.kind === 'registry'
+      ? { sourceId: provenance.registry.sourceId, itemId: provenance.registry.itemId, version: latest.commit }
+      : provenance.kind === 'link' ? provenance.url : fail('update_unavailable'));
+    const mine = projectPromptBundleActionEntriesV1(opened.content.body.entries);
+    const paths = [...new Set([...mine.map(file => file.path), ...next.files.map(file => file.path)])].sort();
+    return { next, files: paths.map(path => { const left = mine.find(file => file.path === path) ?? null, right = next.files.find(file => file.path === path) ?? null;
+      return { path, mine: left, theirs: right, changed: left?.contentBase64 !== right?.contentBase64 || left?.unixMode !== right?.unixMode }; }),
+      costDelta: { mine: estimateSkillCostV1(opened.content.skillMd), theirs: next.cost } };
+  }
+  async function execute(actionId: SkillLibraryActionIdV1, raw: unknown, caller: SkillActionCallerV1, signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted();
+    try {
+      let result: unknown;
+      switch (actionId) {
+        case 'skills.list': {
+          const input = inputs[actionId].parse(raw);
+          if (!port.store.list) return fail('library_unavailable');
+          const [rules, usage, folderCatalog] = await Promise.all([rulesRead(signal), readSkillUsageCatalogV1(port.skillRules, signal),
+            port.store.organization ? readArtifactFolderCatalogV1({ port: port.store.organization, signal }).catch(() => null) : null]);
+          const items: SkillListItemV1[] = []; let cursor: string | undefined;
+          do { const page = await port.store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+            if (page.coverage === 'unavailable' || page.coverage === 'partial' && !page.nextCursor) return fail('library_unavailable');
+            const opened = await Promise.all(page.items.flatMap(item => item.header?.kind === 'prompt_bundle.v2'
+              && item.header.bundleSchemaId === 'skills.skill_md_v1' ? [{ ...item, header: item.header }] : []).map(async header => {
+              const folder = folderCatalog?.status === 'ready' ? resolveArtifactOrganizationHeaderV1({ header: header.header,
+                artifactHeadersById: folderCatalog.value.artifactHeadersById, artifactId: header.id, owned: header.owned === true }).folderId ?? null : null;
+              const item = await project(await read(header.id, signal), rules.rules, folder);
+              return usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
+                ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item;
+            }));
+            items.push(...opened);
+            cursor = page.nextCursor;
+          } while (cursor);
+          for (const skill of FIRST_PARTY_SKILLS_V1) {
+            const item = await project(await read(skill.skillId, signal), rules.rules);
+            items.push(usage && Object.hasOwn(usage.row.lastUsedAt, item.skillId)
+              ? { ...item, lastUsedAt: usage.row.lastUsedAt[item.skillId] } : item);
+          }
+          const usageObservedSince = skillUsageObservedSinceV1(usage?.row);
+          result = { usageObservedSince, items: items.filter(item => { const statuses = deriveSkillAccountStatusesV1(item, { nowMs: nowMs(), usageObservedSince });
+            return (!input.query || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(input.query.toLowerCase()))
+              && (!input.state || input.state === 'in_use' && !statuses.includes('off') || input.state === 'off' && statuses.includes('off')
+                || (input.state === 'updates' || input.state === 'needs_attention') && statuses.includes('update')); }),
+            revision: `${rules.revision}:${usage?.revision ?? 'unavailable'}:${items.map(item => item.revision).join(',')}` }; break;
+        }
+        case 'skills.create': { const input = inputs[actionId].parse(raw); result = await create(renameMarkdown(input.files, input.name, input.description), { kind: 'written' }, caller, input.where, signal); break; }
+        case 'skills.found.read': { const input = inputs[actionId].parse(raw), bundle = await readFound(input.machineId, input.path, signal);
+          result = { name: bundle.name, files: bundle.files }; break; }
+        case 'skills.found.adopt': { const input = inputs[actionId].parse(raw);
+          const reach = resolveCreateReachV1({ kind: 'skill', caller, requested: input.where, ctx: { nowMs: nowMs(), newId: port.randomId } });
+          if (!reach.ok) return reach;
+          const items = await Promise.all(input.items.map(async item => {
+            const bundle = await readFound(input.machineId, item.path, signal);
+            return { files: bundle.files, provenance: { kind: 'machine' as const, machineId: input.machineId,
+              agentIds: bundle.agents, path: bundle.path, importedAt: nowMs() } };
+          }));
+          result = await createMany(items, caller, input.where, signal); break; }
+        case 'skills.duplicate': { const input = inputs[actionId].parse(raw), opened = await read(input.skillId, signal); result = await create(projectPromptBundleActionEntriesV1(opened.content.body.entries), { kind: 'written' }, caller, undefined, signal); break; }
+        case 'skills.update': { const input = inputs[actionId].parse(raw);
+          if (readFirstPartySkillContentV1(input.skillId)) return fail('first_party_read_only');
+          const opened = await reviewed(input.skillId, input.expectedRevision, signal);
+          let files = projectPromptBundleActionEntriesV1(opened.content.body.entries);
+          for (const change of input.files ?? []) files = change.kind === 'remove' ? files.filter(file => file.path !== change.path) : [...files.filter(file => file.path !== change.file.path), change.file];
+          result = await update(opened, renameMarkdown(files, input.name, input.description), { ...opened.lock, ...(input.updatePolicy ? { updatePolicy: input.updatePolicy } : {}) }, signal); break; }
+        case 'skills.delete': { const input = inputs[actionId].parse(raw);
+          if (readFirstPartySkillContentV1(input.skillId)) return fail('first_party_read_only');
+          const artifact = await port.store.read(input.skillId, signal ? { signal } : undefined);
+          if (artifact) {
+            if (artifact.header?.kind !== 'prompt_bundle.v2' || artifact.header.bundleSchemaId !== 'skills.skill_md_v1') return fail('skill_content_unavailable');
+            readSkillLockV1(artifact.header);
+            if (encodeSkillRevisionV1(artifact.revision) !== input.expectedRevision) return fail('revision_conflict');
+            if (!port.store.delete) return fail('delete_unavailable');
+            try { await port.store.delete({ artifactId: input.skillId, expectedRevision: artifact.revision, ...(signal ? { signal } : {}) }); }
+            catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'version_mismatch') fail('revision_conflict'); throw error; } }
+          try { result = await removeSkillRulesV1(port.skillRules, input.skillId, signal) ? { deleted: true } : { deleted: true, rulesLeft: true }; }
+          catch { result = { deleted: true, rulesLeft: true }; } break; }
+        case 'skills.install': { const input = inputs[actionId].parse(raw);
+          const reach = resolveCreateReachV1({ kind: 'skill', caller, requested: input.where, ctx: { nowMs: nowMs(), newId: port.randomId } }); if (!reach.ok) return reach;
+          let previews: Awaited<ReturnType<typeof preview>>[];
+          if (input.source.kind === 'upload') {
+            const uploaded = input.source.files;
+            const roots = uploaded.some(file => file.path === 'SKILL.md') ? [''] : uploaded.filter(file => file.path.endsWith('/SKILL.md')).map(file => file.path.slice(0, -'/SKILL.md'.length));
+            if (!roots.length) return fail('missing_required_entry');
+            previews = roots.map(path => {
+              const files = uploaded.filter(file => !path || file.path.startsWith(path + '/')).map(file => ({ ...file, path: path ? file.path.slice(path.length + 1) : file.path }));
+              validateFiles(files, nowMs()); const md = skillMarkdown(files), fm = readSkillFrontmatterV1(md);
+              return { path, name: fm.name!, description: fm.description ?? null, files, provenance: { kind: 'upload' as const, importedAt: nowMs() }, trust: deriveSkillTrustV1(files), cost: estimateSkillCostV1(md) };
+            });
+          }
+          else if (input.source.kind === 'registry') { if (!port.readRegistryItem || !port.readRegistrySource) return fail('unsupported_source'); const pointer = input.source;
+            const item = await port.readRegistryItem({ sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version });
+            if (item.payload.kind !== 'skill') return fail('unsupported_source');
+            if (item.payload.skill.ref.commit !== pointer.version) return fail('registry_version_mismatch');
+            const source = await port.readRegistrySource(pointer.sourceId);
+            previews = [await preview(item, { kind: 'registry', registry: { sourceId: pointer.sourceId, itemId: pointer.itemId,
+              sourceUrl: source.url, format: source.format, ref: item.payload.skill.ref, importedAt: nowMs() } },
+              { sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version })]; }
+          else { if (!port.readLinkSkills) return fail('unsupported_source'); const url = input.source.url;
+            previews = await Promise.all((await port.readLinkSkills(url)).map(item => {
+              if (item.payload.kind !== 'skill') return fail('unsupported_source');
+              return preview(item, { kind: 'link', url, ref: item.payload.skill.ref }, url);
+            })); }
+          previews = previews.filter(item => !input.selectPaths || input.selectPaths.includes(item.path));
+          if (input.dryRun) result = { items: previews };
+          else result = await createMany(previews, caller, input.where, signal); break; }
+        case 'skills.export': { const input = inputs[actionId].parse(raw); const items = await Promise.all(input.skillIds.map(async id => { const opened = await read(id, signal); return { name: opened.content.frontmatter.name, files: projectPromptBundleActionEntriesV1(opened.content.body.entries) }; })); result = await exportSkillBundlesAsZipV1(items); break; }
+        case 'skills.updates.diff': { const input = inputs[actionId].parse(raw), diff = await upstream(await current(input.skillId, signal)); result = { files: diff.files, costDelta: diff.costDelta }; break; }
+        case 'skills.updates.apply': { const input = inputs[actionId].parse(raw), opened = await reviewed(input.skillId, input.expectedRevision, signal), diff = await upstream(opened);
+          const changed = diff.files.filter(file => file.changed);
+          if (opened.item.modified && changed.some(file => input.choices?.[file.path] === undefined)) return fail('choices_required');
+          const files = diff.files.flatMap(file => { const selected = input.choices?.[file.path] === 'mine' ? file.mine : file.theirs; return selected ? [selected] : []; });
+          const keepMine = changed.some(file => input.choices?.[file.path] === 'mine');
+          const lock = { ...opened.lock, provenance: diff.next.provenance, upstream: { state: 'current' as const },
+            ...(!keepMine ? { importedDigest: computePromptBundleDigestV1({ v: 1, entries: files, createdAtMs: 0, updatedAtMs: 0 }) } : {}) };
+          result = { ...await update(opened, files, lock, signal), provenance: lock.provenance }; break; }
+      }
+      if (result && typeof result === 'object' && 'ok' in result && result.ok === false) return result;
+      return outputs[actionId].parse(result);
+    } catch (error) { if (error instanceof SkillAcknowledgedFailureV1) return { ok: false, errorCode: error.code, error: error.code, details: error.details };
+      if (error instanceof SkillActionFailureV1) return { ok: false, code: error.code, ...(error.current ? { current: error.current } : {}) };
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'invalid_skill_lock') return { ok: false, code: 'invalid_skill_lock' };
+      throw error; }
+  };
+  /** Host observation only: public skills.update never accepts upstream authority. */
+  async function recordRegistryUpstream(skillId: string, observation: RegistryUpstreamV1, signal?: AbortSignal,
+    expectedProvenance?: RegistryProvenanceV1): Promise<SkillListItemV1 | null> {
+    signal?.throwIfAborted(); port.skillRules.assertCurrent();
+    const opened = await current(skillId, signal);
+    const provenance = opened.lock.provenance;
+    if (provenance.kind !== 'registry' && provenance.kind !== 'link') return null;
+    if (expectedProvenance) {
+      const ref = provenance.kind === 'registry' ? provenance.registry.ref : provenance.ref;
+      if (JSON.stringify(ref) !== JSON.stringify(expectedProvenance.ref)) return null;
+    }
+    const upstream = RegistryUpstreamV1Schema.parse(observation);
+    if (registryUpstreamEqualV1(opened.lock.upstream, upstream)) return opened.item;
+    try {
+      await update(opened, projectPromptBundleActionEntriesV1(opened.content.body.entries), { ...opened.lock, upstream }, signal, true);
+    } catch (error) {
+      // The existing Artifact CAS is the duplicate-observation authority. A
+      // different winning edit is never overwritten or automatically replayed.
+      if (error instanceof SkillActionFailureV1 && error.code === 'revision_conflict') {
+        const winner = await current(skillId, signal);
+        if (registryUpstreamEqualV1(winner.lock.upstream, upstream)) return winner.item;
+      }
+      throw error;
+    }
+    signal?.throwIfAborted(); port.skillRules.assertCurrent();
+    return (await current(skillId, signal)).item;
+  }
+  return Object.assign(execute, { recordRegistryUpstream });
+}

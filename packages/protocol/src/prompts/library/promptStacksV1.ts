@@ -3,29 +3,36 @@ import { z } from 'zod';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { PromptArtifactRefV1Schema, type PromptArtifactRefV1 } from './promptArtifactRefsV1.js';
-import { PromptPlacementV1Schema, type PromptPlacementV1 } from './promptPlacementV1.js';
+import { PromptPlacementV1Schema, PromptPlacementV1StoredSchema } from './promptPlacementV1.js';
 
 export const PromptStackRefV1Schema = PromptArtifactRefV1Schema;
 export type PromptStackRefV1 = PromptArtifactRefV1;
 
+/** Full-row custody preserves predecessor placements during unrelated list edits. */
 export const PromptStackEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1),
   ref: PromptStackRefV1Schema,
   enabled: z.boolean().default(true),
-  placement: PromptPlacementV1Schema.default('system_append' satisfies PromptPlacementV1),
+  placement: PromptPlacementV1StoredSchema.default('system_append'),
   maxChars: z.number().int().min(1).optional(),
   required: z.boolean().optional(),
+  /** IR-101: consumed positive projection; retained ref/id still resolve exclusions. */
+  skillMigrationV1: z.literal(true).optional(),
 }).strict());
 
 export type PromptStackEntryV1 = z.infer<typeof PromptStackEntryV1Schema>;
 export const PromptStackEntryV1StoredSchema = createStoredReadSchema(PromptStackEntryV1Schema);
+/** Only new attach operands use this narrower current authoring contract. */
+export const PromptStackEntryAuthoringV1Schema = lazyZodSchema(() => PromptStackEntryV1Schema.omit({ skillMigrationV1: true }).extend({
+  placement: PromptPlacementV1Schema.default('system_append'),
+}).strict());
 
 /** Semantic list edits shared by Account, Profile, Project, Source and Session Context owners. */
 export const PromptStackSetEnabledIntentV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('set_enabled'), entryId: z.string().min(1), enabled: z.boolean(),
 }).strict());
 export const PromptStackIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('attach'), entry: PromptStackEntryV1Schema }).strict(),
+  z.object({ kind: z.literal('attach'), entry: PromptStackEntryAuthoringV1Schema }).strict(),
   z.object({ kind: z.literal('detach'), entryId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal('reorder'), entryId: z.string().min(1), siblingId: z.string().min(1), position: z.enum(['before', 'after']) }).strict(),
   z.object({ kind: z.literal('set_budget'), entryId: z.string().min(1), maxChars: z.number().int().positive().nullable() }).strict(),
@@ -56,11 +63,11 @@ export function applyPromptStackIntentV1<Row extends Readonly<{ promptStack?: re
   let next: readonly PromptStackEntryV1[];
   if (intent.kind === 'attach') {
     if (index >= 0) {
-      const candidate = PromptStackEntryV1Schema.parse(intent.entry);
+      const candidate = PromptStackEntryAuthoringV1Schema.parse(intent.entry);
       const same = JSON.stringify(PromptStackEntryV1Schema.parse(entries[index]!)) === JSON.stringify(candidate);
       return same ? { ok: true, row, changed: false } : { ok: false, errorCode: 'entry_conflict' };
     }
-    next = [...entries, PromptStackEntryV1Schema.parse(intent.entry)];
+    next = [...entries, PromptStackEntryAuthoringV1Schema.parse(intent.entry)];
   } else if (intent.kind === 'detach') {
     if (index < 0) return { ok: true, row, changed: false };
     next = entries.filter(entry => entry.id !== entryId);

@@ -1,33 +1,75 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1, readPromptLibraryCatalogRecordV1, readRetainedPromptLibraryInventoryV1 } from './promptLibraryCatalogV1.js';
 import { PromptLibraryCatalogKeyV1Schema, sealPromptLibraryContentV1, type PromptLibraryRowsListResponseV1Schema } from './promptLibraryRowsV1.js';
 import { retainLegacyRoleArtifactsV1, type RoleArtifactStoreV1 } from '../roles/accountRoleActions.js';
 
 describe('Prompt library destination authority', () => {
+  it('classifies retained skills before admitting rule authority, then publishes before cleanup', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let published = false;
+    let started!: () => void;
+    const classificationStarted = new Promise<void>(resolve => { started = resolve; });
+    const rows: Extract<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] =
+      PromptLibraryCatalogKeyV1Schema.options.map(key => {
+        const record = emptyPromptLibraryRecordV1(key);
+        return { key, revision: 1, content: { t: 'plain', v: record.key === 'coding' ? { ...record,
+          value: { ...record.value, entries: [{ id: 'retained', ref: { kind: 'bundle', artifactId: 'legacy-skill' },
+            placement: 'system_append', enabled: true }] } } : record } };
+      });
+    const loading = loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () => ({ status: 'listed', rows }),
+      onReadyBeforeCleanup: async catalog => { expect(readPromptLibraryCatalogRecordV1({ catalog, key: 'skill-rules' }).status).toBe('ready'); published = true; },
+      skillMigration: { readArtifact: async () => { started(); await held; return { header: { v: 1, kind: 'prompt_bundle.v2', title: 'Legacy', bundleSchemaId: 'skills.skill_md_v1' } }; },
+        writeRecord: async ({ record }) => { const index = rows.findIndex(row => row.key === record.key);
+          rows[index] = { key: record.key, revision: 2, content: { t: 'plain', v: record } };
+          return { status: 'updated', revision: 2, cursor: 2 }; } },
+      transfer: { readSourceSnapshot: async () => ({ raw: {}, version: 7 }),
+        initializeRecord: async () => { throw new Error('Complete received authority must not initialize'); },
+        replaceSource: async () => ({ status: 'applied', settingsVersion: 8 }) } });
+    try { await classificationStarted; expect(published).toBe(false); } finally { release(); }
+    const final = await loading;
+    expect(published).toBe(true);
+    expect(readPromptLibraryCatalogRecordV1({ catalog: final, key: 'skill-rules' })).toMatchObject({ status: 'ready',
+      record: { value: { rules: expect.arrayContaining([expect.objectContaining({ skillId: 'legacy-skill', enabled: true })]) } } });
+  });
   it('initializes the root-less skills row once without retiring a nonexistent Settings root or reseeding deletion', async () => {
     const rows: Extract<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] =
       PromptLibraryCatalogKeyV1Schema.options.filter(key => String(key) !== 'skill-rules').map(key => ({ key, revision: 1,
         content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } }));
     const initialized: unknown[] = [];
     let retired: readonly string[] = [];
+    let raw: Readonly<Record<string, unknown>> = { undefined: 'keep', null: 'keep',
+      promptStacksV1: { v: 1, surfaces: { coding: [], voice: [], profilesById: {} } },
+      promptFoldersV1: { v: 1, folders: [] }, promptInvocationsV1: { v: 1, entries: [] },
+      promptExternalLinksV1: { v: 1, links: [] }, promptRegistrySourcesV1: { v: 1, sources: [] },
+      contextSelectionsV1: { v: 1, selectionsByKey: {} }, rolesV1: { v: 1, overrides: {} } };
     const load = () => loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () => ({ status: 'listed', rows }), transfer: {
-      readSourceSnapshot: async () => ({ raw: { undefined: 'keep', null: 'keep' }, version: 7 }),
+      readSourceSnapshot: async () => ({ raw, version: 7 }),
       initializeRecord: async input => {
         initialized.push(input.record);
         rows.push({ key: input.record.key, revision: 1, content: { t: 'plain', v: input.record } });
         return { status: 'updated', revision: 1, cursor: 1 };
       },
-      replaceSource: async () => { throw new Error('No retained root changed'); },
+      replaceSource: async input => { raw = input.raw; return { status: 'applied', settingsVersion: 8 }; },
       normalizeHistory: async input => { retired = input.activeTransferredRoots; return { status: 'complete' }; },
     } });
     expect(await load()).toMatchObject({ status: 'ready', rows: expect.arrayContaining([
-      { record: { key: 'skill-rules', value: { v: 1, rules: [] } }, revision: 1 },
+      { record: { key: 'skill-rules', value: { v: 1, rules: expect.arrayContaining([
+        expect.objectContaining({ id: 'first-party:happier:happier', skillId: 'happier:happier', enabled: true }),
+      ]) } }, revision: 1 },
     ]) });
-    expect(initialized).toEqual([{ key: 'skill-rules', value: { v: 1, rules: [] } }]);
+    expect(initialized).toMatchObject([{ key: 'skill-rules', value: { v: 1, rules: [
+      { id: 'first-party:happier:happier', skillId: 'happier:happier', enabled: true },
+    ] } }]);
+    expect(raw).toEqual({ undefined: 'keep', null: 'keep',
+      promptStacksV1: { v: 1, surfaces: { profilesById: {} } } });
     expect(retired.every(root => typeof root === 'string' && root !== 'undefined' && root !== 'null')).toBe(true);
     const index = rows.findIndex(row => String(row.key) === 'skill-rules');
     rows[index] = { ...rows[index]!, revision: 2, content: null };
-    expect(await load()).toMatchObject({ status: 'ready', tombstones: expect.arrayContaining([{ key: 'skill-rules', revision: 2 }]) });
+    const deleted = await load();
+    expect(deleted).toMatchObject({ status: 'ready', tombstones: expect.arrayContaining([{ key: 'skill-rules', revision: 2 }]) });
+    expect(readPromptLibraryCatalogRecordV1({ catalog: deleted, key: 'skill-rules' })).toEqual({ status: 'ready',
+      record: { key: 'skill-rules', value: { v: 1, rules: [] } }, revision: 2, authority: 'active' });
     expect(initialized).toHaveLength(1);
   });
   it('publishes complete destination authority before a pending retained-source maintenance read', async () => {
