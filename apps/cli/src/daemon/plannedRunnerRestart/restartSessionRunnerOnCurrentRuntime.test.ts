@@ -4,6 +4,7 @@ import {
   ProviderConnectionIdSchema,
   RestartAllSessionRunnersResultV1Schema,
   RestartSessionRunnerResultV1Schema,
+  RestartSessionRunnerRequestV1Schema,
 } from '@happier-dev/protocol';
 import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
@@ -74,6 +75,23 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it('admits capability selection restart on the current version and preserves the existing vendor resume snapshot', async () => {
+    const tracked = trackedSession();
+    const request = RestartSessionRunnerRequestV1Schema.parse({ sessionId: 'sess-1', mode: 'force_current_cli', reason: 'capability_selection_change' });
+    let signaled = false;
+    const result = await restartSessionRunnerOnCurrentRuntime({ request, tracked, currentIdentity: currentIdentity('0.2.10'),
+      requestRestart: async input => {
+        expect(input.tracked.spawnOptions?.resume).toBe('claude-thread-1');
+        expect(input.tracked.vendorResumeId).toBe('claude-thread-1');
+        signaled = true;
+        return { signaled: true, completion: { ok: true, next: { pid: 5252 } } };
+      } });
+    expect(signaled).toBe(true);
+    expect(RestartSessionRunnerResultV1Schema.parse(result)).toMatchObject({ ok: true, status: 'restarted' });
+    const busy = await restartSessionRunnerOnCurrentRuntime({ request, tracked: trackedSession({ activeTurnId: 'active' }),
+      currentIdentity: currentIdentity('0.2.10'), requestRestart: async () => { throw new Error('must not signal a busy turn'); } });
+    expect(RestartSessionRunnerResultV1Schema.parse(busy)).toMatchObject({ ok: false, status: 'busy', reasonCode: 'turn_in_progress' });
+  });
   it('refreshes exact recovered terminal custody before deciding an adopted stale runner is busy', async () => {
     const tracked = trackedSession({ reattachedInterruptedTurnId: 'completed-before-adoption' });
     const requestRestart = vi.fn(async () => ({ signaled: true }));
