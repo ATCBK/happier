@@ -20,10 +20,24 @@ const facts = {
 } as const;
 
 describe('machine Agent inventory projection', () => {
+  it('preserves explicit optional authentication without inventing a signed-in status', () => {
+    const signIn = { status: 'unknown' as const, loginSupport: 'unsupported' as const, required: false };
+    const item = { ...agents[1], ...facts, installed: true, signIn };
+    const output = projectMachineAgentsDetectResponse({ agents: agents.slice(1), response: { protocolVersion: 1,
+      results: { 'cli.acme/helper': { ok: true, checkedAt: 2, data: item } },
+    } });
+    expect(output).toEqual({ items: [item] });
+    expect(MachinesAgentsListOutputSchema.parse(output)).toEqual(output);
+    expect(MachinesAgentsListOutputSchema.parse({ items: [{ ...item, signIn: facts.signIn }] }).items[0].signIn)
+      .toEqual(facts.signIn);
+    for (const invalid of [{ ...signIn, required: 'false' }, { ...signIn, unexpected: true }]) {
+      expect(MachinesAgentsListOutputSchema.safeParse({ items: [{ ...item, signIn: invalid }] }).success).toBe(false);
+    }
+  });
   it('rejects secret-bearing requests and unsolicited or mismatched definition responses', () => {
     const definition = { definitionId: 'first', title: 'Caller title', launch: { kind: 'npm' as const, package: 'fixture', version: '1', args: [] } };
     expect(MachineAcpInventoryRequestSchema.safeParse({ definitions: [{ ...definition, env: { TOKEN: 'private' } }] }).success).toBe(false);
-    expect(MachineAcpInventoryRequestSchema.safeParse({ definitions: [{ ...definition, launch: { kind: 'command', command: 'npx', args: [] } }] }).success).toBe(false);
+    expect(MachineAcpInventoryRequestSchema.safeParse({ definitions: [{ ...definition, launch: { kind: 'command', command: 'npx', args: [], env: { TOKEN: 'private' } } }] }).success).toBe(false);
     for (const invalid of [{ definitionId: 'foreign', title: definition.title }, { definitionId: 'first', title: 'Custodian private title' }]) {
       const output = projectMachineAgentsDetectResponse({ agents: [], definitions: [definition], response: { protocolVersion: 1,
         results: { 'tool.acpAgentInventory': { ok: true, checkedAt: 2, data: { items: [{ ...facts, ...invalid,

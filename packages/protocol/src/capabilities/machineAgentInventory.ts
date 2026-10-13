@@ -11,11 +11,13 @@ import { AcpPlatformFitV1Schema } from '../acp/catalog/registry/acpPlatformFitV1
 export const MachineAcpInventoryDefinitionSchema = lazyZodSchema(() => z.object({
   definitionId: AcpBackendDefinitionV1Schema.shape.id,
   title: z.string().min(1),
-  launch: AcpBackendLaunchV1Schema.refine(launch => launch.kind !== 'command' && !('envByPlatform' in launch)),
+  launch: AcpBackendLaunchV1Schema.refine(launch => !('envByPlatform' in launch)),
 }).strict());
 export type MachineAcpInventoryDefinition = z.output<typeof MachineAcpInventoryDefinitionSchema>;
 export const MachineAcpInventoryRequestSchema = lazyZodSchema(() => z.object({
   definitions: z.array(MachineAcpInventoryDefinitionSchema).refine(definitions => new Set(definitions.map(definition => definition.definitionId)).size === definitions.length),
+  // The canonical capability service forwards its refresh metadata in params.
+  bypassCache: z.boolean().optional(),
 }).strict());
 const DefinitionCatalogUnavailableSchema = lazyZodSchema(() => z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict());
 type DefinitionInventoryInput = Readonly<{
@@ -49,6 +51,8 @@ const MachineAgentFactsSchema = lazyZodSchema(() => z.object({
   update: z.object({ supported: z.boolean(), command: z.string().nullable() }).strict(),
   signIn: z.object({
     status: z.enum(['signedIn', 'signedOut', 'unknown']),
+    /** Omission retains required authentication for older inventory producers. */
+    required: z.boolean().optional(),
     accountLabel: z.string().optional(),
     loginSupport: z.enum(['login_terminal', 'status_only', 'manual_only', 'unsupported']),
   }).strict(),
