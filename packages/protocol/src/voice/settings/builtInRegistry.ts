@@ -25,10 +25,11 @@ function projectVersionOneSettings(envelope: Readonly<{ schemaVersion: number; c
 }
 const platforms = ['web', 'ios', 'android'] as const;
 const entries = {
+    // Order 0: Happier's own Local voice leads the service gallery ahead of every plugin service (lab C1).
     local_conversation: { kind: 'voice.conversation-provider.v1', providerId: 'local_conversation',
         roles: ['conversation_stt', 'conversation_tts', 'vad', 'endpointing'],
         requirements: ['server_feature', 'runtime', 'model', 'execution_machine', 'endpoint', 'credential'], supportedPlatforms: platforms,
-        selectionOptions: [{ id: 'local', modeId: null, order: 30, titleKey: 'settingsVoice.mode.local', subtitleKey: 'settingsVoice.mode.localSubtitle' }],
+        selectionOptions: [{ id: 'local', modeId: null, order: 0, titleKey: 'settingsVoice.mode.local', subtitleKey: 'settingsVoice.mode.localSubtitle' }],
         projectSettings: (envelope: Readonly<{ schemaVersion: number; config: unknown }> | null) => projectVersionOneSettings(envelope, VoiceLocalConversationSchema),
     },
     // Compatibility-only adapter: no released picker offers a separate direct-session selection.

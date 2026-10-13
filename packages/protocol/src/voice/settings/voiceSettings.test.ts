@@ -7,6 +7,8 @@ import { parsePredecessorVoiceCredentialBindings } from './voiceCredentialBindin
 import { VoiceCredentialBindingV1Schema, classifyLegacyVoiceCredentialCandidateV1 } from '../realtime/providerSettings.js';
 import { selectVoiceProviderOption } from './providerSelection.js';
 import type { VoiceSettingsRegistryEntry } from './providerRegistry.js';
+import { VoiceSpeechDiagnosticsSettingsV1Schema } from '../diagnostics.js';
+import { VoiceLocalConversationSchema } from './localConversation.js';
 
 describe('shared Voice settings owner', () => {
   const owner = createVoiceSettingsOwner({ bundledContributions: [] });
@@ -105,6 +107,10 @@ describe('shared Voice settings owner', () => {
     const diagnostics = { v: 1, enabled: true, consentVersion: 1, captureSttInput: true, retired: true };
     const settings = owner.voiceSettingsParse({ diagnostics });
     expect(owner.readVoiceDiagnosticsSettings(settings)).toMatchObject({ enabled: true, consentVersion: 1, captureSttInput: true });
+    const written = owner.writeVoiceDiagnosticsSettings(settings, owner.readVoiceDiagnosticsSettings(settings));
+    const stored = owner.voiceSettingsParse(JSON.parse(JSON.stringify(written)));
+    expect(VoiceSpeechDiagnosticsSettingsV1Schema.parse(stored.diagnostics)).toEqual(owner.readVoiceDiagnosticsSettings(settings));
+    expect(stored.providers).toEqual(settings.providers);
     expect(Reflect.get(settings.diagnostics, 'retired')).toBeUndefined();
     expect(owner.voiceSettingsParse({ diagnostics: { ...diagnostics, consentVersion: 2 } }).diagnostics.enabled).toBe(false);
     const diagnosticsWithRetiredFields = { ...settings.diagnostics, retired: true };
@@ -128,8 +134,16 @@ describe('shared Voice settings owner', () => {
     const conversation = owner.readLocalConversationVoiceSettings(settings);
     const written = owner.writeLocalConversationVoiceSettings(settings, {
       ...conversation, handsFree: { ...conversation.handsFree, enabled: true },
+      agent: { ...conversation.agent, idleTtlSeconds: 999999 },
     });
-    expect(owner.readLocalConversationVoiceSettings(written).handsFree.enabled).toBe(true);
+    const stored = owner.voiceSettingsParse(JSON.parse(JSON.stringify(written)));
+    const envelope = stored.providers.local_conversation;
+    if (!envelope) throw new Error('Missing persisted local conversation envelope');
+    const consumer = VoiceLocalConversationSchema.parse(envelope.config);
+    expect(consumer).toMatchObject({ handsFree: { enabled: true }, agent: { idleTtlSeconds: 999999 } });
+    const restored = owner.readLocalConversationVoiceSettings(stored);
+    expect(restored.agent.idleTtlSeconds).toBe(999999);
+    expect(restored).toEqual(owner.readLocalConversationVoiceSettings(written));
     expect(written.welcome).toEqual(settings.welcome);
     expect(written.assistantLanguage).toBe('fr');
     expect(owner.readLocalDirectVoiceSettings(written)).toEqual(owner.readLocalDirectVoiceSettings(settings));

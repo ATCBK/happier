@@ -126,6 +126,7 @@ export function projectVoiceProviderDeclarationRegistryBase(input: Readonly<{
     const requirementsByMode = input.declaration.kind === 'conversation' ? deriveRequirementsByMode(input.declaration, selectionOptions) : undefined;
     return deepFreeze({
         roles: [...input.declaration.roles], ...(input.declaration.mark ? { mark: input.declaration.mark } : {}),
+        ...(input.declaration.kind === 'conversation' && input.declaration.description ? { description: input.declaration.description } : {}),
         requirements: projectVoiceProviderDeclarationRequirements(input.declaration), supportedPlatforms: [...input.declaration.platforms],
         ...(selectionOptions.length > 0 ? { selectionOptions } : {}), ...(requirementsByMode ? { requirementsByMode } : {}),
         ...(input.providerSettings ? { providerSettings: input.providerSettings,
