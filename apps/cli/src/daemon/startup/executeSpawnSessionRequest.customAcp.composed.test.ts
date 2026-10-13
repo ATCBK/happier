@@ -19,6 +19,8 @@ import { executeSpawnSessionRequest, type ExecuteSpawnSessionRequestParams } fro
 import { SpawnSessionControlErrorResponseSchema, projectSpawnSessionControlErrorResponse } from '@/session/shared/spawnSessionContract';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
+import { resolveTrackedSessionTerminalPresentation } from '../sessions/resolveTrackedSessionTerminalPresentation';
+import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 
 const storage = vi.hoisted(() => ({ home: '', persistedToken: 'df38-owner-token',
   credentials: { token: 'df38-owner-token', encryption: null } }));
@@ -89,6 +91,12 @@ describe('Custom ACP fresh daemon launch composition', () => {
         const bootstrap = AgentRuntimeRunnerBootstrapV1Schema.parse(JSON.parse(await readFile(join(bootstrapDir, files[0]!), 'utf8')));
         const descriptor = RuntimeDescriptorV1Schema.parse(bootstrap.launch?.runtimeDescriptorV1);
         expect(descriptor.agent.definitionId).toBe(definitionId);
+        const selectedTarget = AgentExecutionTargetV1Schema.parse({ kind: 'agent',
+          identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId });
+        expect(await resolveTrackedSessionTerminalPresentation({ startedBy: 'daemon', pid: process.pid,
+          spawnOptions: { directory: storage.home, agentTarget: selectedTarget,
+            backendTarget: projectResolvedAgentBackendTarget(selectedTarget, descriptor.agentId),
+            runtimeDescriptorV1: descriptor } }, 'plain')).toEqual({ kind: 'none' });
         const launch = await resolveAccountConfiguredAcpLaunchForAgent({ identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
           startupRuntimeDescriptorV1: descriptor });
         expect(await launch?.resolveHostLaunch({ cwd: storage.home })).toMatchObject({

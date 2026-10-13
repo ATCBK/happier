@@ -32,7 +32,11 @@ export async function resolveTrackedSessionTerminalPresentation(
   const descriptor = readRuntimeDescriptorV1FromMetadata(metadata ?? {}) ?? options?.runtimeDescriptorV1;
   const directory = options?.directory ?? metadata?.path;
   if (!target || !descriptor || !directory) return null;
-  const surfaces = await resolveBackendExecutionSurfaces(target);
+  const surfaces = await resolveBackendExecutionSurfaces(target, {
+    agentTarget: options?.agentTarget,
+    startupRuntimeDescriptorV1: descriptor,
+    savedSecretOperationContext: tracked.requesterSessionRuntimeContext?.bootstrap.savedSecretOperationContext,
+  });
   return await resolveDaemonSessionTerminalPresentation(surfaces, {
     cwd: directory,
     requestedHost: hostKind,
