@@ -1,8 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol/actions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { UpdatesActionOutputSchemas } from '@happier-dev/protocol/actions/updatesActionFamily';
 import { createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,9 +24,8 @@ const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
 const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
-const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { createUpdatesAction } = await import('./updatesActionRuntime');
 const { useUpdatesContentModel } = await import('./useUpdatesContentModel');
+const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
 const before = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
@@ -63,13 +61,17 @@ it('Checks updates explicitly on a request-unreachable machine through the mount
     const hook = await renderHook(() => useUpdatesContentModel());
     await flushHookEffects();
     expect(network.requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT)).toHaveLength(0);
-    const account = await captureLazyActionAccountContext(home.id);
     try {
-        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ updatesAction: createUpdatesAction(account) }));
-        await act(async () => { expect(await executor.execute('updates.check', {}, { surface: 'ui', authority: 'present_user' })).toEqual({ ok: true, result: { status: 'requested' } }); });
+        const execute = createFrontDoorActionExecute();
+        await act(async () => {
+            const checked = await execute('updates.check', {}, { surface: 'ui', authority: 'present_user',
+                serverId: home.id, expectedAccountId: scope.accountId });
+            if (!checked.ok) throw new Error(checked.errorCode);
+            expect(UpdatesActionOutputSchemas['updates.check'].parse(checked.result)).toEqual({ status: 'requested' });
+        });
         await vi.waitFor(() => expect(network.requests.some(request => request.method === RPC_METHODS.CAPABILITIES_DETECT
             && request.targetId === machine.id)).toBe(true));
         expect(network.requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT)
             .every(request => request.targetId === machine.id)).toBe(true);
-    } finally { account.dispose(); await hook.unmount(); }
+    } finally { await hook.unmount(); }
 });

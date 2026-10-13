@@ -1,10 +1,15 @@
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol/actions';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { AppUpdateActionOutputSchemas, AppUpdateStatusResultSchema } from '@happier-dev/protocol/actions/appUpdateActionFamily';
 import { createRootLayoutFeaturesResponse, renderHook } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { useAppUpdateStatus } from './useAppUpdateStatus';
-import { executeAppUpdateAction } from './appUpdateActionRuntime';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -26,7 +31,9 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
         prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
 });
 
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'app-account', encryptionMode: 'plain' });
+afterEach(async () => { await connection?.dispose(); connection = undefined; artifacts.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 it('executes desktop skip, check, update, retry and restart through the mounted canonical app owner', async () => {
     vi.stubEnv('EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED', '1');
@@ -52,29 +59,53 @@ it('executes desktop skip, check, update, retry and restart through the mounted 
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(createRootLayoutFeaturesResponse({
         features: { updates: { ota: { enabled: false } } },
     }))));
-    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ appUpdateAction: executeAppUpdateAction }));
-    const context = { surface: 'ui' as const, authority: 'present_user' as const };
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://app-updates-actions.test',
+        serverIdentityId: 'srv_app_updates_actions', accountId: 'app-account', request: async (input, init) => {
+            const url = new URL(String(input));
+            const fromArtifacts = artifacts.handle(`${url.pathname}${url.search}`, init);
+            if (fromArtifacts) return await fromArtifacts;
+            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (url.pathname === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+            return null;
+        } });
+    const execute = createFrontDoorActionExecute();
+    const executor = { execute };
+    const context = { surface: 'ui' as const, authority: 'present_user' as const,
+        serverId: connection.home.id, expectedAccountId: 'app-account' };
+    const executeUpdate = async (actionId: 'app.updates.update' | 'app.updates.retry' | 'app.updates.restart') => {
+        expect(await execute(actionId, {}, context)).toEqual({ ok: true, result: { status: 'requested' } });
+    };
     const hook = await renderHook(() => useAppUpdateStatus());
     await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().model.item.state).toBe('available')); });
-    expect(await executor.execute('app.updates.get', {}, context)).toMatchObject({ ok: true,
-        result: { channel: 'desktop', latestVersion: '1.2.0', canSkip: true } });
+    const current = await executor.execute('app.updates.get', {}, context);
+    if (!current.ok) throw new Error(current.errorCode);
+    expect(AppUpdateStatusResultSchema.parse(current.result)).toMatchObject({
+        channel: 'desktop', latestVersion: '1.2.0', canSkip: true,
+    });
     expect(await executor.execute('app.updates.skip', { version: 'different' }, context)).toMatchObject({ ok: false, errorCode: 'app_update_unavailable' });
     expect(saved.size).toBe(0);
-    await act(async () => { await executor.execute('app.updates.skip', { version: '1.2.0' }, context); });
+    await act(async () => { expect(await executor.execute('app.updates.skip', { version: '1.2.0' }, context))
+        .toEqual({ ok: true, result: { status: 'requested' } }); });
     expect(hook.getCurrent().model.item.skipped).toBe(true);
     expect(saved.get('desktop_update_dismissed_version')).toBe('1.2.0');
     offeredVersion = '1.3.0';
-    await act(async () => { await executor.execute('app.updates.check', {}, context); });
+    await act(async () => {
+        const checked = await executor.execute('app.updates.check', {}, context);
+        if (!checked.ok) throw new Error(checked.errorCode);
+        expect(AppUpdateActionOutputSchemas['app.updates.check'].parse(checked.result)).toEqual({ status: 'requested' });
+    });
     expect(hook.getCurrent().model.item).toMatchObject({ latestVersion: '1.3.0', skipped: false });
     await act(async () => {
-        expect(await executor.execute('app.updates.update', {}, context)).toEqual({ ok: true, result: { status: 'requested' } });
+        await executeUpdate('app.updates.update');
     });
     expect(await executor.execute('app.updates.get', {}, context)).toMatchObject({ ok: true, result: { state: 'failed', action: 'retry' } });
-    await act(async () => { await executor.execute('app.updates.retry', {}, context); });
+    await act(async () => { await executeUpdate('app.updates.retry'); });
     expect(downloads).toBe(2);
     expect(hook.getCurrent().model.item.state).toBe('ready');
     expect(invoke.mock.calls.some(([command]) => command === 'desktop_install_update')).toBe(false);
-    await act(async () => { await executor.execute('app.updates.restart', {}, context); });
+    await act(async () => { await executeUpdate('app.updates.restart'); });
     expect(hook.getCurrent().model.item.state).toBe('running');
     expect(invoke.mock.calls.filter(([command]) => command === 'desktop_install_update')).toHaveLength(1);
     await hook.unmount();

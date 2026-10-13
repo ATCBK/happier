@@ -3,13 +3,21 @@ import { Pressable } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { UpdatesSummary } from '@/updates/items/buildUpdatesSummary';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import type { UpdatesContentModel } from '@/updates/useUpdatesContentModel';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -25,13 +33,6 @@ const routerMock = vi.hoisted(() => ({ spies: { push: vi.fn() } }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: routerMock.spies.push } }).module;
-});
-
-// Machines are storage-owned facts; the default is none.
-const machinesState = vi.hoisted(() => ({ value: [] as Machine[] }));
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({ importOriginal, overrides: { useAllMachines: () => machinesState.value } });
 });
 
 // The real Updates owner and content render beneath; only the portal host and the overlay
@@ -76,9 +77,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return createServerScopedMachineRpcBoundaryMock(rpc.machineRpc);
 });
 const modal = vi.hoisted(() => ({ confirm: vi.fn(async () => true) }));
-vi.mock('@/modal', async (importOriginal) => {
-    const actual = await importOriginal<{ Modal: Record<string, unknown> }>();
-    return { ...actual, Modal: { ...actual.Modal, confirm: modal.confirm } };
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { confirm: modal.confirm } }).module;
 });
 
 vi.mock('@/text', async () => {
@@ -88,13 +89,49 @@ vi.mock('@/text', async () => {
 
 const NONE: UpdatesSummary = { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'none', status: 'upToDate', visible: false };
 const TWO: UpdatesSummary = { actionableCount: 2, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'available', status: 'available', visible: true };
+const initialStorageState = storage.getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+
+async function activateAccount() {
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://updates-popover.test', accountId: 'account-a',
+        request: async (input, init) => {
+            const url = new URL(String(input));
+            const path = url.pathname;
+            const artifactResponse = artifacts.handle(`${url.pathname}${url.search}`, init);
+            if (artifactResponse) return await artifactResponse;
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+            return null;
+        } });
+    storage.setState({ profileScope: { serverId: connection.home.id, accountId: 'account-a' } });
+}
+
+function seedMachines(machines: Machine[]) {
+    const serverId = getActiveServerSnapshot().serverId;
+    storage.setState({
+        machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { [serverId]: machines },
+        machineListStatusByServerId: { [serverId]: 'idle' },
+    });
+}
+
+function updatableStudio() {
+    return createMachineFixture({ id: 'studio', activeAt: Date.now(), metadata: {
+        host: 'studio', platform: 'darwin', happyCliVersion: '0.2.12', happyHomeDir: '/h/.happier', homeDir: '/h',
+        cliUpdate: { currentVersion: '0.2.12', latestVersion: '0.2.13', channel: 'stable',
+            installSource: 'managed', updateCommand: 'happier self update', canUpdateRemotely: true, lastUpdate: null },
+    } });
+}
 
 describe('UpdatesPopoverButton', () => {
-    beforeEach(() => {
-        storage.setState({ profileScope: { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' } });
-    });
     afterEach(async () => {
-        await act(async () => { storage.setState({ profileScope: null }); });
+        standardCleanup();
+        await connection?.dispose(); connection = undefined;
+        artifacts.clear();
+        await act(async () => { storage.setState(initialStorageState, true); });
     });
     it('opens the same Updates content from a menu row trigger', async () => {
         const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
@@ -145,21 +182,15 @@ describe('UpdatesPopoverButton', () => {
     });
 
     it('the open header says "not checked" when an online machine was never asked, like the pill', async () => {
-        machinesState.value = [{
-            id: 'studio', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(),
-            metadata: { host: 'studio', platform: 'darwin', happyCliVersion: '0.2.12', happyHomeDir: '/h/.happier', homeDir: '/h' },
-        } as Machine];
-        try {
-            const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
-            const screen = await renderScreen(<UpdatesPopoverButton summary={TWO} variant="pill" testID="pill" />);
-            await act(async () => {
-                await screen.findByTestId('pill')?.props.onPress({});
-            });
-            const title = screen.findByTestId('updates.summary.title')?.props.children ?? screen.findByTestId('updates.empty')?.props.title;
-            expect(title).toBe('updates.summary.unchecked');
-        } finally {
-            machinesState.value = [];
-        }
+        await activateAccount();
+        seedMachines([createMachineFixture({ id: 'studio', activeAt: Date.now() })]);
+        const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
+        const screen = await renderScreen(<UpdatesPopoverButton summary={TWO} variant="pill" testID="pill" />);
+        await act(async () => {
+            await screen.findByTestId('pill')?.props.onPress({});
+        });
+        const title = screen.findByTestId('updates.summary.title')?.props.children ?? screen.findByTestId('updates.empty')?.props.title;
+        expect(title).toBe('updates.summary.unchecked');
     });
 
     it('the sidebar entry is a compact mark with a count; its sentence is the accessible name and the tooltip', async () => {
@@ -178,36 +209,32 @@ describe('UpdatesPopoverButton', () => {
     });
 
     it('pressing Update on another machine runs it inline: no confirmation, the popover stays open', async () => {
+        await activateAccount();
         modal.confirm.mockClear();
         rpc.invoke.mockClear();
-        machinesState.value = [{
-            id: 'studio', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(),
-            metadata: {
-                host: 'studio', platform: 'darwin', happyCliVersion: '0.2.12', happyHomeDir: '/h/.happier', homeDir: '/h',
-                cliUpdate: {
-                    currentVersion: '0.2.12', latestVersion: '0.2.13', channel: 'stable', installSource: 'managed',
-                    updateCommand: 'happier self update', canUpdateRemotely: true, lastUpdate: null,
-                },
-            },
-        } as Machine];
-        try {
-            const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
-            const screen = await renderScreen(<UpdatesPopoverButton summary={TWO} variant="pill" testID="pill" />);
-            await act(async () => {
-                await screen.findByTestId('pill')?.props.onPress({});
-            });
-            // One row per machine, whose one action runs that machine's update.
-            expect(screen.findAllByTestId('updates.machine.machine:studio').length).toBeGreaterThan(0);
-            expect(screen.findAllByTestId('updates.row.studio:happier-cli').length).toBe(0);
-            await screen.pressByTestIdAsync('updates.machine.machine:studio.action');
-            expect(modal.confirm).not.toHaveBeenCalled();
-            expect(rpc.invoke).toHaveBeenCalledWith('studio', expect.objectContaining({ id: 'tool.systemTasks', method: 'start' }), expect.anything());
-            expect(screen.findAllByTestId('updates.content.popover').length).toBeGreaterThan(0);
-            // "Open Updates" stays the footer link to the full list.
-            expect(screen.findAllByTestId('updates.open_full').length).toBeGreaterThan(0);
-        } finally {
-            machinesState.value = [];
-        }
+        seedMachines([updatableStudio()]);
+        const { UpdatesPopoverButton } = await import('./UpdatesPopoverButton');
+        const screen = await renderScreen(<UpdatesPopoverButton summary={TWO} variant="pill" testID="pill" />);
+        await act(async () => {
+            await screen.findByTestId('pill')?.props.onPress({});
+        });
+        // One row per machine, whose one action runs that machine's update.
+        expect(screen.findAllByTestId('updates.machine.machine:studio').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('updates.row.studio:happier-cli').length).toBe(0);
+        await screen.pressByTestIdAsync('updates.machine.machine:studio.action');
+        expect(modal.confirm).not.toHaveBeenCalled();
+        const approval = artifacts.list()[0];
+        expect(approval).toBeDefined();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        let result!: Awaited<ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>>;
+        await act(async () => { result = await createDefaultActionExecutor().execute('approval.request.decide', {
+            artifactId: approval!.id, decision: 'approve',
+        }, { surface: 'ui', serverId: connection!.home.id, expectedAccountId: 'account-a' }); });
+        expect(result).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result: { status: 'requested' } } } });
+        expect(rpc.invoke).toHaveBeenCalledWith('studio', expect.objectContaining({ id: 'tool.systemTasks', method: 'start' }), expect.anything());
+        expect(screen.findAllByTestId('updates.content.popover').length).toBeGreaterThan(0);
+        // "Open Updates" stays the footer link to the full list.
+        expect(screen.findAllByTestId('updates.open_full').length).toBeGreaterThan(0);
     });
     it('the row\'s session-impact note is part of its accessible name', async () => {
         const { UpdateRow } = await import('./UpdateRow');
