@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1336,6 +1337,7 @@ function plural({
 
 
 const zhHansValues = {
+  capabilities: capabilityKitTranslations.zhHans,
     resourceProposal: resourceProposalTranslations.zhHans,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `${machine} 上没有对话提到“${query}”。`,
@@ -1929,10 +1931,19 @@ const zhHansValues = {
         externalAssetsDeleteConfirmBody: "这会从磁盘删除已链接的外部资源。",
         externalAssetsLinkedTitle: "已链接的外部资源",
         registries: "注册表",
+        personal_saved_secrets: "已保存的密钥",
         registriesSubtitle: "浏览技能注册表并将 bundle 导入库中",
         registriesContext: "注册表上下文",
         registriesNoMachine: "选择一台机器以继续。",
         registriesRefresh: "刷新注册表",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? '请求频率受限' : `限制至 ${time}`,
+          unreachable: "无法连接此注册表。请重试。",
+          authFailed: "令牌被拒绝。请替换令牌。",
+          needsMachine: "请将机器连接到网络以浏览此注册表。",
+          newerFormat: "此注册表使用较新的格式。",
+          invalidSource: "无法读取此注册表。",
+        },
         registriesRefreshSubtitle: "为所选机器加载内置和已配置的注册表来源",
         registriesAddGitSource: "添加 Git 来源",
         registriesAddGitSourceAction: "保存 Git 来源",
@@ -3430,7 +3441,7 @@ const zhHansValues = {
     sessionSubtitleTmuxEnabled: "已启用 Tmux",
     sessionSubtitleMessageSendingAndTmux: "消息发送与 tmux",
     actionsSubtitle: "选择每个操作在应用、语音和集成中的显示位置。",
-    prompts: "提示词与技能",
+    prompts: "提示词",
     promptsSubtitle: "提示词库、模板和堆栈",
     servers: "Homes",
     serversSubtitle: "已保存的 Home、分组和默认设置",
@@ -5744,6 +5755,7 @@ const zhHansValues = {
       usedByNewSessions: '新会话使用',
       sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `使用 ${agent} 开始新会话时采用。已保存到你的账户。`,
       defaultModelAgentDefault: '智能体默认',
+      defaultModelAgentDefaultDescription: '新会话使用智能体自行选择的模型。',
       setupTitle: '设置与状态',
       setupNoComputer: '未选择机器。选择一台以检查 CLI 或登录。',
       modelsDefaultTag: '默认',

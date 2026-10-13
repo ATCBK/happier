@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1327,6 +1328,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 
 
 const zhHantOverrides: DeepPartial<typeof zhHans> = {
+  capabilities: capabilityKitTranslations.zhHant,
     resourceProposal: resourceProposalTranslations.zhHant,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `${machine} 上沒有對話提到「${query}」。`,
@@ -4055,6 +4057,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         externalAssetsDeleteConfirmBody: "這會從磁碟刪除已連結的外部資源。",
         externalAssetsLinkedTitle: "已連結的外部資源",
         registries: "註冊表",
+        personal_saved_secrets: "已儲存的密鑰",
         registriesSubtitle: "瀏覽技能註冊表並將 bundle 匯入資料庫",
         registriesContext: "註冊表內容",
         registriesNoMachine: "請選擇一台機器以繼續。",
@@ -5253,6 +5256,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             usedByNewSessions: '新工作階段使用',
             sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `使用 ${agent} 開始新工作階段時採用。已儲存到你的帳戶。`,
             defaultModelAgentDefault: '代理預設',
+            defaultModelAgentDefaultDescription: '新工作階段使用代理自行選擇的模型。',
             setupTitle: '設定與狀態',
             setupNoComputer: '未選擇機器。選擇一台以檢查 CLI 或登入。',
             modelsDefaultTag: '預設',

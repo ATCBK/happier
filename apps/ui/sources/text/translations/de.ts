@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1119,6 +1120,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  * - New translation keys must be added to ALL language files
  */
 export const de: TranslationStructure = {
+  capabilities: capabilityKitTranslations.de,
     resourceProposal: resourceProposalTranslations.de,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Keine Unterhaltung auf ${machine} erwähnt „${query}“.`,
@@ -1731,10 +1733,19 @@ export const de: TranslationStructure = {
         externalAssetsLinkedTitle: 'Verknüpftes externes Asset',
         externalAssetsLinkedTo: ({ title }: { title: string }) => `Verknüpft mit ${title}`,
         registries: 'Registrys',
+        personal_saved_secrets: 'Gespeicherte Geheimnisse',
         registriesSubtitle: 'Skill-Registries durchsuchen und Bundles in die Bibliothek importieren',
         registriesContext: 'Registry-Kontext',
         registriesNoMachine: 'Wähle einen Rechner, um fortzufahren.',
         registriesRefresh: 'Registries aktualisieren',
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Anfragen begrenzt' : `Begrenzt bis ${time}`,
+          unreachable: "Diese Registry ist nicht erreichbar. Erneut versuchen.",
+          authFailed: "Token abgelehnt. Ersetzen Sie es.",
+          needsMachine: "Bringen Sie einen Rechner online, um diese Registry zu durchsuchen.",
+          newerFormat: "Diese Registry verwendet ein neueres Format.",
+          invalidSource: "Diese Registry konnte nicht gelesen werden.",
+        },
         registriesRefreshSubtitle: 'Eingebaute und konfigurierte Registry-Quellen für den gewählten Rechner laden',
         registriesAddGitSource: 'Git-Quelle hinzufügen',
         registriesAddGitSourceSubtitle: 'Ein Git-Repository oder einen lokalen Checkout als Registry-Quelle hinzufügen',
@@ -3546,7 +3557,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         sessionSubtitleTmuxEnabled: 'Tmux aktiviert',
         sessionSubtitleMessageSendingAndTmux: 'Senden von Nachrichten und tmux',
         actionsSubtitle: 'Lege fest, wo jede Aktion in App, Voice und Integrationen erscheint.',
-        prompts: 'Prompts & Skills',
+        prompts: 'Prompts',
         promptsSubtitle: 'Prompt-Bibliothek, Templates und Stacks',
 	        servers: 'Homes',
 	        serversSubtitle: 'Gespeicherte Homes, Gruppen und Standards',
@@ -5997,6 +6008,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             usedByNewSessions: 'für neue Sitzungen verwendet',
             sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Wird verwendet, wenn eine neue Sitzung mit ${agent} startet. In deinem Konto gespeichert.`,
             defaultModelAgentDefault: 'Agent-Standard',
+            defaultModelAgentDefaultDescription: 'Neue Sitzungen starten mit dem Modell, das der Agent wählt.',
             setupTitle: 'Einrichtung und Status',
             setupNoComputer: 'Kein Rechner ausgewählt. Wähle einen, um die CLI zu prüfen oder dich anzumelden.',
             modelsDefaultTag: 'Standard',

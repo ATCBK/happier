@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1387,6 +1388,7 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const ptValues = {
+  capabilities: capabilityKitTranslations.pt,
     resourceProposal: resourceProposalTranslations.pt,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Nenhuma conversa em ${machine} menciona “${query}”.`,
@@ -2166,10 +2168,19 @@ const ptValues = {
         externalAssetsDeleteConfirmBody: "Isto irá eliminar do disco o recurso externo ligado.",
         externalAssetsLinkedTitle: "Recurso externo ligado",
         registries: "Registros",
+        personal_saved_secrets: "Segredos salvos",
         registriesSubtitle: "Navegue pelos registros de skills e importe bundles para a biblioteca",
         registriesContext: "Contexto do registro",
         registriesNoMachine: "Selecione uma máquina para continuar.",
         registriesRefresh: "Atualizar registros",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Limite de solicitações atingido' : `Limitado até ${time}`,
+          unreachable: "Não foi possível acessar este registro. Tente novamente.",
+          authFailed: "Token rejeitado. Substitua-o.",
+          needsMachine: "Conecte uma máquina para explorar este registro.",
+          newerFormat: "Este registro usa um formato mais recente.",
+          invalidSource: "Não foi possível ler este registro.",
+        },
         registriesRefreshSubtitle: "Carregue as fontes de registro integradas e configuradas para a máquina selecionada",
         registriesAddGitSource: "Adicionar fonte Git",
         registriesAddGitSourceAction: "Salvar fonte Git",
@@ -3789,7 +3800,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     sessionSubtitleTmuxEnabled: "Tmux ativado",
     sessionSubtitleMessageSendingAndTmux: "Envio de mensagens e tmux",
         actionsSubtitle: "Escolha onde cada ação aparece no app, na voz e nas integrações.",
-    prompts: "Prompts e habilidades",
+    prompts: "Prompts",
     promptsSubtitle: "Biblioteca de prompts, modelos e pilhas",
     servers: "Homes",
     serversSubtitle: "Homes salvos, grupos e padrões",
@@ -6149,6 +6160,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
               usedByNewSessions: 'usado por novas sessões',
               sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Usado quando uma nova sessão começa com ${agent}. Salvo na sua conta.`,
               defaultModelAgentDefault: 'Padrão do agente',
+              defaultModelAgentDefaultDescription: 'Novas sessões começam no modelo que o agente escolher.',
               setupTitle: 'Configuração e status',
               setupNoComputer: 'Nenhuma máquina selecionada. Escolha uma para verificar a CLI ou entrar.',
               modelsDefaultTag: 'Padrão',

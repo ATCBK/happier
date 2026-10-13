@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1349,6 +1350,7 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const plValues = {
+  capabilities: capabilityKitTranslations.pl,
     resourceProposal: resourceProposalTranslations.pl,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Żadna rozmowa na ${machine} nie wspomina „${query}”.`,
@@ -1942,10 +1944,19 @@ const plValues = {
         externalAssetsDeleteConfirmBody: "Spowoduje to usunięcie połączonego zasobu zewnętrznego z dysku.",
         externalAssetsLinkedTitle: "Połączony zasób zewnętrzny",
         registries: "Rejestry",
+        personal_saved_secrets: "Zapisane sekrety",
         registriesSubtitle: "Przeglądaj rejestry umiejętności i importuj bundlowane pakiety do biblioteki",
         registriesContext: "Kontekst rejestru",
         registriesNoMachine: "Wybierz maszynę, aby kontynuować.",
         registriesRefresh: "Odśwież rejestry",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Limit żądań osiągnięty' : `Ograniczenie do ${time}`,
+          unreachable: "Nie można połączyć się z tym rejestrem. Spróbuj ponownie.",
+          authFailed: "Token odrzucony. Zastąp go.",
+          needsMachine: "Połącz maszynę, aby przeglądać ten rejestr.",
+          newerFormat: "Ten rejestr używa nowszego formatu.",
+          invalidSource: "Nie można odczytać tego rejestru.",
+        },
         registriesRefreshSubtitle: "Wczytaj wbudowane i skonfigurowane źródła rejestrów dla wybranej maszyny",
         registriesAddGitSource: "Dodaj źródło Git",
         registriesAddGitSourceAction: "Zapisz źródło Git",
@@ -3509,7 +3520,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     sessionSubtitleTmuxEnabled: "Tmux włączony",
     sessionSubtitleMessageSendingAndTmux: "Wysyłanie wiadomości i tmux",
         actionsSubtitle: 'Wybierz, gdzie każda akcja ma się pojawiać w aplikacji, w głosie i w integracjach.',
-    prompts: "Prompty i umiejętności",
+    prompts: "Prompty",
     promptsSubtitle: "Biblioteka promptów, szablony i stosy",
     servers: "Homes",
     serversSubtitle: "Zapisane Home, grupy i ustawienia domyślne",
@@ -5872,6 +5883,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
               usedByNewSessions: 'używany w nowych sesjach',
               sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Używane, gdy nowa sesja startuje z ${agent}. Zapisane na Twoim koncie.`,
               defaultModelAgentDefault: 'Domyślny agenta',
+              defaultModelAgentDefaultDescription: 'Nowe sesje startują na modelu wybranym przez agenta.',
               setupTitle: 'Konfiguracja i stan',
               setupNoComputer: 'Nie wybrano maszyny. Wybierz jedną, aby sprawdzić CLI lub się zalogować.',
               modelsDefaultTag: 'Domyślny',

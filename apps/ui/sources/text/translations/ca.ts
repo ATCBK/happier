@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1304,6 +1305,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  * Must match the exact structure of the English translations
  */
 const caValues = {
+  capabilities: capabilityKitTranslations.ca,
     resourceProposal: resourceProposalTranslations.ca,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Cap conversa a ${machine} esmenta “${query}”.`,
@@ -1950,10 +1952,19 @@ const caValues = {
         externalAssetsDeleteConfirmBody: "Això suprimirà del disc el recurs extern enllaçat.",
         externalAssetsLinkedTitle: "Recurs extern enllaçat",
         registries: "Registres",
+        personal_saved_secrets: "Secrets desats",
         registriesSubtitle: "Explora registres d'habilitats i importa bundles a la biblioteca",
         registriesContext: "Context del registre",
         registriesNoMachine: "Selecciona una màquina per continuar.",
         registriesRefresh: "Actualitza els registres",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Límit de sol·licituds assolit' : `Limitat fins a ${time}`,
+          unreachable: "No es pot contactar amb aquest registre. Torna-ho a provar.",
+          authFailed: "Token rebutjat. Substitueix-lo.",
+          needsMachine: "Connecta una màquina per explorar aquest registre.",
+          newerFormat: "Aquest registre fa servir un format més nou.",
+          invalidSource: "No s’ha pogut llegir aquest registre.",
+        },
         registriesRefreshSubtitle: "Carrega les fonts de registre integrades i configurades per a la màquina seleccionada",
         registriesAddGitSource: "Afegeix una font Git",
         registriesAddGitSourceAction: "Desa la font Git",
@@ -3620,7 +3631,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         sessionSubtitleTmuxEnabled: 'Tmux activat',
         sessionSubtitleMessageSendingAndTmux: 'Enviament de missatges i tmux',
         actionsSubtitle: 'Tria on apareix cada acció a l’aplicació, la veu i les integracions.',
-        prompts: 'Prompts i habilitats',
+        prompts: 'Prompts',
         promptsSubtitle: 'Biblioteca de prompts, plantilles i piles',
         servers: 'Homes',
         serversSubtitle: 'Homes desades, grups i valors per defecte',
@@ -5522,6 +5533,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             usedByNewSessions: 'l’utilitzen les sessions noves',
             sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `S’utilitza quan comença una sessió nova amb ${agent}. Desat al teu compte.`,
             defaultModelAgentDefault: 'Predeterminat de l’agent',
+            defaultModelAgentDefaultDescription: 'Les sessions noves comencen amb el model que triï l’agent.',
             setupTitle: 'Configuració i estat',
             setupNoComputer: 'No hi ha cap màquina seleccionada. Tria’n una per comprovar la CLI o iniciar la sessió.',
             modelsDefaultTag: 'Per defecte',

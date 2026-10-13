@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1320,6 +1321,7 @@ const settingsSessionHandoffTranslationExtensions = {
 
 
 const jaValues = {
+  capabilities: capabilityKitTranslations.ja,
     resourceProposal: resourceProposalTranslations.ja,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `${machine} に「${query}」を含む会話はありません。`,
@@ -2098,10 +2100,19 @@ const jaValues = {
         externalAssetsDeleteConfirmBody: "リンクされた外部アセットをディスクから削除します。",
         externalAssetsLinkedTitle: "リンクされた外部アセット",
         registries: "レジストリ",
+        personal_saved_secrets: "保存済みシークレット",
         registriesSubtitle: "スキル レジストリを参照し、bundle をライブラリにインポート",
         registriesContext: "レジストリ コンテキスト",
         registriesNoMachine: "続行するにはマシンを選択してください。",
         registriesRefresh: "レジストリを更新",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'リクエスト制限中' : `制限解除時刻 ${time}`,
+          unreachable: "このレジストリに接続できません。再試行してください。",
+          authFailed: "トークンが拒否されました。置き換えてください。",
+          needsMachine: "このレジストリを閲覧するにはマシンをオンラインにしてください。",
+          newerFormat: "このレジストリは新しい形式を使用しています。",
+          invalidSource: "このレジストリを読み取れませんでした。",
+        },
         registriesRefreshSubtitle: "選択したマシンの組み込みおよび設定済みレジストリ ソースを読み込む",
         registriesAddGitSource: "Git ソースを追加",
         registriesAddGitSourceAction: "Git ソースを保存",
@@ -3998,7 +4009,7 @@ localTailscale: {
     sessionSubtitleTmuxEnabled: "Tmux 有効",
     sessionSubtitleMessageSendingAndTmux: "メッセージ送信と tmux",
     actionsSubtitle: "各アクションをアプリ、音声、統合のどこに表示するかを選択します。",
-    prompts: "プロンプトとスキル",
+    prompts: "プロンプト",
     promptsSubtitle: "プロンプトライブラリ、テンプレート、スタック",
     servers: "Homes",
     serversSubtitle: "保存済み Home、グループ、既定値",
@@ -6350,6 +6361,7 @@ localTailscale: {
           usedByNewSessions: '新しいセッションで使用',
           sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `${agent} で新しいセッションを始めるときに使われます。アカウントに保存されます。`,
           defaultModelAgentDefault: 'エージェントの既定',
+          defaultModelAgentDefaultDescription: '新しいセッションはエージェントが選ぶモデルで始まります。',
           setupTitle: 'セットアップと状態',
           setupNoComputer: 'マシンが選択されていません。CLI の確認やサインインには、1 台選んでください。',
           modelsDefaultTag: '既定',

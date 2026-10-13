@@ -13,6 +13,7 @@ export const en = {
             turnOn: 'Turn on gateway',
             descriptionNamed: ({ services }: { services: string }) => `Lets any agent use your ${services} subscriptions.`,
             railGroup: 'Gateways',
+            unavailableTitle: 'Gateways can’t be shown right now',
             managedFromConnectedServices: 'Managed from Connected services',
             description: 'Lets any agent use your subscriptions.',
             statusUnavailable: ({ machine }: { machine: string }) => `Unavailable · ${machine} is offline`,

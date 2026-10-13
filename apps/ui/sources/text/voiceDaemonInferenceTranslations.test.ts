@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { SUPPORTED_LANGUAGE_CODES, type SupportedLanguage } from './_all';
 import { ca } from './translations/ca';
+import { de } from './translations/de';
 import { en } from './translations/en';
 import { es } from './translations/es';
+import { fr } from './translations/fr';
 import { it as itLocale } from './translations/it';
 import { ja } from './translations/ja';
 import { pl } from './translations/pl';
@@ -36,17 +39,20 @@ type VoiceTranslationLocale = Readonly<{
     }>;
 }>;
 
-const supportedLocales = [
-    { code: 'ru', root: ru },
-    { code: 'pl', root: pl },
-    { code: 'es', root: es },
-    { code: 'it', root: itLocale },
-    { code: 'pt', root: pt },
-    { code: 'ca', root: ca },
-    { code: 'zh-Hans', root: zhHans },
-    { code: 'zh-Hant', root: zhHant },
-    { code: 'ja', root: ja },
-] satisfies ReadonlyArray<Readonly<{ code: string; root: VoiceTranslationLocale }>>;
+const supportedLocales = {
+    en,
+    ru,
+    pl,
+    es,
+    fr,
+    it: itLocale,
+    pt,
+    ca,
+    de,
+    'zh-Hans': zhHans,
+    'zh-Hant': zhHant,
+    ja,
+} satisfies Readonly<Record<SupportedLanguage, VoiceTranslationLocale>>;
 
 const voiceDaemonInferenceStateKeys: ReadonlyArray<VoiceDaemonInferenceStateKey> = [
     'machineUnreachable',
@@ -66,7 +72,8 @@ const voiceDaemonInferenceStateKeys: ReadonlyArray<VoiceDaemonInferenceStateKey>
 
 describe('voice daemon inference translations', () => {
     it('keeps daemon inference state labels present in every supported locale', () => {
-        for (const { code, root } of supportedLocales) {
+        for (const code of SUPPORTED_LANGUAGE_CODES) {
+            const root = supportedLocales[code];
             const daemonInference = root.settingsVoice?.local?.daemonInference;
             if (!daemonInference) {
                 throw new Error(`${code}: settingsVoice.local.daemonInference is missing`);

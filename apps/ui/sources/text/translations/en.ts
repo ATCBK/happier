@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
@@ -2043,11 +2044,20 @@ const enPromptLibrary = {
   externalAssetsLinkedTo: ({ title }: { title: string }) =>
     `Linked to ${title}`,
   registries: 'Registries',
+  personal_saved_secrets: 'Saved Secrets',
   registriesSubtitle:
     'Browse skill registries and import bundles into the library',
   registriesContext: 'Registry context',
   registriesNoMachine: 'Select a machine to continue.',
   registriesRefresh: 'Refresh registries',
+  registriesStatus: {
+    limited: ({ time }: { time?: string }) => time === undefined ? 'Rate limited' : `Limited until ${time}`,
+    unreachable: "Couldn’t reach this registry. Try again.",
+    authFailed: "Token rejected. Replace the token.",
+    needsMachine: "Bring a machine online to browse this registry.",
+    newerFormat: "This registry uses a newer format.",
+    invalidSource: "This registry could not be read.",
+  },
   registriesRefreshSubtitle:
     'Load built-in and configured registry sources for the selected machine',
   registriesAddGitSource: 'Add Git source',
@@ -4242,7 +4252,7 @@ const enSettings = {
   sessionSubtitleMessageSendingAndTmux: 'Message sending and tmux',
   actionsSubtitle:
     'Choose where every action appears across the app, voice, and integrations.',
-  prompts: 'Prompts & Skills',
+  prompts: 'Prompts',
   promptsSubtitle: 'Prompt library, templates, and stacks',
   servers: 'Homes',
   serversSubtitle: 'Saved Homes, groups, and defaults',
@@ -7265,6 +7275,7 @@ const enSettingsAgents = {
     usedByNewSessions: 'used by new sessions',
     sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Used when a new session starts with ${agent}. Saved to your account.`,
     defaultModelAgentDefault: 'Agent default',
+    defaultModelAgentDefaultDescription: 'New sessions start on the model the agent picks.',
     setupTitle: 'Setup and status',
     setupNoComputer: 'No machine selected. Choose one to check the CLI or sign in.',
     modelsDefaultTag: 'Default',
@@ -22010,6 +22021,7 @@ export const en: TranslationStructure = {
   personalHome: enPersonalHome,
   settingsSearch: enSettingsSearch,
   onboardingJourney: enOnboardingJourney,
+  capabilities: capabilityKitTranslations.en,
 };
 
 // Keep the literal keys above as the compile-time locale shape, while the shared
@@ -22496,6 +22508,7 @@ type EnglishNamespaces27 = TranslationOverlay<
     readonly personalHome: typeof enPersonalHome;
     readonly settingsSearch: typeof enSettingsSearch;
     readonly onboardingJourney: typeof enOnboardingJourney;
+    readonly capabilities: typeof capabilityKitTranslations.en;
   }
 >;
 

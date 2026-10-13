@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1335,6 +1336,7 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const itValues = {
+  capabilities: capabilityKitTranslations.it,
     resourceProposal: resourceProposalTranslations.it,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Nessuna conversazione su ${machine} menziona “${query}”.`,
@@ -1928,10 +1930,19 @@ const itValues = {
         externalAssetsDeleteConfirmBody: "Questa operazione eliminerà dal disco la risorsa esterna collegata.",
         externalAssetsLinkedTitle: "Risorsa esterna collegata",
         registries: "Registri",
+        personal_saved_secrets: "Segreti salvati",
         registriesSubtitle: "Sfoglia i registri delle skill e importa bundle nella libreria",
         registriesContext: "Contesto del registro",
         registriesNoMachine: "Seleziona una macchina per continuare.",
         registriesRefresh: "Aggiorna registri",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Limite di richieste raggiunto' : `Limitato fino a ${time}`,
+          unreachable: "Impossibile raggiungere questo registro. Riprova.",
+          authFailed: "Token rifiutato. Sostituiscilo.",
+          needsMachine: "Connetti una macchina per esplorare questo registro.",
+          newerFormat: "Questo registro usa un formato più recente.",
+          invalidSource: "Impossibile leggere questo registro.",
+        },
         registriesRefreshSubtitle: "Carica le fonti di registro integrate e configurate per la macchina selezionata",
         registriesAddGitSource: "Aggiungi sorgente Git",
         registriesAddGitSourceAction: "Salva sorgente Git",
@@ -3851,7 +3862,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     sessionSubtitleTmuxEnabled: "Tmux abilitato",
     sessionSubtitleMessageSendingAndTmux: "Invio messaggi e tmux",
         actionsSubtitle: "Scegli dove compare ogni azione nell’app, nella voce e nelle integrazioni.",
-    prompts: "Prompt e skill",
+    prompts: "Prompt",
     promptsSubtitle: "Libreria prompt, template e stack",
     servers: "Homes",
     serversSubtitle: "Home salvati, gruppi e impostazioni predefinite",
@@ -6220,6 +6231,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
               usedByNewSessions: 'usato dalle nuove sessioni',
               sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Usato quando una nuova sessione inizia con ${agent}. Salvato nel tuo account.`,
               defaultModelAgentDefault: 'Predefinito dell’agente',
+              defaultModelAgentDefaultDescription: 'Le nuove sessioni partono con il modello scelto dall’agente.',
               setupTitle: 'Configurazione e stato',
               setupNoComputer: 'Nessuna macchina selezionata. Scegline una per controllare la CLI o accedere.',
               modelsDefaultTag: 'Predefinito',

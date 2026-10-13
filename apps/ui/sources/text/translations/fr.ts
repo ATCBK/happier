@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1295,6 +1296,7 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const frValues = {
+  capabilities: capabilityKitTranslations.fr,
     resourceProposal: resourceProposalTranslations.fr,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Aucune conversation sur ${machine} ne mentionne « ${query} ».`,
@@ -1952,10 +1954,19 @@ const frValues = {
         externalAssetsDeleteConfirmBody: "Cela supprimera l’asset externe lié du disque.",
         externalAssetsLinkedTitle: "Asset externe lié",
         registries: "Registres",
+        personal_saved_secrets: "Secrets enregistrés",
         registriesSubtitle: "Parcours les registres de skills et importe des bundles dans la bibliothèque",
         registriesContext: "Contexte du registre",
         registriesNoMachine: "Choisis une machine pour continuer.",
         registriesRefresh: "Rafraîchir les registres",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Limite de requêtes atteinte' : `Limité jusqu’à ${time}`,
+          unreachable: "Impossible de joindre ce registre. Réessayez.",
+          authFailed: "Jeton rejeté. Remplacez-le.",
+          needsMachine: "Connectez une machine pour parcourir ce registre.",
+          newerFormat: "Ce registre utilise un format plus récent.",
+          invalidSource: "Impossible de lire ce registre.",
+        },
         registriesRefreshSubtitle: "Charge les sources de registre intégrées et configurées pour la machine sélectionnée",
         registriesAddGitSource: "Ajouter une source Git",
         registriesAddGitSourceAction: "Enregistrer la source Git",
@@ -3501,7 +3512,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     sessionSubtitleTmuxEnabled: "Tmux activé",
     sessionSubtitleMessageSendingAndTmux: "Envoi des messages et tmux",
         actionsSubtitle: 'Choisis où chaque action apparaît dans l’app, la voix et les intégrations.',
-    prompts: "Prompts et skills",
+    prompts: "Prompts",
     promptsSubtitle: "Bibliothèque de prompts, modèles et stacks",
     servers: "Homes",
     serversSubtitle: "Homes enregistrés, groupes et valeurs par défaut",
@@ -5867,6 +5878,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       usedByNewSessions: 'utilisé par les nouvelles sessions',
       sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Utilisé quand une nouvelle session démarre avec ${agent}. Enregistré dans ton compte.`,
       defaultModelAgentDefault: 'Par défaut de l’agent',
+      defaultModelAgentDefaultDescription: 'Les nouvelles sessions démarrent sur le modèle choisi par l’agent.',
       setupTitle: 'Configuration et état',
       setupNoComputer: 'Aucune machine sélectionnée. Choisis-en une pour vérifier la CLI ou te connecter.',
       modelsDefaultTag: 'Par défaut',

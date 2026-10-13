@@ -65,7 +65,7 @@ export const english = {
         composer: {
             title: "Composer",
             attachments: "Attachments",
-            attachmentsDescription: "Hides the attach button. People who can send can still attach files through the API.",
+            attachmentsDescription: "Shows the attach button in chats. When off, people who can send can still attach files through the API.",
         },
         sessions: {
             title: "Sessions",

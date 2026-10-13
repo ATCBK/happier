@@ -117,7 +117,7 @@ export const en = {
         configureEvent: 'Set up event',
         editEvent: 'Edit event',
         saveAsWorkflow: 'Save as workflow',
-        saveAsWorkflowDescription: 'Opens these steps as a new workflow to review. This trigger keeps its own steps.',
+        saveAsWorkflowDescription: 'Opens these steps as a new workflow to review. Once you save it, this trigger runs that workflow.',
         when: 'When',
         newTrigger: 'New trigger',
         addTrigger: 'Add trigger',

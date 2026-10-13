@@ -1126,6 +1126,8 @@ const SAMPLED_FUNCTION_TRANSLATIONS: Readonly<Record<string, readonly unknown[]>
 };
 
 const SAMPLED_FUNCTION_SAME_VALUE_BY_LOCALE: Readonly<Record<string, ReadonlySet<string>>> = {
+    // “Port” is the standard network-port term in each of these locales.
+    'settingsProviders.local.detectedAtPort': new Set(['pl', 'fr', 'ca', 'de']),
     // Catalan uses the same plural noun spelling as English.
     'settingsProviders.detail.modelCount': new Set(['ca']),
     // Italian and German both use “provider” as the standard product term; the

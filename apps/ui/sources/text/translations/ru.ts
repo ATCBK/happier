@@ -1,3 +1,4 @@
+import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
@@ -1352,6 +1353,7 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const ruValues = {
+  capabilities: capabilityKitTranslations.ru,
     resourceProposal: resourceProposalTranslations.ru,
     conversationSearch: {
         noneFound: ({ machine, query }: { machine: string; query: string }) => `Ни один разговор на ${machine} не содержит «${query}».`,
@@ -1945,10 +1947,19 @@ const ruValues = {
         externalAssetsDeleteConfirmBody: "Это удалит связанный внешний ресурс с диска.",
         externalAssetsLinkedTitle: "Связанный внешний ресурс",
         registries: "Реестры",
+        personal_saved_secrets: "Сохранённые секреты",
         registriesSubtitle: "Просматривайте реестры навыков и импортируйте bundles в библиотеку",
         registriesContext: "Контекст реестра",
         registriesNoMachine: "Выберите машину, чтобы продолжить.",
         registriesRefresh: "Обновить реестры",
+        registriesStatus: {
+          limited: ({ time }: { time?: string }) => time === undefined ? 'Ограничение частоты запросов' : `Ограничено до ${time}`,
+          unreachable: "Не удалось подключиться к реестру. Повторите попытку.",
+          authFailed: "Токен отклонён. Замените его.",
+          needsMachine: "Подключите машину, чтобы просматривать этот реестр.",
+          newerFormat: "Этот реестр использует более новый формат.",
+          invalidSource: "Не удалось прочитать этот реестр.",
+        },
         registriesRefreshSubtitle: "Загрузить встроенные и настроенные источники реестров для выбранной машины",
         registriesAddGitSource: "Добавить источник Git",
         registriesAddGitSourceAction: "Сохранить источник Git",
@@ -3404,7 +3415,7 @@ const ruValues = {
     sessionSubtitleTmuxEnabled: "Tmux включён",
     sessionSubtitleMessageSendingAndTmux: "Отправка сообщений и tmux",
         actionsSubtitle: "Выберите, где будет отображаться каждое действие в приложении, голосовой связи и интеграции.",
-    prompts: "Промпты и скиллы",
+    prompts: "Промпты",
     promptsSubtitle: "Библиотека промптов, шаблоны и стеки",
     servers: "Homes",
 			    serversSubtitle: "Сохранённые Home, группы и значения по умолчанию",
@@ -5757,6 +5768,7 @@ const ruValues = {
       usedByNewSessions: 'используется в новых сессиях',
       sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Используется, когда новая сессия запускается с ${agent}. Сохранено в вашем аккаунте.`,
       defaultModelAgentDefault: 'По умолчанию агента',
+      defaultModelAgentDefaultDescription: 'Новые сессии запускаются на модели, которую выберет агент.',
       setupTitle: 'Настройка и состояние',
       setupNoComputer: 'Машина не выбрана. Выберите её, чтобы проверить CLI или войти.',
       modelsDefaultTag: 'По умолчанию',

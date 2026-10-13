@@ -71,6 +71,8 @@ const en = {
   notStopped: ({ reason }: { reason: string }) => `Not stopped: ${reason}`,
   failed: 'This proposal couldn’t finish. Nothing else was changed.',
   processSafe: 'Safe · start again any time',
+  processStopLoss: ({ title }: { title: string }) => `Stopping “${title}” interrupts its current work or pending question.`,
+  processKillLoss: ({ title }: { title: string }) => `Killing “${title}” ends its work immediately; unsaved work is lost.`,
   processCheck: 'Check first',
   itemLabel: ({
     title,
@@ -166,6 +168,8 @@ const ca = {
   notStopped: ({ reason }: { reason: string }) => `No s’ha aturat: ${reason}`,
   failed: 'Aquesta proposta no s’ha pogut completar. No s’ha canviat res més.',
   processSafe: 'Segur · es pot tornar a iniciar en qualsevol moment',
+  processStopLoss: ({ title }: { title: string }) => `Aturar «${title}» interromp la feina actual o la pregunta pendent.`,
+  processKillLoss: ({ title }: { title: string }) => `Matar «${title}» acaba la feina immediatament; es perd la feina no desada.`,
   processCheck: 'Comprova-ho primer',
   itemLabel: ({
     title,
@@ -262,6 +266,8 @@ const de = {
   failed:
     'Dieser Vorschlag konnte nicht abgeschlossen werden. Sonst wurde nichts geändert.',
   processSafe: 'Sicher · jederzeit neu startbar',
+  processStopLoss: ({ title }: { title: string }) => `Das Stoppen von „${title}“ unterbricht die aktuelle Arbeit oder offene Frage.`,
+  processKillLoss: ({ title }: { title: string }) => `Das Beenden von „${title}“ beendet die Arbeit sofort; ungespeicherte Arbeit geht verloren.`,
   processCheck: 'Zuerst prüfen',
   itemLabel: ({
     title,
@@ -356,6 +362,8 @@ const es = {
   notStopped: ({ reason }: { reason: string }) => `No se detuvo: ${reason}`,
   failed: 'Esta propuesta no pudo terminar. No se cambió nada más.',
   processSafe: 'Seguro · se puede volver a iniciar en cualquier momento',
+  processStopLoss: ({ title }: { title: string }) => `Detener «${title}» interrumpe su trabajo actual o pregunta pendiente.`,
+  processKillLoss: ({ title }: { title: string }) => `Terminar «${title}» finaliza su trabajo de inmediato; se pierde el trabajo sin guardar.`,
   processCheck: 'Comprobar primero',
   itemLabel: ({
     title,
@@ -451,6 +459,8 @@ const fr = {
   notStopped: ({ reason }: { reason: string }) => `Non arrêté : ${reason}`,
   failed: 'Cette proposition n’a pas pu aboutir. Rien d’autre n’a été modifié.',
   processSafe: 'Sûr · peut être relancé à tout moment',
+  processStopLoss: ({ title }: { title: string }) => `Arrêter « ${title} » interrompt son travail en cours ou sa question en attente.`,
+  processKillLoss: ({ title }: { title: string }) => `Terminer « ${title} » met fin à son travail immédiatement ; le travail non enregistré est perdu.`,
   processCheck: 'Vérifier d’abord',
   itemLabel: ({
     title,
@@ -546,6 +556,8 @@ const it = {
   failed:
     'Questa proposta non è stata completata. Non è stato modificato nient’altro.',
   processSafe: 'Sicuro · riavviabile in qualsiasi momento',
+  processStopLoss: ({ title }: { title: string }) => `Arrestare «${title}» interrompe il lavoro in corso o la domanda in attesa.`,
+  processKillLoss: ({ title }: { title: string }) => `Terminare «${title}» interrompe subito il lavoro; quello non salvato va perso.`,
   processCheck: 'Verifica prima',
   itemLabel: ({
     title,
@@ -639,6 +651,8 @@ const ja = {
   notStopped: ({ reason }: { reason: string }) => `停止されませんでした: ${reason}`,
   failed: 'この提案を完了できませんでした。他には何も変更されていません。',
   processSafe: '安全 · いつでも再起動できます',
+  processStopLoss: ({ title }: { title: string }) => `「${title}」を停止すると、現在の作業や回答待ちの質問が中断されます。`,
+  processKillLoss: ({ title }: { title: string }) => `「${title}」を強制終了すると作業が直ちに終了し、未保存の作業は失われます。`,
   processCheck: '先に確認',
   itemLabel: ({
     title,
@@ -733,6 +747,8 @@ const pl = {
   notStopped: ({ reason }: { reason: string }) => `Nie zatrzymano: ${reason}`,
   failed: 'Nie udało się dokończyć tej propozycji. Nic więcej nie zmieniono.',
   processSafe: 'Bezpieczne · można uruchomić ponownie w każdej chwili',
+  processStopLoss: ({ title }: { title: string }) => `Zatrzymanie „${title}” przerywa bieżącą pracę lub oczekujące pytanie.`,
+  processKillLoss: ({ title }: { title: string }) => `Zakończenie „${title}” natychmiast kończy pracę; niezapisana praca zostaje utracona.`,
   processCheck: 'Najpierw sprawdź',
   itemLabel: ({
     title,
@@ -827,6 +843,8 @@ const pt = {
   notStopped: ({ reason }: { reason: string }) => `Não parado: ${reason}`,
   failed: 'Esta proposta não pôde ser concluída. Nada mais foi alterado.',
   processSafe: 'Seguro · pode ser reiniciado a qualquer momento',
+  processStopLoss: ({ title }: { title: string }) => `Parar “${title}” interrompe o trabalho atual ou a pergunta pendente.`,
+  processKillLoss: ({ title }: { title: string }) => `Terminar “${title}” encerra o trabalho imediatamente; o trabalho não guardado é perdido.`,
   processCheck: 'Verificar primeiro',
   itemLabel: ({
     title,
@@ -922,6 +940,8 @@ const ru = {
   notStopped: ({ reason }: { reason: string }) => `Не остановлено: ${reason}`,
   failed: 'Не удалось завершить это предложение. Больше ничего не изменено.',
   processSafe: 'Безопасно · можно запустить снова в любой момент',
+  processStopLoss: ({ title }: { title: string }) => `Остановка «${title}» прерывает текущую работу или ожидающий ответа вопрос.`,
+  processKillLoss: ({ title }: { title: string }) => `Завершение «${title}» немедленно прекращает работу; несохранённая работа теряется.`,
   processCheck: 'Сначала проверить',
   itemLabel: ({
     title,
@@ -1012,6 +1032,8 @@ const zhHans = {
   notStopped: ({ reason }: { reason: string }) => `未停止：${reason}`,
   failed: '此建议未能完成。未更改其他任何内容。',
   processSafe: '安全 · 随时可重新启动',
+  processStopLoss: ({ title }: { title: string }) => `停止“${title}”会中断当前工作或待回答的问题。`,
+  processKillLoss: ({ title }: { title: string }) => `强制结束“${title}”会立即终止工作；未保存的工作将丢失。`,
   processCheck: '请先检查',
   itemLabel: ({
     title,
@@ -1102,6 +1124,8 @@ const zhHant = {
   notStopped: ({ reason }: { reason: string }) => `未停止：${reason}`,
   failed: '此建議未能完成。未變更其他任何內容。',
   processSafe: '安全 · 隨時可重新啟動',
+  processStopLoss: ({ title }: { title: string }) => `停止「${title}」會中斷目前工作或待回答的問題。`,
+  processKillLoss: ({ title }: { title: string }) => `強制結束「${title}」會立即終止工作；未儲存的工作將遺失。`,
   processCheck: '請先檢查',
   itemLabel: ({
     title,
