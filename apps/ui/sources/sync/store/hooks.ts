@@ -109,6 +109,8 @@ import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '../domains/work
 import { resolveWorkspaceTargetForSessionFromState } from '../domains/session/resolveWorkspaceTargetForSessionFromState';
 import { createProjectForSessionResolver } from '../runtime/orchestration/projectForSessionResolver';
 import { normalizeSessionId } from '../domains/session/normalizeSessionId';
+import { selectHomeQualifiedSession } from '../domains/session/selectHomeQualifiedSession';
+export { useProjectAccountRows } from '../domains/workspaces/projectAccountRows';
 import { buildSessionMetadataStabilitySignature } from '../domains/session/metadata/sessionMetadataStability';
 import { readSessionOwnerMetadataView } from '../domains/session/readSessionOwnerMetadataView';
 import { buildMachineDisplayRenderableFromMachine } from '../domains/machines/machineDisplayRenderable';
@@ -189,11 +191,6 @@ import {
   EMPTY_PROJECT_ORGANIZATIONS,
 } from './domains/projectAccountRows';
 
-/** Opened row projections are scoped by the sync owner's captured Account/Home. */
-export function useProjectAccountRows() {
-  return getStorage()(readCurrentProjectAccountRows);
-}
-
 export function useWorkspaceRefs() {
   return getStorage()(readProjectWorkspaceRefs);
 }
@@ -237,20 +234,9 @@ export function useSession(id: string, serverId?: string | null): Session | null
 
 /** One Home-qualified live carrier owner; projections retain their own subscription granularity. */
 export function useSessionSelector<T>(id: string, serverId: string | null | undefined, select: (session: Session | null) => T): T {
-  const normalizedSessionId = normalizeSessionId(id);
   const normalizedServerId = normalizeTrimmedString(serverId);
   const activeServerId = useActiveServerSnapshot(Boolean(normalizedServerId)).serverId;
-  return getStorage()((state) => {
-    if (serverId !== undefined && !normalizedServerId) return select(null);
-    const session = state.sessions[normalizedSessionId] ?? null;
-    if (!normalizedServerId || !session) return select(session);
-    if (normalizeTrimmedString(session.serverId)) {
-      return select(areServerProfileIdentifiersEquivalent(session.serverId, normalizedServerId) ? session : null);
-    }
-    // Older live carriers omitted serverId and belong only to the applied Home.
-    return select(areServerProfileIdentifiersEquivalent(activeServerId, normalizedServerId)
-      && areServerProfileIdentifiersEquivalent(state.sessionLocalStateScope?.serverId, normalizedServerId) ? session : null);
-  });
+  return getStorage()((state) => select(selectHomeQualifiedSession(state, id, serverId, activeServerId)));
 }
 
 /**

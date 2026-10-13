@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import * as owner from './profileCatalogSnapshot';
 
 describe('scoped Profile publication', () => {
     it('publishes a higher acknowledged row after transient revalidation failure without certifying the inventory', () => {
         const scope = { serverId: 'failed-revalidation-ack', accountId: 'account' };
-        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });
         owner.applyProfileCatalogSnapshot(scope, { status: 'ready', authority: 'inactive', source: 'destination',
             control: null, controlRevision: 'absent', records: [{ record, revision: 10 }], diagnostics: [], referenceGuardRevision: 1 }, true);
         owner.applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true);
@@ -14,7 +15,7 @@ describe('scoped Profile publication', () => {
     });
     it('retains row evidence from a partial inventory after empty refresh and failed revalidation', () => {
         const scope = { serverId: 'inventory-evidence', accountId: 'account' };
-        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });
         const catalog = { status: 'partial' as const, authority: 'inactive' as const, source: 'destination' as const,
             control: null, controlRevision: 'absent' as const, records: [{ record, revision: 10 }], diagnostics: [], referenceGuardRevision: 1 };
         owner.applyProfileCatalogSnapshot(scope, catalog, true);
@@ -32,7 +33,7 @@ describe('scoped Profile publication', () => {
     });
     it('retains an acknowledged Artifact body without publishing older or retired evidence', () => {
         const scope = { serverId: 'artifact-ack-home', accountId: 'account' };
-        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });
         const ready = { status: 'ready' as const, authority: 'inactive' as const, source: 'destination' as const, control: null, controlRevision: 'absent' as const,
             records: [{ record, revision: 1 }], diagnostics: [], referenceGuardRevision: 1 };
         const old = { artifactId: 'a', header: { kind: 'launch-profile.v1' }, body: 'old', revision: { headerVersion: 1, bodyVersion: 1 } };
@@ -48,7 +49,7 @@ describe('scoped Profile publication', () => {
     });
     it('publishes durable row evidence without reviving census authority or a retired Account', () => {
         const scope = { serverId: 'ack-home', accountId: 'account' };
-        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });
         const ready = { status: 'ready' as const, authority: 'inactive' as const, source: 'destination' as const, control: null, controlRevision: 'absent' as const,
             records: [{ record, revision: 1 }], diagnostics: [], referenceGuardRevision: 1 };
         owner.applyProfileCatalogSnapshot(scope, ready, true);
@@ -94,7 +95,7 @@ describe('scoped Profile publication', () => {
     });
     it('withdraws runtime authority on refresh, retains display rows and rejects retired results', () => {
         const scope = { serverId: 'home', accountId: 'account' };
-        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });
         const ready = { status: 'ready' as const, authority: 'inactive' as const, source: 'destination' as const, control: null, controlRevision: 'absent' as const,
             records: [{ record, revision: 1 }], diagnostics: [], referenceGuardRevision: 1 };
         const projection = { cleanup: { status: 'cleanup-pending' as const, reason: 'source-conflict' as const } };

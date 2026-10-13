@@ -33,14 +33,9 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 
-function requireSettingsVersion(settingsVersion: number | null): number {
-  if (settingsVersion === null) throw new Error('Account settings version is unavailable');
-  return settingsVersion;
-}
-
 async function persistAccountSettingsOnce(
   expectedSettingsScope: AccountSettingsScope | null,
-  expectedSettingsVersion: number,
+  expectedSettingsVersion: number | null,
   mutate: (raw: Readonly<Record<string, unknown>>) => Record<string, unknown>,
 ): Promise<void> {
   requireOneShotAccountSettingsMutationApplied(
@@ -116,7 +111,7 @@ export function useApplyVoiceSettingsEdit(): (before: VoiceSettings, next: Voice
     if (!expectedScope || !areAccountSettingsScopesEqual(expectedScope, current.settingsScope)) {
       throw new Error('Account settings scope changed');
     }
-    await persistAccountSettingsOnce(expectedScope, requireSettingsVersion(current.settingsVersion), (raw) => {
+    await persistAccountSettingsOnce(expectedScope, current.settingsVersion, (raw) => {
       const settings = settingsParse(raw);
       if (before.assistantLanguage !== next.assistantLanguage && !languageOwnerIsCurrent(settings.voice)) {
         throw new Error('voice_settings_provider_changed');
@@ -148,7 +143,7 @@ export function useApplySessionReminderPresetIntent(): (intent: SessionReminderP
     if (!expectedScope || !areAccountSettingsScopesEqual(expectedScope, current.settingsScope)) {
       throw new Error('Account settings scope changed before saving reminder presets');
     }
-    await persistAccountSettingsOnce(expectedScope, requireSettingsVersion(current.settingsVersion), (raw) => (
+    await persistAccountSettingsOnce(expectedScope, current.settingsVersion, (raw) => (
       applySessionReminderPresetIntentToAccountSettings(raw, intent)
     ));
   }, [expectedScope]);

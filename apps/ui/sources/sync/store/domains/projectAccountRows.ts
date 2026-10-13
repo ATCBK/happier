@@ -1,26 +1,13 @@
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
 import { getWorkspaceSyncWorkerCopyV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import { buildProjectAccountRowPhysicalKeyV1, type ProjectAccountOrganizationV1, type ProjectAccountRowKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { buildProjectAccountRowPhysicalKeyV1, type ProjectAccountOrganizationV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accountSettingsStructuralEquality';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { StoreGet, StoreSet } from './_shared';
 
-export type ProjectAccountRowsStatus = 'idle' | 'loading' | 'ready' | 'error' | 'locked' | 'refused';
-export type ProjectOrganizationRow = Readonly<{
-    key: Extract<ProjectAccountRowKeyV1, { kind: 'project-organization' }>;
-    revision: number;
-    value: ProjectAccountOrganizationV1;
-}>;
-export type ProjectAccountRowsSnapshot = Readonly<{
-    scope: ServerAccountScope;
-    status: ProjectAccountRowsStatus;
-    coverage: 'unknown' | 'partial' | 'complete';
-    workspaceRefs: readonly WorkspaceRefV1[];
-    relationships: readonly WorkspaceSyncRelationshipV1[];
-    organizations: readonly ProjectOrganizationRow[];
-    revisionsByPhysicalKey: Readonly<Record<string, number>>;
-}>;
+import { readCurrentProjectAccountRows, type ProjectAccountRowsStatus, type ProjectAccountRowsSnapshot, type ProjectOrganizationRow } from '@/sync/domains/workspaces/projectAccountRows';
+export { readCurrentProjectAccountRows, type ProjectAccountRowsStatus, type ProjectAccountRowsSnapshot, type ProjectOrganizationRow } from '@/sync/domains/workspaces/projectAccountRows';
 export type ProjectAccountRowsDomain = {
     projectAccountRows: ProjectAccountRowsSnapshot | null;
     pinnedWorkspaceRefIds: readonly string[];
@@ -61,11 +48,6 @@ function reconcileRows<T>(previous: readonly T[], incoming: readonly T[], keyOf:
         if (row !== undefined) next.push(row);
     }
     return next.length === previous.length && next.every((row, index) => row === previous[index]) ? previous : next;
-}
-
-export function readCurrentProjectAccountRows(state: Pick<ProjectAccountRowsDomain, 'projectAccountRows'> & { profileScope?: ServerAccountScope | null }): ProjectAccountRowsSnapshot | null {
-    if ('profileScope' in state && !areServerAccountScopesEqual(state.profileScope, state.projectAccountRows?.scope)) return null;
-    return state.projectAccountRows;
 }
 
 /**

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { storage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import { activatePendingQueueScope } from '../../engine/pending/pendingQueueV2.testHelpers';
 
 beforeEach(async () => {
@@ -15,19 +19,10 @@ afterEach(() => {
     vi.clearAllMocks();
 });
 
-function createHarness(_createSessionsDomain: unknown, createReducer: typeof import('@happier-dev/session-core/reducer').createReducer) {
+function createHarness() {
     storage.setState({
         sessionMessages: {
-            s1: {
-                messageIdsOldestFirst: [],
-                messagesById: {},
-                messagesMap: {},
-                reducerState: createReducer(),
-                latestThinkingMessageId: null,
-                latestThinkingMessageActivityAtMs: null,
-                messagesVersion: 0,
-                isLoaded: true,
-            },
+            s1: createSessionMessagesFixture({ isLoaded: true }),
         },
     });
     return { get: storage.getState, domain: storage.getState() };
@@ -35,12 +30,10 @@ function createHarness(_createSessionsDomain: unknown, createReducer: typeof imp
 
 describe('sessions domain: no voice side effects', () => {
     it('applies agentState permission requests to loaded session messages when applySessions receives newer agentStateVersion', async () => {
-        const { createReducer } = await import("@happier-dev/session-core/reducer");
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, createReducer);
+        const { get, domain } = createHarness();
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
                 seq: 0,
                 createdAt: 1,
@@ -53,12 +46,12 @@ describe('sessions domain: no voice side effects', () => {
                 agentStateVersion: 0,
                 thinking: false,
                 thinkingAt: 0,
-                presence: 1,
-            } as any,
+                presence: 'online',
+            }),
         ]);
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
                 seq: 0,
                 createdAt: 1,
@@ -79,16 +72,19 @@ describe('sessions domain: no voice side effects', () => {
                 agentStateVersion: 1,
                 thinking: false,
                 thinkingAt: 0,
-                presence: 2,
-            } as any,
+                presence: 'online',
+            }),
         ]);
 
-        const nextState: any = get();
+        const nextState = get();
         const mappedMid = nextState.sessionMessages.s1.reducerState.toolIdToMessageId.get('req1');
         expect(mappedMid).toBeTruthy();
+        if (!mappedMid) throw new Error('Expected a canonical message id for req1');
+        expect(nextState.sessionMessages.s1.messageIdsOldestFirst).toEqual([mappedMid]);
 
         const msg = nextState.sessionMessages.s1.messagesMap[mappedMid];
-        expect(msg.kind).toBe('tool-call');
+        expect(msg?.kind).toBe('tool-call');
+        if (msg?.kind !== 'tool-call') throw new Error('Expected the pending permission tool call');
         expect(msg.tool?.name).toBe('Bash');
         expect(msg.tool?.permission?.id).toBe('req1');
         expect(msg.tool?.permission?.status).toBe('pending');
@@ -96,8 +92,7 @@ describe('sessions domain: no voice side effects', () => {
 
     it('reconciles cached Request interrupted placeholders back to pending on reload even when agentStateVersion is unchanged', async () => {
         const { createReducer } = await import("@happier-dev/session-core/reducer");
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, createReducer);
+        const { get, domain } = createHarness();
 
         const reducerState = createReducer();
         reducerState.toolIdToMessageId.set('req1', 'm1');
@@ -127,10 +122,10 @@ describe('sessions domain: no voice side effects', () => {
                     reason: 'Request interrupted',
                 },
             },
-        } as any);
+        });
 
-        const state: any = get();
-        state.sessions.s1 = {
+        const state = get();
+        state.sessions.s1 = createSessionFixture({
             id: 's1',
             seq: 0,
             createdAt: 1,
@@ -154,11 +149,11 @@ describe('sessions domain: no voice side effects', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        };
-        state.sessionMessages.s1 = {
+        });
+        state.sessionMessages.s1 = createSessionMessagesFixture({
             messageIdsOldestFirst: ['m1'],
             messagesById: {
-                m1: {
+                m1: createToolCallMessageFixture({
                     id: 'm1',
                     kind: 'tool-call',
                     createdAt: 100,
@@ -179,7 +174,7 @@ describe('sessions domain: no voice side effects', () => {
                         },
                     },
                     children: [],
-                },
+                }),
             },
             messagesMap: {},
             reducerState,
@@ -188,9 +183,9 @@ describe('sessions domain: no voice side effects', () => {
             latestThinkingMessageActivityAtMs: null,
             messagesVersion: 1,
             isLoaded: true,
-        };
+        });
         state.sessionMessages.s1.messagesMap = state.sessionMessages.s1.messagesById;
-        state.sessionListRowsByServerId.server_1 = { s1: {
+        state.sessionListRowsByServerId.server_1 = { s1: createSessionListRenderableSessionFixture({
             id: 's1',
             seq: 0,
             createdAt: 1,
@@ -208,11 +203,11 @@ describe('sessions domain: no voice side effects', () => {
             presence: 'online',
             hasPendingPermissionRequests: false,
             hasPendingUserActionRequests: false,
-        } };
+        }) };
         state.ordinarySessionListMembershipByServerId.server_1 = ['s1'];
 
         domain.applySessions([
-            {
+            createSessionFixture({
                 id: 's1',
                 seq: 0,
                 createdAt: 1,
@@ -236,16 +231,21 @@ describe('sessions domain: no voice side effects', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any,
+            }),
         ]);
 
-        const nextState: any = get();
+        const nextState = get();
         const updatedMessage = nextState.sessionMessages.s1.messagesById.m1;
+        expect(updatedMessage?.kind).toBe('tool-call');
+        if (updatedMessage?.kind !== 'tool-call') throw new Error('Expected the restored permission tool call');
         expect(updatedMessage.tool?.permission?.status).toBe('pending');
         expect(updatedMessage.tool?.state).toBe('running');
         expect(updatedMessage.tool?.completedAt).toBeNull();
         expect(updatedMessage.tool?.result).toBeUndefined();
         expect(nextState.sessionListRowsByServerId.server_1.s1?.hasPendingPermissionRequests).toBe(false);
+        expect(buildSessionListRenderableFromSession(nextState.sessions.s1,
+            nextState.sessionListRowsByServerId.server_1.s1,
+            readStoredSessionMessages(nextState, 's1') ?? []).hasPendingUserActionRequests).toBe(true);
         expect(nextState.sessionListRowsByServerId.server_1.s1?.hasPendingUserActionRequests).toBe(true);
     });
 });

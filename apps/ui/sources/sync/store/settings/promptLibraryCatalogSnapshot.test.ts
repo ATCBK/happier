@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue,
-    resetPromptLibraryCatalogSnapshotsForTests } from './promptLibraryCatalogSnapshot';
+    publishPromptLibrarySkillRulesDraft, resetPromptLibraryCatalogSnapshotsForTests } from './promptLibraryCatalogSnapshot';
 afterEach(resetPromptLibraryCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('withdraws pending display intent with lost Account admission, not merely its received row', () => {
+        const skillCatalog = { status: 'ready' as const, rows: [{ record: { key: 'skill-rules' as const,
+            value: { v: 1 as const, rules: [] } }, revision: 3 }], tombstones: [], diagnostics: [] };
+        const projection = { catalog: skillCatalog, rawSettings: {}, sourceSettingsVersion: 1 };
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        publishPromptLibrarySkillRulesDraft(scope, 'skill', [{ id: 'draft', target: { t: 'allMachines' },
+            enabled: true, createdAt: 1, updatedAt: 1 }]);
+        expect(getPromptLibraryCatalogValue(scope, 'skill-rules').value?.rules).toHaveLength(1);
+        applyPromptLibraryCatalogSnapshot(scope, { ...projection, catalog: { status: 'unavailable', reason: 'unauthorized' } }, true);
+        expect(getPromptLibraryCatalogValue(scope, 'skill-rules').value).toBeNull();
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        expect(getPromptLibraryCatalogValue(scope, 'skill-rules').value?.rules).toEqual([]);
+    });
     it('retains partial tombstone evidence through refresh and rejects lower or duplicate row receipts', () => {
         applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
         applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'partial', rows: [],

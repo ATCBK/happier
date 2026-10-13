@@ -3,6 +3,7 @@ import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/
 import { PromptLibraryCatalogKeyV1Schema, type PromptLibraryCatalogKeyV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { createRowInventoryReceiptOrdering } from './rowInventoryReceiptOrdering';
+import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 
 export type PromptLibraryValueV1<K extends PromptLibraryCatalogKeyV1> = Extract<PromptLibraryRecordV1, { key: K }>['value'];
 export type PromptLibraryCatalogValueSnapshot<K extends PromptLibraryCatalogKeyV1> = Readonly<{
@@ -13,7 +14,9 @@ export type PromptLibraryCatalogProjection = Readonly<{
     catalog: PromptLibraryCatalogSnapshotV1; rawSettings: Readonly<Record<string, unknown>>; sourceSettingsVersion: number;
 }>;
 type StoredSnapshot = Readonly<{ scope: ServerAccountScope; projection: PromptLibraryCatalogProjection;
-    values: ReadonlyMap<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>> }>;
+    values: ReadonlyMap<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>>;
+    skillRuleDrafts?: ReadonlyMap<string, ReachRulesV1>;
+    skillRulesView?: PromptLibraryCatalogValueSnapshot<'skill-rules'> }>;
 const snapshots = new Map<string, StoredSnapshot>();
 const receiptOrdering = createRowInventoryReceiptOrdering();
 const listeners = new Set<() => void>();
@@ -22,8 +25,35 @@ export function subscribePromptLibraryCatalogSnapshots(listener: () => void): ()
     listeners.add(listener); return () => { listeners.delete(listener); };
 }
 export function getPromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1>(scope: ServerAccountScope | null | undefined, key: K): PromptLibraryCatalogValueSnapshot<K> {
+    const snapshot = scope ? snapshots.get(serverAccountScopeKeySuffix(scope)) : undefined;
     // Each entry is produced at the same validated key below; the generic preserves caller narrowing.
+    return (key === 'skill-rules' ? snapshot?.skillRulesView ?? snapshot?.values.get(key) ?? loading
+        : snapshot?.values.get(key) ?? loading) as PromptLibraryCatalogValueSnapshot<K>;
+}
+/** Mutation bases remain received rows; drafts are display projections, never CAS authority. */
+export function getAcknowledgedPromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1>(scope: ServerAccountScope | null | undefined, key: K): PromptLibraryCatalogValueSnapshot<K> {
     return (scope ? snapshots.get(serverAccountScopeKeySuffix(scope))?.values.get(key) ?? loading : loading) as PromptLibraryCatalogValueSnapshot<K>;
+}
+function withSkillRuleDrafts(snapshot: StoredSnapshot, drafts = snapshot.skillRuleDrafts): StoredSnapshot {
+    const base = snapshot.values.get('skill-rules') as PromptLibraryCatalogValueSnapshot<'skill-rules'> | undefined;
+    if (!base?.value || !drafts?.size) return { ...snapshot, skillRuleDrafts: drafts, skillRulesView: base };
+    const rules = [...base.value.rules.filter(rule => !drafts.has(rule.skillId)),
+        ...[...drafts].flatMap(([skillId, rules]) => rules.map(rule => ({ ...rule, skillId })))];
+    const next = { ...base, value: { ...base.value, rules } };
+    const view = snapshot.skillRulesView && JSON.stringify(snapshot.skillRulesView) === JSON.stringify(next) ? snapshot.skillRulesView : next;
+    return { ...snapshot, skillRuleDrafts: drafts, skillRulesView: view };
+}
+/** The existing catalog publishes one item's pending reach to every mounted consumer. */
+export function publishPromptLibrarySkillRulesDraft(scope: ServerAccountScope, skillId: string, rules: ReachRulesV1 | null): void {
+    const key = serverAccountScopeKeySuffix(scope);
+    const previous = snapshots.get(key);
+    if (!previous || !previous.values.get('skill-rules')?.value) return;
+    const drafts = new Map(previous.skillRuleDrafts);
+    if (rules === null) drafts.delete(skillId); else drafts.set(skillId, rules);
+    const next = withSkillRuleDrafts(previous, drafts);
+    snapshots.set(key, next);
+    if (next.skillRulesView === previous.skillRulesView) return;
+    for (const listener of [...listeners]) listener();
 }
 export function getPromptLibraryCatalogSnapshot(scope: ServerAccountScope): PromptLibraryCatalogProjection | null {
     return snapshots.get(serverAccountScopeKeySuffix(scope))?.projection ?? null;
@@ -45,8 +75,9 @@ export function applyPromptLibraryCatalogAcknowledgedRecord(scope: ServerAccount
             tombstones: catalog.tombstones.filter(row => row.key !== record.key),
             diagnostics: catalog.diagnostics.filter(row => row.key !== record.key) }
         : catalog ?? { status: 'loading' };
-    snapshots.set(scopeKey, { scope, values, projection: { catalog: nextCatalog,
-        rawSettings: previous?.projection.rawSettings ?? {}, sourceSettingsVersion: previous?.projection.sourceSettingsVersion ?? 0 } });
+    snapshots.set(scopeKey, withSkillRuleDrafts({ scope, values, skillRuleDrafts: previous?.skillRuleDrafts,
+        skillRulesView: previous?.skillRulesView, projection: { catalog: nextCatalog,
+        rawSettings: previous?.projection.rawSettings ?? {}, sourceSettingsVersion: previous?.projection.sourceSettingsVersion ?? 0 } }));
     for (const listener of [...listeners]) listener();
 }
 export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, projection: PromptLibraryCatalogProjection, current: boolean): void {
@@ -88,7 +119,8 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
         changed ||= next !== old;
         values.set(key, next);
     }
-    snapshots.set(scopeKey, { scope, projection, values });
+    snapshots.set(scopeKey, withSkillRuleDrafts({ scope, projection, values, skillRuleDrafts: values.get('skill-rules')?.value ? previous?.skillRuleDrafts : undefined,
+        skillRulesView: previous?.skillRulesView }));
     if (!changed) return;
     for (const listener of [...listeners]) listener();
 }

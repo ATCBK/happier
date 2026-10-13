@@ -96,7 +96,8 @@ export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: 
     publish({ scope, catalog, data, dataComplete, stale: catalog.status !== 'ready',
         artifactsById: refused ? emptyArtifacts : !ready ? previousArtifacts ?? emptyArtifacts
             : sameArtifacts ? previousArtifacts : artifactsById,
-        source: refused ? null : ready ? catalog.source ?? null : previous?.source ?? null,
+        source: refused ? null : catalog.status === 'ready' || catalog.status === 'partial'
+            ? catalog.source ?? null : previous?.source ?? null,
         legacyProfiles: previous && JSON.stringify(previous.legacyProfiles) === JSON.stringify(legacyProfiles) ? previous.legacyProfiles : legacyProfiles,
         legacyDiagnostics: previous && JSON.stringify(previous.legacyDiagnostics) === JSON.stringify(legacyDiagnostics) ? previous.legacyDiagnostics : legacyDiagnostics,
         transfer: previous && JSON.stringify(previous.transfer) === JSON.stringify(transfer) ? previous.transfer : transfer,
