@@ -2,36 +2,14 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
-import { installFilesContentCommonModuleMocks } from '@/components/workspaces/scm/review/filesContentTestHelpers';
+import { Item } from '@/components/ui/lists/Item';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installFilesContentCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock(
-            {
-                Platform: {
-                    OS: 'web',
-                },
-                TurboModuleRegistry: {
-                    get: () => ({}),
-                },
-                FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent }: any) => {
-                    const header = ListHeaderComponent
-                        ? (React.isValidElement(ListHeaderComponent) ? ListHeaderComponent : React.createElement(ListHeaderComponent))
-                        : null;
-                    const items = (data ?? []).map((item: any, index: number) => {
-                        const key = keyExtractor ? keyExtractor(item, index) : String(item?.fullPath ?? index);
-                        return React.createElement(React.Fragment, { key }, renderItem({ item, index }));
-                    });
-                    return React.createElement('FlatList', null, header, ...items);
-                },
-            },
-        );
-    },
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
 // `@legendapp/list` is a third-party boundary. It is stubbed here exactly as the
 // sibling SearchResultsList suites stub it: the list keeps its real auxiliary
@@ -65,26 +43,7 @@ vi.mock('@legendapp/list/react-native', async () => {
     };
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Octicons: 'Octicons',
-    Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-
-vi.mock('@/components/ui/media/FileIcon', () => ({
-    FileIcon: 'FileIcon',
-}));
-
-// The real typography owner: the list's states render the shared state composition.
-vi.mock('@/constants/Typography', async () => vi.importActual('@/constants/Typography'));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: 'Item',
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 const searchResultsTheme = {
     colors: {
@@ -118,7 +77,7 @@ describe('SearchResultsList', () => {
         const list = screen.tree.findByType('LegendList');
         await act(async () => { screen.tree.update(<SearchResultsList {...props} searchQuery="a.ts" isSearching />); });
         expect(screen.tree.findByType('LegendList')).toBe(list);
-        expect(screen.tree.findAllByType('Item')).toHaveLength(1);
+        expect(screen.tree.findAllByType(Item)).toHaveLength(1);
         expect(screen.tree.findAllByType('Text').some(node => React.Children.toArray(node.props.children).includes('files.previousSearchResults'))).toBe(true);
         await screen.update(<SearchResultsList {...props} searchQuery="a.ts" searchResultsQuery="a" isSearching={false} />);
         expect(screen.tree.findAllByType('Text').some(node => React.Children.toArray(node.props.children).includes('files.previousSearchResults'))).toBe(true);
@@ -130,7 +89,7 @@ describe('SearchResultsList', () => {
         const onFolderPress = vi.fn();
         const onFilePress = vi.fn();
         const screen = await renderScreen(<SearchResultsList theme={searchResultsTheme} searchQuery="nested" searchResults={[folder]} isSearching={false} onFilePress={onFilePress} onFolderPress={onFolderPress} />);
-        const item = screen.tree.findByType('Item');
+        const item = screen.tree.findByType(Item);
         expect(typeof item.props.onPress).toBe('function');
         await act(async () => { item.props.onPress(); });
         expect(onFolderPress).toHaveBeenCalledWith(folder);
@@ -149,10 +108,12 @@ describe('SearchResultsList', () => {
                     onFilePress={vi.fn()}
                 />)).tree;
 
-        const rootView = tree!.findByType('View' as any);
-        const children = React.Children.toArray(rootView.props.children ?? []);
-        const hasPrimitiveChild = children.some((c) => typeof c === 'string' || typeof c === 'number');
-        expect(hasPrimitiveChild).toBe(false);
+        const views = tree!.findAllByType('View');
+        expect(views.length).toBeGreaterThan(0);
+        for (const view of views) {
+            const children = React.Children.toArray(view.props.children ?? []);
+            expect(children.some(child => typeof child === 'string' || typeof child === 'number')).toBe(false);
+        }
     }, 60_000);
 
     it('wires onFilePressPinned to Item.onDoublePress for file results', async () => {
@@ -177,7 +138,7 @@ describe('SearchResultsList', () => {
                     onFilePressPinned={onFilePressPinned}
                 />)).tree;
 
-        const item = tree!.findByType('Item' as any);
+        const item = tree!.findByType(Item);
         expect(typeof item.props.onDoublePress).toBe('function');
 
         act(() => {
@@ -208,7 +169,7 @@ describe('SearchResultsList', () => {
                     onFilePress={vi.fn()}
                 />)).tree;
 
-        const item = tree!.findByType('Item' as any);
+        const item = tree!.findByType(Item);
         expect(React.isValidElement(item.props.title)).toBe(true);
         expect(item.props.rightElement).toBeNull();
         const title = item.props.title;

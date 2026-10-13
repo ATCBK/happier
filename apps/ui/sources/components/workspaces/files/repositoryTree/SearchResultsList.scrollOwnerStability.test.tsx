@@ -3,7 +3,6 @@ import type renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { installFilesContentCommonModuleMocks } from '@/components/workspaces/scm/review/filesContentTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,19 +17,9 @@ const scrollOwner = vi.hoisted(() => ({
     offset: 0,
 }));
 
-installFilesContentCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'web',
-                select: <T,>(options: { ios?: T; native?: T; default?: T; web?: T }) =>
-                    options.web ?? options.default ?? options.native ?? options.ios,
-            },
-            TurboModuleRegistry: { get: () => ({}) },
-        });
-    },
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
 vi.mock('@legendapp/list/react-native', async () => {
     const ReactModule = await import('react');
@@ -67,11 +56,7 @@ vi.mock('@legendapp/list/react-native', async () => {
     };
 });
 
-vi.mock('@expo/vector-icons', () => ({ Octicons: 'Octicons', Ionicons: 'Ionicons' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/components/ui/media/FileIcon', () => ({ FileIcon: 'FileIcon' }));
-vi.mock('@/components/ui/lists/Item', () => ({ Item: 'Item' }));
-vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 const theme = {
     colors: {
@@ -87,12 +72,6 @@ function makeFile(name: string) {
 
 function countLists(tree: renderer.ReactTestRenderer): number {
     return tree.root.findAll((node) => String(node.type) === 'LegendList').length;
-}
-
-function textOf(tree: renderer.ReactTestRenderer): string[] {
-    return tree.root
-        .findAll((node) => String(node.type) === 'Text')
-        .map((node) => String(node.props.children ?? ''));
 }
 
 describe('SearchResultsList scroll owner stability', () => {
@@ -122,18 +101,19 @@ describe('SearchResultsList scroll owner stability', () => {
         // Searching: the spinner is list content, not a replacement for the list.
         expect(countLists(tree)).toBe(1);
         expect(scrollOwner.mounts).toBe(1);
-        expect(textOf(tree)).toContain('files.searching');
+        expect(rendered.getTextContent()).toContain('files.searching');
 
         await rendered.update(
             <SearchResultsList {...props({ searchResults: [makeFile('a.ts'), makeFile('b.ts')] }) as any} />,
         );
-        expect(tree.root.findAll((node) => String(node.type) === 'Item')).toHaveLength(2);
+        expect(rendered.getTextContent()).toContain('a.ts');
+        expect(rendered.getTextContent()).toContain('b.ts');
 
         // The user scrolled the results; that position lives on the list instance.
         scrollOwner.offset = 320;
 
         await rendered.update(<SearchResultsList {...props({ searchQuery: 'zzz' }) as any} />);
-        expect(textOf(tree)).toContain('files.noFilesFound');
+        expect(rendered.getTextContent()).toContain('files.noFilesFound');
 
         await rendered.update(
             <SearchResultsList {...props({ searchResults: [makeFile('a.ts')] }) as any} />,

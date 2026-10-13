@@ -2,7 +2,6 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { installFilesContentCommonModuleMocks } from '@/components/workspaces/scm/review/filesContentTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -10,21 +9,9 @@ const legendListState = vi.hoisted(() => ({
     props: null as Record<string, unknown> | null,
 }));
 
-installFilesContentCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'ios',
-                select: <T,>(options: { ios?: T; native?: T; default?: T; web?: T; android?: T }) =>
-                    options.ios ?? options.native ?? options.default ?? options.web ?? options.android,
-            },
-            TurboModuleRegistry: {
-                get: () => ({}),
-            },
-        });
-    },
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
 vi.mock('@legendapp/list/react-native', async () => {
     const ReactModule = await import('react');
@@ -36,23 +23,10 @@ vi.mock('@legendapp/list/react-native', async () => {
     };
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Octicons: 'Octicons',
-    Ionicons: 'Ionicons',
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
 
-vi.mock('@/components/ui/media/FileIcon', () => ({
-    FileIcon: 'FileIcon',
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: 'Item',
-}));
 
 describe('SearchResultsList native virtualization', () => {
     it('keeps native search results in the virtualized list during refinement', async () => {
