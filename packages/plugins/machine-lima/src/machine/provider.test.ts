@@ -61,6 +61,18 @@ describe('public Lima native leaf', () => {
     expect(effects).toEqual([]);
   });
 
+  it('requires the host architecture for the native VZ driver before allocation', async () => {
+    let present = false;
+    const { executor, effects } = processBoundary((args) => {
+      if (args[0] === 'create') present = true;
+      return { exitCode: 0, out: present ? JSON.stringify({ ...native, arch: 'x86_64',
+        config: { ...native.config, images: [{ location: launch.image, arch: 'x86_64' }] } }) : '', err: '' };
+    });
+    expect(await createLimaProvider(executor).acquire({ ...launch, arch: 'x86_64' }))
+      .toEqual({ kind: 'unknown', recovery: { reference: `${launch.store}/${launch.instance}`, reason: 'lima_driver_unavailable' } });
+    expect(effects).toEqual([]);
+  });
+
   it('returns unavailable on native inspect failure instead of confirmed absence', async () => {
     const { executor } = processBoundary(() => ({ exitCode: 1, out: '', err: 'cannot read store' }));
     expect(await createLimaProvider(executor).inspect(resource)).toMatchObject({ availability: 'unavailable' });

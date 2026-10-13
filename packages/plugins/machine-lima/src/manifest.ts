@@ -6,12 +6,13 @@ import {
   defineMachineProvisionerSchemas,
   MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerCheckResultV1Schema,
   MachineProvisionerNativeExecResultV1Schema, MachineProvisionerObservationV1Schema,
+  MachineProvisionerOptionsResultV1Schema,
   MachineProvisionerPowerResultV1Schema, MachineProvisionerPutFileResultV1Schema,
 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import type { MachineProvisionerAuthorDefinitionV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createLimaSdkExecutor } from './machine/nativeExecutor.js';
 import { createLimaProvider, LIMA_DEPENDENCY_ID, LIMA_PLUGIN_ID, LIMA_PROVISIONER_ID, LIMA_QEMU_DEPENDENCY_IDS } from './machine/provider.js';
-import { LimaLaunchSchema, LimaResourceSchema } from './machine/schemas.js';
+import { LimaLaunchSchema, LimaOptionsInputSchema, LimaResourceSchema } from './machine/schemas.js';
 
 export const LIMA_ROLE_SCHEMAS = defineMachineProvisionerSchemas({ launch: LimaLaunchSchema, resource: LimaResourceSchema });
 const processAccess = 'lima-process';
@@ -50,7 +51,7 @@ export const LIMA_MACHINE_PROVISIONER = {
   prerequisites: [{ kind: 'managedDependency', id: LIMA_DEPENDENCY_ID }],
   billing: { location: 'local', stoppedBilling: 'not-billed' },
   retention: { supportedIntents: ['start', 'stop', 'delete'] },
-  actions: { check: 'check', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy' },
+  actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy' },
   bootstrapTransport: { kind: 'native', exec: 'exec', putFile: 'put-file' },
 } satisfies MachineProvisionerAuthorDefinitionV1;
 
@@ -93,6 +94,23 @@ export const LIMA_PLUGIN = definePlugin({
         try { return machineCheckPresentation(await (await provider(context)).check()); }
         catch (error) { return machineCheckPresentation({ available: false, code: errorCode(error) }); }
       },
+    },
+    options: {
+      ...actionDefaults, title: 'Read Lima launch choices', dangerLevel: 'safe',
+      inputSchema: LimaOptionsInputSchema, resultSchema: MachineProvisionerOptionsResultV1Schema,
+      inputHints: { fields: [
+        { path: 'instance', title: 'Instance name', widget: 'text', required: true },
+        { path: 'store', title: 'Lima store', widget: 'text', required: true },
+        { path: 'image', title: 'Image location', widget: 'text', required: true },
+        { path: 'arch', title: 'Architecture', widget: 'select', required: true, requireExplicitSelection: true,
+          options: [{ value: 'x86_64', label: 'x86_64' }, { value: 'aarch64', label: 'aarch64' }] },
+        { path: 'vmType', title: 'VM driver', widget: 'select', required: true, requireExplicitSelection: true,
+          options: [{ value: 'qemu', label: 'QEMU' }, { value: 'vz', label: 'VZ' }] },
+        { path: 'cpus', title: 'CPU cores', widget: 'integer', required: true },
+        { path: 'memoryGiB', title: 'Memory (GiB)', widget: 'integer', required: true },
+        { path: 'diskGiB', title: 'Disk (GiB)', widget: 'integer', required: true },
+      ] },
+      async run(input, context) { return (await provider(context)).options(input); },
     },
     acquire: {
       ...actionDefaults, title: 'Acquire Lima guest', dangerLevel: 'writesLocal',

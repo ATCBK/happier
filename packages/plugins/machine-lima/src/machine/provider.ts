@@ -4,7 +4,8 @@ import {
   validateLimaStore,
 } from '@happier-dev/cli-common/machineLima';
 import type { LimaCommandResult, LimaExecutor, LimaInstance } from '@happier-dev/cli-common/machineLima';
-import { LimaLaunchSchema, LimaResourceSchema } from './schemas.js';
+import type { MachineProvisionerOptionsResultV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
+import { LimaLaunchSchema, LimaOptionsInputSchema, LimaResourceSchema } from './schemas.js';
 import type { LimaLaunch, LimaResource } from './schemas.js';
 
 export const LIMA_PLUGIN_ID = 'happier.machine.lima';
@@ -65,6 +66,10 @@ function buildCreateArgs(launch: LimaLaunch) {
 
 export function createLimaProvider<TResult extends LimaCommandResult>(executor: LimaExecutor<TResult>, observedAt = Date.now(),
   qemuAvailable?: (dependencyId: string) => Promise<boolean>) {
+  async function nativeVersionAvailable() {
+    const version = await runLimaCommand({ executor, args: ['--version'] });
+    return version.exitCode === 0 && limaVersionAtLeast(parseLimaVersion(version.out || version.err));
+  }
   async function nativeInfo() {
     const info = await inspectLimaCapabilities({ executor });
     if ((info.hostOS !== 'darwin' && info.hostOS !== 'linux')
@@ -81,6 +86,16 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
       id: { pluginId: LIMA_PLUGIN_ID, localId: dependencyId } }, status: readiness[index] ? 'available' as const : 'unavailable' as const })),
       ...(available ? {} : { code: 'qemu_unavailable' }) };
   }
+  async function launchAvailability(launch: LimaLaunch) {
+    const info = await nativeInfo();
+    // Native VZ cannot emulate the other architecture. QEMU qualification is
+    // per selected guest architecture, not inferred from the controller's CPU.
+    if (!info.vmTypes.includes(launch.vmType)
+      || (launch.vmType === 'vz' && (info.hostOS !== 'darwin' || launch.arch !== info.hostArch))) {
+      return { available: false, code: 'lima_driver_unavailable' };
+    }
+    return launch.vmType === 'qemu' ? requireQemu(launch.arch) : { available: true };
+  }
   async function inspectExact(rawResource: LimaResource) {
     const resource = LimaResourceSchema.parse(rawResource);
     validateLimaStore(resource.store);
@@ -93,8 +108,7 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
   return {
     async check() {
       try {
-        const version = await runLimaCommand({ executor, args: ['--version'] });
-        if (version.exitCode !== 0 || !limaVersionAtLeast(parseLimaVersion(version.out || version.err))) {
+        if (!await nativeVersionAvailable()) {
           return { available: false, code: 'lima_2_required' };
         }
         const info = await nativeInfo();
@@ -105,17 +119,32 @@ export function createLimaProvider<TResult extends LimaCommandResult>(executor: 
         return info.vmTypes.includes('vz') ? { available: true } : { available: false, code: 'vz_driver_unavailable' };
       } catch { return { available: false, code: 'lima_unavailable' }; }
     },
+    async options(rawQuery: unknown): Promise<MachineProvisionerOptionsResultV1> {
+      const query = LimaOptionsInputSchema.parse(rawQuery);
+      // The existing product create recipe uses --mount-none. Preserve every
+      // explicitly reviewed mount; omitted mounts keep that no-mount default.
+      const parsed = LimaLaunchSchema.safeParse({ ...query, mounts: query.mounts ?? [] });
+      if (!parsed.success) return { choices: [] };
+      const launch = parsed.data;
+      validateLimaStore(launch.store);
+      const availability = await nativeVersionAvailable() ? await launchAvailability(launch) : { available: false };
+      return { choices: [{ id: launch.instance, title: launch.instance, available: availability.available,
+        ...(availability.available ? { launch } : {}),
+        nativeFacts: {
+          size: { id: `${launch.cpus}/${launch.memoryGiB}/${launch.diskGiB}`, title: launch.instance,
+            cpuCores: launch.cpus, memoryBytes: launch.memoryGiB * gib, diskBytes: launch.diskGiB * gib },
+          image: { id: launch.image, title: launch.image },
+        },
+      }] };
+    },
     async acquire(rawLaunch: LimaLaunch) {
       const launch = LimaLaunchSchema.parse(rawLaunch);
       validateLimaStore(launch.store);
       const expected = expectedResource(launch);
       try {
-        const info = await nativeInfo();
-        if (!info.vmTypes.includes(launch.vmType) || (info.hostOS === 'linux' && launch.vmType !== 'qemu')) {
-          throw Object.assign(new Error('reviewed native VM driver unavailable'), { code: 'lima_driver_unavailable' });
-        }
-        if (launch.vmType === 'qemu' && !(await requireQemu(launch.arch)).available) {
-          throw Object.assign(new Error('reviewed architecture QEMU executable unavailable'), { code: 'qemu_unavailable' });
+        const availability = await launchAvailability(launch);
+        if (!availability.available) {
+          throw Object.assign(new Error('reviewed native launch unavailable'), { code: 'code' in availability ? availability.code : 'lima_driver_unavailable' });
         }
         const created = await createLimaInstance({ executor, ...launch, createArgs: buildCreateArgs(launch) });
         if (!sameCreationFacts(created.instance, expected)) {
