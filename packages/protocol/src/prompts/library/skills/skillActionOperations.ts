@@ -139,13 +139,15 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     const store: PromptLibraryArtifactStore = { ...port.store, create: port.store.create ? input => port.store.create!({ ...input, header: { ...input.header, skillLock: lock } }) : undefined };
     const created = await createPromptBundleInLibrary({ store, request: { title: name, bundleSchemaId: 'skills.skill_md_v1', entries: files,
       origin: provenance.kind === 'written' ? 'user' : 'imported' }, nowMs, signal });
-    let artifact: PromptLibraryStoredArtifact | null;
+    let revision = created.revision;
     const unreadable = () => new SkillAcknowledgedFailureV1('created_skill_unreadable', { skillIds: [created.artifactId],
       incomplete: reach.rules.length ? [{ skillId: created.artifactId, step: 'rules' }] : reach.includeInSessionId ? [{ skillId: created.artifactId, step: 'session_include' }] : [] });
-    try { artifact = await port.store.read(created.artifactId, signal ? { signal } : undefined); }
-    catch { throw unreadable(); }
-    if (!artifact) throw unreadable();
-    const base = { ok: true as const, skillId: created.artifactId, revision: encodeSkillRevisionV1(artifact.revision), includedInSessionId: null as string | null };
+    if (!revision) {
+      try { revision = (await port.store.read(created.artifactId, signal ? { signal } : undefined))?.revision; }
+      catch { throw unreadable(); }
+    }
+    if (!revision) throw unreadable();
+    const base = { ok: true as const, skillId: created.artifactId, revision: encodeSkillRevisionV1(revision), includedInSessionId: null as string | null };
     if (reach.rules.length) {
       try { const result = await mutateSkillRulesV1(port.skillRules, { items: [{ skillId: base.skillId }], change: { kind: 'replace', rules: reachRulesToDraftsV1(reach.rules) } }, signal);
         if (!result.ok) return { ...base, incomplete: 'rules' as const }; }

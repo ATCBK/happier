@@ -74,7 +74,7 @@ export type PromptLibraryArtifactStore = Readonly<{
     header: Readonly<Record<string, unknown>>;
     body: string;
     signal?: AbortSignal;
-  }>): Promise<string>;
+  }>): Promise<string | Readonly<{ artifactId: string; revision: PromptLibraryStoredArtifact['revision'] }>>;
   delete?(input: Readonly<{ artifactId: string; expectedRevision: PromptLibraryStoredArtifact['revision']; signal?: AbortSignal }>): Promise<void>;
 }>;
 
@@ -259,7 +259,8 @@ export async function createMemoryDocInLibrary(params: MemoryFactAuthorParams & 
   const body = MemoryDocBodyV1Schema.parse(appendMemoryFact({ v: 1, index: [], topics: [] }, fact, params.request.topic));
   const header = MemoryDocArtifactHeaderV1Schema.parse({ v: 1, kind: 'memory_doc.v1', title: params.request.title });
   throwIfAborted(params.signal);
-  const artifactId = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const created = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const artifactId = typeof created === 'string' ? created : created.artifactId;
   return { ok: true, artifactId, factId: fact.id };
 }
 
@@ -414,7 +415,8 @@ export async function createPromptDocInLibrary(params: Readonly<{
     ...(params.request.favorite !== undefined ? { favorite: params.request.favorite } : {}),
   });
   const body = PromptDocBodyV1Schema.parse({ v: 1, markdown: params.request.markdown, createdAtMs: now, updatedAtMs: now });
-  const artifactId = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const created = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const artifactId = typeof created === 'string' ? created : created.artifactId;
   if (params.request.folderId != null || normalizePromptTags(params.request.tags).length > 0) {
     await persistPromptArtifactOrganizationV1({ store: params.store, artifactId, request: params.request, signal: params.signal });
   }
@@ -427,7 +429,7 @@ export async function createPromptBundleInLibrary(params: Readonly<{
     folderId?: string | null; tags?: readonly string[]; origin?: 'built_in' | 'user' | 'imported' }>;
   nowMs?: () => number;
   signal?: AbortSignal;
-}>): Promise<Readonly<{ ok: true; artifactId: string }>> {
+}>): Promise<Readonly<{ ok: true; artifactId: string; revision?: PromptLibraryStoredArtifact['revision'] }>> {
   throwIfAborted(params.signal);
   if (!params.store.create) throw new Error('prompt_bundle_create_unavailable');
   const hasOrganization = params.request.folderId != null || normalizePromptTags(params.request.tags).length > 0;
@@ -439,9 +441,12 @@ export async function createPromptBundleInLibrary(params: Readonly<{
   const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: params.request.title,
     bundleSchemaId: params.request.bundleSchemaId, origin: params.request.origin ?? 'user', locked: false });
   throwIfAborted(params.signal);
-  const artifactId = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
-  if (hasOrganization) await persistPromptArtifactOrganizationV1({ store: params.store, artifactId, request: params.request, signal: params.signal });
-  return { ok: true, artifactId };
+  const created = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const artifactId = typeof created === 'string' ? created : created.artifactId;
+  const revision = typeof created === 'string' ? undefined : created.revision;
+  if (hasOrganization) await persistPromptArtifactOrganizationV1({ store: params.store, artifactId, request: params.request, signal: params.signal,
+    ...(revision ? { contentRevision: revision } : {}) });
+  return { ok: true, artifactId, ...(revision ? { revision } : {}) };
 }
 
 export async function setPromptDocFavorite(params: Readonly<{

@@ -51,7 +51,7 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
       fetchRegistrySkillFiles: registry.filesForPointer, readLinkSkills: registry.readLinkSkills, fetchLinkSkillFiles: registry.fetchLinkSkillFiles } : {}),
     includeInSession: async (sessionId, id) => { if (failSession) return { ok: false }; includes.set(sessionId, [...(includes.get(sessionId) ?? []), id]); order.push('session'); return { ok: true }; },
   });
-  return { execute, store, artifacts, includes, order, rules: () => rules, setRules: (value: SkillRuleV1[]) => { rules = value; }, creates: () => creates, usage: (value: Record<string, number>) => { usage = value; },
+  return { execute, store, skillRules, artifacts, includes, order, rules: () => rules, setRules: (value: SkillRuleV1[]) => { rules = value; }, creates: () => creates, usage: (value: Record<string, number>) => { usage = value; },
     usageUnavailable: () => { usageUnavailable = true; },
     failCreateAt: (value: number) => { failCreateAt = value; },
     failCreatedRead: (value: boolean) => { failCreatedRead = value; },
@@ -59,6 +59,30 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it.each([false, true])('keeps the acknowledged creation revision without a readback, including incomplete rules (%s)', async failRules => {
+    const h = harness(); h.failRules(failRules);
+    // Artifact persistence can acknowledge a current non-initial revision.
+    // No second content observation is needed to report that durable receipt.
+    const revision = { headerVersion: 3, bodyVersion: 7 };
+    const store = { ...h.store,
+      create: async (input: Parameters<NonNullable<PromptLibraryArtifactStore['create']>>[0]) => {
+        const created = await h.store.create!(input);
+        const artifactId = typeof created === 'string' ? created : created.artifactId;
+        const artifact = h.artifacts.get(artifactId)!;
+        h.artifacts.set(artifactId, { ...artifact, revision });
+        return { artifactId, revision };
+      },
+      read: async () => { throw new Error('Creation receipt must not await readback'); },
+    };
+    const execute = createSkillActionExecuteV1({ store, skillRules: h.skillRules, randomId: () => 'rule', nowMs: () => 1,
+      includeInSession: async () => ({ ok: true }) });
+    const output = await execute('skills.duplicate', { skillId: FIRST_PARTY_SKILLS_V1[0]!.skillId }, { surface: 'ui' });
+    expect(output).toEqual({ ok: true, skillId: 'skill-1', revision: '3:7', includedInSessionId: null,
+      ...(failRules ? { incomplete: 'rules' } : {}) });
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(output);
+    expect(h.order).toEqual(failRules ? ['content'] : ['content', 'rules']);
+    expect(h.rules()).toEqual(failRules ? [] : [expect.objectContaining({ skillId: result.skillId, enabled: true })]);
+  });
   it('opens independent listed skills together, so a slow content read does not gate the next skill', async () => {
     const h = harness();
     await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' });
