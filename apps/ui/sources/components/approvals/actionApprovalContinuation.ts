@@ -284,11 +284,21 @@ function inspectActionApprovalRequest<TActionId extends ActionId>(input: Readonl
     const parsed = approvalArtifactBodyMatchesHeaderV1(input.artifact.header ?? {}, input.artifact.body);
     if (!parsed || parsed.family !== 'built_in' || parsed.request.v !== 2) return { kind: 'invalid_artifact' };
     const request = parsed.request;
+    const origin = request.executionOriginV1;
+    const binding = origin.externalActionExecutionAuthorization?.binding;
+    // An Account UI request can retain its admitted automation ceiling on the
+    // daemon. Observing its exact receipt neither grants nor changes authority.
+    const signedAccountUiOrigin = binding && 'authentication' in binding
+        && binding.authentication.kind === 'account'
+        && !binding.sessionActionOrigin && !binding.workflowActionOrigin;
+    // The daemon's device-local profile id is not an app profile id. The stored
+    // portable Home identity is already bound to the signed originating root.
+    const originHomeId = origin.serverIdentityId ?? origin.serverId;
     if (
         request.actionId !== input.actionId
         || request.executionOriginV1.actionId !== input.actionId
         || (input.expectedExecutionOriginCanonical === undefined && (
-            request.executionOriginV1.authority !== 'present_user'
+            (origin.authority !== 'present_user' && !signedAccountUiOrigin)
             || request.executionOriginV1.surface !== 'ui'
             || request.requestedSurface !== 'ui'
             || request.executionOriginV1.caller.kind !== 'host'
@@ -303,9 +313,9 @@ function inspectActionApprovalRequest<TActionId extends ActionId>(input: Readonl
             && request.executionOriginV1.requestId !== input.expectedRequestId
         )
         || (
-            request.executionOriginV1.serverId !== input.scope.serverId
+            originHomeId !== input.scope.serverId
             && !areServerProfileIdentifiersEquivalent(
-                request.executionOriginV1.serverId,
+                originHomeId,
                 input.scope.serverId,
             )
         )

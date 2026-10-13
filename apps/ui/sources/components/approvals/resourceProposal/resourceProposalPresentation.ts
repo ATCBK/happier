@@ -1,4 +1,5 @@
 import type { ApprovalRequest } from '@happier-dev/protocol';
+import type { MachineGuardLadderV1 } from '@happier-dev/protocol/machines/guard/guardViewV1';
 import {
   MachineProcessesActionResultV1Schema,
   MachineProcessesCleanUpResultV1Schema,
@@ -30,6 +31,8 @@ export type ResourceProposalItemFacts = Readonly<{
   /** On disk when that is more than it gives back ("7.1 GB of 9.8 GB on disk"). */
   onDiskBytes: number | null;
   loses: readonly StorageReasonV1[];
+  /** The canonical planner's reason this proposed session is kept, not a proposal-side heuristic. */
+  keptByGuard?: MachineGuardLadderV1['excluded'][number];
   /** Any fact differs from what the agent claimed when it proposed. */
   changed: boolean;
 }>;

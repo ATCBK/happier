@@ -1,9 +1,11 @@
 import * as React from 'react';
+import { router } from 'expo-router';
 
 import { createActionApprovalContinuationObserver, type ActionApprovalRegistration } from './actionApprovalContinuation';
 import { useApprovalArtifact } from './useApprovalArtifact';
 import { readApprovalPreviewSummary } from './ApprovalPreviewCard';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { buildApprovalHref } from './approvalNavigation';
 
 const PENDING_STATUSES = new Set(['open', 'approved', 'executing']);
 const TERMINAL_STATUSES = new Set(['executed', 'rejected', 'failed', 'canceled']);
@@ -13,6 +15,8 @@ export function useActionApprovalContinuation(input: Readonly<{
     scopeKey: string;
     serverId: string;
     onExecuted: () => void;
+    /** Direct controls without an inline decision surface open the existing Inbox review. */
+    openOnRequest?: boolean;
 }>) {
     const onExecutedRef = React.useRef(input.onExecuted);
     onExecutedRef.current = input.onExecuted;
@@ -35,8 +39,15 @@ export function useActionApprovalContinuation(input: Readonly<{
         };
     }, [observer]);
     const requestApproval = React.useCallback((registration: ActionApprovalRegistration) => {
-        if (currentObserver.current === observer) observer.requestApproval(registration);
-    }, [observer]);
+        if (currentObserver.current !== observer) return;
+        const previous = observer.getSnapshot().approval?.artifactId;
+        observer.requestApproval(registration);
+        const registered = observer.getSnapshot().approval;
+        if (input.openOnRequest && registered && registered.artifactId !== previous) {
+            const serverId = registered.continuation?.scope?.serverId ?? input.serverId;
+            router.push(buildApprovalHref(registered.artifactId, serverId) as Parameters<typeof router.push>[0]);
+        }
+    }, [observer, input.openOnRequest, input.serverId]);
     const { approval, settlement } = React.useSyncExternalStore(observer.subscribe, observer.getSnapshot, observer.getSnapshot);
     const approvalId = approval?.artifactId ?? null;
     const artifactScope = approval?.continuation?.scope;

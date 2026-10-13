@@ -7,6 +7,8 @@ import {
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import {
     AgentsAcpBackendsUpsertOutputV1Schema,
     applyAcpBackendUpsertV1,
@@ -97,6 +99,7 @@ function failedArtifact(overrides?: Readonly<{
     errorCode?: string;
     error?: string;
     details?: unknown;
+    executionOrigin?: ApprovalRequestV2['executionOriginV1'];
 }>): ReadableArtifact {
     const requestActionId = overrides?.actionId ?? actionId;
     const request: ApprovalRequestV2 = {
@@ -106,7 +109,7 @@ function failedArtifact(overrides?: Readonly<{
         updatedAtMs: 2,
         createdBy: { surface: 'system' },
         requestedSurface: 'ui',
-        executionOriginV1: {
+        executionOriginV1: overrides?.executionOrigin ?? {
             v: 1,
             authority: 'present_user',
             surface: 'ui',
@@ -189,6 +192,46 @@ describe('createHomeActionApprovalContinuation', () => {
             await createActionApprovalContinuation({ artifactId: 'approval-1', actionId: boardActionId,
                 scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
             expect(onSucceeded).not.toHaveBeenCalled();
+            expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+        }
+    });
+    it('delivers the recorded finite refusal from an Account UI root on a daemon-local Home profile', () => {
+        const scriptInput = { workspace: { serverId: 'srv_home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/project' },
+            selection: { kind: 'named', name: 'lint' } };
+        const target = { kind: 'machine' as const, machineId: 'machine' };
+        const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'root-token', binding: {
+            accountId: 'account-1', custodianAccountId: 'account-1', authentication: { kind: 'account', tokenEpoch: 1 },
+            accountEncryptionMode: 'plain', serverIdentityId: 'srv_home', machineId: 'machine', installationId: 'installation',
+            actionId: 'projects.script.run', requestId: 'request-1', target,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'request-1', target, input: scriptInput }),
+        } });
+        const origin: ApprovalRequestV2['executionOriginV1'] = { v: 1, authority: 'account_automation', surface: 'ui',
+            caller: { kind: 'host' }, serverId: 'daemon-local-profile', serverIdentityId: 'srv_home', accountId: 'account-1',
+            actionId: 'projects.script.run', requestId: 'request-1', machineId: 'machine', target,
+            externalActionExecutionAuthorization: authorization, externalActionInputSignature: signExternalActionApprovalInputV1({
+                authorizationToken: authorization.token, actionId: 'projects.script.run', input: scriptInput, target,
+                privateKey: new Uint8Array(64),
+            }) };
+        const artifact = failedArtifact({ actionId: 'projects.script.run', actionArgs: scriptInput, executionOrigin: origin,
+            errorCode: 'project_finite_execution_unavailable' });
+        expect(approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body)).toMatchObject({ family: 'built_in' });
+        const onFailed = vi.fn();
+        const create = (serverId = 'srv_home', executionOrigin = origin) => ({
+            continuation: createActionApprovalContinuation({ artifactId: 'approval-1', actionId: 'projects.script.run',
+                scope: { serverId, accountId: 'account-1' }, expectedInput: scriptInput, onSucceeded: vi.fn(), onFailed }),
+            artifact: failedArtifact({ actionId: 'projects.script.run', actionArgs: scriptInput, executionOrigin,
+                errorCode: 'project_finite_execution_unavailable' }),
+        });
+        const matched = create();
+        matched.continuation.onTerminal?.('failed', matched.artifact);
+        expect(onFailed).toHaveBeenCalledWith('project_finite_execution_unavailable', expect.objectContaining({ ok: false }));
+        for (const candidate of [create('srv_other'), create('srv_home', { ...origin,
+            externalActionExecutionAuthorization: undefined, externalActionInputSignature: undefined }),
+            create('srv_home', { ...origin, externalActionExecutionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({
+                ...authorization, binding: { ...authorization.binding, authentication: { kind: 'terminal', tokenEpoch: 1 } },
+            }) })]) {
+            onFailed.mockClear();
+            candidate.continuation.onTerminal?.('failed', candidate.artifact);
             expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
         }
     });

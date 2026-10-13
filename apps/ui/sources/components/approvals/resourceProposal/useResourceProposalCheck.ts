@@ -5,6 +5,7 @@ import type { MachineStorageTrashMoveInputV1, PileApplyResultV1, TrashEmptyResul
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { executeMachineProcessesActionV1, executeMachineProcessesStartAgainV1 } from '@/sync/domains/machines/processes/machineProcessesActions';
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { fetchMachineGuardViewViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
 import type { StoragePileBar } from '@/components/machines/storage/storagePileModel';
 import {
   checkMachineStorageItemsViaAction,
@@ -189,6 +190,11 @@ async function checkProcesses(
       outcome.result,
     );
     if (!parsed.success) return null;
+    const guard = await fetchMachineGuardViewViaAction({
+      machineId: model.machineId, serverId: clients.serverId,
+      expectedAccountId: account.accountId, signal: clients.signal,
+    });
+    if (!guard.ok) return null;
     const facts = new Map<string, ResourceProposalItemFacts>();
     for (const claim of model.items) {
       const check = parsed.data.checks.find(
@@ -198,11 +204,13 @@ async function checkProcesses(
         claim.operand.expect as { level?: unknown } | undefined
       )?.level;
       const present = Boolean(check?.present && check.identityEqual);
+      const keptByGuard = guard.value.ladder.excluded.find(entry =>
+        entry.kind === 'session' && entry.processRef === claim.key);
       facts.set(claim.key, {
         key: claim.key,
         status: present ? 'present' : 'gone',
         verdict:
-          check?.level === 'proven' || check?.level === 'left_behind'
+          keptByGuard ? 'keep' : check?.level === 'proven' || check?.level === 'left_behind'
             ? 'safe'
             : check?.level === 'likely'
               ? 'caution'
@@ -217,6 +225,7 @@ async function checkProcesses(
         bytes: check?.memoryBytes ?? null,
         onDiskBytes: null,
         loses: [],
+        ...(keptByGuard ? { keptByGuard } : {}),
         changed: !present || check?.level !== claimedLevel,
       });
     }
@@ -271,6 +280,7 @@ export function useResourceProposalCheck(
       runRef.current?.abort();
       const controller = new AbortController();
       runRef.current = controller;
+      const previousFacts = new Map(rowsRef.current.map(row => [row.item.key, row.facts]));
       setCheck((previous) => ({
         kind: 'checking',
         previous:
@@ -290,6 +300,19 @@ export function useResourceProposalCheck(
               : { kind: 'unavailable' },
           );
           if (facts) {
+            // Confirmation names a current loss. A different owner/work state needs fresh consent.
+            setConfirmedKeep(current => new Set([...current].filter(key => {
+              const before = previousFacts.get(key);
+              const after = facts.get(key);
+              if (!before || !after || after.status !== 'present' || after.verdict !== 'keep') return false;
+              return before.verdict === after.verdict
+                && JSON.stringify(before.expect) === JSON.stringify(after.expect)
+                && JSON.stringify(before.reason) === JSON.stringify(after.reason)
+                && JSON.stringify(before.loses) === JSON.stringify(after.loses)
+                && before.keptByGuard?.ref === after.keptByGuard?.ref
+                && before.keptByGuard?.label === after.keptByGuard?.label
+                && before.keptByGuard?.reason === after.keptByGuard?.reason;
+            })));
             // A changed item keeps its tick only while it is still something the person can approve.
             setSelection(
               (current) =>
@@ -386,13 +409,12 @@ export function useResourceProposalCheck(
   else display = deriveResourceProposalDisplay(approval, model, check, emptied);
   const selectedCount = rows.filter((row) => row.selected).length;
   const stale = display.kind === 'ask' && display.stale;
-  const firstCheck = check.kind === 'checking' && check.previous === null;
   const batchId = display.kind === 'trashed' ? display.result.batchId : null;
   const scope = {
     machineId: model.machineId,
     ...(serverId ? { serverId } : {}),
   };
-  const approveWithheld = selectedCount === 0 || stale || firstCheck;
+  const approveWithheld = selectedCount === 0 || stale || check.kind !== 'ready';
   const runFromUi = async (keys: ReadonlySet<string> | null): Promise<boolean> => {
     const selectedRows = rowsRef.current.filter((row) => (keys ? keys.has(row.item.key) && row.selectable : row.selected));
     const input = buildResourceProposalNarrowedInput(model, selectedRows.map((row) => ({ ...row, selected: true })));

@@ -74,6 +74,9 @@ function verdictChip(
   actionId: ResourceProposalModel['actionId'],
 ): StorageVerdictChip {
   if (kind === 'processes') {
+    if (verdict === 'keep') return {
+      variant: 'neutral', chrome: 'pill', icon: 'lock', label: t('machineStorage.verdicts.keep'),
+    };
     return verdict === 'safe'
       ? {
           variant: 'success',
@@ -148,7 +151,7 @@ const ProposalRow = React.memo(function ProposalRow(
   const title =
     props.kind === 'storage'
       ? lastSegment(row.item.path)
-      : ownerTitle(row.item);
+      : row.facts?.keptByGuard?.label ?? ownerTitle(row.item);
   const path =
     props.kind === 'storage'
       ? formatPathRelativeToHome(row.item.path)
@@ -169,7 +172,9 @@ const ProposalRow = React.memo(function ProposalRow(
       })
     : null;
   const chip = verdictChip(props.kind, row.verdict, row.reason, props.actionId);
-  const reasonText = row.reason ? storageReasonLabel(row.reason) : null;
+  const reasonText = row.facts?.keptByGuard
+    ? t(`machineGuard.reasons.${row.facts.keptByGuard.reason}`)
+    : row.reason ? storageReasonLabel(row.reason) : null;
   const skipped = props.outcome?.status === 'skipped';
   const skippedReason =
     skipped && props.outcome?.reasonCode
@@ -303,7 +308,8 @@ const ProposalRow = React.memo(function ProposalRow(
               {revealLoss && row.needsConfirm ? (
                 <View style={styles.loss}>
                   <Text style={styles.lossText}>
-                    {describeStorageLosses(
+                    {row.facts?.keptByGuard ? t(props.actionId === 'machines.processes.kill'
+                      ? 'resourceProposal.processKillLoss' : 'resourceProposal.processStopLoss', { title }) : describeStorageLosses(
                       row.facts?.loses.length
                         ? row.facts.loses
                         : row.reason
@@ -591,9 +597,11 @@ export const ResourceProposalBody = React.memo(function ResourceProposalBody(
         </View>
       ) : null}
       {display.kind === 'ask' && controller.check.kind === 'unavailable' ? (
-        <Text testID="resource-proposal-check-unavailable" style={styles.hint}>
-          {t('resourceProposal.checkUnavailable')}
-        </Text>
+        <View testID="resource-proposal-check-unavailable">
+          <Text style={styles.hint}>{t('resourceProposal.checkUnavailable')}</Text>
+          <RoundButton testID="resource-proposal-check-again" size="small" display="secondary"
+            title={t('resourceProposal.checkAgain')} onPress={controller.checkAgain} />
+        </View>
       ) : null}
       {interactive && openCount > 0 ? (
         <View style={styles.allRow}>

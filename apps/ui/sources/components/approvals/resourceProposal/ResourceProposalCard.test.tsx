@@ -14,6 +14,8 @@ import {
   buildApprovalRequestArtifactHeaderV1,
   computeExternalActionRequestEnvelopeDigestV1,
   encodePlainArtifactStoredContent,
+  ExternalActionRequestEnvelopeV1Schema,
+  ExternalActionResponseEnvelopeV1Schema,
   signExternalActionApprovalInputV1,
   type ApprovalRequestV2,
 } from '@happier-dev/protocol';
@@ -24,6 +26,7 @@ import type {
   PileReviewV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import tweetnacl from 'tweetnacl';
+import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
 
 import {
   createHomeGovernanceHarness,
@@ -280,6 +283,7 @@ describe('resource proposal card', () => {
       serverUrl: 'https://proposal-home.example',
       serverIdentityId: 'srv_stable-home-a',
       accountId: 'account-1',
+      currentAccount: true,
     });
     home.answer(homeId, 'GET /v1/machines', {
       body: [
@@ -291,6 +295,13 @@ describe('resource proposal card', () => {
           installationId: 'installation-exact',
         },
       ],
+    });
+    home.answer(homeId, 'POST /v1/actions/approval.request.decide', {
+      select: raw => {
+        const request = ExternalActionRequestEnvelopeV1Schema.parse(raw);
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+          requestId: request.requestId, execution: { ok: true, result: { status: 'executed' } } }) };
+      },
     });
     storage.setState({
       sessions: {
@@ -346,6 +357,8 @@ describe('resource proposal card', () => {
         }
         case RPC_METHODS.MACHINES_PROCESSES_START_AGAIN:
           return { status: 'started' };
+        case RPC_METHODS.MACHINES_GUARD_GET:
+          return createMachineGuardViewFixture();
         case RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE:
           return { outcomes: [{ entryId: 'entry-old-wt', status: 'restored' }] };
         case RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY:
@@ -565,12 +578,12 @@ describe('resource proposal card', () => {
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('resourceProposal.startedAgain'));
   });
 
-  it.each(['machines.processes.kill', 'machines.processes.leftBehind.cleanUp'] as const)('checks and approves only the selected %s references', async (actionId) => {
+  it.each(['machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp'] as const)('checks and approves only the selected %s references', async (actionId) => {
     const refs = ['cHJvYzox', 'cHJvYzoy'];
-    const level = actionId === 'machines.processes.kill' ? 'proven' : 'left_behind';
-    const actionArgs = actionId === 'machines.processes.kill'
-      ? { machineId: MACHINE, tree: true, targets: refs.map(ref => ({ ref, expect: { level } })) }
-      : { machineId: MACHINE, refs };
+    const level = actionId === 'machines.processes.leftBehind.cleanUp' ? 'left_behind' : 'proven';
+    const actionArgs = actionId === 'machines.processes.leftBehind.cleanUp'
+      ? { machineId: MACHINE, refs }
+      : { machineId: MACHINE, ...(actionId === 'machines.processes.kill' ? { tree: true } : {}), targets: refs.map(ref => ({ ref, expect: { level } })) };
     const boundary = daemonRpc.getMockImplementation()!;
     daemonRpc.mockImplementation(async (call) => call.method === RPC_METHODS.MACHINES_PROCESSES_CHECK
       ? { checks: refs.map(ref => ({ ref, present: true, identityEqual: true, level, memoryBytes: GB })) }
@@ -584,9 +597,72 @@ describe('resource proposal card', () => {
     await screen.pressByTestIdAsync('resource-proposal-item-cHJvYzoy');
     await screen.pressByTestIdAsync('approval-prompt-approve');
     await vi.waitFor(() => expect(readApproval()).toMatchObject({ status: 'approved' }));
-    expect((readApproval() as ApprovalRequestV2).decision?.narrowedInput).toEqual(actionId === 'machines.processes.kill'
-      ? { machineId: MACHINE, tree: true, targets: [{ ref: refs[0], expect: { level } }] }
-      : { machineId: MACHINE, refs: [refs[0]] });
+    expect((readApproval() as ApprovalRequestV2).decision?.narrowedInput).toEqual(actionId === 'machines.processes.leftBehind.cleanUp'
+      ? { machineId: MACHINE, refs: [refs[0]] }
+      : { machineId: MACHINE, ...(actionId === 'machines.processes.kill' ? { tree: true } : {}), targets: [{ ref: refs[0], expect: { level } }] });
+  });
+
+  it.each([
+    ['machines.processes.stop', 'working'],
+    ['machines.processes.kill', 'waiting_for_you'],
+  ] as const)('leaves %s %s work unticked until its named-loss confirmation, then admits exactly that consent', async (actionId, reason) => {
+    const ref = 'cHJvYzox';
+    const owner = { kind: 'session' as const, sessionId: 'session-1' };
+    const args = { machineId: MACHINE, ...(actionId === 'machines.processes.kill' ? { tree: true } : {}),
+      targets: [{ ref, expect: { level: 'likely', owner } }] };
+    const guard = createMachineGuardViewFixture();
+    guard.ladder.excluded.push({ ref: 'session:session-1', processRef: ref, kind: 'session',
+      label: 'Upgrade the editor', reason, footprintBytes: GB });
+    const boundary = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => call.method === RPC_METHODS.MACHINES_PROCESSES_CHECK
+      ? { checks: [{ ref, present: true, identityEqual: true, level: 'proven', owner, memoryBytes: GB }] }
+      : call.method === RPC_METHODS.MACHINES_GUARD_GET ? guard : boundary(call));
+    const base = proposal();
+    const request = signed(ApprovalRequestV2Schema.parse({ ...base, actionId, actionArgs: args,
+      executionOriginV1: { ...base.executionOriginV1, actionId } }));
+    const screen = await render(request);
+    await vi.waitFor(() => expect(calls(RPC_METHODS.MACHINES_PROCESSES_CHECK)).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.findByTestId(`resource-proposal-item-${ref}`)).toBeTruthy());
+    await vi.waitFor(() => expect(screen.findByTestId(`resource-proposal-item-${ref}`)?.props.accessibilityState?.checked).toBe(false));
+    expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(true);
+    await screen.pressByTestIdAsync(`resource-proposal-item-${ref}`);
+    expect(screen.getTextContent()).toContain('Upgrade the editor');
+    expect(screen.getTextContent()).toContain(`machineGuard.reasons.${reason}`);
+    expect(screen.getTextContent()).toContain(actionId === 'machines.processes.kill'
+      ? 'resourceProposal.processKillLoss' : 'resourceProposal.processStopLoss');
+    await screen.pressByTestIdAsync(`resource-proposal-include-${ref}`);
+    expect(screen.findByTestId(`resource-proposal-item-${ref}`)?.props.accessibilityState?.checked).toBe(true);
+    // Consent to the old loss must not carry into a different current work state.
+    const nextReason = reason === 'working' ? 'waiting_for_you' : 'working';
+    guard.ladder.excluded[0]!.reason = nextReason;
+    await screen.pressByTestIdAsync('resource-proposal-check-again');
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain(`machineGuard.reasons.${nextReason}`));
+    expect(screen.findByTestId(`resource-proposal-item-${ref}`)?.props.accessibilityState?.checked).toBe(false);
+    await screen.pressByTestIdAsync(`resource-proposal-include-${ref}`);
+    await screen.pressByTestIdAsync('approval-prompt-approve');
+    await vi.waitFor(() => expect(readApproval()).toMatchObject({ status: 'approved' }));
+    expect((readApproval() as ApprovalRequestV2).decision?.narrowedInput).toEqual({ ...args,
+      targets: [{ ref, expect: { level: 'proven', owner } }] });
+    expect(readApproval().actionArgs).toEqual(args);
+  });
+
+  it('withholds a process approval when the canonical current-work facts cannot be checked', async () => {
+    const actionId = 'machines.processes.stop';
+    const args = { machineId: MACHINE, targets: [{ ref: 'cHJvYzox', expect: { level: 'proven' } }] };
+    const boundary = daemonRpc.getMockImplementation()!;
+    let unavailable = true;
+    daemonRpc.mockImplementation(async call => call.method === RPC_METHODS.MACHINES_PROCESSES_CHECK
+      ? { checks: [{ ref: 'cHJvYzox', present: true, identityEqual: true, level: 'proven', memoryBytes: GB }] }
+      : call.method === RPC_METHODS.MACHINES_GUARD_GET && unavailable ? undefined : boundary(call));
+    const base = proposal();
+    const screen = await render(signed(ApprovalRequestV2Schema.parse({ ...base, actionId, actionArgs: args,
+      executionOriginV1: { ...base.executionOriginV1, actionId } })));
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('resourceProposal.checkUnavailable'));
+    expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(true);
+    expect(readApproval().status).toBe('open');
+    unavailable = false;
+    await screen.pressByTestIdAsync('resource-proposal-check-again');
+    await vi.waitFor(() => expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(false));
   });
 
   it('renders cleanup ended/skipped receipts without offering Start again for left-behind work', async () => {
