@@ -4,7 +4,7 @@ import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { AgentMessage, AgentMessageHandler, SessionId } from '@/agent/core/AgentBackend';
-import { isModelOutputSegmentBoundary, reconcileModelOutput, resetModelOutputSegment } from '@/agent/core/reconcileModelOutput';
+import { reconcileModelOutput, resetModelOutputSegment } from '@/agent/core/reconcileModelOutput';
 import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunState } from '@/agent/executionRuns/runtime/executionRunTypes';
 import { computeSidechainStreamText } from '@/agent/executionRuns/runtime/sidechainStreamText';
@@ -30,15 +30,30 @@ function isExecutionRunActivityMessage(msg: AgentMessage): boolean {
   }
 }
 
-function applyModelOutput(ctrl: ExecutionRunBackendController, msg: Extract<AgentMessage, { type: 'model-output' }>) {
+function isModelOutputSegmentBoundary(msg: AgentMessage): boolean {
+  switch (msg.type) {
+    case 'tool-call':
+    case 'tool-result':
+    case 'fs-edit':
+    case 'terminal-output':
+    case 'patch-apply-begin':
+    case 'patch-apply-end':
+      return true;
+    case 'status':
+      return msg.status === 'starting' || msg.status === 'running';
+    default:
+      return false;
+  }
+}
+
+function applyModelOutput(ctrl: ExecutionRunBackendController, msg: Extract<AgentMessage, { type: 'model-output' }>): void {
   const state = {
     turnText: ctrl.buffer,
     segmentText: ctrl.modelOutputSegmentSnapshot ?? '',
   };
-  const change = reconcileModelOutput(state, msg);
+  reconcileModelOutput(state, msg);
   ctrl.buffer = state.turnText;
   ctrl.modelOutputSegmentSnapshot = state.segmentText;
-  return { state, change };
 }
 
 export function createBackendControllerMessageHandler(args: Readonly<{
@@ -93,8 +108,7 @@ export function createBackendControllerMessageHandler(args: Readonly<{
 
     const shouldWriteActivityMarker = isExecutionRunActivityMessage(msg);
 
-    const segmentBoundary = isModelOutputSegmentBoundary(msg);
-    if (segmentBoundary) {
+    if (isModelOutputSegmentBoundary(msg)) {
       const state = {
         turnText: args.ctrl.buffer,
         segmentText: args.ctrl.modelOutputSegmentSnapshot ?? '',
@@ -103,14 +117,23 @@ export function createBackendControllerMessageHandler(args: Readonly<{
       args.ctrl.modelOutputSegmentSnapshot = state.segmentText;
     }
 
-    if (args.ctrl.streamWriter && segmentBoundary) {
+    if (
+      args.ctrl.streamWriter
+      && (
+        msg.type === 'tool-call'
+        || msg.type === 'tool-result'
+        || msg.type === 'fs-edit'
+        || msg.type === 'terminal-output'
+      )
+    ) {
       args.ctrl.streamWriter.flushAll({ reason: 'tool-call-boundary' });
     }
 
     forwarder.forward(msg);
 
     if (msg.type === 'model-output') {
-      const { state, change } = applyModelOutput(args.ctrl, msg);
+      const prevFullText = args.ctrl.buffer;
+      applyModelOutput(args.ctrl, msg);
 
       // Streaming: emit best-effort sidechain transcript updates.
       const streamWriter = args.ctrl.streamWriter;
@@ -125,22 +148,20 @@ export function createBackendControllerMessageHandler(args: Readonly<{
         if (typeof nextStreamText === 'string') {
           const prevStreamText = args.ctrl.sidechainStreamBuffer;
 
-          if (change.kind === 'replace' || !nextStreamText.startsWith(prevStreamText)) {
-            const retainedPrefix = state.turnText.slice(0, state.turnText.length - state.segmentText.length);
-            const retainedStreamText = computeSidechainStreamText(args.intent, retainedPrefix) ?? '';
-            const segmentText = nextStreamText.startsWith(retainedStreamText)
-              ? nextStreamText.slice(retainedStreamText.length)
-              : nextStreamText;
-            if (!streamWriter.overrideAssistantText(segmentText, { sidechainId: args.sidechainId })) {
-              streamWriter.appendAssistantDelta(segmentText, { sidechainId: args.sidechainId });
+          const delta = (() => {
+            if (nextStreamText.startsWith(prevStreamText)) {
+              return nextStreamText.slice(prevStreamText.length);
             }
+
+            // Fallback: if the backend reports cumulative fullText but it diverges (vendor bug/restarts),
+            // emit the delta between previous and current fullText as best-effort.
+            if (args.ctrl.buffer === prevFullText) return '';
+            return nextStreamText;
+          })();
+
+          if (delta && delta.length > 0) {
             args.ctrl.sidechainStreamBuffer = nextStreamText;
-          } else {
-            const delta = nextStreamText.slice(prevStreamText.length);
-            if (delta) {
-              args.ctrl.sidechainStreamBuffer = nextStreamText;
-              streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
-            }
+            streamWriter.appendAssistantDelta(delta, { sidechainId: args.sidechainId });
           }
         }
       }

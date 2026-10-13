@@ -135,6 +135,7 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
     provider: params.provider,
     directory: params.directory,
     happierSessionId: params.session.sessionId,
+    processEnv: params.processEnv,
     session: params.session,
     messageBuffer: params.messageBuffer,
     mcpServers: params.mcpServers,
