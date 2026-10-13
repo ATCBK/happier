@@ -7,7 +7,6 @@ import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/tes
 
 import {
     createPluginSettingsViews,
-    buildDiscoverQueryFilters,
     filterInstalledPlugins,
     groupDiscoverEntriesByShelf,
     projectBrowseShelves,
@@ -1188,15 +1187,6 @@ describe('Browse after the results change under a chosen chip or shelf', () => {
         expect(view.category).toBe('agents');
         expect(view.focusedShelfId).toBeNull();
         expect(view.shelves.map((shelf) => shelf.id)).toEqual(['community-npm']);
-    });
-});
-
-describe('Discover query filters', () => {
-    it('sends no source filter for All, narrows to a source, and resolves one exact listing', () => {
-        expect(buildDiscoverQueryFilters({ sourceId: null })).toEqual({ includeUnavailable: true });
-        expect(buildDiscoverQueryFilters({ sourceId: 's1' })).toEqual({ sourceIds: ['s1'], includeUnavailable: true });
-        expect(buildDiscoverQueryFilters({ sourceId: 's1', pluginId: 'acme.tools' }))
-            .toEqual({ sourceIds: ['s1'], pluginIds: ['acme.tools'], includeUnavailable: true });
     });
 });
 

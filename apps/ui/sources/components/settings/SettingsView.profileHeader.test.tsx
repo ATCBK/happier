@@ -4,11 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
-import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
-const profileState = vi.hoisted(() => ({ value: null as Profile | null }));
-const machinesState = vi.hoisted(() => ({ value: [] as unknown[] }));
+
+// Substitute browser portal placement while keeping the Account menu and entries real.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 const routerPush = vi.hoisted(() => ({ spy: null as null | ((route: unknown) => void) }));
 const navigationState = vi.hoisted(() => ({
     focused: true,
@@ -26,19 +29,7 @@ installSettingsViewCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key: string) => key });
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSetting: (key: string) => {
-                if (key === 'useProfiles') return false;
-                if (key === 'sessionUseTmux') return false;
-                return null;
-            },
-            useEntitlement: () => false,
-            useProfile: () => profileState.value,
-            useAllMachines: () => machinesState.value,
-        });
-    },
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
@@ -118,32 +109,16 @@ vi.mock('expo-constants', () => ({
     default: { expoConfig: { version: '0.0.0-test' } },
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('Item', props, props.children),
-}));
 
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: (props: Record<string, unknown>) => React.createElement('Avatar', props),
-}));
+
+
 
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: (props: Record<string, unknown>) => React.createElement('MachineCliGlyphs', props),
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown>) => React.createElement('Text', props),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
 
 vi.mock('@/components/settings/supportUsBehavior', () => ({
     resolveSupportUsAction: () => 'github',
@@ -196,6 +171,7 @@ vi.mock('@/auth/accountDirectory/accountDirectoryCredentialStorage', () => ({
 }));
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { Avatar } = await import('@/components/ui/avatar/Avatar');
 await import('./SettingsView');
 const { NavigationContext } = await import('@react-navigation/native');
 // The canonical navigator boundary supplies a method bag instead of the native SDK's full route state.
@@ -206,19 +182,27 @@ function NavigationFixture({ children }: React.PropsWithChildren) {
     return <NavigationFixtureContext.Provider value={fixtureNavigation}>{children}</NavigationFixtureContext.Provider>;
 }
 
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
+
 describe('SettingsView profile header', () => {
     beforeEach(() => {
         navigationState.focused = true;
         navigationState.headerRight = null;
-        profileState.value = { ...profileDefaults, id: 'prof_1', name: 'Lee' };
+        storage.setState({ profile: { ...profileDefaults, id: 'prof_1', name: 'Lee' } });
     });
 
     it('renders when the profile has a display name', async () => {
         const { SettingsView } = await import('./SettingsView');
         const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
 
-        expect(screen.findAllByType('Avatar')).toHaveLength(1);
-        expect(screen.findAllByType('Text').some((node) => node.props.children === 'Lee')).toBe(true);
+        expect(screen.findAllByType(Avatar)).toHaveLength(1);
+        expect(screen.getTextContent()).toContain('Lee');
     });
 
     it.each([
@@ -230,16 +214,17 @@ describe('SettingsView profile header', () => {
             expectedName: 'Lee Code',
         },
     ])('shows the canonical Account name or username: $expectedName', async ({ expectedName, ...profile }) => {
-        profileState.value = { ...profileDefaults, id: 'prof_1', ...profile };
+        storage.setState({ profile: { ...profileDefaults, id: 'prof_1', ...profile } });
         const { SettingsView } = await import('./SettingsView');
         const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
 
-        expect(screen.findAllByType('Avatar')).toHaveLength(1);
-        expect(screen.findAllByType('Text').some((node) => node.props.children === expectedName)).toBe(true);
+        expect(screen.findAllByType(Avatar)).toHaveLength(1);
+        expect(screen.getTextContent()).toContain(expectedName);
     });
 
     it('leads to the Account, and leaves the machine count to the Machines section', async () => {
-        machinesState.value = [{ id: 'm1' }, { id: 'm2' }];
+        const machines = [createMachineFixture({ id: 'm1' }), createMachineFixture({ id: 'm2' })];
+        storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])) });
         const push = vi.fn();
         routerPush.spy = push;
         const { SettingsView } = await import('./SettingsView');
@@ -248,11 +233,11 @@ describe('SettingsView profile header', () => {
         expect(screen.findByTestId('settings-overview-machines')).toBeNull();
         screen.pressByTestId('settings-overview-account');
         expect(push).toHaveBeenCalledWith('/settings/account');
-        machinesState.value = [];
+        storage.setState({ machines: {} });
     });
 
     it('names an Account without a name "Your account", with its avatar, on a phone too', async () => {
-        profileState.value = { ...profileDefaults, id: 'prof_1' };
+        storage.setState({ profile: { ...profileDefaults, id: 'prof_1' } });
         const [{ SettingsView }, { NavigationTitleChromeProvider }] = await Promise.all([
             import('./SettingsView'),
             import('@/components/ui/layout/PageHeader'),
@@ -261,8 +246,8 @@ describe('SettingsView profile header', () => {
             <NavigationTitleChromeProvider showsTitle><InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider></NavigationTitleChromeProvider>,
         );
 
-        expect(phone.findAllByType('Avatar')).toHaveLength(1);
-        expect(phone.findAllByType('Text').some((node) => node.props.children === 'accountDisplay.yours')).toBe(true);
+        expect(phone.findAllByType(Avatar)).toHaveLength(1);
+        expect(phone.getTextContent()).toContain('accountDisplay.yours');
         expect(navigationState.headerRight).toEqual(expect.any(Function));
         const header = await renderSettingsView(<>{navigationState.headerRight?.()}</>);
         await header.pressByTestIdAsync('page-header-actions.trigger');

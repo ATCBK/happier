@@ -38,16 +38,6 @@ vi.mock('@/platform/randomUUID', () => ({
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
 }));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-    createBundledPluginUiAppExactArtifactSourceFromInventory: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-}));
 
 // The logo picker reads picked bytes through the platform file API, which has no
 // implementation in this runtime. It is a genuine process boundary, and the

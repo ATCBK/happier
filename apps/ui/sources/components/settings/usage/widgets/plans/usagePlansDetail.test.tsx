@@ -76,7 +76,7 @@ afterEach(async () => {
   restoreFrameBoundary?.();
   execute.mockReset();
   selectionTransport.mockReset();
-  comparisonHome?.dispose(); comparisonHome = undefined;
+  await comparisonHome?.dispose(); comparisonHome = undefined;
   (
     await import('@/sync/domains/scope/activeServerAccountScope')
   ).retireActiveServerAccountScopeLifetime();

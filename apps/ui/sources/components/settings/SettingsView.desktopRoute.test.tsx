@@ -6,32 +6,13 @@ import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers'
 
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
 const routerPushSpy = vi.fn();
-const localSettingsState = vi.hoisted(() => ({
-    value: {} as Record<string, unknown>,
-}));
 
 installSettingsViewCommonModuleMocks({
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key: string) => key });
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useLocalSettings: () => localSettingsState.value,
-            useSetting: (key: string) => {
-                if (key === 'useProfiles') return false;
-                if (key === 'sessionUseTmux') return false;
-                return null;
-            },
-            useEntitlement: () => false,
-            useProfile: () => ({
-                id: 'prof_1',
-                firstName: '',
-                connectedServices: [],
-            }),
-        });
-    },
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
@@ -105,32 +86,16 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('Item', props, props.children),
-}));
 
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: (props: Record<string, unknown>) => React.createElement('Avatar', props),
-}));
+
+
 
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: (props: Record<string, unknown>) => React.createElement('MachineCliGlyphs', props),
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown>) => React.createElement('Text', props),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
 
 vi.mock('@/components/settings/supportUsBehavior', () => ({
     resolveSupportUsAction: () => 'github',
@@ -140,19 +105,22 @@ vi.mock('@/utils/system/bugReportActionTrail', () => ({
     recordBugReportUserAction: vi.fn(),
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
-    return {
-        ...actual,
-        getAvatarUrl: () => null,
-        getBio: () => '',
-    };
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
 });
 
 describe('SettingsView desktop route', () => {
     beforeEach(() => {
         tauriDesktopState.value = true;
-        localSettingsState.value = {};
         routerPushSpy.mockReset();
     });
 

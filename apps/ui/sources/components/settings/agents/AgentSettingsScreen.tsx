@@ -448,6 +448,8 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
         selected: defaultSelection?.ref ?? null,
         title: defaultModelTitle,
         fallbackLabel: t('settingsAgents.detailPage.defaultModelAgentDefault'),
+        clearOptionLabel: t('settingsAgents.detailPage.defaultModelAgentDefault'),
+        clearOptionDescription: t('settingsAgents.detailPage.defaultModelAgentDefaultDescription'),
         enabled: Boolean(providersEnabled && accountSettingsAvailable && providerTargetKey),
     });
     const { setProviderDefaultModelSelection } = useProviderActionClient(accountServerId);
@@ -478,6 +480,11 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
         placeholder: t('settingsAgents.detailPage.defaultModelAgentDefault'),
         secondary: defaultSelection ? defaultModelChoice.presentation.detail ?? null : null,
         secondaryColor: theme.colors.text.secondary,
+        // A page field: it spans the column it sits in, beside the label or beneath it on a phone.
+        fieldSpan: 'column',
+        // A source's model is named only once its projection answers; until then the field keeps its
+        // place with its own quiet bar (no spinner beside it, and the row stays openable).
+        loading: Boolean(defaultSelection?.ref.providerConnectionId) && defaultModelChoice.loading,
     });
     const nativeModels = React.useMemo(() => providerTargetKey ? resolveAgentNativeModels({
         runtimeAgentId: nativeAgentId,
@@ -564,11 +571,12 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                 <Item
                     testID="settings.agents.detail.defaultModel"
                     title={defaultModelTitle}
-                    accessibilityLabel={defaultSelection ? defaultModelChoice.presentation.accessibilityLabel : undefined}
+                    accessibilityLabel={(defaultSelection ? defaultModelChoice.presentation.accessibilityLabel : undefined)
+                        ?? `${defaultModelTitle}: ${defaultSelection ? defaultModelChoice.presentation.subtitle ?? '' : t('settingsAgents.detailPage.defaultModelAgentDefault')}`}
                     accessoryLayout="adaptive"
+                    fieldAccessory
                     showChevron={false}
                     rightElement={defaultModelField}
-                    loading={Boolean(defaultSelection) && defaultModelChoice.loading}
                     disabled={!accountSettingsAvailable}
                     onPress={chooseDefaultModel}
                 />

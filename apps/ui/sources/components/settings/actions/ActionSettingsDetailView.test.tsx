@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen as renderRealScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks, resetSettingsViewCommonModuleMockState } from '../settingsViewTestHelpers';
 import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 import {
@@ -13,38 +13,28 @@ import {
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capture = vi.hoisted(() => ({
-    items: [] as Array<Record<string, unknown>>,
-    searchHeaders: [] as Array<Record<string, unknown>>,
     itemListsWithSearchHeader: 0,
     itemGroupsWithSearchHeader: 0,
     renderOrder: [] as string[],
-    segmentedTabBars: [] as Array<Record<string, unknown>>,
-    dropdownMenus: [] as Array<Record<string, unknown>>,
     rawSettings: { v: 1, actions: {} } as unknown,
     rawPolicy: { v: 1, allowEnvironmentVariables: false, allowCrossMachine: false } as unknown,
     rawAllowLists: { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: null } as unknown,
     setPolicy: vi.fn(),
     setAllowLists: vi.fn(),
     stackOptions: null as Record<string, unknown> | null,
-    switches: [] as Array<Record<string, unknown>>,
     windowWidth: 800,
     routeActionId: 'review.start',
     setRawSettings: vi.fn(),
     reset() {
-        this.items = [];
-        this.searchHeaders = [];
         this.itemListsWithSearchHeader = 0;
         this.itemGroupsWithSearchHeader = 0;
         this.renderOrder = [];
-        this.segmentedTabBars = [];
-        this.dropdownMenus = [];
         this.rawSettings = { v: 1, actions: {} };
         this.rawPolicy = { v: 1, allowEnvironmentVariables: false, allowCrossMachine: false };
         this.rawAllowLists = { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: null };
         this.setPolicy.mockReset();
         this.setAllowLists.mockReset();
         this.stackOptions = null;
-        this.switches = [];
         this.windowWidth = 800;
         this.routeActionId = 'review.start';
         this.setRawSettings.mockReset();
@@ -80,6 +70,10 @@ const daemonProjection = vi.hoisted(() => ({
     },
 }));
 
+// Browser portal placement is a system boundary; the dropdown and option rows remain real.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
+
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => true,
 }));
@@ -95,6 +89,7 @@ installSettingsViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
+            Dimensions: { get: () => ({ width: capture.windowWidth, height: 844, scale: 2, fontScale: 1 }) },
             useWindowDimensions: () => ({
                 width: capture.windowWidth,
                 height: 844,
@@ -141,84 +136,15 @@ installSettingsViewCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/forms/SearchHeader', () => ({
-    SearchHeader: (props: Record<string, unknown>) => {
-        capture.searchHeaders.push(props);
-        capture.renderOrder.push('search');
-        return React.createElement('SearchHeaderMock', props);
-    },
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => {
-        capture.switches.push(props);
-        return React.createElement('Switch', props);
-    },
-}));
 
-vi.mock('@/components/ui/navigation/SegmentedTabBar', () => ({
-    SegmentedTabBar: (props: Record<string, unknown>) => {
-        capture.segmentedTabBars.push(props);
-        return React.createElement('SegmentedTabBar', props);
-    },
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => {
-        capture.dropdownMenus.push(props);
-        return React.createElement('DropdownMenu', props);
-    },
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => {
-        capture.items.push(props);
-        if (typeof props.testID === 'string') {
-            capture.renderOrder.push(props.testID);
-        }
-        return React.createElement('ItemMock', {
-            testID: props.testID,
-        }, props.subtitleAccessory as React.ReactNode, props.rightElement as React.ReactNode);
-    },
-}));
 
-function containsSearchHeaderMock(node: React.ReactNode): boolean {
-    return React.Children.toArray(node).some((child) => {
-        if (!React.isValidElement(child)) {
-            return false;
-        }
-        if (child.type === 'SearchHeaderMock') {
-            return true;
-        }
-        if (typeof child.type === 'function' && child.type.name === 'SearchHeader') {
-            return true;
-        }
-        return containsSearchHeaderMock((child.props as { children?: React.ReactNode }).children);
-    });
-}
 
-vi.mock('@/components/ui/lists/ItemGroup', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/ui/lists/ItemGroup')>(),
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => {
-        if (containsSearchHeaderMock(children)) {
-            capture.itemGroupsWithSearchHeader += 1;
-        }
-        return React.createElement(React.Fragment, null, children);
-    },
-}));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => {
-        if (containsSearchHeaderMock(children)) {
-            capture.itemListsWithSearchHeader += 1;
-        }
-        return React.createElement(React.Fragment, null, children);
-    },
-}));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-}));
+
 
 afterEach(() => {
     standardCleanup();
@@ -232,12 +158,26 @@ afterEach(() => {
 // Resolve the shared catalog/module graph during collection, outside individual
 // interaction-test deadlines; the page and domain logic remain real.
 await import('./ActionSettingsDetailView');
+const { Item } = await import("@/components/ui/lists/Item");
+const { SearchHeader } = await import("@/components/ui/forms/SearchHeader");
+const { Switch } = await import("@/components/ui/forms/Switch");
+const { DropdownMenu } = await import("@/components/ui/forms/dropdown/DropdownMenu");
+const { SegmentedTabBar } = await import("@/components/ui/navigation/SegmentedTabBar");
+let renderedScreen: Awaited<ReturnType<typeof renderRealScreen>> | null = null;
+async function renderScreen(...args: Parameters<typeof renderRealScreen>) {
+    renderedScreen = await renderRealScreen(...args);
+    return renderedScreen;
+}
+function renderedProps(component: React.ElementType): Array<Record<string, unknown>> {
+    return renderedScreen?.findAllByType(component).map(node => node.props) ?? [];
+}
+
 
 describe('ActionSettingsDetailView', () => {
     it('keeps built-in action rows stable when the machine inventory refreshes', async () => {
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
-        await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
-        const renderedItems = capture.items.length;
+        const screen = await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
+        const renderedItems = screen.findAllByType(Item);
 
         await React.act(async () => {
             administrationTargetSelection.controller.setMachines([
@@ -249,7 +189,7 @@ describe('ActionSettingsDetailView', () => {
             selectionKey: 'actions.settings',
             options: { enabled: false },
         });
-        expect(capture.items).toHaveLength(renderedItems);
+        expect(screen.findAllByType(Item)).toEqual(renderedItems);
     });
 
     it('lets the user waive host capture viewing only for the selected plugin', async () => {
@@ -262,7 +202,7 @@ describe('ActionSettingsDetailView', () => {
         administrationTargetSelection.controller.select('machine-a');
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
         await renderScreen(<ActionSettingsDetailContent actionId="capture.view" />);
-        const control = capture.segmentedTabBars.find(bar => (
+        const control = renderedProps(SegmentedTabBar).find(bar => (
             bar.testIDPrefix === 'settings-actions:host-capture:acme.viewer:mode'
         ));
         expect(control?.activeTabId).toBe('ask_first');
@@ -284,39 +224,40 @@ describe('ActionSettingsDetailView', () => {
         });
         // The page opens on the action itself (entity header with its on/off switch); the surface
         // filter sits between the header and the surfaces, outside any section sheet.
-        expect(capture.searchHeaders).toHaveLength(1);
-        expect(capture.itemGroupsWithSearchHeader).toBe(0);
+        expect(renderedProps(SearchHeader)).toHaveLength(1);
+        const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
+        expect(screen.findAllByType(ItemGroup).some(group => group.findAllByType(SearchHeader).length > 0)).toBe(false);
         expect(await screen.findByTestId('settings-actions:action:review.start:summary')).toBeTruthy();
-        const summarySwitch = capture.switches.find((switchProps) =>
+        const summarySwitch = renderedProps(Switch).find((switchProps) =>
             switchProps.testID === 'settings-actions:action:review.start:enabled',
         );
         expect(summarySwitch?.accessibilityLabel).toBe('Start review');
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start:target:cli')).toBe(true);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start:target:api')).toBe(true);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:review.start:target:plugin')).toBe(true);
-        expect(capture.segmentedTabBars.some((bar) =>
+        expect(renderedProps(Item).some((item) => item.testID === 'settings-actions:action:review.start:target:cli')).toBe(true);
+        expect(renderedProps(Item).some((item) => item.testID === 'settings-actions:action:review.start:target:api')).toBe(true);
+        expect(renderedProps(Item).some((item) => item.testID === 'settings-actions:action:review.start:target:plugin')).toBe(true);
+        expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:cli:mode'
             && bar.activeTabId === 'default',
         )).toBe(true);
-        expect(capture.segmentedTabBars.some((bar) =>
+        expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:api:mode'
             && bar.activeTabId === 'default',
         )).toBe(true);
-        expect(capture.segmentedTabBars.some((bar) =>
+        expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:plugin:mode'
             && bar.activeTabId === 'default',
         )).toBe(true);
-        const apiMode = capture.segmentedTabBars.find((bar) =>
+        const apiMode = renderedProps(SegmentedTabBar).find((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:api:mode',
         );
-        const apiRow = capture.items.find((item) =>
+        const apiRow = renderedProps(Item).find((item) =>
             item.testID === 'settings-actions:action:review.start:target:api',
         );
         expect(apiMode?.accessibilityLabel).toBe(apiRow?.title);
-        const commandPaletteSwitch = capture.switches.find((switchProps) =>
+        const commandPaletteSwitch = renderedProps(Switch).find((switchProps) =>
             switchProps.testID === 'settings-actions:action:review.start:target:command_palette:enabled',
         );
-        const commandPaletteRow = capture.items.find((item) =>
+        const commandPaletteRow = renderedProps(Item).find((item) =>
             item.testID === 'settings-actions:action:review.start:target:command_palette',
         );
         expect(commandPaletteSwitch?.accessibilityLabel).toBe(commandPaletteRow?.title);
@@ -327,7 +268,7 @@ describe('ActionSettingsDetailView', () => {
 
         const screen = await renderScreen(<ActionSettingsDetailContent actionId="prompt_doc.update" />);
 
-        const sessionAgentMode = capture.segmentedTabBars.find((bar) =>
+        const sessionAgentMode = renderedProps(SegmentedTabBar).find((bar) =>
             bar.testIDPrefix === 'settings-actions:action:prompt_doc.update:target:agent:mode',
         );
         expect(sessionAgentMode).toBeTruthy();
@@ -344,7 +285,7 @@ describe('ActionSettingsDetailView', () => {
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
         await renderScreen(<ActionSettingsDetailContent actionId="machines.storage.trash.move" />);
 
-        const factIds = capture.items
+        const factIds = renderedProps(Item)
             .map((item) => item.testID)
             .filter((id) => typeof id === 'string' && id.includes(':fact:'));
         expect(factIds).toEqual([
@@ -352,9 +293,9 @@ describe('ActionSettingsDetailView', () => {
             'settings-actions:action:machines.storage.trash.move:fact:forbidden',
             'settings-actions:action:machines.storage.trash.move:fact:trash-first',
         ]);
-        expect(capture.segmentedTabBars.some((bar) => String(bar.testIDPrefix).includes('automations'))).toBe(false);
-        expect(capture.items.find((item) => item.testID === factIds[0])?.rightElement).toBeUndefined();
-        expect(capture.segmentedTabBars.find((bar) =>
+        expect(renderedProps(SegmentedTabBar).some((bar) => String(bar.testIDPrefix).includes('automations'))).toBe(false);
+        expect(renderedProps(Item).find((item) => item.testID === factIds[0])?.rightElement).toBeUndefined();
+        expect(renderedProps(SegmentedTabBar).find((bar) =>
             bar.testIDPrefix === 'settings-actions:action:machines.storage.trash.move:target:agent:mode',
         )?.tabs).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'allowed' })]));
     });
@@ -364,7 +305,7 @@ describe('ActionSettingsDetailView', () => {
 
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
 
-        const cliMode = capture.segmentedTabBars.find((bar) =>
+        const cliMode = renderedProps(SegmentedTabBar).find((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:cli:mode',
         );
         expect(cliMode).toBeTruthy();
@@ -390,15 +331,15 @@ describe('ActionSettingsDetailView', () => {
 
         const screen = await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
 
-        const sessionAgentExposure = capture.dropdownMenus.find((menu) => {
+        const sessionAgentExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:agent:tool-exposure';
         });
-        const mcpExposure = capture.dropdownMenus.find((menu) => {
+        const mcpExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:mcp:tool-exposure';
         });
-        const cliExposure = capture.dropdownMenus.find((menu) => {
+        const cliExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:cli:tool-exposure';
         });
@@ -417,7 +358,7 @@ describe('ActionSettingsDetailView', () => {
             'settings-actions:action:review.start:target:agent:tool-exposure:discoverable_only',
             'settings-actions:action:review.start:target:agent:tool-exposure:direct',
         ]);
-        expect(capture.dropdownMenus.some((menu) => {
+        expect(renderedProps(DropdownMenu).some((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:agent_input_chips:tool-exposure';
         })).toBe(false);
@@ -434,7 +375,7 @@ describe('ActionSettingsDetailView', () => {
 
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
 
-        const sessionAgentExposure = capture.dropdownMenus.find((menu) => {
+        const sessionAgentExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:agent:tool-exposure';
         });
@@ -456,10 +397,8 @@ describe('ActionSettingsDetailView', () => {
                 },
             },
         });
-
-        capture.dropdownMenus = [];
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
-        const resetSessionAgentExposure = capture.dropdownMenus.find((menu) => {
+        const resetSessionAgentExposure = renderedProps(DropdownMenu).find((menu) => {
             const itemTrigger = menu.itemTrigger as { itemProps?: { testID?: string } } | undefined;
             return itemTrigger?.itemProps?.testID === 'settings-actions:action:review.start:target:agent:tool-exposure';
         });
@@ -478,7 +417,7 @@ describe('ActionSettingsDetailView', () => {
 
         await renderScreen(<ActionSettingsDetailContent actionId="session.spawn_new" />);
 
-        const directoryToggle = capture.switches.find((switchProps) =>
+        const directoryToggle = renderedProps(Switch).find((switchProps) =>
             switchProps.testID === 'settings-actions:session-spawn-policy:allowCustomDirectory',
         );
         expect(directoryToggle).toBeTruthy();
@@ -505,7 +444,7 @@ describe('ActionSettingsDetailView', () => {
 
         await renderScreen(<ActionSettingsDetailContent actionId="session.spawn_new" />);
 
-        const environmentToggle = capture.switches.find((switchProps) =>
+        const environmentToggle = renderedProps(Switch).find((switchProps) =>
             switchProps.testID === 'settings-actions:session-spawn-policy:allowEnvironmentVariables',
         );
         expect(environmentToggle?.value).toBe(false);
@@ -523,7 +462,7 @@ describe('ActionSettingsDetailView', () => {
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
         const screen = await renderScreen(<ActionSettingsDetailContent actionId="session.spawn_new" />);
         await screen.pressByTestIdAsync('settings-actions:session-start-allow-lists:agents');
-        const menu = capture.dropdownMenus.find((entry) => entry.testID === 'settings-actions:session-start-allow-lists:agents:menu');
+        const menu = renderedProps(DropdownMenu).find((entry) => entry.testID === 'settings-actions:session-start-allow-lists:agents:menu');
         expect(menu).toBeTruthy();
         const select = menu?.onSelect;
         if (typeof select !== 'function') throw new Error('allow-list selection unavailable');
@@ -538,13 +477,13 @@ describe('ActionSettingsDetailView', () => {
 
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
 
-        const cliTarget = capture.items.find((item) =>
+        const cliTarget = renderedProps(Item).find((item) =>
             item.testID === 'settings-actions:action:review.start:target:cli',
         );
         expect(cliTarget).toBeTruthy();
         expect(cliTarget?.rightElement).toBeFalsy();
         expect(cliTarget?.subtitleAccessory).toBeTruthy();
-        expect(capture.segmentedTabBars.some((bar) =>
+        expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:cli:mode'
             && bar.activeTabId === 'default',
         )).toBe(true);
@@ -588,20 +527,20 @@ describe('ActionSettingsDetailView', () => {
         expect(await screen.findByTestId(
             'settings-actions:action:happier.inspector/actions/self-check:summary',
         )).toBeTruthy();
-        expect(capture.items.some((item) => (
+        expect(renderedProps(Item).some((item) => (
             item.testID === 'settings-actions:action:happier.inspector/actions/self-check:target:api'
         ))).toBe(true);
-        expect(capture.items.some((item) => (
+        expect(renderedProps(Item).some((item) => (
             item.testID === 'settings-actions:action:happier.inspector/actions/self-check:target:plugin'
         ))).toBe(true);
-        expect(capture.items.some((item) => (
+        expect(renderedProps(Item).some((item) => (
             item.testID === 'settings-actions:action:happier.inspector/actions/self-check:target:contextual_ui'
         ))).toBe(true);
         for (const targetId of ['api', 'plugin'] as const) {
-            const target = capture.items.find((item) => (
+            const target = renderedProps(Item).find((item) => (
                 item.testID === `settings-actions:action:happier.inspector/actions/self-check:target:${targetId}`
             ));
-            const modeControl = capture.segmentedTabBars.find((bar) => (
+            const modeControl = renderedProps(SegmentedTabBar).find((bar) => (
                 bar.testIDPrefix === `settings-actions:action:happier.inspector/actions/self-check:target:${targetId}:mode`
             ));
             expect(modeControl?.accessibilityLabel).toBe(target?.title);
@@ -628,6 +567,6 @@ describe('ActionSettingsDetailView', () => {
         await renderScreen(<ActionSettingsDetailView />);
 
         expect(capture.stackOptions?.headerTitle).not.toBe(getActionSpec('devices.simulator.input.orientation').title);
-        expect(capture.items.some((item) => item.testID === 'settings-actions:action:devices.simulator.input.orientation:summary')).toBe(false);
+        expect(renderedProps(Item).some((item) => item.testID === 'settings-actions:action:devices.simulator.input.orientation:summary')).toBe(false);
     });
 });

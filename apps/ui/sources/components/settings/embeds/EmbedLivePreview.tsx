@@ -19,6 +19,13 @@ type PreviewWidth = 'phone' | 'desktop';
 /** The frame widths the toolbar switches between: a phone, and a desktop host column. */
 const PREVIEW_FRAME_WIDTH: Record<PreviewWidth, number> = { phone: 390, desktop: 760 };
 const PREVIEW_HEIGHT_PX = 560;
+/**
+ * The shortest pushed preview page that still shows the whole embed chat: its header strip, the
+ * composer's approval card at its floor (`AgentInput` clamps it to at least 160 px) and the input
+ * with its Send row, measured at 318 px live (UI5, 2026-10-13). A shorter pane (a landscape phone
+ * under the page header) scrolls the page to reach Send instead of clipping it.
+ */
+export const EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX = 320;
 // The empty-state illustration's measure in settings lab L2; its contents are the real preview route.
 const ILLUSTRATION_WIDTH_PX = 294;
 const ILLUSTRATION_HEIGHT_PX = 168;
@@ -39,7 +46,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     page: {
         flex: 1,
-        minHeight: 0,
+        minHeight: EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX,
     },
     pageFrame: {
         flex: 1,
@@ -107,7 +114,7 @@ export function EmbedLivePreview(props: Readonly<{
     // The framed widget carries the width toolbar and preview controls; a full page is only the chat.
     const widget = interactive && !page;
     const [pageHeight, setPageHeight] = React.useState(PREVIEW_HEIGHT_PX);
-    const height = page ? pageHeight : interactive ? PREVIEW_HEIGHT_PX : ILLUSTRATION_HEIGHT_PX;
+    const height = page ? Math.max(pageHeight, EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX) : interactive ? PREVIEW_HEIGHT_PX : ILLUSTRATION_HEIGHT_PX;
     const [columnWidth, setColumnWidth] = React.useState(interactive ? 344 : ILLUSTRATION_WIDTH_PX);
     const [width, setWidth] = React.useState<PreviewWidth>('phone');
     const [reduceMotion, setReduceMotion] = React.useState(false);

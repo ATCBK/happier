@@ -78,31 +78,12 @@ vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
     getPermissionModeOptionsForAgentType: () => [],
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement(
-        React.Fragment,
-        null,
-        props.itemTrigger ? React.createElement('Item', props.itemTrigger) : null,
-        ...(props.items ?? []).map((item: any) => React.createElement('Item', {
-            key: `${props.itemTrigger?.title ?? 'unknown'}:${item.id}`,
-            title: `DropdownItem:${props.itemTrigger?.title ?? 'unknown'}:${item.title}`,
-            subtitle: item.subtitle,
-            onPress: () => props.onSelect?.(item.id),
-        })),
-    ),
-}));
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./PermissionsSettingsView');
 
 describe('PermissionsSettingsView', () => {
     it('does not render new-session shortcut settings', async () => {

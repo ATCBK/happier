@@ -23,11 +23,6 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute:
-        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
-});
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('@react-navigation/native', async importOriginal => ({
     ...await importOriginal<typeof import('@react-navigation/native')>(),
@@ -52,10 +47,10 @@ async function seedDocument(id: string, title: string, folderId: string | null, 
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
     }) });
 }
-afterEach(() => {
+afterEach(async () => {
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
-    fixture?.dispose(); fixture = undefined;
+    await fixture?.dispose(); fixture = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
 });

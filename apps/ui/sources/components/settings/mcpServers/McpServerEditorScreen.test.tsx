@@ -16,13 +16,15 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { SharedSavedSecretCreateInputV1Schema, SharedSavedSecretPromoteInputV1Schema, SHARED_SAVED_SECRET_ACTION_PATHS_V1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema,
     PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
-import { buildApprovalRequestArtifactHeaderV1, StoredApprovalRequestSchema, type ApprovalRequestV2 } from '@happier-dev/protocol';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
@@ -251,10 +253,6 @@ vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', ()
     MachineAdministrationTargetSelector: (props: any) => React.createElement('MachineAdministrationTargetSelector', props),
 }));
 
-vi.mock('@/components/settings/mcpServers/McpValueRefMapEditor', () => ({
-    McpValueRefMapEditor: () => React.createElement('McpValueRefMapEditor'),
-}));
-
 vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => ++uuidBoundary.sequence === 1 ? 'uuid' : `uuid-${uuidBoundary.sequence}`,
 }));
@@ -291,6 +289,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
     accountScope = { serverId: resolveServerProfileScopeId(home), accountId };
     const { storage } = await import('@/sync/domains/state/storageStore');
     let settingsReads = 0;
+    const unhandledRequests: string[] = [];
     onTestFailed(async () => {
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
         console.error('MCP editor boundary refusal', {
@@ -301,6 +300,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
             rowWrites: rowMutationRequests.length, compoundWrites: compoundMutationRequests.length,
             alerts: modalAlertSpy.mock.calls.map(([title, reason]) => ({ title, reason })),
             pushes: routerPushSpy.mock.calls, replacements: routerReplaceSpy.mock.calls,
+            unhandledRequests,
         });
     });
     const machines = liveMachines.map(machine => createMachineFixture({ id: machine.id,
@@ -308,11 +308,12 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
     let settingsVersion = 7;
     let rawSettings: Record<string, unknown> = { userNote: 'unrelated', actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
         actions: {
-            ...(options.ask ? { 'secrets.shared.promote': { approvalRequiredSurfaces: ['ui'] } } : {}),
+            ...(options.ask ? { 'mcp.servers.import': { approvalRequiredSurfaces: ['ui'] } } : {}),
             ...(options.mcpUpdatePolicy === 'disabled' ? { 'mcp.servers.update': { disabledSurfaces: ['ui'] } } : {}),
             ...(options.mcpUpdatePolicy === 'ask' ? { 'mcp.servers.update': { approvalRequiredSurfaces: ['ui'] } } : {}),
         }, approvalWaivedSurfaces: {
             ...(!options.ask ? { 'secrets.shared.promote': ['ui'], 'secrets.shared.create': ['ui'] } : {}),
+            ...(!options.ask ? { 'mcp.servers.import': ['ui'] } : {}),
             'mcp.servers.create': ['ui'], 'mcp.servers.delete': ['ui'],
             ...(!options.mcpUpdatePolicy ? { 'mcp.servers.update': ['ui'] } : {}),
         } }) };
@@ -361,7 +362,15 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
         }
         if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
         if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-        if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: [] });
+        if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(
+            SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: standaloneResourceMutationRequests.map(input => ({
+                resourceId: input.resourceId, encryptionMode: input.encryptionMode,
+                recipientEnvelope: null, storedContent: input.storedContent,
+                entry: { ref: formatSharedSavedSecretRefV1(input.resourceId), source: 'shared_resource',
+                    relationship: 'owner', ownerAccountId: accountId, name: input.displayName, kind: input.kind,
+                    revision: 1, materialStatus: 'ready',
+                    capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+            })) }));
         if (path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create'] && init?.method === 'POST') {
             const input = SharedSavedSecretCreateInputV1Schema.parse(JSON.parse(String(init.body)));
             standaloneResourceMutationRequests.push(input);
@@ -391,6 +400,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
                 }
                 liveMcpSettings = { ...input.content.v, strictMode: false };
                 catalogRevision += 1;
+                if (loseCompoundAcknowledgement) throw new TypeError('Connection lost after the catalog commit');
                 return Response.json({ status: 'updated', revision: catalogRevision, cursor: catalogRevision });
             }
             if (rowMutationRequests.length > 0) await postWriteReadGate;
@@ -400,6 +410,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
             const { strictMode: _strictMode, ...catalog } = liveMcpSettings as Record<string, unknown>;
             return Response.json({ status: 'present', revision: catalogRevision, content: { t: 'plain', v: catalog } });
         }
+        unhandledRequests.push(`${init?.method ?? 'GET'} ${path}`);
         return Response.json({ error: 'not_found' }, { status: 404 });
     };
     setRuntimeFetch(request);
@@ -495,52 +506,41 @@ beforeEach(async () => {
     mcpServersModuleState.routerSearchParams = { serverId: 'server-1' };
 });
 
+/** A Configuration field (the input itself, not its row). */
+function configField(screen: Awaited<ReturnType<typeof renderEditorScreen>>, testID: string) {
+    return screen.findAllByTestId(testID).find((node) => typeof node.props.onChangeText === 'function')!;
+}
+async function typeConfig(screen: Awaited<ReturnType<typeof renderEditorScreen>>, testID: string, text: string) {
+    await act(async () => { configField(screen, testID).props.onChangeText(text); });
+}
+/** Focus leaves the field: a new server keeps the value in its draft; a saved server saves it. */
+async function leaveConfig(screen: Awaited<ReturnType<typeof renderEditorScreen>>, testID: string) {
+    await act(async () => { configField(screen, testID).props.onBlur?.(); });
+}
+
 describe('McpServerEditorScreen', () => {
-    it('saves per-machine configuration while preserving the server reach rules', async () => {
+    it('saves a saved server\'s Configuration when focus leaves a value, keeping its machine differences and reach rules', async () => {
         const configOverrides = [{ target: { t: 'machine', machineId: 'machine-1' }, stdio: { command: 'machine-command' } }];
         const bindings = [{ id: 'binding-1', serverId: 'server-1', target: { t: 'allMachines' }, enabled: false,
             createdAt: 1, updatedAt: 1 }];
         liveMcpSettings = { v: 1, strictMode: false, servers: [{ id: 'server-1', name: 'hard-drives', transport: 'stdio',
             stdio: { command: 'node', args: ['server.js'] }, env: {}, createdAt: 1, updatedAt: 1, configOverrides }], bindings };
         const screen = await renderEditorScreen();
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('hard-drives');
-        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'configuration-edit'); });
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
-        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
-        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
-            servers: [{ name: 'configuration-edit', configOverrides }], bindings,
-        } });
-    });
-
-    it('saves rule-only edits through the rules Action without overwriting the configuration', async () => {
-        const screen = await renderEditorScreen();
-        await act(async () => {
-            screen.findByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' }).props.onValueChange(false);
-        });
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
-        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
-        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
-            servers: [{ name: 'hard-drives', stdio: { command: 'node', args: ['server.js'] } }],
-            bindings: [{ id: 'binding-1', enabled: false }],
-        } });
-    });
-
-    it('finishes combined configuration and rules edits after the acknowledged catalog refresh', async () => {
-        const screen = await renderEditorScreen();
-        postWriteReadGate = new Promise(resolve => { releasePostWriteRead = resolve; });
-        await act(async () => {
-            screen.changeTextByTestId('mcp.server.editor.name', 'combined-edit');
-            screen.findByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' }).props.onValueChange(false);
-        });
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
-        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        const command = () => screen.findAllByTestId('mcp.server.editor.command')
+            .find((node) => typeof node.props.onChangeText === 'function')!;
+        expect(command().props.value).toBe('node');
+        // Typing alone writes nothing; there is no Save on a saved server's page.
+        await act(async () => { command().props.onChangeText('bun'); });
         await flushHookEffects();
-        expect(modalAlertSpy).not.toHaveBeenCalled();
-        await act(async () => { releasePostWriteRead?.(); });
-        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(2));
-        expect(rowMutationRequests[1]?.content).toMatchObject({ t: 'plain', v: {
-            servers: [{ name: 'combined-edit' }], bindings: [{ id: 'binding-1', enabled: false }],
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(screen.findAllByTestId('mcp.server.editor.save')).toHaveLength(0);
+
+        await act(async () => { command().props.onBlur?.(); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
+            servers: [{ name: 'hard-drives', stdio: { command: 'bun', args: ['server.js'] }, configOverrides }], bindings,
         } });
+        await vi.waitFor(() => expect(screen.findAllByTestId('mcp.server.config.saveState').length).toBeGreaterThan(0));
     });
 
     it('keeps a new draft open and dirty until its destination CAS is acknowledged', async () => {
@@ -549,8 +549,9 @@ describe('McpServerEditorScreen', () => {
         const screen = await renderEditorScreen();
         await act(async () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'awaiting-ack');
-            screen.changeTextByTestId('mcp.server.editor.commandLine', 'mcp-server');
         });
+        await typeConfig(screen, 'mcp.server.editor.command', 'mcp-server');
+        await leaveConfig(screen, 'mcp.server.editor.command');
         rowMutationGate = new Promise<void>(resolve => { releaseRowMutation = resolve; });
         try {
             act(() => { screen.pressByTestId('mcp.server.editor.save'); });
@@ -566,22 +567,22 @@ describe('McpServerEditorScreen', () => {
     it('honors the disabled MCP update Action for an ordinary editor Save without writing the row', async () => {
         mcpServersModuleState.routerSearchParams = { serverId: 'server-1' };
         const screen = await renderEditorScreen({ activeAccount: true, mcpUpdatePolicy: 'disabled' });
-        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'disabled-policy-draft'); });
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
+        await typeConfig(screen, 'mcp.server.editor.command', 'disabled-policy-draft');
+        await leaveConfig(screen, 'mcp.server.editor.command');
         await vi.waitFor(() => expect(rowMutationRequests.length + modalAlertSpy.mock.calls.length
             + routerReplaceSpy.mock.calls.length).toBeGreaterThan(0));
         expect(rowMutationRequests).toHaveLength(0);
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'action_disabled');
         expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('disabled-policy-draft');
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('disabled-policy-draft');
         expect(navigationPreventRemove.enabled).toBe(true);
     });
 
     it('opens the original MCP approval while retaining the dirty editor and later edits without replay', async () => {
         mcpServersModuleState.routerSearchParams = { serverId: 'server-1' };
         const screen = await renderEditorScreen({ activeAccount: true, mcpUpdatePolicy: 'ask', hosted: true });
-        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'approved-policy-draft'); });
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
+        await typeConfig(screen, 'mcp.server.editor.command', 'approved-policy-draft');
+        await leaveConfig(screen, 'mcp.server.editor.command');
         await vi.waitFor(() => expect(approvalArtifacts!.list().length + rowMutationRequests.length
             + modalAlertSpy.mock.calls.length + routerReplaceSpy.mock.calls.length).toBeGreaterThan(0));
         expect(approvalArtifacts!.list()).toHaveLength(1);
@@ -593,8 +594,8 @@ describe('McpServerEditorScreen', () => {
         const request = StoredApprovalRequestSchema.parse(JSON.parse(approvalArtifacts!.readPlainBody(artifact.id)!));
         if (request.v !== 2) throw new Error('Expected typed MCP update approval');
         expect(request.actionId).toBe('mcp.servers.update');
-        expect(request.actionArgs).toMatchObject({ expectedRevision: 3, entry: { id: 'server-1', name: 'approved-policy-draft' } });
-        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'later-local-edit'); });
+        expect(request.actionArgs).toMatchObject({ expectedRevision: 3, entry: { id: 'server-1', stdio: { command: 'approved-policy-draft' } } });
+        await typeConfig(screen, 'mcp.server.editor.command', 'later-local-edit');
         unsavedChangesDecision = 'keepEditing';
         await act(async () => {
             const notice = screen.findAll(node => node.props.testID === 'mcp.server.editor.approval'
@@ -605,76 +606,45 @@ describe('McpServerEditorScreen', () => {
             `/inbox/approvals/${encodeURIComponent(artifact.id)}?serverId=${encodeURIComponent(accountScope!.serverId)}`,
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('later-local-edit');
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('later-local-edit');
         // The real Inbox decision executes the captured Action against this
         // HTTP row and publishes its genuine durable approval receipt.
         const decision = await decideApprovalAsInbox(accountScope!.serverId, artifact.id, 'approve');
         expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
         await vi.waitFor(() => expect(catalogRevision).toBe(4));
         expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('later-local-edit');
-        // Reviewing the approval never authorizes abandoning subsequent edits.
-        await act(async () => { expect(await runGuardedNavigation(() => routerBackSpy())).toBe(false); });
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('later-local-edit');
         expect(approvalArtifacts!.list()).toHaveLength(1);
         expect(rowMutationRequests).toHaveLength(1);
         expect(rowMutationRequests[0]?.expectedRevision).toBe(3);
         expect(catalogRevision).toBe(4);
     });
 
-    it('preserves the dirty draft and captured base when another writer moves the destination', async () => {
+    it('saves a typed value against the latest revision when another writer moved the server first', async () => {
         const screen = await renderEditorScreen();
-        await act(async () => { screen.changeTextByTestId('mcp.server.editor.name', 'local-draft'); });
+        await typeConfig(screen, 'mcp.server.editor.command', 'local-draft');
         liveMcpSettings = { v: 1, strictMode: false, servers: [{ id: 'server-1', name: 'remote-edit', transport: 'stdio',
             stdio: { command: 'node', args: ['server.js'] }, env: {}, createdAt: 1, updatedAt: 2 }], bindings: [] };
         catalogRevision = 4;
         await act(async () => { await refreshMcpServerCatalog(accountScope!); });
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('local-draft');
-        act(() => { screen.pressByTestId('mcp.server.editor.save'); });
-        await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalled());
-        // The canonical Action owner observes the moved revision before row CAS.
-        expect(rowMutationRequests).toHaveLength(0);
-        expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('local-draft');
-        expect(navigationPreventRemove.enabled).toBe(true);
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
+        // The typed value survives the other writer's change, which the page now shows.
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('local-draft');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(4);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
+            servers: [{ name: 'remote-edit', stdio: { command: 'local-draft', args: ['server.js'] } }],
+        } });
+        expect(modalAlertSpy).not.toHaveBeenCalled();
     });
 
-    it('replaces to the MCP servers settings screen when cancelling quick install even if a back stack exists', async () => {
-        navigationCanGoBack = true;
-
-        Object.defineProperty(globalThis, 'location', {
-            value: { href: 'http://localhost/settings/mcp-server?addMode=quick-install', pathname: '/settings/mcp-server' },
-            writable: true,
-            configurable: true,
-        });
-        Object.defineProperty(globalThis, 'history', {
-            value: { back: vi.fn() },
-            writable: true,
-            configurable: true,
-        });
-
-        mcpServersModuleState.routerSearchParams = { addMode: 'quick-install', presetId: 'sequential-thinking' };
+    it('prompts to discard an unsaved new server when navigating away via the navigation back action', async () => {
+        // A saved server saves on blur; only a server being added holds unsaved edits.
+        mcpServersModuleState.routerSearchParams = {};
         liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-
         const screen = await renderEditorScreen();
-        vi.useFakeTimers();
-
-        await act(async () => {
-            screen.pressByTestId('mcp.server.quickInstall.cancel');
-            await flushHookEffects({ cycles: 1, turns: 1 });
-        });
-
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp');
-
-        vi.useRealTimers();
-    });
-
-    it('prompts to discard unsaved changes when navigating away via the navigation back action', async () => {
-        const screen = await renderEditorScreen();
-
-        // Save lives in the page header and is offered only once there is something to save.
-        expect(screen.findByTestId('mcp.server.editor.save')?.props.disabled).toBe(true);
+        await typeConfig(screen, 'mcp.server.editor.command', 'node');
+        await leaveConfig(screen, 'mcp.server.editor.command');
 
         await act(async () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'server_edited');
@@ -695,10 +665,14 @@ describe('McpServerEditorScreen', () => {
         expect(navigationDispatchSpy).toHaveBeenCalledWith(action);
     });
 
-    it('saves the draft before completing navigation when the user chooses save in the unsaved-changes prompt', async () => {
+    it('saves a new server before completing navigation when the user chooses save in the unsaved-changes prompt', async () => {
         unsavedChangesDecision = 'save';
+        mcpServersModuleState.routerSearchParams = {};
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
 
         const screen = await renderEditorScreen();
+        await typeConfig(screen, 'mcp.server.editor.command', 'node');
+        await leaveConfig(screen, 'mcp.server.editor.command');
 
         await act(async () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'server_edited');
@@ -715,17 +689,16 @@ describe('McpServerEditorScreen', () => {
         await vi.waitFor(() => expect(navigationDispatchSpy).toHaveBeenCalledWith(action));
         expect(rowMutationRequests).toHaveLength(1);
         expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
-            servers: [{ id: 'server-1', name: 'server_edited' }],
+            servers: [{ name: 'server_edited', stdio: { command: 'node' } }],
         } });
     });
 
     it('falls back to the MCP settings screen after delete when there is no back stack entry', async () => {
         const screen = await renderEditorScreen();
 
-        // Delete is the rare operation in the header's ⋯ menu.
+        // Remove is the page's way out, at its foot.
         await act(async () => {
-            screen.find((node) => node.props?.testID === 'mcp.server.editor.menu' && typeof node.props?.onSelect === 'function')
-                .props.onSelect('delete');
+            screen.pressByTestId('mcp.server.editor.remove');
             await flushHookEffects({ cycles: 1, turns: 1 });
         });
 
@@ -763,12 +736,9 @@ describe('McpServerEditorScreen', () => {
             };
             modalConfirmSpy.mockResolvedValueOnce(false);
             const screen = await renderEditorScreen();
+            await typeConfig(screen, 'mcp.server.editor.command', 'github_renamed_unsaved');
             await act(async () => {
-                screen.changeTextByTestId('mcp.server.editor.name', 'github_renamed_unsaved');
-            });
-            await act(async () => {
-                screen.find((node) => node.props?.testID === 'mcp.server.editor.menu' && typeof node.props?.onSelect === 'function')
-                    .props.onSelect('delete');
+                screen.pressByTestId('mcp.server.editor.remove');
                 await flushHookEffects({ cycles: 1, turns: 1 });
             });
 
@@ -824,15 +794,11 @@ describe('McpServerEditorScreen', () => {
         };
 
         const screen = await renderEditorScreen();
-        await act(async () => {
-            screen.changeTextByTestId('mcp.server.editor.name', 'hard-drives-updated');
-        });
-        await act(async () => {
-            screen.pressByTestId('mcp.server.editor.save');
-        });
+        await typeConfig(screen, 'mcp.server.editor.command', 'bun');
+        await leaveConfig(screen, 'mcp.server.editor.command');
 
         await vi.waitFor(() => expect(setMcpSettingsSpy).toHaveBeenCalled());
-        expect(setMcpSettingsSpy.mock.calls.at(-1)?.[0]).toMatchObject({ servers: [{ name: 'hard-drives-updated' }] });
+        expect(setMcpSettingsSpy.mock.calls.at(-1)?.[0]).toMatchObject({ servers: [{ name: 'hard-drives', stdio: { command: 'bun' } }] });
         expect(setMcpSettingsSpy.mock.calls.at(-1)?.[0]).not.toHaveProperty('futureV2');
         expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
     });
@@ -858,9 +824,8 @@ describe('McpServerEditorScreen', () => {
             transportTabs?.props.onSelectTab?.('http');
         });
 
-        await act(async () => {
-            screen.findByProps({ placeholder: 'https://example.com/mcp' }).props.onChangeText?.('http://127.0.0.1:63254/mcp');
-        });
+        await typeConfig(screen, 'mcp.server.editor.url', 'http://127.0.0.1:63254/mcp');
+        await leaveConfig(screen, 'mcp.server.editor.url');
 
         await act(async () => {
             updateLiveSecrets([{
@@ -874,7 +839,7 @@ describe('McpServerEditorScreen', () => {
         });
 
         expect(screen.findByTestId('mcp.server.editor.name')?.props.value).toBe('qa_remote_http_20260306');
-        expect(screen.findByProps({ placeholder: 'https://example.com/mcp' })?.props.value).toBe('http://127.0.0.1:63254/mcp');
+        expect(configField(screen, 'mcp.server.editor.url').props.value).toBe('http://127.0.0.1:63254/mcp');
         expect(screen.findAllByType('SegmentedTabBar')[1]?.props.activeTabId).toBe('http');
     });
 
@@ -943,7 +908,38 @@ describe('McpServerEditorScreen', () => {
         expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(true);
     });
 
-    it('saves an imported credential and its MCP binding in one transaction without a standalone Settings write', async () => {
+    it('imports JSON without value rows through the canonical Action and catalog owner', async () => {
+        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        const screen = await renderEditorScreen({ activeAccount: true });
+        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
+            one: { command: 'tool', args: ['serve'] },
+        } })); });
+        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
+        expect(rowMutationRequests).toHaveLength(1);
+        expect(standaloneResourceMutationRequests).toHaveLength(0);
+    });
+
+    it('imports a key only after an explicit From the machine choice through the canonical Action', async () => {
+        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        const screen = await renderEditorScreen({ activeAccount: true });
+        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
+            one: { command: 'tool', env: { API_KEY: '${input:token}' } },
+        }, inputs: [{ id: 'token', password: true }] })); });
+        expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(true);
+        const mode = screen.findAllByType('SegmentedTabBar').find(node => node.props.testIDPrefix === 'mcp.server.importInput.token.mode')!;
+        await act(async () => { mode.props.onSelectTab('machineEnv'); });
+        act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
+        expect(rowMutationRequests).toHaveLength(1);
+        expect(standaloneResourceMutationRequests).toHaveLength(0);
+        const committed = rowMutationRequests[0]!.content;
+        expect(committed?.t === 'plain' && committed.v.servers[0]?.env.API_KEY).toEqual({ t: 'literal', v: '${API_KEY}' });
+    });
+
+    it('saves an imported credential through the private secret Action and commits its MCP defaults in one catalog write', async () => {
         mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
         liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
         const screen = await renderEditorScreen({ activeAccount: true });
@@ -959,26 +955,24 @@ describe('McpServerEditorScreen', () => {
         expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(false);
         modalAlertSpy.mockClear();
         await act(async () => { screen.pressByTestId('mcp.server.importJson.import'); });
-        // A refused incumbent save is also a completed observable outcome; it
-        // must not turn this defining compound-write assertion into a setup timeout.
         await vi.waitFor(() => expect(settingsHttpWriteSpy.mock.calls.length + standaloneResourceMutationRequests.length
             + compoundMutationRequests.length + modalAlertSpy.mock.calls.length).toBeGreaterThan(0));
-        expect(compoundMutationRequests).toHaveLength(1);
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
+        expect(compoundMutationRequests).toHaveLength(0);
         expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
-        const input = compoundMutationRequests[0]!;
-        const mutation = McpServerCatalogRowMutationV1Schema.parse(input.catalogMutations?.mcp);
-        expect(input).toMatchObject({ nextSettings: null, profileMutations: [],
-            referenceCensus: { scope: 'catalogs', accountMode: 'plain', catalogs: { mcp: 3 } } });
-        expect(input).not.toHaveProperty('expectedSettingsVersion');
-        if (mutation.content?.t !== 'plain') throw new Error('Expected plain MCP compound content');
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
+        const input = standaloneResourceMutationRequests[0]!;
+        const mutation = rowMutationRequests[0]!;
+        expect(input).toMatchObject({ accountGrants: [], teamGrants: [], groupGrants: [] });
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain MCP catalog content');
         expect(mutation.content.v.servers[0]?.env.GITHUB_TOKEN).toEqual({ t: 'savedSecret', secretId: `happier:shared-secret:v1:${input.resourceId}` });
+        expect(mutation.content.v.bindings).toMatchObject([{ enabled: true, target: { t: 'allMachines' } }]);
         expect(mutation).toMatchObject({ expectedRevision: 3,
             savedSecretRevisions: [{ resourceId: input.resourceId, expectedRevision: 1 }] });
     });
 
-    it('awaits one compound acknowledgement for quick-install credential and selected servers', async () => {
+    it('awaits one catalog acknowledgement for the quick-install credential and selected servers', async () => {
         mcpServersModuleState.routerSearchParams = { addMode: 'quick-install' };
         liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
         const screen = await renderEditorScreen({ activeAccount: true });
@@ -992,13 +986,13 @@ describe('McpServerEditorScreen', () => {
         rowMutationGate = new Promise(resolve => { releaseRowMutation = resolve; });
         modalAlertSpy.mockClear();
         act(() => { screen.pressByTestId('mcp.server.quickInstall.install'); });
-        await vi.waitFor(() => expect(compoundMutationRequests).toHaveLength(1));
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
         expect(routerReplaceSpy).not.toHaveBeenCalled();
         expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
-        const input = compoundMutationRequests[0]!;
-        const mutation = McpServerCatalogRowMutationV1Schema.parse(input.catalogMutations?.mcp);
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(compoundMutationRequests).toHaveLength(0);
+        const input = standaloneResourceMutationRequests[0]!;
+        const mutation = rowMutationRequests[0]!;
         if (mutation.content?.t !== 'plain') throw new Error('Expected plain quick-install catalog');
         expect(mutation.content.v.servers.map(server => server.name).sort()).toEqual(['github', 'sequential_thinking']);
         expect(mutation.content.v.servers.find(server => server.name === 'github')?.env.GITHUB_TOKEN).toEqual({
@@ -1006,7 +1000,7 @@ describe('McpServerEditorScreen', () => {
         });
         releaseRowMutation!();
         await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
-        expect(compoundMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
     });
 
     it('keeps an imported credential Save pending and consumes its original deferred approval without replay', async () => {
@@ -1045,64 +1039,84 @@ describe('McpServerEditorScreen', () => {
         expect(standaloneResourceMutationRequests).toHaveLength(0);
         expect(rowMutationRequests).toHaveLength(0);
         const artifact = approvalArtifacts!.list()[0]!;
-        const bodyVersion = artifact.bodyVersion;
-        if (typeof bodyVersion !== 'number') throw new Error('Expected a versioned original approval body');
         const request = StoredApprovalRequestSchema.parse(JSON.parse(approvalArtifacts!.readPlainBody(artifact.id)!));
-        if (request.v !== 2 || !request.actionArgs || typeof request.actionArgs !== 'object') throw new Error('Expected original compound approval');
-        const resourceId = Reflect.get(request.actionArgs, 'resourceId');
-        if (typeof resourceId !== 'string') throw new Error('Expected original pending resource identity');
-        const settledAt = request.createdAtMs + 1;
-        const settled: ApprovalRequestV2 = { ...request, status: 'executed', updatedAtMs: settledAt,
-            decision: { kind: 'approve', decidedAtMs: settledAt },
-            execution: { ok: true, executedAtMs: settledAt, result: { resourceId, settingsVersion: 7 } } };
-        // Model the Home's terminal Artifact observation, not a direct call into
-        // the pending registration. The actual mounted reader must deliver it.
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        phase = 'publish Home terminal approval observation';
-        await act(async () => { storage.getState().updateArtifact({ id: artifact.id,
-            header: buildApprovalRequestArtifactHeaderV1(settled), body: JSON.stringify(settled),
-            title: null, headerVersion: artifact.headerVersion + 1, bodyVersion: bodyVersion + 1,
-            seq: artifact.seq + 1, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt + 1, isDecrypted: true }); });
+        expect(request.v).toBe(2);
+        expect(JSON.stringify(request)).not.toContain('deferred-import-value');
+        phase = 'approve original live-input custody through the Inbox';
+        expect((await decideApprovalAsInbox(accountScope!.serverId, artifact.id, 'approve')).ok).toBe(true);
         phase = 'await mounted continuation completion';
         await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
         expect(approvalArtifacts!.list()).toHaveLength(1);
         expect(compoundMutationRequests).toHaveLength(0);
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
         expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
     });
 
-    it('retains an imported credential draft after an unknown commit and verifies without replaying Save', async () => {
-        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
+    it.each(['import-json', 'quick-install'] as const)('retains an acknowledged credential across a catalog conflict and retries using its canonical ref (%s)', async addMode => {
+        mcpServersModuleState.routerSearchParams = { addMode };
         liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
         const screen = await renderEditorScreen({ activeAccount: true });
         const source = JSON.stringify({ mcp: {
             inputs: { github_token: { type: 'promptString', password: true } },
             servers: { github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } } },
         } });
-        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', source); });
+        await act(async () => {
+            if (addMode === 'import-json') screen.changeTextByTestId('mcp.server.importJson.input', source);
+            else screen.pressByTestId('mcp.server.quickInstall.preset.github');
+        });
+        const submitId = addMode === 'import-json' ? 'mcp.server.importJson.import' : 'mcp.server.quickInstall.install';
         const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true);
         expect(valueField).toBeTruthy();
         await act(async () => { valueField!.props.onChangeText('unknown-import-value'); });
+        rowMutationOutcome = 'conflict';
+        modalAlertSpy.mockClear();
+        act(() => { screen.pressByTestId(submitId); });
+        await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'mcp_catalog_conflict'));
+        expect(compoundMutationRequests).toHaveLength(0);
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+        if (addMode === 'import-json') expect(screen.findByTestId('mcp.server.importJson.input')?.props.value).toBe(source);
+        expect(screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)?.props.value).toBe('unknown-import-value');
+        await vi.waitFor(() => expect(screen.findByTestId(submitId)?.props.disabled).toBe(false));
+        rowMutationOutcome = 'updated';
+        modalAlertSpy.mockClear();
+        act(() => { screen.pressByTestId(submitId); });
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
+        expect(compoundMutationRequests).toHaveLength(0);
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(2);
+        expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
+        const retried = rowMutationRequests[1]!;
+        if (retried.content?.t !== 'plain') throw new Error('Expected the retried current catalog');
+        expect(retried.content.v.servers[0]?.env.GITHUB_TOKEN).toEqual({ t: 'savedSecret',
+            secretId: `happier:shared-secret:v1:${standaloneResourceMutationRequests[0]!.resourceId}` });
+    });
+
+    it('reobserves an unknown catalog acknowledgement and avoids duplicating the created credential or server', async () => {
+        mcpServersModuleState.routerSearchParams = { addMode: 'import-json' };
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        const screen = await renderEditorScreen({ activeAccount: true });
+        await act(async () => { screen.changeTextByTestId('mcp.server.importJson.input', JSON.stringify({ servers: {
+            github: { command: 'github-mcp', env: { GITHUB_TOKEN: '${input:github_token}' } },
+        }, inputs: [{ id: 'github_token', password: true }] })); });
+        const valueField = screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!;
+        await act(async () => { valueField.props.onChangeText('unknown-import-value'); });
         loseCompoundAcknowledgement = true;
         modalAlertSpy.mockClear();
         act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
         await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'outcome_unknown'));
-        expect(compoundMutationRequests).toHaveLength(1);
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
         expect(routerReplaceSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId('mcp.server.importJson.input')?.props.value).toBe(source);
-        expect(screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)?.props.value).toBe('unknown-import-value');
-        // The resource material boundary intentionally cannot prove the lost
-        // commit. A second click must use the original read-only continuation.
         await vi.waitFor(() => expect(screen.findByTestId('mcp.server.importJson.import')?.props.disabled).toBe(false));
-        modalAlertSpy.mockClear();
         act(() => { screen.pressByTestId('mcp.server.importJson.import'); });
-        await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'outcome_unknown'));
-        expect(compoundMutationRequests).toHaveLength(1);
-        expect(standaloneResourceMutationRequests).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
+        await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/mcp'));
+        expect(standaloneResourceMutationRequests).toHaveLength(1);
+        expect(rowMutationRequests).toHaveLength(1);
+        expect(compoundMutationRequests).toHaveLength(0);
         expect(settingsHttpWriteSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).not.toHaveBeenCalled();
     });
 
     it('allows selecting multiple quick-install presets while preserving required-auth validation', async () => {

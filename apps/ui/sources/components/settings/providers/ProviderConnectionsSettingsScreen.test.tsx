@@ -597,6 +597,19 @@ describe('ProviderConnectionsSettingsScreen', () => {
         expect(findConnectionRow(screen, 'pc_gateway')?.props.selected).toBe(true);
         expect(findConnectionRow(screen, 'pc_gateway')?.props.subtitle).toBe('settingsProvidersCollection.gateway.managedFromConnectedServices');
         expect(findConnectionRow(screen, 'pc_local')?.props.subtitle).not.toBe('settingsProvidersCollection.gateway.managedFromConnectedServices');
+
+        // Where no rail shows, the page keeps the same grouping: gateways in their own titled group.
+        const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
+        const page = await renderScreen(<ProviderConnectionsSettingsScreen variant="page" />);
+        await waitForHomeGovernance(() => expect(findConnectionRow(page, 'pc_gateway')).not.toBeNull());
+        const groupRows = page.findAllByType(ItemGroup).map(group => ({
+            title: group.props.title ?? null,
+            rows: [...new Set(group.findAll(node => typeof node.props?.testID === 'string'
+                && node.props.testID.startsWith('settings-provider-connection:')).map(node => node.props.testID as string))],
+        }));
+        expect(groupRows.find(group => group.title === 'settingsProvidersCollection.gateway.railGroup')?.rows)
+            .toEqual(['settings-provider-connection:pc_gateway']);
+        expect(groupRows.find(group => group.title === null)?.rows).not.toContain('settings-provider-connection:pc_gateway');
     });
 
     it('does not leave a dirty editor when another connection is selected until its guard permits navigation', async () => {

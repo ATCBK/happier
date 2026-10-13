@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPromptDoc } from '@/sync/ops/promptLibrary/promptDocs';
 import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
@@ -40,21 +41,16 @@ vi.mock('@react-navigation/native', async importOriginal => ({
   ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
   usePreventRemove: (prevent: boolean) => { navigation.preventRemove = prevent; },
 }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-  return { ...original, createFrontDoorActionExecute:
-    (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
-});
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 let catalog = createPromptLibraryCatalogBoundary();
 // The browser-hosted Monaco adapter is a platform boundary. With no installed
 // Monaco API it uses its real text-input fallback; draft/save logic stays real.
-beforeEach(() => { vi.stubGlobal('window', {}); navigation.push.mockClear(); navigation.replace.mockClear(); navigation.back.mockClear(); navigation.preventRemove = false; modal.alert.mockClear(); });
-afterEach(() => {
+beforeEach(async () => { await loadSyncSingletonForTests(); vi.stubGlobal('window', {}); navigation.push.mockClear(); navigation.replace.mockClear(); navigation.back.mockClear(); navigation.preventRemove = false; modal.alert.mockClear(); });
+afterEach(async () => {
   resetPromptLibraryCatalogEngineForTests();
   resetPromptLibraryCatalogSnapshotsForTests();
-  fixture?.dispose(); fixture = undefined; vi.unstubAllGlobals();
+  await fixture?.dispose(); fixture = undefined; vi.unstubAllGlobals();
 });
 
 async function home(records: readonly PromptLibraryRecordV1[] = []) {

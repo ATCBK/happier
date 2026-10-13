@@ -35,6 +35,11 @@ vi.mock('@/text', async () => {
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
+vi.mock('@legendapp/list/react-native', async importOriginal =>
+    (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(), renderItems: true,
+    }).module);
+
 // The platform accessibility adapter (native AccessibilityInfo / a web live region).
 const announceAccessibilityMessageSpy = vi.hoisted(() => vi.fn());
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
@@ -46,22 +51,14 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, ...props }: { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/lists/virtualized', () => ({
-    VirtualizedList: (props: Record<string, unknown>) => React.createElement('VirtualizedList', props),
-}));
+
+const { Item } = await import('@/components/ui/lists/Item');
+function findItem(screen: Awaited<ReturnType<typeof renderSettingsView>>, testID: string) {
+    return screen.findAllByType(Item).find(node => node.props.testID === testID) ?? null;
+}
 
 const thirdPartyAgent = {
     pluginId: 'acme.external-sessions',
@@ -178,6 +175,9 @@ function integration(
     } as const;
 }
 
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./ExternalSessionsIntegrationSection');
+
 describe('ExternalSessionsIntegrationSection', () => {
     beforeEach(() => {
         modalMock.spies.confirm.mockClear();
@@ -247,14 +247,14 @@ describe('ExternalSessionsIntegrationSection', () => {
         expect(detail.findRow('settings-external-sessions-integration-selected')).toBeTruthy();
         expect(global.findAllByProps({ testID: 'settings-external-sessions-integration-other-machine' })).toHaveLength(0);
         expect(detail.findAllByProps({ testID: 'settings-external-sessions-integration-other-agent' })).toHaveLength(0);
-        expect(global.findAllByType('Item' as never)
+        expect(global.findAllByType(Item)
             .filter((row) => row.props.testID === 'settings-external-sessions-auto-link-source')
             .map((row) => row.props.subtitle))
             .toEqual([
                 'Selected source · externalSessions.settingsAutoLinkSubtitle',
                 'Other Agent source · externalSessions.settingsAutoLinkSubtitle',
             ]);
-        expect(detail.findAllByType('Item' as never)
+        expect(detail.findAllByType(Item)
             .filter((row) => row.props.testID === 'settings-external-sessions-auto-link-source')
             .map((row) => row.props.subtitle))
             .toEqual([
@@ -276,16 +276,16 @@ describe('ExternalSessionsIntegrationSection', () => {
             />,
         );
 
-        expect(screen.findRow('settings-external-sessions-integration-detailed')?.props.subtitle)
+        expect(findItem(screen,'settings-external-sessions-integration-detailed')?.props.subtitle)
             .toBe('externalSessions.settingsIntegrationStatusNeedsAttention · Approval pending on this machine');
-        const diagnosticRow = screen.findRow(
+        const diagnosticRow = findItem(screen,
             'settings-external-sessions-integration-detailed.diagnostic.agent.hooks.configuration_attention.0',
         );
         expect(diagnosticRow).toBeTruthy();
         expect(diagnosticRow?.props.subtitle.props.children).toContain(
             'Approve this Agent hook configuration, then check again. externalSessions.settingsIntegrationRemediationRetry',
         );
-        expect(screen.findRow('settings-external-sessions-integration-detailed')?.props.title)
+        expect(findItem(screen,'settings-external-sessions-integration-detailed')?.props.title)
             .toBe('Acme Reviewer · externalSessions.settingsIntegrationTitle');
         expect(screen.findAllByProps({
             testID: 'settings-external-sessions-trust-detailed',
@@ -322,7 +322,7 @@ describe('ExternalSessionsIntegrationSection', () => {
             />,
         );
 
-        const actions = screen.findAllByType('Item' as never)
+        const actions = screen.findAllByType(Item)
             .map((item) => String(item.props.subtitleTestID ?? ''))
             .filter((testID) => testID.startsWith('settings-external-sessions-action-row-'))
             .map((testID) => testID.replace('settings-external-sessions-action-row-', ''));
@@ -507,7 +507,7 @@ describe('ExternalSessionsIntegrationSection', () => {
             />,
         );
 
-        const autoLinkRows = screen.findAllByType('Item' as never)
+        const autoLinkRows = screen.findAllByType(Item)
             .filter((row) => row.props.testID === 'settings-external-sessions-auto-link-source');
         expect(autoLinkRows).toHaveLength(1);
         expect(autoLinkRows[0]?.props.title).toBe('Automatically add new Acme Reviewer sessions');
@@ -536,10 +536,10 @@ describe('ExternalSessionsIntegrationSection', () => {
                 agentTitle="Acme Reviewer"
             />,
         );
-        expect(nativeSource.findAllByType('Item' as never)
+        expect(nativeSource.findAllByType(Item)
             .filter((row) => row.props.testID === 'settings-external-sessions-integration-native'))
             .toHaveLength(0);
-        expect(nativeSource.findAllByType('Item' as never)
+        expect(nativeSource.findAllByType(Item)
             .filter((row) => row.props.testID === 'settings-external-sessions-auto-link-source'))
             .toHaveLength(1);
     });
@@ -568,7 +568,7 @@ describe('ExternalSessionsIntegrationSection', () => {
                 agent={thirdPartyAgent}
             />,
         );
-        const row = screen.findRow('settings-external-sessions-auto-link-source');
+        const row = findItem(screen,'settings-external-sessions-auto-link-source');
 
         await act(async () => {
             row?.props.onPress?.();
@@ -669,9 +669,9 @@ describe('ExternalSessionsIntegrationSection', () => {
                         expect.objectContaining({ kind: 'integrations_empty' }),
                     ]));
                 } else {
-                    expect(Boolean(screen.findRow('settings-external-sessions-inventory-status')))
+                    expect(Boolean(findItem(screen,'settings-external-sessions-inventory-status')))
                         .toBe(status !== 'idle');
-                    expect(screen.findRow(
+                    expect(findItem(screen,
                         'settings-external-sessions-integrations-unavailable',
                     )).toBeNull();
                 }
@@ -705,12 +705,12 @@ describe('ExternalSessionsIntegrationSection', () => {
             />,
         );
 
-        const status = screen.findRow('settings-external-sessions-inventory-status');
+        const status = findItem(screen,'settings-external-sessions-inventory-status');
         expect(status?.props.subtitle).not.toContain('installation_record_read_failed');
-        expect(screen.findRow(
+        expect(findItem(screen,
             'settings-external-sessions-action-stale-disable',
         )).toBeTruthy();
-        expect(screen.findRow(
+        expect(findItem(screen,
             'settings-external-sessions-action-stale-uninstall',
         )).toBeTruthy();
 
@@ -853,12 +853,12 @@ describe('ExternalSessionsIntegrationSection', () => {
         );
         const screen = await renderSettingsView(render('partial'));
         const actionTestID = 'settings-external-sessions-action-stale-disable';
-        expect(screen.findRow(actionTestID)?.props.disabled).toBe(false);
+        expect(findItem(screen,actionTestID)?.props.disabled).toBe(false);
 
         await screen.update(render('loading'));
 
-        expect(screen.findRow(actionTestID)).toBeTruthy();
-        expect(screen.findRow(actionTestID)?.props.disabled).toBe(true);
+        expect(findItem(screen,actionTestID)).toBeTruthy();
+        expect(findItem(screen,actionTestID)?.props.disabled).toBe(true);
         await screen.pressByTestIdAsync(actionTestID);
         expect(operations.disable).not.toHaveBeenCalled();
     });
@@ -886,7 +886,7 @@ describe('ExternalSessionsAgentSettingsSection', () => {
         await screen.pressByTestIdAsync('settings-external-sessions-agent-browse');
         await screen.pressByTestIdAsync('settings-external-sessions-manage-all');
 
-        expect(screen.findRow('settings-external-sessions-integration-selected')).toBeTruthy();
+        expect(findItem(screen,'settings-external-sessions-integration-selected')).toBeTruthy();
         expect(onBrowse).toHaveBeenCalledTimes(1);
         expect(onManageAll).toHaveBeenCalledTimes(1);
     });
@@ -911,7 +911,7 @@ describe('ExternalSessionsAgentSettingsSection', () => {
             />,
         );
 
-        const continuation = screen.findRow('settings-external-sessions-inventory-continuation');
+        const continuation = findItem(screen,'settings-external-sessions-inventory-continuation');
         expect(continuation?.props.mode).toBe('interactive');
         expect(continuation?.props.title).toBe('externalSessions.browseLoadMore');
         await screen.pressByTestIdAsync('settings-external-sessions-inventory-continuation');

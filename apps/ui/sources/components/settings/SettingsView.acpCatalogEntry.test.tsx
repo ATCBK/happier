@@ -1,14 +1,14 @@
 import * as React from 'react';
 import { ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
-import { installAcpCatalogSettingsCommonModuleMocks } from './acpCatalog/acpCatalogSettingsTestHelpers';
+import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerPushSpy = vi.fn();
 
-installAcpCatalogSettingsCommonModuleMocks({
+installSettingsViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -51,33 +51,9 @@ installAcpCatalogSettingsCommonModuleMocks({
             },
         }).module;
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useEntitlement: () => false,
-            useLocalSettingMutable: () => [false, vi.fn()],
-            useSetting: (key: string) => {
-                if (key === 'serverSelectionGroups') return [];
-                if (key === 'serverSelectionActiveTargetKind') return null;
-                if (key === 'serverSelectionActiveTargetId') return null;
-                if (key === 'experiments') return false;
-                if (key === 'featureToggles') return {};
-                if (key === 'useProfiles') return false;
-                if (key === 'sessionUseTmux') return false;
-                return null;
-            },
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useProfile: () => ({ id: 'prof_1', firstName: '', connectedServices: [] }),
-        });
-    },
+    storage: 'real',
 });
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'StyledText',
-    TextInput: 'TextInput',
-}));
 
 vi.mock('expo-image', () => ({
     Image: 'Image',
@@ -93,17 +69,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -131,9 +98,6 @@ vi.mock('@/hooks/ui/useMultiClick', () => ({
     useMultiClick: (cb: () => void) => cb,
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => false,
-}));
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1000 },
@@ -145,15 +109,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getAvatarUrl: () => null,
-    getBio: () => '',
-}));
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -204,6 +160,16 @@ afterEach(() => {
 });
 
 const { SettingsView } = await import('./SettingsView');
+const { Item } = await import('@/components/ui/lists/Item');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
 
 describe('SettingsView ACP catalog entry', () => {
     it('does not include a detached ACP backends entry in the main settings screen', async () => {
@@ -211,7 +177,7 @@ describe('SettingsView ACP catalog entry', () => {
         let tree!: ReactTestRenderer;
         tree = (await renderSettingsView(React.createElement(SettingsView))).tree;
 
-        const items = tree.findAllByType('Item' as any);
+        const items = tree.findAllByType(Item);
         const acpItem = items.find((item: any) => item?.props?.title === 'settings.acpCatalog');
         expect(acpItem).toBeFalsy();
         expect(routerPushSpy).not.toHaveBeenCalled();

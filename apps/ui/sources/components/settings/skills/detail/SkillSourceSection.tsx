@@ -1,0 +1,242 @@
+import * as React from 'react';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
+
+import { Switch } from '@/components/ui/forms/Switch';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+
+import type { SkillChange, SkillChangeResult } from './useSkillDetail';
+
+function formatTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(ms);
+}
+function formatDay(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+  }).format(ms);
+}
+
+/** Where a skill came from, as the Source row says it (sd D "Source and updates"). */
+function sourceRow(
+  read: SkillReadResultV1,
+  machineName: (machineId: string) => string,
+): Readonly<{
+  title: string;
+  subtitle?: string;
+  icon: 'github-logo' | 'link' | 'desktop' | 'user-circle' | 'sparkle';
+  mono?: boolean;
+}> {
+  const provenance = read.provenance;
+  switch (provenance.kind) {
+    case 'written':
+      return {
+        title: t('capabilities.skillDetail.source.writtenByYou'),
+        subtitle: t('capabilities.skillDetail.source.writtenByYouBody'),
+        icon: 'user-circle',
+      };
+    case 'upload':
+      return {
+        title: t('capabilities.skillDetail.source.uploadedByYou'),
+        subtitle: t('capabilities.skillDetail.source.added', {
+          date: formatDay(provenance.importedAt),
+        }),
+        icon: 'user-circle',
+      };
+    case 'first_party':
+      return {
+        title: t('capabilities.skillDetail.source.firstParty'),
+        icon: 'sparkle',
+      };
+    case 'machine':
+      return {
+        title: t('capabilities.skillDetail.source.foundOn', {
+          machine: machineName(provenance.machineId),
+        }),
+        subtitle: t('capabilities.skillDetail.source.foundOnBody', {
+          path: provenance.path,
+        }),
+        icon: 'desktop',
+      };
+    case 'registry': {
+      const ref = provenance.registry.ref;
+      const at =
+        ref.kind === 'gitTree'
+          ? `${ref.path ? `${ref.path} ` : ''}@${ref.commit.slice(0, 7)}`
+          : ref.version;
+      return {
+        title: ref.kind === 'gitTree' ? ref.repo : provenance.registry.sourceId,
+        subtitle: `${at} · ${t('capabilities.skillDetail.source.added', { date: formatDay(provenance.registry.importedAt) })}`,
+        icon: 'github-logo',
+      };
+    }
+    case 'link': {
+      const ref = provenance.ref;
+      return {
+        title: provenance.url,
+        subtitle:
+          ref.kind === 'gitTree' ? `@${ref.commit.slice(0, 7)}` : ref.version,
+        icon: 'link',
+      };
+    }
+  }
+}
+
+/**
+ * "Source and updates" (sd D): where the skill came from and, for registry and link sources only, its
+ * update state with Check now (P4's one checker), "Update automatically" (off by default for others'
+ * skills, D19) and "Pin to this version". A skill written by the person says so and offers nothing to update.
+ */
+export function SkillSourceSection(
+  props: Readonly<{
+    read: SkillReadResultV1;
+    updatePolicy: 'manual' | 'auto' | 'pinned';
+    machineName: (machineId: string) => string;
+    checkNow: () => void;
+    checking: boolean;
+    checkedAt: number | null;
+    checkFailed: boolean;
+    onViewUpdate: () => void;
+    update: (change: SkillChange) => Promise<SkillChangeResult>;
+    testID: string;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { read } = props;
+  const tracked =
+    read.provenance.kind === 'registry' || read.provenance.kind === 'link';
+  const source = sourceRow(read, props.machineName);
+  const [policy, setPolicy] = React.useState(props.updatePolicy);
+  React.useEffect(() => setPolicy(props.updatePolicy), [props.updatePolicy]);
+  const setUpdatePolicy = React.useCallback(
+    async (next: 'manual' | 'auto' | 'pinned') => {
+      const previous = policy;
+      setPolicy(next);
+      const result = await props.update({ updatePolicy: next });
+      if (!result.ok) setPolicy(previous);
+    },
+    [policy, props],
+  );
+
+  const description =
+    read.provenance.kind === 'first_party'
+      ? t('capabilities.skillDetail.source.descriptionFirstParty')
+      : !tracked
+        ? t('capabilities.skillDetail.source.descriptionOwn')
+        : policy === 'pinned'
+          ? t('capabilities.skillDetail.source.descriptionPinned')
+          : policy === 'auto'
+            ? t('capabilities.skillDetail.source.descriptionAuto')
+            : t('capabilities.skillDetail.source.descriptionReview');
+  const upstream = read.upstream?.state;
+  const stateWords =
+    upstream === 'update_available'
+      ? t('capabilities.skillDetail.source.updateAvailable')
+      : upstream === 'removed_from_source'
+        ? t('capabilities.skillDetail.source.removedFromSource')
+        : upstream === 'current'
+          ? t('capabilities.skillDetail.source.upToDate')
+          : t('capabilities.skillDetail.source.notChecked');
+  const updatesSubtitle = props.checkFailed
+    ? t('capabilities.skillDetail.source.checkFailed')
+    : props.checkedAt
+      ? `${stateWords} · ${t('capabilities.skillDetail.source.checked', { time: formatTime(props.checkedAt) })}`
+      : stateWords;
+
+  return (
+    <ItemGroup
+      testID={props.testID}
+      title={t('capabilities.skillDetail.source.title')}
+      description={description}
+    >
+      <Item
+        testID={`${props.testID}:source`}
+        title={source.title}
+        subtitle={source.subtitle}
+        subtitleStyle={
+          read.provenance.kind === 'machine' ? styles.mono : undefined
+        }
+        icon={
+          <Icon
+            name={source.icon}
+            size={20}
+            color={theme.colors.text.secondary}
+          />
+        }
+        showChevron={false}
+      />
+      {tracked ? (
+        <>
+          <Item
+            testID={`${props.testID}:updates`}
+            title={t('capabilities.skillDetail.source.updates')}
+            subtitle={updatesSubtitle}
+            rightElement={
+              upstream === 'update_available' ? (
+                <RoundButton
+                  testID={`${props.testID}:view`}
+                  size="small"
+                  display="secondary"
+                  title={t('capabilities.skillDetail.source.view')}
+                  onPress={props.onViewUpdate}
+                />
+              ) : (
+                <RoundButton
+                  testID={`${props.testID}:checkNow`}
+                  size="small"
+                  display="secondary"
+                  title={t('capabilities.skillDetail.source.checkNow')}
+                  loading={props.checking}
+                  disabled={props.checking}
+                  onPress={props.checkNow}
+                />
+              )
+            }
+            showChevron={false}
+          />
+          <Item
+            testID={`${props.testID}:auto`}
+            title={t('capabilities.skillDetail.source.auto')}
+            subtitle={t('capabilities.skillDetail.source.autoBody')}
+            rightElement={
+              <Switch
+                value={policy === 'auto'}
+                disabled={policy === 'pinned'}
+                onValueChange={(on) => {
+                  void setUpdatePolicy(on ? 'auto' : 'manual');
+                }}
+              />
+            }
+            showChevron={false}
+          />
+          <Item
+            testID={`${props.testID}:pin`}
+            title={t('capabilities.skillDetail.source.pin')}
+            subtitle={t('capabilities.skillDetail.source.pinBody')}
+            rightElement={
+              <Switch
+                value={policy === 'pinned'}
+                onValueChange={(on) => {
+                  void setUpdatePolicy(on ? 'pinned' : 'manual');
+                }}
+              />
+            }
+            showChevron={false}
+          />
+        </>
+      ) : null}
+    </ItemGroup>
+  );
+}
+
+const styles = StyleSheet.create(() => ({
+  mono: { ...Typography.mono() },
+}));

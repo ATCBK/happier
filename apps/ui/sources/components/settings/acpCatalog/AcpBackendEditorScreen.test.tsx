@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,6 +39,8 @@ const shared = vi.hoisted(() => ({
     failAcknowledgedRefresh: false,
     accountSettings: {} as Record<string, unknown>,
 }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 // Metro's lazy module loader is the substituted platform boundary, not Action execution.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {

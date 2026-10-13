@@ -72,7 +72,7 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         selection={pageExecution.selection} presentation="chip"
         groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null,
     [needsMachineExecution, pageExecution.selection]);
-    const headerOptions = React.useMemo(() => ({ title: destination?.title ?? t('pluginSurfaces.appPage.title'),
+    const headerOptions = React.useMemo(() => ({ title: destination?.title, headerTitle: destination?.title ?? t('pluginSurfaces.appPage.title'),
         headerRight: () => executionChip }), [destination?.title, executionChip]);
     const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={executionChip}>
         <Stack.Screen options={headerOptions} />{body}

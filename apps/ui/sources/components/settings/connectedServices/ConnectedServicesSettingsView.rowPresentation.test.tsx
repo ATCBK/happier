@@ -1,5 +1,8 @@
 import * as React from 'react';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AccountProfileSchema } from '@happier-dev/protocol';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { storage } from '@/sync/domains/state/storageStore';
 
 import { renderScreen } from '@/dev/testkit';
 import type { ConnectedAccountIndexFacts } from './index/ConnectedAccountIndexRow';
@@ -37,28 +40,6 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
     }),
 }));
 
-vi.mock('@/sync/store/hooks', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useActiveServerAccountScope: () => null,
-    useAllMachines: () => [],
-    useProfile: () => ({
-        connectedServicesV2: profileState.connectedServicesV2,
-        connectedAccountsV4: profileState.connectedAccountsV4,
-        connectedAccountGroupsV4: profileState.connectedAccountGroupsV4,
-    }),
-    useSettings: () => ({
-        connectedServicesDefaultProfileByServiceId: {},
-        connectedServicesProfileLabelByKey: {},
-        connectedServicesProviderStateSharingSettingsV1: {},
-        connectedServicesDefaultAuthByAgentIdV1: {},
-    }),
-    useSettingMutable: () => [{}, vi.fn()],
-    useSetting: () => undefined,
-    useLocalSetting: () => undefined,
-    useLocalSettingMutable: () => [undefined, vi.fn()],
-    });
-});
 
 vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
     useHomeTeamCredentialModelCatalog: () => ({
@@ -123,24 +104,13 @@ vi.mock('./ConnectedServicesProviderStateSharingSettings', () => ({
         React.createElement('ConnectedServicesProviderStateSharingDisclosure', props),
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
 
 // Keep the group props on the host stand-in so the screen's section headings
 // stay inspectable (the list group and the dev-only usage summary must not
 // present the same heading twice in a row).
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, ...props }: { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, children),
-}));
 
 // `Item` owns the fixed leading slot; render `leftElement` and `titleAccessory` so the brand mark
 // and the state pill are actually mounted and inspectable in the tree.
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: { leftElement?: React.ReactNode; rightElement?: React.ReactNode }) =>
-        React.createElement('Item', props, props.leftElement, props.rightElement),
-}));
 
 // The generic fallback glyph draws through Hugeicons/Phosphor primitives; a host
 // stand-in keeps the resolved `name` assertable without the drawing stack.
@@ -179,30 +149,35 @@ const REGISTRY_ENTRIES: Array<Record<string, unknown>> = [
 const PROFILES = [
     {
         ref: { service: { pluginId: 'happier.scm.forge.github', localId: 'github-account' }, accountId: 'personal' },
-        status: 'connected', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'cred-github', configurationReady: true, configurationRevision: null, scopes: [],
+        status: 'connected', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa', configurationReady: true, configurationRevision: null, scopes: [],
     },
     {
         ref: { service: { pluginId: 'happier.agent.claude', localId: 'anthropic' }, accountId: 'work' },
-        status: 'refresh_failed_retryable', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'cred-anthropic', configurationReady: true, configurationRevision: null, scopes: [],
+        status: 'refresh_failed_retryable', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb', configurationReady: true, configurationRevision: null, scopes: [],
     },
     {
         ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
-        status: 'needs_reauth', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'cred-codex', configurationReady: true, configurationRevision: null, scopes: [],
+        status: 'needs_reauth', authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'csr_cccccccccccccccccccccc', configurationReady: true, configurationRevision: null, scopes: [],
     },
 ];
 
 async function renderView() {
+    storage.setState({ profile: AccountProfileSchema.parse({ ...profileDefaults, ...profileState }) });
     const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
     const { tree } = await renderScreen(<ConnectedServicesSettingsView />);
     return tree;
 }
 
+const { Item } = await import('@/components/ui/lists/Item');
+
 function serviceHeaders(tree: Awaited<ReturnType<typeof renderView>>) {
-    return tree.root.findAllByType('Item' as never)
+    return tree.findAllByType(Item)
         .filter((row) => String(row.props.testID ?? '').startsWith('connected-services-service:'));
 }
 
 describe('ConnectedServicesSettingsView row presentation', () => {
+    const initialState = storage.getState();
+    afterEach(() => storage.setState(initialState, true));
     // The page's module graph is large; loading it once up front keeps each case's own time honest.
     beforeAll(async () => {
         await import('./ConnectedServicesSettingsView');

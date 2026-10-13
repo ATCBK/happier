@@ -372,9 +372,11 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   // DropdownMenu draws), holding the value and a pool's mark; grouped surfaces keep the value row.
   const { theme } = useUnistyles();
   const pageField = useListPresentation() === 'page';
+  // Only a saved target that no longer exists is a wrong value; a target the user can repair (add or
+  // reconnect an account) keeps the ordinary field and says what fixes it in the warning line below.
   const fieldColors = React.useMemo(
-    () => (pageField ? resolveFieldBoxColors(theme, selected?.presentation.unavailableReason ? 'invalid' : 'idle') : undefined),
-    [pageField, selected?.presentation.unavailableReason, theme],
+    () => (pageField ? resolveFieldBoxColors(theme, selected?.presentation.unavailableReasonCode === 'targetMissing' ? 'invalid' : 'idle') : undefined),
+    [pageField, selected?.presentation.unavailableReasonCode, theme],
   );
   const subtitle = triggerStatus ?? selected?.presentation.summaryLabel ?? props.description;
   // What repairs a saved target that cannot serve (D14) reads as needing the user.

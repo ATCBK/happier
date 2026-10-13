@@ -8,6 +8,7 @@ import type { MachinePoolMemberInputV1, MachinePoolViewV1 } from '@happier-dev/p
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -669,11 +670,9 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
                         testID={eligibleMachines.length === 0 ? 'settings.machinePools.editor.noMachines' : 'settings.machinePools.editor.allMachinesAdded'}
                         title={eligibleMachines.length === 0 ? t('machinePools.noMachines') : t('machinePools.allMachinesAdded')}
                     /> : null
-                ) : <Item
+                ) : <ItemAddRow
                     testID={tier === 0 ? 'settings.machinePools.editor.addMachines' : `settings.machinePools.editor.addMachines.tier.${tier}`}
                     title={t('machinePools.addMachines')}
-                    icon={<Icon name="plus" size={18} color={theme.colors.text.secondary} />}
-                    showChevron={false}
                     onPress={() => openMemberPicker(tier)}
                     disabled={formDisabled}
                 />}

@@ -136,9 +136,6 @@ vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaBadges', () =>
     useConnectedServiceQuotaBadges: () => ({}),
 }));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
 const narrowLayoutRef = vi.hoisted(() => ({ value: false }));
 vi.mock('@/components/settings/actions/useActionSettingsNarrowLayout', () => ({

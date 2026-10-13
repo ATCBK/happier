@@ -7,13 +7,11 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { installBugReportHooksCommonModuleMocks } from './bugReportHooksTestHelpers';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
-import type { BugReportDraftInput } from '@happier-dev/protocol/actions/specs/bugReport';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { BugReportSubmitOutputSchema, type BugReportDraftInput } from '@happier-dev/protocol/actions/specs/bugReport';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
-import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { persistPreRestartBugReportSnapshot, peekPreRestartBugReportSnapshot } from '@/utils/system/preRestartBugReportSnapshot';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
   .createSocketIoClientBoundary(importOriginal));
@@ -33,22 +31,18 @@ installBugReportHooksCommonModuleMocks({
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 
-// Device-local persistence is the boundary. Form validation, Action admission,
-// consent, diagnostics selection and the report HTTP client remain real.
-const clearSnapshot = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('@/utils/system/preRestartBugReportSnapshot', () => ({
-  clearPreRestartBugReportSnapshot: clearSnapshot, peekPreRestartBugReportSnapshot: async () => null,
-}));
 await import('@/sync/domains/state/storage');
 const { useBugReportComposerSubmit } = await import('./useBugReportComposerSubmit');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { createBugReportSubmitAction } = await import('@/sync/ops/actions/bugReportSubmitAction');
 const feature = { enabled: true, providerUrl: 'https://reports.example.test', defaultIncludeDiagnostics: true,
   maxArtifactBytes: 128_000, acceptedArtifactKinds: ['user-note'], uploadTimeoutMs: 10_000, contextWindowMs: 30_000 };
-const draft: BugReportDraftInput = { title: 'Crash report', summary: 'App crashed.', reproductionStepsText: '1. Open app',
+const draft: BugReportDraftInput = { title: 'Crash in private-project-q7z4', summary: 'Confidential steps n3k8.', reproductionStepsText: '1. Open app',
   whatChangedRecently: '', environment: { appVersion: '0.3', platform: 'web', deploymentType: 'self-hosted' },
   includeDiagnostics: false, acceptedPrivacyNotice: false };
+const snapshot = {
+  v: 1, createdAtMs: Date.now(), reason: 'crash', platform: 'web', origin: 'https://reports-home.example.test',
+  isSecureContext: true, errorDetails: 'Private crash details', appLogs: 'Private log line', userActions: [],
+} as const;
 let serverId: string;
 let locks: ReturnType<typeof installWebLockManagerMock>;
 const reportRequests: { path: string; body: unknown }[] = [];
@@ -77,7 +71,7 @@ describe('bug report Submit form through Action admission', () => {
     await homes.reset();
     const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
     await loadSyncSingletonForTests();
-    alerts.mockClear(); confirms.mockClear(); back.mockClear(); clearSnapshot.mockClear(); fetchReport.mockClear();
+    alerts.mockClear(); confirms.mockClear(); back.mockClear(); fetchReport.mockClear();
     reportRequests.length = 0;
     vi.stubGlobal('fetch', fetchReport);
     // The report checkbox does not alter the independently opted-out crash
@@ -109,6 +103,8 @@ describe('bug report Submit form through Action admission', () => {
   });
 
   it.each(['approve', 'reject'] as const)('keeps Submit pending without service writes and respects %s', async decision => {
+    await persistPreRestartBugReportSnapshot(snapshot);
+    await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
     const screen = await renderScreen(React.createElement(Composer));
     const created = new Promise<void>(resolve => homes.artifacts(serverId).afterNextCreate(async () => { resolve(); }));
     let pending: Promise<void> = Promise.resolve();
@@ -120,16 +116,19 @@ describe('bug report Submit form through Action admission', () => {
     expect(admission).toEqual({ phase: 'approval', alerts: [] });
     await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
     const artifact = homes.artifacts(serverId).list()[0]!;
-    const request = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id)!));
+    const storedApproval = homes.artifacts(serverId).readPlainBody(artifact.id)!;
+    const request = ApprovalRequestSchema.parse(JSON.parse(storedApproval));
     await waitForHomeGovernance(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifact.id)).toBe(1));
     expect(reportRequests).toEqual([]);
     expect(back).not.toHaveBeenCalled();
-    expect(clearSnapshot).not.toHaveBeenCalled();
+    await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
     expect(screen.findByTestId('submit').props.submitting).toBe(true);
     expect(request.actionArgs).toMatchObject({ draft: { acceptedPrivacyNotice: false },
       destination: { providerUrl: feature.providerUrl, issueOwner: 'happier-dev', issueRepo: 'happier' } });
     expect(request.actionArgs).not.toHaveProperty('draft.title');
     expect(request.actionArgs).not.toHaveProperty('draft.summary');
+    expect(storedApproval).not.toContain(draft.title);
+    expect(storedApproval).not.toContain(draft.summary);
     await act(async () => {
       const result = await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: artifact.id, decision },
         { surface: 'ui', serverId });
@@ -142,18 +141,20 @@ describe('bug report Submit form through Action admission', () => {
           reproductionSteps: ['Open app'], consent: { includeDiagnostics: false, acceptedPrivacyNotice: true } }), artifacts: [] }) },
         { path: '/v1/reports/submit', body: expect.objectContaining({ reportId: 'report-1', issue: { owner: 'happier-dev', repo: 'happier' } }) },
       ]);
-      expect(clearSnapshot).toHaveBeenCalledOnce();
+      await expect(peekPreRestartBugReportSnapshot()).resolves.toBeNull();
       expect(back).toHaveBeenCalledOnce();
     } else {
       expect(reportRequests).toEqual([]);
       expect(confirms).not.toHaveBeenCalled();
       expect(back).not.toHaveBeenCalled();
-      expect(clearSnapshot).not.toHaveBeenCalled();
+      await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
     }
     await screen.unmount();
   });
 
   it('uses the default Action review for diagnostics without imposing a second acknowledgement floor', async () => {
+    await persistPreRestartBugReportSnapshot(snapshot);
+    await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
     const screen = await renderScreen(React.createElement(Composer, { value: { ...draft, includeDiagnostics: true, acceptedPrivacyNotice: false } }));
     let pending: Promise<void> = Promise.resolve();
     try {
@@ -171,27 +172,33 @@ describe('bug report Submit form through Action admission', () => {
       });
       expect(reportRequests).toEqual([]);
       expect(back).not.toHaveBeenCalled();
-      expect(clearSnapshot).not.toHaveBeenCalled();
+      await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
     } finally { getSharedBlockingApprovalCoordinator().dispose(); await pending; await screen.unmount(); }
   });
 
   it('honors a diagnostic submission waiver at the real submission owner', async () => {
-    const account = await captureLazyActionAccountContext(serverId);
-    try {
-      const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'bugreport.submit': ['agent'] } });
-      const executor = createActionExecutor(createActionExecutorBoundaryFixture({ bugReportSubmit: createBugReportSubmitAction(account),
-        isActionApprovalRequired: (actionId, context, admittedInput) =>
-          isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, admittedInput),
-      }));
-      expect(await executor.execute('bugreport.submit', { draft: { ...draft, includeDiagnostics: true, acceptedPrivacyNotice: false },
-        destination: { providerUrl: feature.providerUrl, issueOwner: 'happier-dev', issueRepo: 'happier' } },
-      { surface: 'agent', authority: 'account_automation', serverId, actionsSettings: settings }))
-        .toMatchObject({ ok: true, result: { mode: 'submitted' } });
-      expect(reportRequests[0]).toMatchObject({ path: '/v1/reports/session', body: {
-        form: { consent: { includeDiagnostics: true, acceptedPrivacyNotice: true } },
-      } });
-    } finally {
-      account.dispose();
-    }
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+    const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'reporter' };
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'bugreport.submit': ['agent'] } });
+    const accountSettings = { ...storage.getState().settings, actionsSettingsV1: settings };
+    const version = (loadAccountSettings(scope).version ?? 0) + 1;
+    storage.getState().applySettingsForScope(scope, accountSettings, version);
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: accountSettings }, version } });
+    const produced = await createDefaultActionExecutor().execute('bugreport.submit', {
+      draft: { ...draft, includeDiagnostics: true, acceptedPrivacyNotice: false },
+      destination: { providerUrl: feature.providerUrl, issueOwner: 'happier-dev', issueRepo: 'happier' },
+    }, { surface: 'agent', authority: 'account_automation', serverId });
+    expect(produced.ok).toBe(true);
+    if (!produced.ok) throw new Error(produced.error);
+    expect(BugReportSubmitOutputSchema.parse(produced.result)).toEqual({
+      mode: 'submitted', reportId: 'report-1', issueNumber: 123,
+      issueUrl: 'https://github.com/happier-dev/happier/issues/123', artifactCount: 0,
+    });
+    expect(homes.artifacts(serverId).list()).toHaveLength(0);
+    expect(reportRequests[0]).toMatchObject({ path: '/v1/reports/session', body: {
+      form: { consent: { includeDiagnostics: true, acceptedPrivacyNotice: true } },
+    } });
   });
 });

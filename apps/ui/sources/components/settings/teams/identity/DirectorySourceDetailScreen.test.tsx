@@ -67,7 +67,6 @@ vi.mock('@/modal', async () => {
 });
 vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
 vi.mock('@/components/ui/forms/SearchHeader', () => ({ SearchHeader: 'SearchHeader' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
 vi.mock('@/components/ui/lists/Item', async () => {
     const React = await import('react');
     return { Item: (props: { testID?: string; rightElement?: unknown; pressableRef?: React.Ref<{ focus: () => void }> }) => {
@@ -110,26 +109,6 @@ vi.mock('@/components/ui/lists/virtualized', () => ({
 // is intentionally absent from synchronized source-only test targets.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
-}));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-    createBundledPluginUiAppExactArtifactSourceFromInventory: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(),
-    createPluginAccountAvailabilityReaderStore: () => Object.freeze({
-        replace: () => null,
-        clear: () => null,
-        subscribe: () => () => undefined,
-        bind: vi.fn(),
-    }),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(),
 }));
 vi.mock('@/hooks/teams/useTeamGroups', () => ({
     useTeamGroups: () => ({ ...nativeGroupsBinding, isCurrent: !nativeGroupsBinding.error, hasMore: false, status: nativeGroupsBinding.error ? 'error' : 'ready', loadMore: vi.fn() }),

@@ -177,17 +177,8 @@ vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
     }),
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props, props.rightElement),
-}));
 
 type SegmentedControlProps = Readonly<{
     tabs: ReadonlyArray<Readonly<{ id: string; label: string }>>;
@@ -199,7 +190,7 @@ type SegmentedControlProps = Readonly<{
 /** The segmented control a page row carries (`SegmentedChoiceItem` renders it as the row's control). */
 function segmentedControl(row: { props: Record<string, any>; type?: unknown; findAll?: (predicate: (node: any) => boolean) => any[] } | null): SegmentedControlProps {
     // The title lookup may land on the `SegmentedChoiceItem` wrapper; its rendered row carries the control.
-    const item = row && row.type !== 'Item' ? row.findAll?.((node) => node.type === 'Item')[0] ?? row : row;
+    const item = row?.props.rightElement ? row : row?.findAll?.((node) => node.props.rightElement?.props?.tabs)[0] ?? row;
     const control = item?.props.rightElement?.props as SegmentedControlProps | undefined;
     if (!control?.tabs) throw new Error('row has no segmented control');
     return control;
@@ -207,6 +198,7 @@ function segmentedControl(row: { props: Record<string, any>; type?: unknown; fin
 
 // Load real screen owners after boundary setup, outside behavior deadlines.
 const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
+const { Item } = await import('@/components/ui/lists/Item');
 
 describe('SourceControlSettingsView', () => {
     it('writes explicit explain preferences but does not offer prefetch without an eligible selected model', async () => {
@@ -322,7 +314,7 @@ describe('SourceControlSettingsView', () => {
         });
 
         // A backend with a single diff mode states it rather than offering a one-option choice.
-        const defaultDiff = screen.findRow('settings.sourceControl.backend.acme.scm/stacked.defaultDiff');
+        const defaultDiff = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.acme.scm/stacked.defaultDiff');
         expect(defaultDiff?.props.detail).toBe('settingsSourceControl.diffMode.pending');
 
         expect(screen.findRowByTitle('Acme Forge Enterprise')).toBeTruthy();
@@ -458,7 +450,7 @@ describe('SourceControlSettingsView', () => {
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         expect(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle')).toBeNull();
-        const scopeState = screen.findRow('settings.sourceControl.routing.scopeState');
+        const scopeState = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.routing.scopeState');
         expect(scopeState?.props.title).toBe('settingsSourceControl.page.routing.waiting');
         expect(scopeState?.props.subtitle).toBe('settingsSourceControl.page.routing.waitingDescription');
     });
@@ -505,8 +497,8 @@ describe('SourceControlSettingsView', () => {
         try {
             const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
             // Git and Sapling both render the row; only one carries the anchor.
-            expect(screen.findRow('settings.sourceControl.backend.git.defaultDiff')).toBeTruthy();
-            expect(screen.findRow('settings.sourceControl.backend.sapling.defaultDiff')).toBeTruthy();
+            expect(screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.git.defaultDiff')).toBeTruthy();
+            expect(screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.sapling.defaultDiff')).toBeTruthy();
             expect(screen.findAllByTestId('setting-reveal.sourceControl.backendDefaultDiff').filter((node) => typeof node.type === 'string')).toHaveLength(1);
         } finally {
             searchParamsState.value = {};
@@ -515,10 +507,10 @@ describe('SourceControlSettingsView', () => {
 
     it('only renders backend-supported default diff modes', async () => {
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
-        const git = segmentedControl(screen.findRow('settings.sourceControl.backend.git.defaultDiff'));
+        const git = segmentedControl(screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.git.defaultDiff'));
         expect(git.tabs.map((tab) => tab.id)).toContain('included');
         // When no snapshot/capabilities are available yet, Sapling conservatively only advertises "pending".
-        const sapling = screen.findRow('settings.sourceControl.backend.sapling.defaultDiff');
+        const sapling = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.sapling.defaultDiff');
         expect(sapling?.props.rightElement).toBeFalsy();
         expect(sapling?.props.detail).toBe('settingsSourceControl.diffMode.pending');
     });

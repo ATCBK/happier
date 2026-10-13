@@ -141,7 +141,7 @@ export const EmbedModelsSection = React.memo(function EmbedModelsSection(props: 
     );
 });
 
-/** Composer: presentation only; the attach button hides, uploads stay governed by Send. */
+/** Composer: presentation only; on shows the attach button, off hides it while uploads stay governed by Send. */
 export const EmbedComposerSection = React.memo(function EmbedComposerSection(props: EmbedDraftSectionProps) {
     const { draft, onChange } = props;
     return (

@@ -26,7 +26,7 @@ const shownQuery = normalizeUsageQuery({ period: { startMs: 100, endMs: 900 }, a
   workspaceIds: ['workspace'], modelIds: ['model'], backendModes: ['remote'], timeZoneOffsetMinutes: 120,
   metric: 'cost', costBasis: 'reported', breakdown: ['agent'] });
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined;
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
   vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function mount(denied = false, queryResponse?: () => Response | Promise<Response>, hasAccounting = true, requestedQuery = shownQuery) {

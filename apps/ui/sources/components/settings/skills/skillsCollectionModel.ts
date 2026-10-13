@@ -1,0 +1,347 @@
+import type { PromptFoldersV1 } from '@happier-dev/protocol';
+import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { resolveSkillPlanKindV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
+import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
+
+import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
+import type { HomeOrbitBody } from '@/components/atmosphere/orbit/homeOrbitScene';
+import {
+  projectReachOnMachines,
+  type ReachMachine,
+} from '@/sync/domains/capabilities/reach/useReachProjection';
+
+import { groupRowsByFolder } from '@/components/settings/prompts/collection/promptCollectionModel';
+
+import { isSkillOff, skillNeedsALook } from './status/skillStatus';
+
+export const SKILLS_COLLECTION_ROUTE = '/settings/skills';
+export const SKILLS_NEW_ROUTE = '/settings/skills/new';
+export const skillHref = (skillId: string) =>
+  `${SKILLS_COLLECTION_ROUTE}/${encodeURIComponent(skillId)}`;
+
+/** The collection offers a search field only once it no longer fits at a glance (the Machines rule). */
+export const SKILLS_SEARCH_THRESHOLD = 8;
+
+/** Where a skill came from, in one place (P6 §4.1 "Rows"). */
+export function skillSource(
+  item: Pick<SkillListItemV1, 'provenance'>,
+  machineName: (machineId: string) => string,
+): CapabilitySource {
+  const provenance = item.provenance;
+  switch (provenance.kind) {
+    case 'written':
+    case 'upload':
+      return { kind: 'you' };
+    case 'first_party':
+      return { kind: 'happier' };
+    case 'machine':
+      return {
+        kind: 'machine',
+        machineName: machineName(provenance.machineId),
+      };
+    case 'registry':
+      return {
+        kind: 'git',
+        label:
+          repositoryLabel(provenance.registry.ref.kind === 'gitTree' ? provenance.registry.ref.repo : undefined) ??
+          repositoryLabel(provenance.registry.sourceUrl) ??
+          provenance.registry.sourceId,
+      };
+    case 'link': {
+      const repository = repositoryLabel(provenance.url);
+      if (repository) return { kind: 'git', label: repository };
+      return { kind: 'link', host: hostOf(provenance.url) };
+    }
+  }
+}
+
+/** "owner/repo" for a GitHub URL; null for any other link. */
+function repositoryLabel(url: string | undefined): string | null {
+  if (!url) return null;
+  const match = url.match(
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)/i,
+  );
+  return match ? `${match[1]}/${match[2]!.replace(/\.git$/i, '')}` : null;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+export type SkillsRailGroups = Readonly<{
+  inUse: readonly SkillListItemV1[];
+  off: readonly SkillListItemV1[];
+}>;
+
+/** In use / Off by the item's rules (D4: no rule turning it on = Off); library order within each. */
+export function groupSkillsByUse(
+  items: readonly SkillListItemV1[],
+): SkillsRailGroups {
+  const inUse: SkillListItemV1[] = [];
+  const off: SkillListItemV1[] = [];
+  for (const item of items) (isSkillOff(item) ? off : inUse).push(item);
+  return { inUse, off };
+}
+
+/**
+ * Folder groups (IR-83): when any skill is filed in a folder the personal folder tree knows, the list
+ * groups by folder through the library's one grouping rule (shared with the prompt collection), and
+ * Off rows stay in place with their "Off" summary. `null` when no skill has a folder: In use / Off stand.
+ */
+export function groupSkillsByFolder(
+  items: readonly SkillListItemV1[],
+  folders: PromptFoldersV1 | null | undefined,
+): readonly Readonly<{ id: string | null; title: string | null; rows: readonly SkillListItemV1[] }>[] | null {
+  const names = new Map((folders?.folders ?? []).map((folder) => [folder.id, folder.name]));
+  const filed = (item: SkillListItemV1) =>
+    item.folderId !== null && names.has(item.folderId) ? item.folderId : null;
+  if (!items.some((item) => filed(item) !== null)) return null;
+  return groupRowsByFolder(
+    items.map((item) => {
+      const id = filed(item);
+      return { folder: id === null ? null : { id, title: names.get(id) ?? null }, row: item };
+    }),
+  );
+}
+
+/** Does any Agent on this machine get the skill (machine level, no project)? */
+export function skillReachesMachine(
+  item: SkillListItemV1,
+  machine: ReachMachine,
+): boolean {
+  return (
+    projectReachOnMachines(item.rules, [machine])[0]?.agents.some(
+      (agent) => agent.enabled && skillPlanOnMachine(machine, agent.agentId) !== 'none',
+    ) ?? false
+  );
+}
+
+export function filterSkills(
+  items: readonly SkillListItemV1[],
+  input: Readonly<{ query: string; machine: ReachMachine | null }>,
+): readonly SkillListItemV1[] {
+  const query = input.query.trim().toLowerCase();
+  if (!query && !input.machine) return items;
+  return items.filter(
+    (item) =>
+      (!query ||
+        `${item.name} ${item.description ?? ''}`
+          .toLowerCase()
+          .includes(query)) &&
+      (!input.machine || skillReachesMachine(item, input.machine)),
+  );
+}
+
+export function countSkillsNeedingALook(
+  items: readonly SkillListItemV1[],
+): number {
+  return items.filter(skillNeedsALook).length;
+}
+
+export type SkillsReachMachine = Readonly<{
+  machine: ReachMachine;
+  /** Skills that reach at least one Agent on it (last known for an offline machine). */
+  skillIds: readonly string[];
+  /** The Agents on it that get at least one skill. */
+  agentIds: readonly string[];
+  /** Its installed Agents that can take skills at all (P3 plan kind not `none`): the legend's words. */
+  supportedAgentIds: readonly string[];
+}>;
+
+export type SkillsReach = Readonly<{
+  machines: readonly SkillsReachMachine[];
+  bodies: readonly HomeOrbitBody[];
+  /** Skills that reach at least one online machine. */
+  reachingCount: number;
+  /** Agents that get at least one skill on an online machine, in first-seen order. */
+  agentIds: readonly string[];
+  onlineReachedMachineCount: number;
+  offlineMachineIds: readonly string[];
+  /** Installed Agents on online machines that take skills on none of them (named once, in a note). */
+  unsupportedAgentIds: readonly string[];
+  /** Whether any online machine has said which Agents it has. */
+  onlineInventory: boolean;
+}>;
+
+/**
+ * The homepage's reach facts from P2's projection, one body per Account machine and one dot per skill
+ * reaching an Agent there whose per-Machine declaration permits P3 delivery. A cold bundled catalog
+ * can use its generated manifest facts; an unknown external Agent never counts as reached.
+ */
+export function buildSkillsReach(
+  items: readonly SkillListItemV1[],
+  machines: readonly ReachMachine[],
+): SkillsReach {
+  const reached = new Set<string>();
+  const agents: string[] = [];
+  let onlineReachedMachineCount = 0;
+  const rows = machines.map((machine): SkillsReachMachine => {
+    const skillIds: string[] = [];
+    const machineAgents = new Set<string>();
+    for (const item of items) {
+      const row = projectReachOnMachines(item.rules, [machine])[0];
+      const enabled = row?.agents.filter((agent) => agent.enabled && skillPlanOnMachine(machine, agent.agentId) !== 'none') ?? [];
+      if (enabled.length === 0) continue;
+      skillIds.push(item.skillId);
+      for (const agent of enabled) machineAgents.add(agent.agentId);
+    }
+    if (!machine.offline && skillIds.length > 0) {
+      onlineReachedMachineCount += 1;
+      for (const id of skillIds) reached.add(id);
+      for (const agentId of machineAgents)
+        if (!agents.includes(agentId)) agents.push(agentId);
+    }
+    return {
+      machine,
+      skillIds,
+      agentIds: [...machineAgents],
+      supportedAgentIds: machine.agentIds.filter(
+        (agentId) => skillPlanOnMachine(machine, agentId) !== 'none',
+      ),
+    };
+  });
+  const supportedOnline = new Set<string>();
+  const unsupported: string[] = [];
+  for (const row of rows) {
+    if (row.machine.offline) continue;
+    for (const agentId of row.supportedAgentIds) supportedOnline.add(agentId);
+  }
+  for (const row of rows) {
+    if (row.machine.offline) continue;
+    for (const agentId of row.machine.agentIds)
+      if (!supportedOnline.has(agentId) && !unsupported.includes(agentId))
+        unsupported.push(agentId);
+  }
+  // Inner orbits and the first legend rows go to what matters now (as Your Home ranks them): online
+  // machines a skill reaches, then the other online ones, then offline ones, most recently seen first.
+  // Each group keeps the store's order.
+  // Offline machines a skill reaches (they catch up) come before offline ones it never reached.
+  const rank = (row: SkillsReachMachine) =>
+    (row.machine.offline ? 2 : 0) + (row.skillIds.length > 0 ? 0 : 1);
+  rows.sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      (a.machine.offline
+        ? (b.machine.lastSeenAt ?? 0) - (a.machine.lastSeenAt ?? 0)
+        : 0),
+  );
+  return {
+    machines: rows,
+    bodies: rows.map((row) => ({
+      key: row.machine.machineId,
+      online: !row.machine.offline,
+      dots: row.skillIds.map((skillId) => ({
+        key: skillId,
+        tone: row.machine.offline ? 'quiet' : 'active',
+      })),
+    })),
+    reachingCount: reached.size,
+    agentIds: agents,
+    onlineReachedMachineCount,
+    offlineMachineIds: rows
+      .filter((row) => row.machine.offline)
+      .map((row) => row.machine.machineId),
+    unsupportedAgentIds: unsupported,
+    onlineInventory: rows.some(
+      (row) => !row.machine.offline && row.machine.agentIds.length > 0,
+    ),
+  };
+}
+
+/**
+ * The homepage's present sentence, as one decision (P6 §4.2): the first-visit moment, no machine yet,
+ * skills on but no online machine has said which Agents it has (the inventory wait), skills on but
+ * every Agent there takes none (unsupported delivery, IR-80), or what reaches whom with what needs a
+ * look and which offline machines catch up.
+ */
+export type SkillsPresent =
+  | Readonly<{ kind: 'new' }>
+  | Readonly<{ kind: 'first'; on: number; off: number }>
+  | Readonly<{ kind: 'noMachines' }>
+  | Readonly<{ kind: 'waiting'; on: number }>
+  | Readonly<{ kind: 'unsupported'; on: number; agentIds: readonly string[] }>
+  | Readonly<{ kind: 'none' }>
+  | Readonly<{
+      kind: 'reach';
+      count: number;
+      agentIds: readonly string[];
+      machines: number;
+      needs: number;
+      unsupportedAgentIds: readonly string[];
+      /** Offline machines a skill reaches, by name: they catch up when they're back. */
+      catchUp: readonly string[];
+    }>;
+
+export function resolveSkillsPresent(
+  input: Readonly<{
+    items: readonly SkillListItemV1[];
+    reach: SkillsReach;
+    needs: number;
+    firstVisit: Readonly<{ on: number; off: number }> | null;
+  }>,
+): SkillsPresent {
+  const { reach } = input;
+  if (input.items.length === 0) return { kind: 'new' };
+  if (input.firstVisit) return { kind: 'first', ...input.firstVisit };
+  if (reach.machines.length === 0) return { kind: 'noMachines' };
+  const on = input.items.filter((item) => !isSkillOff(item)).length;
+  if (reach.reachingCount === 0) {
+    if (on === 0) return { kind: 'none' };
+    if (!reach.onlineInventory) return { kind: 'waiting', on };
+    if (reach.unsupportedAgentIds.length > 0 && reach.machines.every(
+      (row) => row.machine.offline || row.supportedAgentIds.length === 0,
+    ))
+      return { kind: 'unsupported', on, agentIds: reach.unsupportedAgentIds };
+    return { kind: 'none' };
+  }
+  return {
+    kind: 'reach',
+    count: reach.reachingCount,
+    agentIds: reach.agentIds,
+    machines: reach.onlineReachedMachineCount,
+    needs: input.needs,
+    unsupportedAgentIds: reach.unsupportedAgentIds,
+    catchUp: reach.machines
+      .filter((row) => row.machine.offline && row.skillIds.length > 0)
+      .map((row) => row.machine.name ?? row.machine.machineId),
+  };
+}
+
+/** P3 owns the decision; this join supplies declarations, never installation or launch-readiness guesses. */
+/** What an Agent on this machine does with skills (P3 plan kind): `none` never takes one. */
+export function skillPlanOnMachine(machine: ReachMachine, agentId: string) {
+  if (machine.agentDeclarationsById) {
+    const capabilities = machine.agentDeclarationsById[agentId]?.capabilities;
+    return resolveSkillPlanKindV1({ agentSkills: capabilities?.skills ?? null,
+      agentHasActionChannel: capabilities?.tools !== undefined });
+  }
+  const bundled = isBundledAgentId(agentId) ? getAgentCore(agentId) : null;
+  const skills = bundled?.skills;
+  return resolveSkillPlanKindV1({ agentSkills: skills ? {
+    delivery: skills.delivery, nativeDisable: skills.nativeDisable, liveReload: skills.liveReload,
+  } : null, agentHasActionChannel: bundled?.tools.delivery !== undefined && bundled.tools.delivery !== 'unsupported' });
+}
+
+/**
+ * The machines the map and its legend draw, in rank order: as many as the room holds; past it, the
+ * last slot becomes one quiet "N more machines" line (layout density, not a limit: the rail's
+ * `?machine=` filter and Settings → Machines still reach every one).
+ */
+export function foldReachMachines(
+  machines: readonly SkillsReachMachine[],
+  room: number,
+): Readonly<{ shown: readonly SkillsReachMachine[]; more: number }> {
+  if (machines.length <= room) return { shown: machines, more: 0 };
+  const shown = machines.slice(0, Math.max(1, room - 1));
+  return { shown, more: machines.length - shown.length };
+}
+
+/**
+ * The first-visit moment (P6 §4.7): the library has skills with no rule at all and the Account's reach
+ * is still the undecided default. The first-run owner also honors this device's dismissal.
+ */
+export { resolveSkillsFirstVisit } from './firstRun/firstRunEligibility';

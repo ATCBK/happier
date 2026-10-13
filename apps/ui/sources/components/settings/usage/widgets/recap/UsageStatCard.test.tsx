@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { UsageRecapComposeResultSchema } from '@happier-dev/protocol';
+import { composeUsageRecap, UsageAnalyticsQueryResponseSchema, UsageRecapComposeInputSchema } from '@happier-dev/protocol';
+import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { buildUsageStatCardModel, type UsageRecapComposed } from './usageStatCardModel';
+import { buildUsageStatCardModel } from './usageStatCardModel';
 import { UsageStatCard } from './UsageStatCard';
 import { USAGE_STAT_CARD_STYLES } from './usageStatCardStyles';
 
@@ -11,13 +13,19 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 const tokens = { input: 900, output: 300, reasoning: 0, cacheRead: 600, cacheWrite: 100, total: 1_900_000_000 };
-const composed = UsageRecapComposeResultSchema.parse({ kind: 'composed', v: 1, style: 'daybreak', format: 'square',
-    selectedFields: ['tokens', 'activeDays', 'agentMix', 'rhythm'], unavailableFields: [],
-    period: { startMs: Date.UTC(2026, 6, 1), endMs: Date.UTC(2026, 8, 30), timeZoneOffsetMinutes: 0 }, asOfMs: null,
-    coverage: { accounting: null, sourceCoverage: [], sourceStatuses: [], pending: false },
-    facts: { tokens, activeDays: 61, agentMix: [{ tokens: 3, events: 1 }, { tokens: 1, events: 1 }],
-        rhythm: { calendarDays: [{ date: '2026-09-01', eventCount: 4 }, { date: '2026-09-02', eventCount: 0 }], weekdayHourBuckets: [] } },
-}) as UsageRecapComposed;
+const query = normalizeUsageQuery({ period: { startMs: Date.UTC(2026, 6, 1), endMs: Date.UTC(2026, 8, 30) } });
+const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+    totals: { eventCount: 2, tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+    insights: { activeDays: 61, longestStreakDays: 1, sessionsUsed: 1, messagesUsed: 2, modelsTried: 1, favoriteModelChangeCount: 0 },
+    breakdowns: { agent: [{ key: 'private-agent-a', label: 'Private Agent A', eventCount: 1, tokens: { ...tokens, total: 3 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+        { key: 'private-agent-b', label: 'Private Agent B', eventCount: 1, tokens: { ...tokens, total: 1 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] },
+    activity: { calendarDays: [{ date: '2026-09-01', eventCount: 4 }, { date: '2026-09-02', eventCount: 0 }], weekdayHourBuckets: [] },
+});
+const composed = composeUsageRecap({
+    input: UsageRecapComposeInputSchema.parse({ query, style: 'daybreak', format: 'square', selectedFields: ['tokens', 'activeDays', 'agentMix', 'rhythm'] }),
+    snapshot: resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: accounting, status: 'available' }] }).results[0]!,
+});
+if (composed.kind !== 'composed') throw new Error('The canonical recap producer must admit the renderer fixture');
 
 describe('private stat card renderer', () => {
     it.each(USAGE_STAT_CARD_STYLES)('retains every selected mix share beyond the palette in %s', async style => {
@@ -37,6 +45,7 @@ describe('private stat card renderer', () => {
             const card = screen.findByTestId('card')!;
             expect(card.props.accessibilityLabel).toContain('1.9B');
             expect(card.props.accessibilityLabel).toContain('61');
+            expect(card.props.accessibilityLabel).not.toContain('Private Agent');
             standardCleanup();
         });
 });

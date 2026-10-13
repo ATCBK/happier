@@ -37,7 +37,7 @@ import { MachineScopedSection } from '@/components/settings/machines/MachineScop
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import { ProviderExternalLinkItem } from '@/components/settings/providers/ProviderExternalLinkItem';
-import { ProviderHeaderActions, ProviderProbeResult, ProviderSavedSecretControl } from '@/components/settings/providers/ProviderPageParts';
+import { ProviderApprovalPendingBanner, ProviderHeaderActions, ProviderProbeResult, ProviderSavedSecretControl } from '@/components/settings/providers/ProviderPageParts';
 import { ConnectedAccountPurposeTargetChooser } from '@/components/settings/connectedServices/account/ConnectedAccountPurposeTargetChooser';
 import {
     useProjectedConnectedServicesRegistry,
@@ -142,6 +142,9 @@ function ProviderDuplicateDraft(props: Readonly<{
     mode: 'sameSource' | 'asCustom';
     initialName: string;
     pending: boolean;
+    providerName: string;
+    /** The Create waiting for its approval: the draft stays, and the way to the approval sits under it. */
+    pendingApproval: Readonly<{ onOpen: () => void }> | null;
     onCreate: (name: string, allowNavigation: () => void) => Promise<void>;
     onCancel: () => void;
 }>) {
@@ -149,18 +152,25 @@ function ProviderDuplicateDraft(props: Readonly<{
     const [name, setName] = React.useState(props.initialName);
     const guard = useUnsavedDraftNavigationGuard({ navigation, isDirty: name !== props.initialName,
         onDiscard: props.onCancel, tag: 'provider-duplicate-draft' });
-    return <ItemGroup title={t(props.mode === 'asCustom' ? 'settingsProviders.customTitle' : 'settingsProviders.detail.duplicateTitle')}
-        description={t(props.mode === 'asCustom' ? 'settingsProviders.customFooter' : 'settingsProviders.detail.duplicateDescription')}>
-        <ProviderFieldRow testID="provider-connection-duplicate-name" title={t('settingsProviders.authoring.name')}
-            value={name} onChangeText={setName} editable={!props.pending} />
-        <SectionContentRow><SectionButtonRow>
-            <RoundButton testID="provider-connection-duplicate-save" title={t('common.create')} size="small"
-                loading={props.pending} disabled={props.pending || !name.trim()}
-                onPress={() => { void props.onCreate(name, guard.allowSavedNavigation); }} />
-            <RoundButton testID="provider-connection-duplicate-cancel" title={t('common.cancel')} size="small" display="secondary"
-                disabled={props.pending} onPress={props.onCancel} />
-        </SectionButtonRow></SectionContentRow>
-    </ItemGroup>;
+    return <>
+        <ItemGroup title={t(props.mode === 'asCustom' ? 'settingsProviders.customTitle' : 'settingsProviders.detail.duplicateTitle')}
+            description={t(props.mode === 'asCustom' ? 'settingsProviders.customFooter' : 'settingsProviders.detail.duplicateDescription')}>
+            <ProviderFieldRow testID="provider-connection-duplicate-name" title={t('settingsProviders.authoring.name')}
+                value={name} onChangeText={setName} editable={!props.pending} />
+            <SectionContentRow><SectionButtonRow>
+                <RoundButton testID="provider-connection-duplicate-save" title={t('common.create')} size="small"
+                    loading={props.pending && !props.pendingApproval} disabled={props.pending || !name.trim()}
+                    onPress={() => { void props.onCreate(name, guard.allowSavedNavigation); }} />
+                <RoundButton testID="provider-connection-duplicate-cancel" title={t('common.cancel')} size="small" display="secondary"
+                    disabled={props.pending} onPress={props.onCancel} />
+            </SectionButtonRow></SectionContentRow>
+        </ItemGroup>
+        {props.pending && props.pendingApproval ? (
+            // Names the connection being added ("DeepSeek · Work"), not the one already on this page.
+            <ProviderApprovalPendingBanner testID="provider-connection-duplicate-approval"
+                providerName={name.trim() || props.providerName} onOpen={props.pendingApproval.onOpen} />
+        ) : null}
+    </>;
 }
 
 export const ProviderConnectionDetailScreen = React.memo(function ProviderConnectionDetailScreen(
@@ -226,6 +236,10 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         serverId,
         refresh: refreshConnectionQuery,
     });
+    const mutationApprovalHref = mutation.pendingApproval?.href ?? null;
+    const mutationApproval = React.useMemo(() => mutationApprovalHref ? {
+        onOpen: () => router.pushRetainingCurrent(mutationApprovalHref as never),
+    } : null, [mutationApprovalHref, router]);
     const deleteInFlightRef = React.useRef(false);
     const [deletePending, setDeletePending] = React.useState(false);
     const [probeState, setProbeState] = React.useState<'idle' | 'probing' | 'success' | 'notSupported'>('idle');
@@ -1246,6 +1260,8 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
             {duplicateMode ? <ProviderDuplicateDraft key={duplicateMode} mode={duplicateMode}
                 initialName={t('settingsProviders.detail.copyName', { name: connection.displayName })}
                 pending={mutation.isPending(`duplicate:${duplicateMode}`)}
+                providerName={presentation.title}
+                pendingApproval={mutationApproval}
                 onCreate={(name, allowNavigation) => duplicate(duplicateMode, name, allowNavigation)} onCancel={discardDuplicate} /> : null}
             {gateway ? (
                 <ProviderGatewaySections

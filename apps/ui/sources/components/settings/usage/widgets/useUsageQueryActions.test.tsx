@@ -6,7 +6,7 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
 import { createDeferred, renderScreen } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
-import type { Credentials } from '@/auth/storage/tokenStorage';
+import type { AuthCredentials as Credentials } from '@/auth/storage/tokenStorage';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -84,8 +84,8 @@ beforeEach(async () => {
   publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://usage-ask.test', generation: 1 });
 });
 
-afterEach(() => {
-  home?.dispose();
+afterEach(async () => {
+  await home?.dispose();
   publishAppliedActiveServerRuntimeAvailability(false);
   resetSessionDraftRepositoryForTests();
   retirePresentationNotice();

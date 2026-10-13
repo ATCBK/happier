@@ -10,11 +10,7 @@ import {
 } from './promptLibrarySettingsTestHelpers';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const useFeatureEnabledMock = vi.hoisted(() => vi.fn((featureId: string) => (
-    featureId === 'prompts.assets.external' || featureId === 'prompts.skills.registries'
-)));
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 installPromptLibrarySettingsCommonModuleMocks({ storage: async (importOriginal) => importOriginal() });
 
@@ -22,24 +18,11 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 1000 },
-    useLayoutMaxWidth: () => 1000,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 1000 }),
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => useFeatureEnabledMock(featureId),
-}));
-
 beforeEach(async () => {
     installDisconnectedServerSocketBoundary();
     await loadSyncSingletonForTests();
     clearActiveUnsavedChangesGuard();
     promptLibrarySettingsRouterPushSpy.mockClear();
-    useFeatureEnabledMock.mockImplementation((featureId: string) => (
-        featureId === 'prompts.assets.external' || featureId === 'prompts.skills.registries'
-    ));
 });
 
 afterEach(async () => {

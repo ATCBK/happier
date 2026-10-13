@@ -65,15 +65,35 @@ export function buildPromptLibraryCollection(params: Readonly<{
     const tree = projectArtifactBrowserTree(members.map(artifact => ({ ...artifact,
         title: readPromptArtifactTitle(artifact, params.untitledTitle) })),
         { query: params.query, kind: 'prompt', sort: 'title_asc' }, { folders: params.folders });
-    const groups = new Map<string | null, { id: string | null; title: string | null; rows: PromptCollectionRow[] }>();
     const folderNames = new Map(tree.filter(node => node.kind === 'branch').map(node => [node.key, node.title]));
-    for (const node of tree) {
-        if (node.kind !== 'leaf') continue;
-        const id = node.parentKey === null ? null : node.row.folderId;
-        const group = groups.get(id) ?? { id, title: node.parentKey === null ? null : folderNames.get(node.parentKey) ?? null, rows: [] };
-        group.rows.push({ id: node.row.key, title: node.title }); groups.set(id, group);
+    const groups = groupRowsByFolder(tree.flatMap(node => node.kind !== 'leaf' ? [] : [{
+        folder: node.parentKey === null ? null : { id: node.row.folderId, title: folderNames.get(node.parentKey) ?? null },
+        row: { id: node.row.key, title: node.title },
+    }]));
+    return { total: members.length, groups, tree };
+}
+
+/**
+ * The library's one folder-grouping rule, for every collection that files items in the personal folder
+ * tree (prompts, skills): folders by name, then the items outside any folder, each group keeping the
+ * caller's row order. With no item in a folder it is one untitled group, never a heading that says
+ * nothing; with no rows, no group.
+ */
+export function groupRowsByFolder<R>(entries: readonly Readonly<{
+    /** The folder the row is filed in, when the folder tree knows it; `null` for none or an unknown one. */
+    folder: Readonly<{ id: string | null; title: string | null }> | null;
+    row: R;
+}>[]): readonly Readonly<{ id: string | null; title: string | null; rows: readonly R[] }>[] {
+    const groups = new Map<string | null, { id: string | null; title: string | null; rows: R[] }>();
+    for (const entry of entries) {
+        const id = entry.folder?.id ?? null;
+        const group = groups.get(id) ?? { id, title: id === null ? null : entry.folder?.title ?? null, rows: [] };
+        group.rows.push(entry.row); groups.set(id, group);
     }
-    return { total: members.length, groups: [...groups.values()], tree };
+    const folders = [...groups.values()].filter(group => group.id !== null)
+        .sort((left, right) => (left.title ?? '').localeCompare(right.title ?? '', undefined, { sensitivity: 'base' }));
+    const outside = groups.get(null);
+    return outside ? [...folders, outside] : folders;
 }
 
 /** Slash templates, by name, each with its command. */

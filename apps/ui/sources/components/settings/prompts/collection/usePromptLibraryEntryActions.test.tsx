@@ -10,11 +10,6 @@ import { installPromptLibrarySettingsCommonModuleMocks, promptLibrarySettingsRou
 
 const modalConfirm = vi.hoisted(() => vi.fn(async () => true));
 const modalAlert = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute:
-    (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
-});
 installDisconnectedServerSocketBoundary();
 installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => importOriginal(),
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({

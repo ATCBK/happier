@@ -1,0 +1,59 @@
+import * as React from 'react';
+import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
+import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { resolveSkillsFirstVisit } from './firstRunEligibility';
+import { buildSkillsFirstRunSelection, skillsFirstRunTurnOnInput } from './skillsFirstRunSelection';
+
+/** First-run reads the existing Account rule owner; only dismissal lives on this device. */
+export function useSkillsFirstRun(items: readonly SkillListItemV1[]) {
+  const scope = useAccountSettingsScope();
+  const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
+  const catalog = usePromptLibraryCatalogValue('skill-rules', scope);
+  const execution = useMountedActionExecution(scope);
+  const [decidedAt, setDecidedAt] = useLocalSettingMutable('skillsFirstRunDecidedAt');
+  const selection = React.useMemo(() => buildSkillsFirstRunSelection(items), [items]);
+  const firstVisit = React.useMemo(() => catalog.status === 'ready' && catalog.value
+    ? resolveSkillsFirstVisit(items, { rules: catalog.value.rules, decidedAt }) : null,
+  [items, catalog.status, catalog.value, decidedAt]);
+  const [choices, setChoices] = React.useState<Readonly<{ scopeKey: string | null; values: ReadonlyMap<string, boolean> }>>(
+    () => ({ scopeKey, values: new Map() }));
+  const selectedIds = React.useMemo(() => {
+    const defaults = new Set(selection.preselectedIds);
+    return selection.items.filter(item => choices.scopeKey === scopeKey && choices.values.has(item.skillId)
+      ? choices.values.get(item.skillId) : defaults.has(item.skillId)).map(item => item.skillId);
+  }, [selection, choices, scopeKey]);
+  const setSelected = React.useCallback((skillId: string, selected: boolean) => {
+    setChoices(previous => ({ scopeKey, values: new Map(previous.scopeKey === scopeKey ? previous.values : []).set(skillId, selected) }));
+  }, [scopeKey]);
+  const [pending, setPending] = React.useState(false);
+  const [errorCode, setErrorCode] = React.useState<string | null>(null);
+  const inFlight = React.useRef<Promise<boolean> | null>(null);
+  const notNow = React.useCallback(() => setDecidedAt(Date.now()), [setDecidedAt]);
+  const turnOn = React.useCallback((): Promise<boolean> => {
+    if (inFlight.current) return inFlight.current;
+    if (!firstVisit || !execution.ready || selectedIds.length === 0) return Promise.resolve(false);
+    setPending(true); setErrorCode(null);
+    const operation = (async () => {
+      try {
+        const receipt = await execution.execute('skills.rules.set', skillsFirstRunTurnOnInput(selectedIds));
+        if (!receipt.ok) { setErrorCode(receipt.errorCode ?? receipt.error); return false; }
+        const parsed = SkillsRulesSetOutputV1Schema.safeParse(receipt.result);
+        if (!parsed.success) { setErrorCode('invalid_action_output'); return false; }
+        if (!parsed.data.ok) { setErrorCode(parsed.data.code); return false; }
+        setDecidedAt(Date.now());
+        return true;
+      } catch (error) {
+        setErrorCode(error instanceof Error ? error.message : 'catalog_unavailable'); return false;
+      } finally { setPending(false); inFlight.current = null; }
+    })();
+    inFlight.current = operation;
+    return operation;
+  }, [firstVisit, execution.ready, execution.execute, selectedIds, setDecidedAt]);
+  const migrated = React.useMemo(() => items.filter(item => item.provenance.kind !== 'first_party' && item.migratedFromContext), [items]);
+  return { eligible: firstVisit !== null, firstVisit, items: selection.items, migrated, selectedIds, selectedCount: selectedIds.length,
+    setSelected, turnOn, notNow, pending, errorCode };
+}

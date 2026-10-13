@@ -24,11 +24,13 @@ export function ProviderPickerVisibilityRow(props: Readonly<{
     visibility: ProviderModelPickerVisibility;
     /** Why this kind of source starts as it does, when the page knows more than the default reason. */
     description?: string;
+    /** Injected by the enclosing `ItemGroup`, so the section's last row draws no divider. */
+    showDivider?: boolean;
 }>): React.ReactElement {
     const { visibility } = props;
     const title = t('settingsProvidersCollection.showInPickerTitle');
     return (
-        <SettingAnchor setting={PROVIDER_DETAIL_SETTINGS.settings.visibility}><Item
+        <SettingAnchor setting={PROVIDER_DETAIL_SETTINGS.settings.visibility} showDivider={props.showDivider}><Item
             testID="provider-connection-picker-visibility"
             title={title}
             subtitle={props.description ?? (visibility.defaultReason === 'direct'

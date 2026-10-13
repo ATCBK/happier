@@ -1,8 +1,9 @@
 import * as React from 'react';
+import { SelectableRow } from '@/components/ui/lists/SelectableRow';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit';
 import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/machines/machinesSettingsTestHelpers';
 import { createSystemTaskRunner } from '@/components/systemTasks/createSystemTaskRunner';
 import { ThisComputerServersMenuSection } from './ThisComputerServersMenuSection';
@@ -27,13 +28,6 @@ installMachinesSettingsCommonModuleMocks({
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
     Octicons: 'Octicons',
-}));
-
-// The menu row primitive is presentation; the rows it receives are this leaf's contract.
-vi.mock('@/components/ui/lists/ActionListSection', () => ({
-    ActionListSection: (props: { title?: string; actions: ReadonlyArray<Record<string, unknown>> }) =>
-        React.createElement('Section', { title: props.title }, props.actions.map((action) =>
-            React.createElement('Row', { key: String(action.id), ...action }))),
 }));
 
 describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', () => {
@@ -69,7 +63,7 @@ describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', 
         const onClose = vi.fn();
         const screen = await renderScreen(React.createElement(ThisComputerServersMenuSection, { runner, onClose }));
         // Nothing to show until this computer's status is known.
-        expect(screen.findByTestId('connection-popover-this-computer-server-0')).toBeFalsy();
+        expect(findTestInstanceByTypeWithProps(screen, SelectableRow, { testID: 'connection-popover-this-computer-server-0' })).toBeFalsy();
 
         await publish(runner, {
             serviceInstalled: true,
@@ -84,7 +78,7 @@ describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', 
             ],
         });
 
-        const rows = [0, 1, 2].map((index) => screen.findByTestId(`connection-popover-this-computer-server-${index}`));
+        const rows = [0, 1, 2].map((index) => findTestInstanceByTypeWithProps(screen, SelectableRow, { testID: `connection-popover-this-computer-server-${index}` }));
         expect(rows.map((entry) => entry?.props.subtitle)).toEqual([
             'machine.thisComputer.servers.connected',
             'machine.thisComputer.servers.offline',
@@ -92,7 +86,7 @@ describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', 
         ]);
         expect(starts).toEqual([]);
         // Some services could not be read (`serviceRowsComplete: false`): the list says so.
-        expect(screen.findByTestId('connection-popover-this-computer-servers-incomplete')?.props.label).toBe('settingsDesktop.tray.incomplete');
+        expect(findTestInstanceByTypeWithProps(screen, SelectableRow, { testID: 'connection-popover-this-computer-servers-incomplete' })?.props.title).toBe('settingsDesktop.tray.incomplete');
         rows[1]?.props.onPress();
         // Opens This computer, then closes the popover.
         expect(onClose).toHaveBeenCalledTimes(1);
@@ -102,7 +96,7 @@ describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', 
         const { runner } = runnerWithNoReads();
         const screen = await renderScreen(React.createElement(ThisComputerServersMenuSection, { runner, onClose: () => {} }));
         await publish(runner, { serviceInstalled: false, daemonRunning: false, needsAuth: false, serviceRowsComplete: true, serviceRows: [] });
-        expect(screen.findByTestId('connection-popover-this-computer-servers')).toBeFalsy();
+        expect(findTestInstanceByTypeWithProps(screen, SelectableRow, { testID: 'connection-popover-this-computer-servers' })).toBeFalsy();
     });
 
     it('reports a failed inventory read and leads to This computer instead of implying there are no services', async () => {
@@ -110,7 +104,7 @@ describe('ThisComputerServersMenuSection (connection popover, R15 d, R13C-F4)', 
         const onClose = vi.fn();
         const screen = await renderScreen(<ThisComputerServersMenuSection runner={runner} onClose={onClose} />);
         await publish(runner, {});
-        const failure = screen.findByTestId('connection-popover-this-computer-servers-failed');
+        const failure = findTestInstanceByTypeWithProps(screen, SelectableRow, { testID: 'connection-popover-this-computer-servers-failed' });
         expect(failure).toBeTruthy();
         failure?.props.onPress();
         expect(onClose).toHaveBeenCalledOnce();

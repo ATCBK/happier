@@ -7,11 +7,10 @@ import type {
   PromptAssetInstallModeV1,
   PromptAssetScopeV1,
   PromptAssetTypeDescriptorV1,
-  PromptRegistryConfiguredSourceV1,
-  PromptRegistryFetchedItemV1,
 } from '@happier-dev/protocol';
 
-import { decodeBase64 } from '@/encryption/base64';
+import { useRegistryItem } from '@/registries/useRegistryItem';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { defaultPromptAssetTargetInput } from '@/components/settings/prompts/assets/promptAssetExportDefaults';
 import { ContextBar } from '@/components/settings/contextBar/ContextBar';
 import { useContextBarSelection } from '@/components/settings/contextBar/useContextBarSelection';
@@ -34,9 +33,8 @@ import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/pro
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionRoutes';
 import { requireUpdatedPromptLibraryMutation, writePromptLibraryRecordAndPublishInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
 import { machinePromptAssetsListTypes } from '@/sync/ops/machinePromptAssets';
-import { machinePromptRegistriesDownloadItem } from '@/sync/ops/machinePromptRegistries';
 import { installPromptRegistryItem, type PromptRegistryInstallResult } from '@/sync/ops/promptLibrary/installPromptRegistryItem';
-import { createPromptRegistrySkillArtifactFromFetchedItem } from '@/sync/ops/promptLibrary/promptRegistrySkillImports';
+import { importPromptRegistrySkillItem } from '@/sync/ops/promptLibrary/promptRegistrySkillImports';
 import { translatePromptLibraryMessage } from '@/sync/ops/promptLibrary/translatePromptLibraryMessage';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -73,17 +71,6 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 
-function decodeUtf8BundleEntry(item: PromptRegistryFetchedItemV1 | null, path: string): string | null {
-  const entry = item?.bundleBody.entries.find((candidate) => candidate.path === path && candidate.contentKind === 'utf8') ?? null;
-  if (!entry) return null;
-  try {
-    const bytes = decodeBase64(entry.contentBase64, 'base64');
-    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
 function installFailureMessage(error: string, result: PromptRegistryInstallResult): string {
   const message = translatePromptLibraryMessage(error);
   const targetPath = result.exported === true ? result.response?.preview?.targetPath : undefined;
@@ -93,7 +80,6 @@ function installFailureMessage(error: string, result: PromptRegistryInstallResul
 export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistryItemDetailsScreen(props: Readonly<{
   sourceId: string;
   itemId: string;
-  configuredSources: PromptRegistryConfiguredSourceV1[] | null;
   title?: string | null;
   displayPath?: string | null;
   workspacePath?: string | null;
@@ -101,6 +87,9 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
   const { theme } = useUnistyles();
   const router = useRouter();
   const libraryScope = useAccountSettingsScope();
+  const execution = useMountedActionExecution(libraryScope);
+  const { item, loading, error: itemError } = useRegistryItem({ kind: 'skill', sourceId: props.sourceId, itemId: props.itemId });
+  React.useEffect(() => { if (itemError) Modal.alert(t('common.error'), itemError); }, [itemError]);
   const administrationTargetSelection = useMachineAdministrationTargetSelection(
     MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptRegistries,
   );
@@ -112,7 +101,6 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
   } = useMachineAdministrationExecutionTargetBinding(administrationTargetSelection);
   const { value: promptExternalLinksV1, revision: linksRevision, sourceSettingsVersion: linksSourceSettingsVersion,
     status: linksStatus, stale: linksStale } = usePromptLibraryCatalogValue('external-links');
-  const [item, setItem] = React.useState<PromptRegistryFetchedItemV1 | null>(null);
   const [installTypes, setInstallTypes] = React.useState<PromptAssetTypeDescriptorV1[]>([]);
   const [installScope, setInstallScope] = React.useState<PromptAssetScopeV1>('project');
   const [typeMenuOpen, setTypeMenuOpen] = React.useState(false);
@@ -132,34 +120,9 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
   });
 
   React.useEffect(() => {
-    setItem(null);
     setInstallTypes([]);
     setSelectedInstallTypeId(null);
   }, [selectionKey]);
-
-  const loadItem = React.useCallback(async () => {
-    if (!props.configuredSources) return;
-    const requestedSelection = selectionKey;
-    const executionTarget = resolveExactExecutionTarget(selectedTarget);
-    if (!executionTarget) return;
-    const response = await machinePromptRegistriesDownloadItem(executionTarget.machine.id, {
-      sourceId: props.sourceId,
-      itemId: props.itemId,
-      configuredSources: props.configuredSources,
-    }, { serverId: executionTarget.serverId });
-    if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
-    if (!response.ok) {
-      Modal.alert(t('common.error'), response.error);
-      return;
-    }
-    setItem(response.item);
-  }, [isExecutionTargetCurrent, props.configuredSources, props.itemId, props.sourceId, resolveExactExecutionTarget, selectedTarget, selectionKey]);
-
-  const [loading, runLoad] = useHappyAction(loadItem);
-
-  React.useEffect(() => {
-    runLoad();
-  }, [runLoad]);
 
   React.useEffect(() => {
     const requestedSelection = selectionKey;
@@ -184,7 +147,7 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
     return () => {
       cancelled = true;
     };
-  }, [isExecutionTargetCurrent, resolveExactExecutionTarget, selectedTarget, selectionKey]);
+  }, [administrationTargetSelection.canExecute, isExecutionTargetCurrent, resolveExactExecutionTarget, selectedTarget, selectionKey]);
 
   const scopeCompatibleInstallTypes = React.useMemo(
     () => listPromptAssetTypesForScope(installTypes, installScope),
@@ -203,7 +166,7 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
     if (!item) return;
     setTargetInput((current) => current || defaultPromptAssetTargetInput({
       libraryKind: 'bundle',
-      title: item.title,
+      title: item.summary.title,
     }));
   }, [item]);
 
@@ -244,28 +207,17 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
   );
 
   const importItem = React.useCallback(async () => {
-    if (!libraryScope || !props.configuredSources || !item || !resolveExactExecutionTarget(selectedTarget)) return;
-    const libraryAccount = await captureLazyActionAccountContext(libraryScope.serverId);
-    try {
-      if (libraryAccount.accountId !== libraryScope.accountId) throw new Error('action_account_scope_changed');
-      libraryAccount.assertCurrent();
-      const imported = await createPromptRegistrySkillArtifactFromFetchedItem(item,
-        createUiPromptLibraryArtifactStore(libraryAccount.workflowArtifacts, libraryAccount));
-      libraryAccount.assertCurrent();
-      if (!imported.ok) {
-        Modal.alert(t('common.error'), translatePromptLibraryMessage(imported.error));
-        return;
-      }
-      router.push(promptCollectionItemHref('bundle', imported.artifactId, { serverId: libraryAccount.serverId }));
-    } finally {
-      libraryAccount.dispose();
-    }
-  }, [item, libraryScope, props.configuredSources, resolveExactExecutionTarget, router, selectedTarget]);
+    if (!libraryScope || !item || !item.summary.version) return;
+    const imported = await importPromptRegistrySkillItem({ sourceId: item.summary.sourceId, itemId: item.summary.itemId,
+      version: item.summary.version, serverId: libraryScope.serverId, expectedAccountId: libraryScope.accountId }, execution.execute);
+    if (!imported.ok) { Modal.alert(t('common.error'), translatePromptLibraryMessage(imported.error)); return; }
+    if (execution.isCurrent()) router.push(promptCollectionItemHref('bundle', imported.artifactId, { serverId: libraryScope.serverId }));
+  }, [execution.execute, execution.isCurrent, item, libraryScope, router]);
 
   const [importing, runImport] = useHappyAction(importItem);
 
   const installItem = React.useCallback(async () => {
-    if (!libraryScope || !props.configuredSources) return;
+    if (!libraryScope) return;
     if (!promptExternalLinksV1 || linksStatus !== 'ready' || linksStale) return;
     const requestedSelection = selectionKey;
     const executionTarget = resolveExactExecutionTarget(selectedTarget);
@@ -285,7 +237,6 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
         machineTarget: executionTarget.target,
         libraryServerIdentityId: libraryAccount.serverIdentityId,
         serverId: executionTarget.serverId,
-        configuredSources: props.configuredSources,
         sourceId: props.sourceId,
         itemId: props.itemId,
         installTarget: {
@@ -298,7 +249,7 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
         promptExternalLinks: promptExternalLinksV1,
         previewOnly: true,
         signal: controller.signal,
-      }, store);
+      }, store, libraryAccount);
       libraryAccount.assertCurrent();
       if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
       if (!preview.ok) {
@@ -330,7 +281,6 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
         machineTarget: committedExecutionTarget.target,
         libraryServerIdentityId: libraryAccount.serverIdentityId,
         serverId: committedExecutionTarget.serverId,
-        configuredSources: props.configuredSources,
         sourceId: props.sourceId,
         itemId: props.itemId,
         installTarget: {
@@ -343,7 +293,7 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
         promptExternalLinks: promptExternalLinksV1,
         previewOnly: false,
         signal: controller.signal,
-      }, store);
+      }, store, libraryAccount);
       if (!installed.ok) {
         Modal.alert(t('common.error'), installFailureMessage(installed.error, installed));
         if (installed.artifactId && libraryAccount.accountLifetime.isCurrent()
@@ -370,14 +320,14 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
       retirement.dispose();
       libraryAccount.dispose();
     }
-  }, [installScope, installType, isExecutionTargetCurrent, libraryScope, linksRevision, linksSourceSettingsVersion, linksStatus, linksStale, promptExternalLinksV1, props.configuredSources, props.itemId, props.sourceId, resolveExactExecutionTarget, router, selectedInstallMode, selectedTarget, selectionKey, targetInput, workspacePath]);
+  }, [installScope, installType, isExecutionTargetCurrent, libraryScope, linksRevision, linksSourceSettingsVersion, linksStatus, linksStale, promptExternalLinksV1, props.itemId, props.sourceId, resolveExactExecutionTarget, router, selectedInstallMode, selectedTarget, selectionKey, targetInput, workspacePath]);
 
   const [installing, runInstall] = useHappyAction(installItem);
 
-  const skillMarkdown = React.useMemo(() => decodeUtf8BundleEntry(item, 'SKILL.md'), [item]);
-  const additionalFilesCount = Math.max(0, (item?.bundleBody.entries.length ?? 0) - (skillMarkdown ? 1 : 0));
-  const screenTitle = item?.title ?? props.title ?? t('common.details');
-  const sourceLabel = props.displayPath?.split('/').slice(0, -1).join('/') || item?.description || props.sourceId;
+  const skillMarkdown = item?.payload.kind === 'skill' ? item.payload.skill.skillMarkdown : null;
+  const additionalFilesCount = Math.max(0, (item?.payload.kind === 'skill' ? item.payload.skill.files.length : 0) - (skillMarkdown ? 1 : 0));
+  const screenTitle = item?.summary.title ?? props.title ?? t('common.details');
+  const sourceLabel = props.displayPath?.split('/').slice(0, -1).join('/') || item?.summary.description || props.sourceId;
   const executionTarget = resolveExactExecutionTarget(selectedTarget);
 
   const installDisabled = executionTarget === null || installing || !installType || targetInput.trim().length === 0 || (installScope === 'project' && workspacePath.trim().length === 0);
@@ -421,7 +371,7 @@ export const PromptRegistryItemDetailsScreen = React.memo(function PromptRegistr
         <Item
           testID="promptRegistries.details.path"
           title={t('promptLibrary.registriesItemPath')}
-          subtitle={props.displayPath ?? item?.description ?? props.itemId}
+          subtitle={props.displayPath ?? item?.summary.description ?? props.itemId}
           mode="info"
           showChevron={false}
         />

@@ -3,7 +3,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachinePoolViewV1 } from '@happier-dev/protocol';
 
-import { createMachineFixture, renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { resolveItemSubtitleMaxLines } from '@/components/ui/lists/itemTextClamp';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
@@ -19,7 +21,7 @@ import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMac
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// Only the navigation boundary and the two list primitives are stubbed: the feature decision,
+// Only the navigation and HTTP boundaries are stubbed: the feature decision,
 // projection owner, storage and HTTP transport below them stay real, and translation keys stand in
 // for copy so the assertions describe presentation decisions rather than wording.
 vi.mock('expo-router', async () => {
@@ -34,8 +36,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: ({ children, ...props }: any) => React.createElement('ItemGroup', props, children) }));
-vi.mock('@/components/ui/lists/Item', () => ({ Item: (props: any) => React.createElement('Item', props) }));
 
 const boundary = {
     serverId: '',
@@ -153,7 +153,7 @@ describe('MachinePoolsSection', () => {
 
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        expect(screen.findAllByType('Item')).toHaveLength(0);
+        expect(screen.tree.findAllByType(Item)).toHaveLength(0);
         expect(boundary.requests.some((url) => url.endsWith('/v1/machines/pools/list'))).toBe(false);
     });
 
@@ -165,12 +165,12 @@ describe('MachinePoolsSection', () => {
 
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        expect(screen.findByTestId(`settings.machinePools.featureFailed.${boundary.serverId}`)).not.toBeNull();
-        const retainedRow = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}`);
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureFailed.${boundary.serverId}` })).toBeDefined();
+        const retainedRow = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` });
         expect(retainedRow?.props.title).toBe('Development');
         expect(retainedRow?.props.disabled).toBe(true);
         expect(retainedRow?.props.detail).toContain('machinePools.unavailable');
-        expect(screen.findByTestId(`settings.machinePools.add.${boundary.serverId}`)).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.add.${boundary.serverId}` })).toBeUndefined();
         expect(boundary.requests.some((url) => url.endsWith('/v1/machines/pools/list'))).toBe(false);
 
         const callsBeforeRetry = boundary.requests.filter((url) => url.endsWith('/v1/features')).length;
@@ -192,8 +192,8 @@ describe('MachinePoolsSection', () => {
 
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        expect(screen.findAllByType('ItemGroup')).toHaveLength(0);
-        expect(screen.findByTestId(`settings.machinePools.featureLoading.${boundary.serverId}`)).toBeNull();
+        expect(screen.tree.findAllByType(ItemGroup)).toHaveLength(0);
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureLoading.${boundary.serverId}` })).toBeUndefined();
     });
 
     it('does not advertise Pool administration after a cold feature-discovery failure', async () => {
@@ -209,10 +209,10 @@ describe('MachinePoolsSection', () => {
 
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        expect(screen.findAllByType('ItemGroup')).toHaveLength(0);
-        expect(screen.findByTestId(`settings.machinePools.featureFailed.${boundary.serverId}`)).toBeNull();
-        expect(screen.findByTestId(`settings.machinePools.featureRetry.${boundary.serverId}`)).toBeNull();
-        expect(screen.findByTestId(`settings.machinePools.add.${boundary.serverId}`)).toBeNull();
+        expect(screen.tree.findAllByType(ItemGroup)).toHaveLength(0);
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureFailed.${boundary.serverId}` })).toBeUndefined();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureRetry.${boundary.serverId}` })).toBeUndefined();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.add.${boundary.serverId}` })).toBeUndefined();
         expect(boundary.requests.some((url) => url.endsWith('/v1/machines/pools/list'))).toBe(false);
     });
 
@@ -224,14 +224,14 @@ describe('MachinePoolsSection', () => {
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
         await vi.waitFor(() => {
-            expect(screen.findByTestId(`settings.machinePools.featureLoading.${boundary.serverId}`)).not.toBeNull();
-            expect(screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}`)).not.toBeNull();
+            expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.featureLoading.${boundary.serverId}` })).toBeDefined();
+            expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` })).toBeDefined();
         });
-        const retainedRow = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}`);
+        const retainedRow = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` });
         expect(retainedRow?.props.title).toBe('Development');
         expect(retainedRow?.props.disabled).toBe(true);
         expect(retainedRow?.props.detail).toContain('machinePools.unavailable');
-        expect(screen.findByTestId(`settings.machinePools.add.${boundary.serverId}`)).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.add.${boundary.serverId}` })).toBeUndefined();
         expect(boundary.requests.some((url) => url.endsWith('/v1/machines/pools/list'))).toBe(false);
     });
 
@@ -239,13 +239,13 @@ describe('MachinePoolsSection', () => {
         const { MachinePoolsSection } = await import('./MachinePoolsSection');
         const screen = await renderScreen(<MachinePoolsSection groups={[group('signedOut')]} />);
 
-        const row = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}`);
+        const row = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` });
         expect(row?.props.title).toBe('Development');
         expect(row?.props.disabled).toBe(true);
         expect(row?.props.detail).toContain('machinePools.unavailable');
         expect(row?.props.accessibilityLabel).toContain('machinePools.unavailable');
-        expect(screen.findByTestId(`settings.machinePools.unavailable.${boundary.serverId}`)).not.toBeNull();
-        expect(screen.findByTestId(`settings.machinePools.add.${boundary.serverId}`)?.props.disabled).toBe(true);
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.unavailable.${boundary.serverId}` })).toBeDefined();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.add.${boundary.serverId}` })?.props.disabled).toBe(true);
     });
 
     it('reports a refresh failure truthfully with an explicit Retry instead of claiming the Home is offline', async () => {
@@ -258,18 +258,18 @@ describe('MachinePoolsSection', () => {
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
         await vi.waitFor(() => {
-            expect(screen.findByTestId(`settings.machinePools.refreshFailed.${boundary.serverId}`)).not.toBeNull();
+            expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.refreshFailed.${boundary.serverId}` })).toBeDefined();
         });
-        expect(screen.findByTestId(`settings.machinePools.unavailable.${boundary.serverId}`)).toBeNull();
-        expect(screen.findByTestId(`settings.machinePools.refreshFailed.${boundary.serverId}`)?.props.title)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.unavailable.${boundary.serverId}` })).toBeUndefined();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.refreshFailed.${boundary.serverId}` })?.props.title)
             .toBe('machinePools.refreshFailed');
         // Retained rows stay readable, but their connection summary is not presented as current.
-        const row = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}`);
+        const row = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${POOL_A.pool.id}` });
         expect(row?.props.title).toBe('Development');
         expect(row?.props.detail).toContain('machinePools.unavailable');
         // Administration remains reachable: a failed read is not a write authority decision.
         expect(row?.props.disabled).toBe(false);
-        expect(screen.findByTestId(`settings.machinePools.add.${boundary.serverId}`)?.props.disabled).toBe(false);
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.add.${boundary.serverId}` })?.props.disabled).toBe(false);
 
         boundary.requests.length = 0;
         await screen.pressByTestIdAsync(`settings.machinePools.retry.${boundary.serverId}`);
@@ -290,7 +290,7 @@ describe('MachinePoolsSection', () => {
         const { MachinePoolsSection } = await import('./MachinePoolsSection');
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        const row = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${memberless.pool.id}`);
+        const row = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${memberless.pool.id}` });
         expect(row?.props.title).toBe('Staging');
         // An empty Pool is a valid saved configuration. Saying "no machine pools yet" under its own
         // name tells the user their Pool does not exist.
@@ -315,7 +315,7 @@ describe('MachinePoolsSection', () => {
         const { MachinePoolsSection } = await import('./MachinePoolsSection');
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} />);
 
-        const row = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${view.pool.id}`);
+        const row = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${view.pool.id}` });
         // A member this Home no longer lists is named by the state the pool reports, never as locked.
         expect(row?.props.subtitle).toBe('Mac Studio, machine.unlistedMachine');
         expect(row?.props.accessibilityLabel).toContain('Mac Studio, machine.unlistedMachine');
@@ -328,7 +328,7 @@ describe('MachinePoolsSection', () => {
         const screen = await renderScreen(<MachinePoolsSection groups={[group('idle')]} variant={variant} />);
 
         for (const pool of [POOL_A, POOL_B]) {
-            const row = screen.findByTestId(`settings.machinePools.row.${boundary.serverId}.${pool.pool.id}`);
+            const row = findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.machinePools.row.${boundary.serverId}.${pool.pool.id}` });
             expect(row?.props.title).toBe('Development');
             const visibleText = [row?.props.title, row?.props.subtitle, row?.props.detail].filter(Boolean).join(' ');
             // These IDs differ only in their final character: a common short prefix is not identity.

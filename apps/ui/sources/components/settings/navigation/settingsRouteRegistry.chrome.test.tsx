@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Text } from '@/components/ui/text/Text';
 import { getSettingsStackScreenDefinitions, shouldShowSettingsParentBackButton } from './settingsRouteRegistry';
 
 import {
@@ -135,6 +136,32 @@ describe('settings header Back', () => {
 
         expect(dismissToSpy).toHaveBeenCalledWith('/settings');
         expect(navigateSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe('a page that heads itself on a phone', () => {
+    async function renderBackLabels(pathname: string, name: string): Promise<{ title: unknown; labels: string[] }> {
+        pathnameState.value = pathname;
+        const definition = getSettingsStackScreenDefinitions(identity).find((candidate) => candidate.name === name);
+        let tree!: ReactTestRenderer;
+        await act(async () => {
+            tree = create(React.createElement(definition?.options.headerLeft as React.ElementType, { tintColor: '#111111' }));
+        });
+        const labels = tree.root.findAllByType(Text).flatMap((node) => node.props.children as string);
+        await act(async () => { tree.unmount(); });
+        return { title: definition?.options.headerTitle, labels };
+    }
+
+    it('leaves the bar untitled and names the parent beside Back, so its large title is the only title', async () => {
+        const skills = await renderBackLabels('/settings/skills', 'skills');
+        expect(skills.title).toBe('');
+        expect(skills.labels).toEqual(['settings.title']);
+    });
+
+    it('keeps the bar title and an icon-only Back on a page the chrome titles', async () => {
+        const appearance = await renderBackLabels('/settings/appearance', 'appearance');
+        expect(appearance.title).toBe('settings.appearance');
+        expect(appearance.labels).toEqual([]);
     });
 });
 

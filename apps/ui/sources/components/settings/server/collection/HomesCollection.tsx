@@ -12,6 +12,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import {
     CollectionDraftRow,
@@ -213,10 +214,9 @@ export const HomesCollectionList = React.memo(function HomesCollectionList(props
                 <ItemGroup>{deviceRow}</ItemGroup>
                 <ItemGroup>
                     {homeRows}
-                    <Item
+                    <ItemAddRow
                         testID="settings.homes.add"
                         title={t('addFlows.addHome')}
-                        icon={<Icon name="plus" size={20} color={theme.colors.text.secondary} />}
                         onPress={() => openHref(router, HOMES_ADD_ROUTE, false, 'HomesCollectionList.add')}
                     />
                 </ItemGroup>

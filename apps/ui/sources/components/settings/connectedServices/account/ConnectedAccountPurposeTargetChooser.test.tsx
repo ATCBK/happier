@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Item } from '@/components/ui/lists/Item';
 import { act } from 'react-test-renderer';
 import { View } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -58,13 +59,6 @@ vi.mock('@expo/vector-icons', () => ({
   Ionicons: (props: Record<string, unknown>) => React.createElement('Ionicons', props),
 }));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Item', props, props.children),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Text', props, props.children),
-  TextInput: (props: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('TextInput', props, props.children),
-}));
 
 function seedAccountProfile() {
   storage.setState({
@@ -169,7 +163,7 @@ function latestPurposeTargetModalConfig(): CapturedPurposeTargetModalConfig {
 }
 
 function findItemByTestId(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) {
-  return screen.findAllByType('Item').find((node) => node.props?.testID === testID);
+  return screen.findAllByType(Item).find((node) => node.props?.testID === testID);
 }
 
 describe('ConnectedAccountPurposeTargetChooser', () => {
@@ -478,7 +472,7 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
     />);
 
     // The page carries one row per purpose: the choice itself, never a bare Refresh row.
-    expect(screen.findAllByType('Item').map((node) => node.props.testID)).toEqual([testID]);
+    expect(screen.findAllByType(Item).map((node) => node.props.testID)).toEqual([testID]);
 
     await act(async () => {
       findItemByTestId(screen, testID)?.props.onPress();

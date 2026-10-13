@@ -24,7 +24,7 @@ export function promptStackArtifactPresentation(header: Readonly<Record<string, 
 export type PromptStackDocumentChoice = HappierInputPickerOption & Readonly<{
     id: string;
     value: PromptArtifactRefV1;
-    kind: Exclude<PromptStackEntryPresentation['kind'], 'unknown'>;
+    kind: 'memory' | 'doc';
 }>;
 
 /** The host supplies an admitted Account inventory and its actual Home, never a requested alias. */
@@ -38,8 +38,9 @@ export function promptStackDocumentChoices(input: Readonly<{
     return input.artifacts.flatMap(artifact => {
         if (artifact.isDecrypted === false || input.attachedRefs.some(ref => isPromptLibraryReferenceInHome(ref, artifact.id, input.serverId))) return [];
         const presentation = promptStackArtifactPresentation(artifact.header, artifact.access);
-        if (presentation.kind === 'unknown' || (input.purpose === 'instructions' && presentation.kind !== 'doc')) return [];
-        return [{ id: artifact.id, value: { kind: presentation.kind === 'skill' ? 'bundle' as const : 'doc' as const,
+        if (presentation.kind === 'unknown' || presentation.kind === 'skill'
+            || (input.purpose === 'instructions' && presentation.kind !== 'doc')) return [];
+        return [{ id: artifact.id, value: { kind: 'doc' as const,
             artifactId: artifact.id, serverId: input.serverId }, kind: presentation.kind,
             label: presentation.title ?? input.untitled }];
     });

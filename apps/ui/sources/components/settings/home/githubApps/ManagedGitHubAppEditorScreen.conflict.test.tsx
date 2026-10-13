@@ -14,17 +14,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { replace: replaceMock } }).module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: vi.fn(async () => true) }));
 vi.mock('./useManagedGitHubApps', () => ({
     useManagedGitHubAppsClient: () => ({ execute: executeMock }),

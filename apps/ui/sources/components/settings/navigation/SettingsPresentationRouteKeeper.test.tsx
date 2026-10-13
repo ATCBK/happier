@@ -8,10 +8,14 @@ import { renderScreen } from '@/dev/testkit';
 
 const pathnameState = vi.hoisted(() => ({ value: '/settings' }));
 const routerReplaceSpy = vi.hoisted(() => vi.fn());
+const viewport = vi.hoisted(() => ({ width: 1200, height: 800 }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ View: 'View' });
+    return createReactNativeWebMock({
+        View: 'View',
+        Dimensions: { get: () => ({ width: viewport.width, height: viewport.height }) },
+    });
 });
 
 vi.mock('expo-router', async () => {
@@ -22,41 +26,44 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 
+const { SettingsPresentationRouteKeeper } = await import('./SettingsPresentationRouteKeeper');
+
 type DeviceType = 'phone' | 'tablet';
 
-async function mountKeeper(deviceType: DeviceType, liveDeviceType: () => DeviceType) {
-    const { SettingsPresentationRouteKeeper } = await import('./SettingsPresentationRouteKeeper');
-    return await renderScreen(<SettingsPresentationRouteKeeper deviceType={deviceType} readLiveDeviceType={liveDeviceType} />);
+async function mountKeeper(deviceType: DeviceType) {
+    return await renderScreen(<SettingsPresentationRouteKeeper deviceType={deviceType} />);
 }
 
 describe('SettingsPresentationRouteKeeper', () => {
     afterEach(() => {
         pathnameState.value = '/settings';
+        viewport.width = 1200;
+        viewport.height = 800;
         routerReplaceSpy.mockReset();
     });
 
     it('reopens the settings page that was showing when a phone/desktop switch remounted Settings', async () => {
-        let live: DeviceType = 'tablet';
         pathnameState.value = '/settings/session/transcript';
-        const before = await mountKeeper('tablet', () => live);
+        const before = await mountKeeper('tablet');
 
         // The window narrows: Settings is presented differently and its navigator remounts at the index.
-        live = 'phone';
+        viewport.width = 390;
+        viewport.height = 844;
         await act(async () => { before.tree.unmount(); });
         // The pathname still names the old page while the new navigator sits at its index (seen live).
-        await mountKeeper('phone', () => live);
+        const after = await mountKeeper('phone');
 
         expect(routerReplaceSpy).toHaveBeenCalledWith('/settings/session/transcript');
+        await act(async () => { after.tree.unmount(); });
     });
 
     it('leaves Settings where it opens after an ordinary close', async () => {
-        const live: DeviceType = 'tablet';
         pathnameState.value = '/settings/session/transcript';
-        const before = await mountKeeper('tablet', () => live);
+        const before = await mountKeeper('tablet');
 
         await act(async () => { before.tree.unmount(); });
         pathnameState.value = '/settings';
-        await mountKeeper('tablet', () => live);
+        await mountKeeper('tablet');
 
         expect(routerReplaceSpy).not.toHaveBeenCalled();
     });

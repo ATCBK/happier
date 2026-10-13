@@ -20,7 +20,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import { getActiveUnsavedChangesGuard, runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 
@@ -259,7 +259,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 revision: 1,
             },
         });
-        await account.restore({ serverIdentityId: 'srv_provider_screen', machines: [machine], waivedActions: [
+        await account.restore({ serverIdentityId: 'srv_provider_screen', currentAccount: true, machines: [machine], waivedActions: [
             'providers.connections.create_contribution', 'providers.connections.create_custom',
             'providers.connections.enabled.set', 'providers.probe', 'secrets.shared.create',
         ] });
@@ -1502,9 +1502,14 @@ describe('ProviderConnectionAuthoringScreen', () => {
         ['custom', 'approve'], ['built-in', 'approve'], ['custom', 'reject'], ['built-in', 'reject'],
         ['custom', 'retire'], ['built-in', 'retire'],
     ] as const)('continues the %s pasted-key save from the original Secret approval result: %s', async (kind, outcome) => {
-        await account.home.requireUiApproval(account.serverId, 'secrets.shared.create');
+        // Private pasted-key creation enters through the personal Secret Action;
+        // its admitted host performs the shared-resource write beneath that policy.
+        await account.home.requireUiApproval(account.serverId, 'secrets.create');
         state.credential = { required: true };
         installPastedSecretResourceBoundary();
+        if (kind === 'built-in') await installOwnMachineApprovalReplayBoundary({
+            harness: account.home, serverId: account.serverId, accountId: 'account-a', machineId: machine.id,
+        });
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen {...(kind === 'built-in' ? { contributionKey: 'acme.plugin/ollama' } : {})} />);
         await React.act(async () => {
@@ -1519,6 +1524,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
         await React.act(async () => { operation = screen.findByTestId(kind === 'custom' ? 'settings-provider-authoring-save' : 'settings-provider-authoring-connect')!.props.onPress(); });
         await waitForHomeGovernance(() => expect(account.home.artifacts(account.serverId).list()).toHaveLength(1));
         const presented = screen.findByTestId('settings-provider-authoring-approval') !== null;
+        expect(presented).toBe(true);
         const originalServerId = account.serverId;
         const artifactId = account.home.artifacts(originalServerId).list()[0]!.id;
         if (outcome === 'retire') {
@@ -1528,12 +1534,16 @@ describe('ProviderConnectionAuthoringScreen', () => {
             });
         } else await expect(decideApprovalAsInbox(originalServerId, artifactId, outcome)).resolves.toMatchObject({ ok: true });
         await flushHookEffects();
-        expect(presented).toBe(true);
         if (outcome !== 'approve') {
             expect(run).not.toHaveBeenCalled();
             expect(stored.writes).toBe(0);
             expect(account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null)).toHaveLength(0);
             expect(screen.findByTestId('settings-provider-authoring-approval')).toBeNull();
+            if (outcome === 'reject') {
+                // Declining is the person's own decision: the draft stays as it was, with no failure state.
+                const { ProviderErrorItems } = await import('./ProviderErrorItems');
+                expect(screen.findAllByType(ProviderErrorItems).map(node => node.props.error)).toEqual([]);
+            }
             return;
         }
         // Requiring Secret approval replaces the fixture's waived policy. The
@@ -1542,7 +1552,9 @@ describe('ProviderConnectionAuthoringScreen', () => {
         const providerArtifactId = account.home.artifacts(originalServerId).list().find(artifact => artifact.id !== artifactId)!.id;
         expect(run).not.toHaveBeenCalled();
         expect(stored.writes).toBe(0);
-        await expect(decideApprovalAsInbox(originalServerId, providerArtifactId, 'approve')).resolves.toMatchObject({ ok: true });
+        const providerDecision = await decideApprovalAsInbox(originalServerId, providerArtifactId, 'approve');
+        if (!providerDecision.ok) throw new Error(providerDecision.errorCode);
+        expect(providerDecision).toMatchObject({ ok: true, result: { status: 'executed' } });
         await waitForHomeGovernance(() => expect(kind === 'built-in' ? run.mock.calls.length : stored.writes).toBe(1));
         await operation;
         const resourceWrites = account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null);

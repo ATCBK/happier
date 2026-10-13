@@ -236,8 +236,12 @@ const USAGE_PAGE_READ_SOURCES: ReadonlySet<string> = new Set(['accounting', 'quo
 export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
   // Only the page's shared reads; a widget's own read (a pool selection) is said by that widget.
   const names = [...new Set(slices.flatMap(slice => slice.sources
-    .filter(source => USAGE_PAGE_READ_SOURCES.has(source.source) && (source.status === 'pending' || source.status === 'not_loaded'))
-    .map(source => usageSourceTitle(source.source))))];
+    .filter(source => source.status === 'pending' || source.status === 'not_loaded')
+    // A sibling can already supply the aggregate quota while this account is still being read.
+    // Keep qualified identity at the Resource; the shared header names its read family only once.
+    .map(source => source.source.startsWith('quota:') ? 'quota' : source.source)
+    .filter(source => USAGE_PAGE_READ_SOURCES.has(source))
+    .map(source => usageSourceTitle(source))))];
   return names.length ? t('usage.board.page.coveragePending', { sources: names.join(', ') }) : null;
 }
 

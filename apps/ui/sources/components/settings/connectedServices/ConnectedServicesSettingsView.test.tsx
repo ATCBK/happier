@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
 import type { AccountProfile } from '@happier-dev/protocol/account/profile';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createMachineFixture, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import type { ConnectedAccountIndexFacts } from './index/ConnectedAccountIndexRow';
 import type { ConnectedServicesConnectMore } from './setup/ConnectedServicesConnectMore';
 import type { IModal } from '@/modal';
@@ -12,7 +12,6 @@ import {
     connectedServicesModuleState,
     installConnectedServicesCommonModuleMocks,
 } from './connectedServicesTestHelpers';
-import { ConnectedServicesAgentSignInView } from './collection/ConnectedServicesAgentSignInView';
 import { applyConnectedAccountCatalogSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 
 
@@ -167,18 +166,8 @@ vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
     useHomeTeamCredentialModelCatalog: () => profileState.teamCredentialCatalog,
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: { rightElement?: React.ReactNode; leftElement?: React.ReactNode }) =>
-        React.createElement('Item', props, props.leftElement, props.rightElement),
-}));
 
 // Account rows own their own quota reads (server requests); the index decides only which accounts it
 // lists and what each row says, so a host stand-in keeps the row props assertable.
@@ -245,6 +234,9 @@ vi.mock('@/sync/domains/state/warmCachePersistence', () => ({
     loadUsageSummaryWarmCache: () => null,
     saveUsageSummaryWarmCache: () => {},
 }));
+
+const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
+const { Item } = await import('@/components/ui/lists/Item');
 
 describe('ConnectedServicesSettingsView', () => {
     beforeEach(async () => {
@@ -338,7 +330,7 @@ describe('ConnectedServicesSettingsView', () => {
 
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
-        const row = screen.tree.findAllByType('Item' as never).find((item) => item.props.title === 'Bitbucket Cloud');
+        const row = screen.tree.findAllByType(Item).find((item) => item.props.title === 'Bitbucket Cloud');
 
         expect(row).toBeTruthy();
         expect(row?.props.subtitle).toContain('common.blocked');
@@ -415,7 +407,7 @@ describe('ConnectedServicesSettingsView', () => {
         expect(notices).toHaveLength(1);
         expect(notices[0]?.props.description).toBe('connectedServicesSettings.projectionErrorDescription');
         expect(screen.findByTestId('connected-services-account:happier.agent.codex/openai-codex:work')).not.toBeNull();
-        const serviceRows = screen.findAllByType('Item');
+        const serviceRows = screen.findAllByType(Item);
         expect(serviceRows.find((node) => node.props.title === 'ChatGPT')?.props.subtitle ?? '').not.toContain('common.unavailable');
         expect(screen.findByTestId('connected-services-index:happier.agent.codex/openai-codex:support-details')).toBeNull();
         expect(screen.findByTestId('connected-services-service:happier.agent.codex/openai-codex:add-account')).toBeNull();
@@ -428,10 +420,13 @@ describe('ConnectedServicesSettingsView', () => {
     });
 
     it('says which machine offers no service and leads to Agents', async () => {
+        profileState.activeAccountScope = { serverId: 'server-1', accountId: 'account-1' };
         connectedServiceRegistryState.status = 'ready';
         connectedServiceRegistryState.entries = [];
         profileState.connectedServicesV2 = [];
-        machineState.machines = [{ id: 'machine-a', active: true, metadata: { displayName: 'lima-happier-fresh' } }];
+        machineState.machines = [createMachineFixture({ id: 'machine-a', activeAt: Date.now(), metadata: {
+            ...createMachineFixture().metadata!, displayName: 'lima-happier-fresh',
+        } })];
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
 
@@ -510,7 +505,7 @@ describe('ConnectedServicesSettingsView', () => {
             record: { key: 'purposes', value: purposeBindings },
         }, true);
         const { tree } = await renderScreen(<ConnectedServicesAgentSignInView />);
-        const row = tree.root.findAllByType('Item' as never)
+        const row = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(row).toBeTruthy();
         const selectedDetail = row?.props.detail;
@@ -530,7 +525,7 @@ describe('ConnectedServicesSettingsView', () => {
             record: { key: 'purposes', value: purposeBindings },
             diagnostics: [{ path: 'bindings[1]', reason: 'invalid-stored-content' }],
         }, true));
-        const safeRow = tree.root.findAllByType('Item' as never)
+        const safeRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(safeRow?.props.detail).toBe(selectedDetail);
         expect(safeRow?.props.disabled).toBe(true);
@@ -540,14 +535,14 @@ describe('ConnectedServicesSettingsView', () => {
             diagnostics: [{ path: 'bindings[0]', reason: 'invalid-stored-content' }],
         }, true));
         const { t } = await import('@/text');
-        const unreadRow = tree.root.findAllByType('Item' as never)
+        const unreadRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(unreadRow?.props.detail).toBe(t('common.unavailable'));
         expect(unreadRow?.props.disabled).toBe(true);
         await act(async () => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
             status: 'unavailable', reason: 'account-mode-mismatch',
         }, true));
-        const unavailableRow = tree.root.findAllByType('Item' as never)
+        const unavailableRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(unavailableRow?.props.detail).toBe(t('common.unavailable'));
         expect(unavailableRow?.props.disabled).toBe(true);
@@ -555,14 +550,14 @@ describe('ConnectedServicesSettingsView', () => {
         await act(async () => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
             status: 'ready', revision: 5, record: { key: 'purposes', value: purposeBindings },
         }, true));
-        const restoredRow = tree.root.findAllByType('Item' as never)
+        const restoredRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         await act(async () => restoredRow?.props.onPress());
         modalHideSpy.mockClear();
         profileState.activeAccountScope = { serverId: 'server-2', accountId: 'other-account' };
         profileState.connectedAccountsV4 = [];
         await act(async () => tree.update(<ConnectedServicesAgentSignInView key="other-home" />));
-        const otherHomeRow = tree.root.findAllByType('Item' as never)
+        const otherHomeRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(otherHomeRow?.props.disabled).toBe(true);
         expect(otherHomeRow?.props.detail).not.toBe(selectedDetail);

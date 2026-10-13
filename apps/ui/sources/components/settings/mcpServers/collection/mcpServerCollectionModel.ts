@@ -30,6 +30,10 @@ export type McpServerCollectionRow = Readonly<{
     unbound: boolean;
 }>;
 
+export function mcpServerDisplayName(server: Pick<McpServerCatalogEntryV1, 'title' | 'name'>): string {
+    return server.title || server.name || t('settings.mcpServersUnnamed');
+}
+
 /** Servers by display name, each with the rules that apply it. */
 export function buildMcpServerCollection(settings: McpServersSettingsV1, query: string): readonly McpServerCollectionRow[] {
     const bindingsByServerId = new Map<string, McpServerRuleV1[]>();
@@ -45,7 +49,7 @@ export function buildMcpServerCollection(settings: McpServersSettingsV1, query: 
             return {
                 server,
                 bindings,
-                title: server.title || server.name || t('settings.mcpServersUnnamed'),
+                title: mcpServerDisplayName(server),
                 unbound: !bindings.some((binding) => binding.enabled),
             };
         })

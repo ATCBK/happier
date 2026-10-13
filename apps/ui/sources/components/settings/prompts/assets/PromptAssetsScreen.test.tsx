@@ -1,216 +1,164 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol';
-import type { IModal } from '@/modal';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { installPromptAssetsCommonModuleMocks, promptAssetsRouterPushSpy } from './promptAssetsScreenTestHelpers';
+const alertSpy = vi.hoisted(() => vi.fn());
 
-const deletionConfirmation = vi.hoisted(() => vi.fn<IModal['confirm']>(async () => true));
-const deletionAlert = vi.hoisted(() => vi.fn<IModal['alert']>());
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
 installPromptAssetsCommonModuleMocks({ storage: original => original(), modal: async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm: deletionConfirmation, alert: deletionAlert } }).module;
+    return createModalModuleMock({ spies: { alert: alertSpy } }).module;
 }, reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
 } });
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
 const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
-const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+const { createPromptMachineTransferFixture, createFoundSkillTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
 installPromptMachineSocketBoundary();
+const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
 const { storage } = await import('@/sync/domains/state/storage');
 const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
-const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { PromptAssetsScreen } = await import('./PromptAssetsScreen');
-const skillType: PromptAssetTypeDescriptorV1 = { id: 'agents.skill', providerId: 'agents', title: 'Agent skills', description: 'Portable skills', libraryKind: 'bundle',
-    supportsScope: { user: true, project: true }, supportsFiles: true, formatId: 'skill_md_v1', defaultRoots: [], capabilities: { supportsSymlinkInstall: true } };
-const docType: PromptAssetTypeDescriptorV1 = { ...skillType, id: 'claude.command', providerId: 'claude', libraryKind: 'doc', supportsFiles: false, formatId: 'markdown_utf8_v1' };
-const skill = { assetTypeId: skillType.id, scope: 'project' as const, externalRef: { name: 'refactor' }, title: 'Refactor', libraryKind: 'bundle' as const,
-    bundleSchemaId: 'skills.skill_md_v1' as const, digest: 'digest-1', displayPath: '/repo/.agents/skills/refactor' };
-const doc = { assetTypeId: docType.id, scope: 'project' as const, externalRef: { relativePath: 'review/code.md' }, title: 'review/code', libraryKind: 'doc' as const,
-    digest: 'digest-doc', displayPath: '/repo/.claude/commands/review/code.md' };
+const foundSkill = createFoundSkillTransferFixture({ name: 'refactor', path: '/repo/.agents/skills/refactor', scope: 'project', agents: ['claude', 'codex'],
+    files: [{ path: 'SKILL.md', contentBase64: Buffer.from('---\nname: refactor\ndescription: Refactor code\n---\n# Refactor').toString('base64'), contentKind: 'utf8', unixMode: 0o644 },
+        { path: 'run.sh', contentBase64: Buffer.from('#!/bin/sh\ntrue').toString('base64'), contentKind: 'utf8', unixMode: 0o755 },
+        { path: 'sample.bin', contentBase64: Buffer.from([0, 255, 128]).toString('base64'), contentKind: 'binary', unixMode: 0o644 }] });
 let fixture: Awaited<ReturnType<typeof createPromptMachineTransferFixture>>;
 let catalog: ReturnType<typeof createPromptLibraryCatalogBoundary>;
 let previousState: ReturnType<typeof storage.getState>;
+const itemId = 'promptAssets.item.project./repo/.agents/skills.0';
 async function setup(workspacePath = '/repo') {
     catalog = createPromptLibraryCatalogBoundary({ records: [
         { key: 'contexts', value: { v: 1, selectionsByKey: { 'promptAssets.externalAssets': { machineId: 'machine-2', workspacePath } } } },
         { key: 'external-links', value: { v: 1, links: [] } },
+        { key: 'skill-rules', value: { v: 1, rules: [] } },
     ], revision: 4 });
     fixture = await createPromptMachineTransferFixture({ serverUrl: 'https://prompt-assets-screen.test', serverIdentityId: 'srv_prompt_assets_screen',
-        selectionKey: MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptAssets, types: [skillType], discoveries: [skill],
-        asset: { ...skill, bundleBody: { v: 1, entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Refactor').toString('base64'), contentKind: 'utf8' }], createdAtMs: 1, updatedAtMs: 1 } },
-        handleHomeRequest: catalog.handle });
+        selectionKey: MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptAssets, types: [], foundSkill, handleHomeRequest: catalog.handle });
     await refreshPromptLibraryCatalog(fixture.scope);
-    expect(getPromptLibraryCatalogValue(fixture.scope, 'contexts'), JSON.stringify(fixture.diagnostic())).toMatchObject({ status: 'ready', stale: false,
-        value: { selectionsByKey: { 'promptAssets.externalAssets': { workspacePath } } } });
-    expect(getPromptLibraryCatalogValue(fixture.scope, 'external-links'), JSON.stringify(fixture.diagnostic())).toMatchObject({ status: 'ready', stale: false });
-    expect(storage.getState().settingsScope).toEqual(fixture.scope);
 }
 function requests(method: string) { return fixture.daemonRequests.filter(request => request.method.endsWith(':' + method)); }
-async function waitForAsset(screen: Awaited<ReturnType<typeof renderScreen>>, itemId: string) {
-    await vi.waitFor(() => {
-        const diagnostic = JSON.stringify({ ...fixture.diagnostic(), contexts: getPromptLibraryCatalogValue(fixture.scope, 'contexts'),
-            renderedText: screen.findAll(node => typeof node.props.children === 'string').map(node => node.props.children),
-            directory: screen.findByTestId('promptAssets.directoryInput')?.props.value });
-        expect(screen.findByTestId('promptAssets.directoryInput')?.props.value, diagnostic).toBe('/repo');
-        expect(screen.findByTestId(itemId), diagnostic).not.toBeNull();
-    });
+async function waitForAsset(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await vi.waitFor(() => expect(screen.findByTestId(itemId), JSON.stringify({ ...fixture.diagnostic(),
+        directory: screen.findByTestId('promptAssets.directoryInput')?.props.value,
+        alerts: alertSpy.mock.calls, renderedText: screen.findAll(node => typeof node.props.children === 'string').map(node => node.props.children),
+    })).not.toBeNull());
 }
-beforeEach(() => {
-    previousState = storage.getState(); promptAssetsRouterPushSpy.mockReset();
-    deletionConfirmation.mockReset(); deletionConfirmation.mockResolvedValue(true); deletionAlert.mockReset();
-});
+beforeEach(() => { previousState = storage.getState(); promptAssetsRouterPushSpy.mockReset(); alertSpy.mockReset(); });
 afterEach(async () => { await standardCleanup(); await fixture?.dispose(); storage.setState(previousState, true); });
 
-describe('PromptAssetsScreen through Home and daemon boundaries', () => {
-    it.each(['bundle', 'doc'] as const)('loads project assets and imports %s into the captured Account catalog', async kind => {
-        await setup();
-        if (kind === 'doc') {
-            fixture.setTypes([docType]); fixture.setDiscoveries([doc]);
-            fixture.setAsset({ ...doc, markdown: 'Review code carefully.' });
-        }
-        const screen = await renderScreen(<PromptAssetsScreen />);
-        const type = kind === 'doc' ? docType : skillType;
-        const itemId = 'promptAssets.item.project.' + type.id + '.0';
-        await waitForAsset(screen, itemId);
-        expect(requests('daemon.promptAssets.discover').at(-1)?.params).toMatchObject({ assetTypeId: type.id, scope: 'project', directory: '/repo' });
+describe('PromptAssetsScreen strict Found Action transition', () => {
+    it('adopts a scanned skill through the real Action and transfer with reach and machine provenance', async () => {
+        await setup(); const screen = await renderScreen(<PromptAssetsScreen />); await waitForAsset(screen);
+        expect(requests('skills.found.list').at(-1)?.params).toEqual({ machineId: 'machine-1', directory: '/repo' });
         await screen.pressByTestIdAsync(itemId);
         await vi.waitFor(() => expect(fixture.artifacts.list()).toHaveLength(1));
         const created = fixture.artifacts.list()[0]!;
-        expect(fixture.artifacts.readPlainBody(created.id)).toContain(kind === 'doc' ? 'Review code carefully.' : 'SKILL.md');
-        await vi.waitFor(() => expect(catalog.read('external-links').value).toMatchObject({ links: [{ artifactId: created.id, assetTypeId: type.id, machineId: 'machine-1',
-            workspacePath: '/repo', scope: 'project', syncMode: 'manual' }] }));
-        expect(catalog.requests.find(request => request.key === 'external-links')?.expectedRevision).toBe(4);
-        await vi.waitFor(() => expect(promptAssetsRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(created.id)));
-        expect(fixture.homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
-    });
-    it('uses Administration rather than Context machine and clears project discovery after a target switch', async () => {
-        await setup(); const screen = await renderScreen(<PromptAssetsScreen />);
-        await waitForAsset(screen, 'promptAssets.item.project.agents.skill.0');
-        expect(requests('daemon.promptAssets.discover')[0]?.method).toMatch(/^machine-1:/);
-        const discoveriesBeforeSwitch = requests('daemon.promptAssets.discover').length;
-        await act(async () => { fixture.selectMachine('machine-2'); });
-        await vi.waitFor(() => expect(screen.findByTestId('promptAssets.item.project.agents.skill.0'), JSON.stringify({ ...fixture.diagnostic(),
-            contexts: getPromptLibraryCatalogValue(fixture.scope, 'contexts'),
-            directory: screen.findByTestId('promptAssets.directoryInput')?.props.value })).toBeNull());
-        expect(requests('daemon.promptAssets.discover')).toHaveLength(discoveriesBeforeSwitch);
-        await vi.waitFor(() => expect(catalog.read('contexts').value).toMatchObject({ selectionsByKey: { 'promptAssets.externalAssets': { workspacePath: '' } } }));
-    });
-    it('does not discover a project before choosing its workspace', async () => {
-        await setup(''); await renderScreen(<PromptAssetsScreen />);
-        await vi.waitFor(() => expect(requests('daemon.promptAssets.listTypes').length).toBeGreaterThan(0));
+        const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        expect(decodePlainArtifactStoredContent(created.header)).toMatchObject({ skillLock: { provenance: { kind: 'machine', machineId: 'machine-1',
+            path: foundSkill.bundle.path, agentIds: ['claude', 'codex'] } } });
+        const body = JSON.parse(fixture.artifacts.readPlainBody(created.id)!);
+        expect(body.entries).toEqual(foundSkill.bundle.files);
+        await vi.waitFor(() => expect(catalog.read('skill-rules').value).toMatchObject({ rules: [{ skillId: created.id, target: { t: 'allMachines' }, enabled: true }] }));
+        expect(catalog.read('external-links').value).toEqual({ v: 1, links: [] });
+        expect(requests('daemon.directTransfer.export.prepare').at(-1)?.params).toEqual({ t: 'prompt_asset_download_v1', path: foundSkill.bundle.path });
         expect(requests('daemon.promptAssets.discover')).toEqual([]);
+        expect(requests('daemon.promptAssets.listTypes')).toEqual([]);
+        await vi.waitFor(() => expect(promptAssetsRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(created.id)));
     });
-    it('fails closed without an Administration target rather than falling back to Context', async () => {
-        await setup(); fixture.selectMachine(null); await renderScreen(<PromptAssetsScreen />);
-        await act(async () => {});
-        expect(fixture.daemonRequests).toEqual([]);
-        expect(catalog.requests).toEqual([]);
+    it('uses Administration and clears project results after a target change', async () => {
+        await setup(); const screen = await renderScreen(<PromptAssetsScreen />); await waitForAsset(screen);
+        expect(requests('skills.found.list')[0]?.method).toMatch(/^machine-1:/);
+        const before = requests('skills.found.list').length;
+        await act(async () => { fixture.selectMachine('machine-2'); });
+        await vi.waitFor(() => expect(screen.findByTestId(itemId)).toBeNull());
+        expect(requests('skills.found.list')).toHaveLength(before);
     });
-    it('does not persist an empty Context when no Machine inventory is available', async () => {
-        await setup('');
-        storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
-        await renderScreen(<PromptAssetsScreen />); await act(async () => {});
-        expect(catalog.requests).toEqual([]);
+    it('does not scan a project before a workspace is chosen', async () => {
+        await setup(''); await renderScreen(<PromptAssetsScreen />); await act(async () => {});
+        expect(requests('skills.found.list')).toEqual([]);
     });
-    async function prepareLinkedArtifact(serverIdentityId?: string) {
-        const { createPromptBundleInLibrary } = await import('@happier-dev/protocol/prompts/library/promptLibraryActionOperations');
-        const { withUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
-        const { artifactId } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store,
-            request: { title: skill.title, bundleSchemaId: 'skills.skill_md_v1', origin: 'imported',
-                entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Refactor').toString('base64'), contentKind: 'utf8' }] } }),
-            { serverId: fixture.scope.serverId, expectedAccountId: fixture.scope.accountId });
-        expect(storage.getState().artifacts[artifactId]?.header?.title).toBe(skill.title);
-        const { writePromptLibraryRecord, requireUpdatedPromptLibraryMutation } = await import('@/sync/api/account/apiPromptLibraryCatalog');
-        requireUpdatedPromptLibraryMutation(await writePromptLibraryRecord(fixture.scope, {
-            record: { key: 'external-links', value: { v: 1, links: [{ id: 'link-1', artifactId, assetTypeId: skillType.id,
-                machineId: 'machine-1', ...(serverIdentityId ? { serverIdentityId } : {}),
-                scope: 'project', workspacePath: '/repo', externalRef: skill.externalRef }] } }, expectedRevision: 4,
-        }));
-        await refreshPromptLibraryCatalog(fixture.scope);
-        return artifactId;
-    }
-
-    it('shows linked management and deletes only the external asset and its acknowledged link without creating another Artifact', async () => {
+    it.each([
+        { changed: 'directory', machineId: 'machine-1' },
+        { changed: 'Machine and directory', machineId: 'machine-2' },
+    ])('scans the newest $changed after a pending scan without admitting old rows', async ({ machineId }) => {
         await setup();
-        const artifactId = await prepareLinkedArtifact();
-        const screen = await renderScreen(<PromptAssetsScreen />);
-        await waitForAsset(screen, 'promptAssets.item.project.agents.skill.0');
-        const manage = screen.findAll(node => Array.isArray(node.props.actions) && node.props.actions.some((action: { id?: string }) => action.id === 'manage'))[0];
-        if (!manage) throw new Error('Missing linked management');
-        expect(manage.props.actions.map((action: { id: string }) => action.id)).toEqual(['open', 'manage', 'delete']);
-        await act(async () => { manage.props.actions.find((action: { id: string }) => action.id === 'delete').onPress(); });
-        await vi.waitFor(() => expect(catalog.read('external-links').value).toEqual({ v: 1, links: [] }));
-        expect(requests('daemon.promptAssets.delete').map(request => request.params)).toMatchObject([{
-            assetTypeId: skillType.id, scope: 'project', directory: '/repo', externalRef: skill.externalRef, previewOnly: false,
-        }]);
-        expect(catalog.requests.at(-1)).toMatchObject({ key: 'external-links', expectedRevision: 5 });
-        expect(fixture.artifacts.list().map(artifact => artifact.id)).toEqual([artifactId]);
+        const first = createDeferred<void>(), second = createDeferred<void>();
+        fixture.beforeNextFoundList(() => first.promise);
+        try {
+            const screen = await renderScreen(<PromptAssetsScreen />);
+            await vi.waitFor(() => expect(requests('skills.found.list')).toHaveLength(1));
+            if (machineId === 'machine-2') {
+                await act(async () => { fixture.selectMachine(machineId); });
+                await vi.waitFor(() => expect(screen.findByTestId('promptAssets.directoryInput')?.props.value).toBe(''));
+            }
+            const newest = createFoundSkillTransferFixture({ ...foundSkill.bundle, scope: 'project', name: 'newest', path: '/next/.agents/skills/newest' });
+            fixture.setFoundList(newest.list); fixture.beforeNextFoundList(() => second.promise);
+            await act(async () => { screen.changeTextByTestId('promptAssets.directoryInput', '/next'); });
+            await act(async () => { first.resolve(); });
+            await vi.waitFor(() => expect(requests('skills.found.list')).toHaveLength(2));
+            expect(screen.findByTestId(itemId)).toBeNull();
+            expect(requests('skills.found.list').map(request => ({ method: request.method, params: request.params }))).toEqual([
+                { method: 'machine-1:skills.found.list', params: { machineId: 'machine-1', directory: '/repo' } },
+                { method: `${machineId}:skills.found.list`, params: { machineId, directory: '/next' } },
+            ]);
+            await act(async () => { second.resolve(); });
+            await vi.waitFor(() => expect(screen.findByTestId('promptAssets.item.project./next/.agents/skills.0')).not.toBeNull());
+        } finally { first.resolve(); second.resolve(); }
     });
-
-    it('does not delete an independent Machine asset after the library Account retires during confirmation', async () => {
-        await setup();
-        const artifactId = await prepareLinkedArtifact('srv_asset_delete_machine');
-        let machineHome: Awaited<ReturnType<typeof fixture.addMachineHome>> | undefined;
-        let failure: unknown;
-        const admission = fixture.addMachineHome('https://asset-delete-machine.test', 'srv_asset_delete_machine')
-            .then(value => { machineHome = value; }, error => { failure = error; });
-        await vi.waitFor(() => { if (failure) throw failure; expect(machineHome, JSON.stringify(fixture.diagnostic())).toBeDefined(); });
-        await admission;
-        if (!machineHome) throw new Error('Independent deletion Machine admission did not settle');
-        const screen = await renderScreen(<PromptAssetsScreen />);
-        await waitForAsset(screen, 'promptAssets.item.project.agents.skill.0');
-        const manage = screen.findAll(node => Array.isArray(node.props.actions)
-            && node.props.actions.some((action: { id?: string }) => action.id === 'delete'))[0];
-        if (!manage) throw new Error('Missing real linked deletion action');
-        let confirm: ((value: boolean) => void) | undefined;
-        deletionConfirmation.mockImplementationOnce(() => new Promise<boolean>(resolve => { confirm = resolve; }));
-        await act(async () => { manage.props.actions.find((action: { id: string }) => action.id === 'delete').onPress(); });
-        await vi.waitFor(() => expect(confirm).toBeDefined());
-        await act(async () => { await fixture.homes.switchAccount(fixture.serverId, 'replacement-account'); });
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        const { parseToken } = await import('@/utils/auth/parseToken');
-        const credentials = await TokenStorage.getCredentialsForServerUrl('https://asset-delete-machine.test', { serverId: machineHome.serverId });
-        if (!credentials) throw new Error('Independent Machine credentials were retired');
-        expect(parseToken(credentials.token)).toBe('account-b');
-        await act(async () => { confirm?.(true); });
-        await vi.waitFor(() => expect(deletionAlert).toHaveBeenCalled());
-        expect(requests('daemon.promptAssets.delete'), JSON.stringify(fixture.diagnostic())).toEqual([]);
-        expect(catalog.requests).toMatchObject([{ key: 'external-links', expectedRevision: 4 }]);
-        expect(catalog.read('external-links').value).toMatchObject({ links: [{ id: 'link-1', artifactId }] });
-        expect(fixture.artifacts.list().map(artifact => artifact.id)).toEqual([artifactId]);
+    it('fails closed without an Administration target', async () => {
+        await setup(); fixture.selectMachine(null); await renderScreen(<PromptAssetsScreen />); await act(async () => {});
+        expect(fixture.daemonRequests).toEqual([]); expect(catalog.requests).toEqual([]);
+    });
+    it('does not create content after its captured library Account retires during download', async () => {
+        await setup(); const screen = await renderScreen(<PromptAssetsScreen />); await waitForAsset(screen);
+        fixture.afterNextExport(async () => { await fixture.homes.switchAccount(fixture.serverId, 'replacement-account'); });
+        await screen.pressByTestIdAsync(itemId);
+        await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        expect(fixture.artifacts.list()).toEqual([]);
+        expect(catalog.requests.filter(request => request.key === 'skill-rules')).toEqual([]);
+    });
+    it('reads the selected Machine Home when its id also exists on the library Home', async () => {
+        await setup(); const machineHome = await fixture.addMachineHome('https://found-independent-machine.test', 'srv_found_independent_machine');
+        const screen = await renderScreen(<PromptAssetsScreen />); await waitForAsset(screen);
+        const before = fixture.homes.requests.length;
+        await screen.pressByTestIdAsync(itemId);
+        await vi.waitFor(() => expect(fixture.artifacts.list()).toHaveLength(1));
         expect(machineHome.artifacts.list()).toEqual([]);
+        expect(fixture.homes.requests.slice(before).filter(request => request.path === '/v1/machines/peer/mediation/route-grants')
+            .map(request => request.serverId)).toEqual([machineHome.serverId]);
     });
-
-    it('does not adopt a bare original-Home link for the same Machine id on an independent Home', async () => {
+    it.each([false, true])('uses inLibrary only from the captured library Account (independent Home: %s)', async independent => {
         await setup();
-        const originalArtifactId = await prepareLinkedArtifact();
-        let machineHome: Awaited<ReturnType<typeof fixture.addMachineHome>> | undefined;
-        let failure: unknown;
-        const admission = fixture.addMachineHome('https://asset-collision-machine.test', 'srv_asset_collision_machine')
-            .then(value => { machineHome = value; }, error => { failure = error; });
-        await vi.waitFor(() => { if (failure) throw failure; expect(machineHome, JSON.stringify(fixture.diagnostic())).toBeDefined(); });
-        await admission;
-        if (!machineHome) throw new Error('Independent colliding Machine admission did not settle');
-        const screen = await renderScreen(<PromptAssetsScreen />);
-        await waitForAsset(screen, 'promptAssets.item.project.agents.skill.0');
-        const actions = screen.findAll(node => Array.isArray(node.props.actions)
-            && node.props.actions.some((action: { id?: string }) => action.id === 'import'))[0];
-        expect(actions?.props.actions.map((action: { id: string }) => action.id), JSON.stringify(fixture.diagnostic())).toEqual(['import']);
-        await screen.pressByTestIdAsync('promptAssets.item.project.agents.skill.0');
-        await vi.waitFor(() => expect(fixture.artifacts.list()).toHaveLength(2));
-        const imported = fixture.artifacts.list().find(artifact => artifact.id !== originalArtifactId);
-        if (!imported) throw new Error('Independent Machine import was not acknowledged');
-        await vi.waitFor(() => expect(catalog.read('external-links').value).toMatchObject({ links: [
-            { id: 'link-1', artifactId: originalArtifactId },
-            { artifactId: imported.id, machineId: 'machine-1', serverIdentityId: 'srv_asset_collision_machine' },
-        ] }));
-        expect(machineHome.artifacts.list()).toEqual([]);
-        expect(requests('daemon.promptAssets.delete')).toEqual([]);
+        const machineHome = independent ? await fixture.addMachineHome('https://found-source-library.test', 'srv_found_source_library') : null;
+        const sourceArtifacts = machineHome?.artifacts ?? fixture.artifacts;
+        const { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const sourceId = 'source-library-only';
+        const seeded = await sourceArtifacts.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: sourceId,
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Refactor', bundleSchemaId: 'skills.skill_md_v1' }),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, entries: foundSkill.bundle.files, createdAtMs: 1, updatedAtMs: 1 }) }),
+        }) });
+        expect(seeded?.status).toBe(200);
+        fixture.setFoundList({ ...foundSkill.list, items: foundSkill.list.items.map(item => ({ ...item, inLibrary: sourceId })) });
+        const screen = await renderScreen(<PromptAssetsScreen />); await waitForAsset(screen);
+        await screen.pressByTestIdAsync(itemId);
+        if (independent) {
+            await vi.waitFor(() => expect(fixture.artifacts.list()).toHaveLength(1));
+            const created = fixture.artifacts.list()[0]!;
+            expect(created.id).not.toBe(sourceId);
+            await vi.waitFor(() => expect(promptAssetsRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(created.id)));
+            expect(sourceArtifacts.list().map(artifact => artifact.id)).toEqual([sourceId]);
+        } else {
+            await vi.waitFor(() => expect(promptAssetsRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(sourceId)));
+            expect(fixture.artifacts.list().map(artifact => artifact.id)).toEqual([sourceId]);
+            expect(requests('daemon.directTransfer.export.prepare')).toEqual([]);
+        }
     });
 });

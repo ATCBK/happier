@@ -19,18 +19,6 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 
 vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
-}));
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
 
 describe('ConnectedAccountOAuthForm', () => {
     beforeEach(() => {
@@ -48,6 +36,7 @@ describe('ConnectedAccountOAuthForm', () => {
             code: string;
             callbackUrl: string;
             state: string;
+            iss?: string;
         }>) => {});
         const { ConnectedAccountOAuthForm } = await import('./ConnectedAccountOAuthForm');
         const tree = (await renderScreen(
@@ -69,7 +58,12 @@ describe('ConnectedAccountOAuthForm', () => {
         );
         await act(async () => {
             callback.props.onChangeText(
-                'http://127.0.0.1:1455/auth/callback?code=code-1&state=state-1',
+                'http://127.0.0.1:1455/auth/callback?code=code-1&state=state-1&iss=https%3A%2F%2Fissuer.example',
+            );
+        });
+        await act(async () => {
+            callback.props.onChangeText(
+                'http://127.0.0.1:1455/auth/callback?code=code-1&state=state-1&iss=https%3A%2F%2Fcurrent-issuer.example',
             );
         });
         await pressTestInstanceAsync(
@@ -80,6 +74,7 @@ describe('ConnectedAccountOAuthForm', () => {
             code: 'code-1',
             callbackUrl: 'http://127.0.0.1:1455/auth/callback',
             state: 'state-1',
+            iss: 'https://current-issuer.example',
         });
         expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty('pkceVerifier');
     });

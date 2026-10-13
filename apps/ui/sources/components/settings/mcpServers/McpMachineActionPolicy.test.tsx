@@ -63,7 +63,7 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         { operation: 'test', disabled: false, retry: true },
         { operation: 'probe', disabled: false, retry: true },
     ] as const)('honors the selected Home $operation Action policy (disabled=$disabled, retry=$retry)', async ({ operation, disabled, retry }) => {
-        const actionId = operation === 'test' ? 'mcp.servers.test' : 'mcp.servers.probe';
+        const actionId = operation === 'test' ? 'mcp.servers.test' : 'mcp.found.list';
         const rpcMethod = operation === 'test' ? RPC_METHODS.DAEMON_MCP_SERVERS_TEST : RPC_METHODS.DAEMON_MCP_SERVERS_DETECT;
         const active = await upsertServerProfileOnly({ serverUrl: 'https://mcp-policy-focus.test', name: 'Focused Home' });
         await upsertServerProfileOnly({ serverUrl: 'https://mcp-policy-machine.test', name: 'Machine Home' });
@@ -130,9 +130,8 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         await loadSyncSingletonForTests();
         connection = await restoreServerAccountForTest({ serverUrl: active.serverUrl, accountId: 'focused-owner',
             credentials: activeCredentials, request });
-        // Both synthetic credentials were persisted before restore. Remove the
-        // harness's one-Home shortcut so the foreign reader uses its actual key.
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
+        // The canonical restore harness persists credentials; the real reader
+        // selects the active or foreign Home's own credential key.
         setRuntimeFetch(request);
         storage.getState().applyMachines([machine], true, { sourceServerId: target.id });
         expect(resolveFreshMachineAdministrationExecutionTarget(targetSelection, { accountScope: targetAccountScope })?.serverId).toBe(target.id);

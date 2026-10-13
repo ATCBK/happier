@@ -5,8 +5,6 @@ import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCo
 
 import { AgentCollectionRail } from './collection/AgentCollectionList';
 
-/** Rail width at normal text scale: a brand mark, a name and one status line. */
-const AGENT_RAIL_WIDTH_PX = 272;
 /** The narrowest detail that still fits a segmented permission row beside its label. */
 const AGENT_DETAIL_MIN_WIDTH_PX = 480;
 const AGENTS_COLLECTION_ROUTE = '/settings/agents';
@@ -30,7 +28,7 @@ export const AgentSettingsLayout = React.memo(function AgentSettingsLayout() {
             rootPathname={AGENTS_COLLECTION_ROUTE}
             resolveChildRoute={resolveAgentsChildRoute}
             rail={<AgentCollectionRail />}
-            railWidthPx={AGENT_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={AGENT_DETAIL_MIN_WIDTH_PX}
             testID="settings-agents"
         />

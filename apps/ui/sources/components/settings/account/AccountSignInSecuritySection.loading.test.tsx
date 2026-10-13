@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
@@ -8,10 +8,7 @@ import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSettingsViewCommonModuleMocks();
-// The linked sign-in providers are a separate owner with its own reads; this suite is about the
-// Account Security projection's rows.
-vi.mock('@/components/account/ProviderIdentityItems', () => ({ ProviderIdentityItems: () => null }));
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 
 const { AccountSignInSecuritySection } = await import('./AccountSignInSecuritySection');
 

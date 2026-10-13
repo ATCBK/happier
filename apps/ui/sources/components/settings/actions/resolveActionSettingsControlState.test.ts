@@ -1,56 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_ACTIONS_SETTINGS_V1, type ActionId, type ActionSurfaces, type ActionsSettingsV1 } from '@happier-dev/protocol';
+import { DEFAULT_ACTIONS_SETTINGS_V1, type ActionId } from '@happier-dev/protocol';
 
 import * as actionSettingsTargets from './actionSettingsTargets';
 
-type ActionSettingsApprovalControlValue = 'off' | 'default' | 'ask_first' | 'allowed';
-type ActionSettingsBooleanControlValue = 'off' | 'on';
-type ActionSettingsTargetControlKind = 'approval' | 'switch' | 'unavailable';
-type ActionSettingsTargetControlState =
-    | Readonly<{
-        kind: 'approval';
-        value: ActionSettingsApprovalControlValue;
-        approvalSurface: keyof ActionSurfaces;
-        approvalRequiredByPolicy: boolean;
-        approvalWaivable: boolean;
-    }>
-    | Readonly<{ kind: 'switch'; value: ActionSettingsBooleanControlValue }>
-    | Readonly<{ kind: 'unavailable'; value: 'off' }>;
-
-type ResolveActionSettingsTargetControlState = (params: Readonly<{
-    settings: ActionsSettingsV1;
-    actionId: ActionId;
-    targetId: actionSettingsTargets.ActionSettingsTargetId;
-    available?: boolean;
-}>) => ActionSettingsTargetControlState;
-
-type ApplyActionSettingsTargetControlState = (params: Readonly<{
-    settings: ActionsSettingsV1;
-    actionId: ActionId;
-    targetId: actionSettingsTargets.ActionSettingsTargetId;
-    value: ActionSettingsApprovalControlValue | ActionSettingsBooleanControlValue;
-}>) => ActionsSettingsV1;
-
-function expectResolveControlStateExport(): ResolveActionSettingsTargetControlState {
-    const candidate = (
-        actionSettingsTargets as typeof actionSettingsTargets & {
-            resolveActionSettingsTargetControlState?: ResolveActionSettingsTargetControlState;
-        }
-    ).resolveActionSettingsTargetControlState;
-    expect(typeof candidate).toBe('function');
-    return candidate ?? (() => ({ kind: 'unavailable', value: 'off' }));
-}
-
-function expectApplyControlStateExport(): ApplyActionSettingsTargetControlState {
-    const candidate = (
-        actionSettingsTargets as typeof actionSettingsTargets & {
-            applyActionSettingsTargetControlState?: ApplyActionSettingsTargetControlState;
-        }
-    ).applyActionSettingsTargetControlState;
-    expect(typeof candidate).toBe('function');
-    return candidate ?? ((params) => params.settings);
-}
+const resolveControlState = actionSettingsTargets.resolveActionSettingsTargetControlState;
+const applyControlState = actionSettingsTargets.applyActionSettingsTargetControlState;
 
 describe('resolveActionSettingsTargetControlState', () => {
     it.each(['workflow.trigger.add', 'workflow.trigger.update', 'workflow.trigger.remove'] as const)(
@@ -70,7 +25,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     );
 
     it('resolves approval-capable targets to the inherited default', () => {
-        const resolveControlState = expectResolveControlStateExport();
 
         expect(resolveControlState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
@@ -86,7 +40,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('resolves approval-required surfaces to ask first', () => {
-        const resolveControlState = expectResolveControlStateExport();
         const settings = actionSettingsTargets.setActionTargetApprovalRequired({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',
@@ -105,7 +58,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('resolves opt-in placements to simple off and on states', () => {
-        const resolveControlState = expectResolveControlStateExport();
         const enabledSettings = actionSettingsTargets.setActionTargetSelected({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',
@@ -132,7 +84,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('requires confirmation for a dangerous Agent Action by default', () => {
-        const resolveControlState = expectResolveControlStateExport();
 
         // `prompt_doc.update` is the LIVE-1 fixture: danger + agent with no persisted override.
         const state = resolveControlState({
@@ -153,7 +104,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('reports assignment confirmation on the app as required by default, and a waiver as allowed', () => {
-        const resolveControlState = expectResolveControlStateExport();
 
         // The picker has no confirmation host of its own, so the canonical policy
         // requires confirmation by default and routes it to an approval
@@ -170,7 +120,7 @@ describe('resolveActionSettingsTargetControlState', () => {
             approvalWaivable: true,
         });
 
-        const waived = expectApplyControlStateExport()({
+        const waived = applyControlState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'session.responsibility.set',
             targetId: 'contextual_ui',
@@ -191,7 +141,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('does not floor read-only agent actions or non-agent surfaces (CON-5)', () => {
-        const resolveControlState = expectResolveControlStateExport();
 
         // Read-only agent verb: not floored.
         const readOnly = resolveControlState({
@@ -203,7 +152,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('preserves a disabled floored agent target as stricter than ask_first (LIVE-1)', () => {
-        const resolveControlState = expectResolveControlStateExport();
         const settings = actionSettingsTargets.setActionTargetSelected({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'prompt_doc.update' as ActionId,
@@ -225,7 +173,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('persists an explicit dangerous Action waiver and restores the default', () => {
-        const applyControlState = expectApplyControlStateExport();
 
         const next = applyControlState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
@@ -233,8 +180,6 @@ describe('resolveActionSettingsTargetControlState', () => {
             targetId: 'agent',
             value: 'allowed',
         });
-
-        const resolveControlState = expectResolveControlStateExport();
         const state = resolveControlState({
             settings: next,
             actionId: 'prompt_doc.update' as ActionId,
@@ -253,7 +198,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('restores inherited approval policy without disabling the surface', () => {
-        const applyControlState = expectApplyControlStateExport();
         const required = applyControlState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',
@@ -270,7 +214,7 @@ describe('resolveActionSettingsTargetControlState', () => {
 
         expect(restored.actions['review.start']?.approvalRequiredSurfaces ?? []).toEqual([]);
         expect(restored.approvalWaivedSurfaces?.['review.start']).toBeUndefined();
-        expect(expectResolveControlStateExport()({
+        expect(resolveControlState({
             settings: restored,
             actionId: 'review.start',
             targetId: 'mcp',
@@ -278,7 +222,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('does not expose approval controls for approval actions', () => {
-        const resolveControlState = expectResolveControlStateExport();
 
         expect(resolveControlState({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
@@ -291,7 +234,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('preserves target preferences while resolving a globally disabled action', () => {
-        const resolveControlState = expectResolveControlStateExport();
         const settings = actionSettingsTargets.setActionEnabled({
             settings: actionSettingsTargets.setActionTargetApprovalRequired({
                 settings: DEFAULT_ACTIONS_SETTINGS_V1,
@@ -314,7 +256,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('applies off by disabling the target and clearing matching approval state', () => {
-        const applyControlState = expectApplyControlStateExport();
         const settings = actionSettingsTargets.setActionTargetApprovalRequired({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',
@@ -338,7 +279,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('applies allowed by enabling the target and clearing matching approval state', () => {
-        const applyControlState = expectApplyControlStateExport();
         const settings = actionSettingsTargets.setActionTargetSelected({
             settings: actionSettingsTargets.setActionTargetApprovalRequired({
                 settings: DEFAULT_ACTIONS_SETTINGS_V1,
@@ -363,7 +303,6 @@ describe('resolveActionSettingsTargetControlState', () => {
     });
 
     it('applies simple off without clearing unrelated approval surfaces', () => {
-        const applyControlState = expectApplyControlStateExport();
         const settings = actionSettingsTargets.setActionTargetApprovalRequired({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'review.start',

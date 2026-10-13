@@ -156,10 +156,13 @@ export const ConnectedServicePoolIndexItemView = React.memo(function ConnectedSe
                 </View>
                 {props.compact ? props.star : null}
             </View>
-            <View pointerEvents="none" style={props.compact ? null : styles.use}>
-                {meters}
-                {chips}
-            </View>
+            {/* An empty pool has no usage column: its identity takes the row instead of wrapping beside a blank. */}
+            {meters || (chips && props.members.length > 0) ? (
+                <View pointerEvents="none" style={props.compact ? null : styles.use}>
+                    {meters}
+                    {chips}
+                </View>
+            ) : null}
             {props.compact ? null : props.star}
         </OpenableSurface>
     );

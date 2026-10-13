@@ -6,6 +6,7 @@ import {
     SavedSecretResourceEnvelopeRepairInputV1Schema,
     SavedSecretResourceMaterialV1Schema,
     SharedSavedSecretDeleteInputV1Schema,
+    SharedSavedSecretCreateInputV1Schema,
     SharedSavedSecretUpdateInputV1Schema,
     computeAccountEncryptionMigrateKeyFingerprintV1,
     computeContentPublicKeyFingerprint,
@@ -37,6 +38,7 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
+import { AccountSettingsV2HistoryListResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
 /** Real Home/Account/catalog/Action/crypto owners, with only HTTP and credential storage synthetic. */
 export async function createSecretSettingsTestHarness(options: Readonly<{
@@ -88,6 +90,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const resources: SavedSecretResourceMaterialV1[] = [];
     const recipients: SavedSecretResourceEnvelopeCensusRecipientV1[] = [];
     const updates: Array<ReturnType<typeof SharedSavedSecretUpdateInputV1Schema.parse>> = [];
+    const creations: Array<ReturnType<typeof SharedSavedSecretCreateInputV1Schema.parse>> = [];
     const deletes: Array<ReturnType<typeof SharedSavedSecretDeleteInputV1Schema.parse>> = [];
     const repairs: Array<ReturnType<typeof SavedSecretResourceEnvelopeRepairInputV1Schema.parse>> = [];
     const settingsWrites: unknown[] = [];
@@ -112,6 +115,11 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
             contentKeyFingerprint: encryption ? computeAccountEncryptionMigrateKeyFingerprintV1(encryption.contentDataKey) : null,
             recipientEnvelopeReadiness: encryption ? { status: 'available' } : { status: 'unavailable', reason: 'plain_account' },
         });
+        if (path === '/v2/account/settings/history' && init?.method === 'GET') {
+            // This fresh Home fixture retains no history snapshots. The real
+            // importer still performs its inventory and authority recapture.
+            return Response.json(AccountSettingsV2HistoryListResponseSchema.parse({ snapshots: [] }));
+        }
         if (path === '/v2/account/settings') {
             if (init?.method !== 'POST') return Response.json({ content: settingsContent, version: settingsVersion });
             const body: unknown = JSON.parse(String(init.body));
@@ -134,12 +142,26 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
             return Response.json({ success: true, version: settingsVersion });
         }
         if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources });
+        if (path === '/v1/account/saved-secrets/resources' && init?.method === 'POST') {
+            const body=SharedSavedSecretCreateInputV1Schema.parse(JSON.parse(String(init.body)));
+            creations.push(body);
+            const ownerEnvelope=body.keyEnvelopes?.find(envelope=>envelope.recipientAccountId==='account-a');
+            resources.push(SavedSecretResourceMaterialV1Schema.parse({resourceId:body.resourceId,encryptionMode:body.encryptionMode,
+                storedContent:body.storedContent,recipientEnvelope:ownerEnvelope?{encryptedDataKey:ownerEnvelope.encryptedDataKey,
+                    recipientContentPublicKeyFingerprint:ownerEnvelope.recipientContentPublicKeyFingerprint}:null,
+                entry:{ref:`happier:shared-secret:v1:${body.resourceId}`,source:'shared_resource',relationship:'owner',ownerAccountId:'account-a',
+                    name:body.displayName,kind:body.kind,encryptionMode:body.encryptionMode,revision:1,materialStatus:'ready',
+                    audience:{accounts:[],teams:[],groups:[]},capabilities:{use:true,rename:true,rotate:true,manageAccess:true,delete:true}},
+            }));
+            return Response.json({resourceId:body.resourceId,revision:1});
+        }
         if (path === PROFILE_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows: [], nextCursor: null,
             complete: true, referenceGuardRevision, transferControl: { status: 'absent' }, diagnostics: [] });
         if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: referenceGuardRevision });
         if (path === PROFILE_TRANSFER_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1) return Response.json({ status: 'absent' });
         if (['/v1/account/entity-rows/mcp', '/v1/account/entity-rows/acp', '/v1/account/entity-rows/provider-connections',
-            '/v1/account/entity-rows/connected-accounts/configurations', '/v1/account/entity-rows/connected-accounts/purposes'].includes(path)) {
+            '/v1/account/entity-rows/connected-accounts/configurations', '/v1/account/entity-rows/connected-accounts/purposes',
+            '/v1/account/entity-rows/prompt-library/registry-sources'].includes(path)) {
             return Response.json(catalogRows.get(path) ?? { status: 'absent' });
         }
         if (path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote']) {
@@ -232,7 +254,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const scope = { serverId: connection.home.id, accountId: 'account-a' };
     storage.setState({ settings, settingsScope: scope, settingsVersion });
     return {
-        credentials, encryption, scope, request, resources, recipients, updates, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,
+        credentials, encryption, scope, request, resources, recipients, updates, creations, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,
         setRejectSettingsWrites(next: boolean) { rejectSettingsWrites = next; },
         setLosePromotionResponse(next: boolean) { losePromotionResponse = next; },
         replaceSettings(next: Settings, options?: Readonly<{ version?: number; publish?: boolean }>) {

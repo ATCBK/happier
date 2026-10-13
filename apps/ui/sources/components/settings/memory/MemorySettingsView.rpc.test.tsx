@@ -110,7 +110,7 @@ async function renderSettledMemorySettingsView(): Promise<MemorySettingsScreen> 
 
 /** A row choosing between always-visible options, found by one of its option ids. */
 function findSegmentedChoice(screen: MemorySettingsScreen, optionId: string) {
-    return screen.findAllByType('Item' as any).find((item) => {
+    return screen.findAllByType(Item).find((item) => {
         const tabs = (item.props as { rightElement?: { props?: { tabs?: unknown } } }).rightElement?.props?.tabs;
         return Array.isArray(tabs) && tabs.some((tab: { id?: string }) => tab.id === optionId);
     });
@@ -126,13 +126,14 @@ async function chooseSegment(screen: MemorySettingsScreen, optionId: string) {
 
 /** Types into an inline field row and leaves the field, which commits the value. */
 async function typeIntoFieldRow(screen: MemorySettingsScreen, rowTestID: string, text: string) {
-    const row = screen.findByTestId(rowTestID);
+    const findRow = () => screen.findAllByType(Item).find(node => node.props.testID === rowTestID);
+    const row = findRow();
     expect(row?.props.rightElement?.props.onChangeText).toBeTypeOf('function');
     await act(async () => {
-        screen.findByTestId(rowTestID)!.props.rightElement.props.onChangeText(text);
+        findRow()!.props.rightElement.props.onChangeText(text);
     });
     await act(async () => {
-        await screen.findByTestId(rowTestID)!.props.rightElement.props.onBlur();
+        await findRow()!.props.rightElement.props.onBlur();
     });
 }
 
@@ -140,7 +141,7 @@ function findDropdownMenu(
     screen: MemorySettingsScreen,
     predicate: (props: Record<string, unknown>) => boolean,
 ) {
-    return screen.findAllByType('DropdownMenu' as any).find((menu) => predicate(menu.props as Record<string, unknown>));
+    return screen.findAllByType(DropdownMenu).find((menu) => predicate(menu.props as Record<string, unknown>));
 }
 
 installSettingsViewCommonModuleMocks({
@@ -182,29 +183,10 @@ installSettingsViewCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: (props: any) => React.createElement('ItemList', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props, props.children),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: any) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) =>
-        React.createElement('DropdownMenu', {
-            ...props,
-            testID: props.testID ?? props.itemTrigger?.itemProps?.testID,
-        }),
-}));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => ({ serverId: 'srv_1', generation: 1 }),
@@ -245,6 +227,8 @@ afterEach(() => {
 
 // Load real screen owners after boundary setup, outside behavior deadlines.
 const { MemorySettingsView } = await import('./MemorySettingsView');
+const { Item } = await import('@/components/ui/lists/Item');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
 
 describe('MemorySettingsView', () => {
     it('keeps default keyword settings keyless when another indexing preference is saved', async () => {
@@ -300,7 +284,7 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        const archivedItem = screen.findByTestId('memory-settings-include-archived-item');
+        const archivedItem = screen.findAllByType(Item).find(node => node.props.testID === 'memory-settings-include-archived-item');
         expect(archivedItem?.props.subtitle).toBe('common.unavailable');
         expect(archivedItem?.props.subtitle).not.toBe('memorySearchSettings.archived.unsupportedSubtitle');
         expect(archivedItem?.props.rightElement?.props.disabled).toBe(true);
@@ -313,7 +297,7 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        const archivedItem = screen.findByTestId('memory-settings-include-archived-item');
+        const archivedItem = screen.findAllByType(Item).find(node => node.props.testID === 'memory-settings-include-archived-item');
         expect(archivedItem?.props.subtitle).toBe('memorySearchSettings.archived.unsupportedSubtitle');
         expect(archivedItem?.props.rightElement?.props.disabled).toBe(true);
     });
@@ -431,15 +415,10 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        const privacyItem = screen.findByTestId('memory-settings-delete-on-disable-item');
-        if (!privacyItem) {
-            return;
-        }
-        const toggle = privacyItem.props?.rightElement;
+        const privacyItem = screen.findAllByType(Item).find(node => node.props.testID === 'memory-settings-delete-on-disable-item');
+        expect(privacyItem).toBeTruthy();
+        const toggle = privacyItem!.props?.rightElement;
         expect(toggle?.props?.testID).toBe('memory-settings-delete-on-disable');
-        if (!toggle) {
-            return;
-        }
 
         await act(async () => {
             toggle.props.onValueChange?.(true);
@@ -466,14 +445,14 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        const embeddingsModeDropdown = screen.findByTestId('memory-settings-embeddings-mode');
+        const embeddingsModeDropdown = findDropdownMenu(screen, props => {
+            const trigger = props.itemTrigger as { itemProps?: { testID?: string } } | undefined;
+            return trigger?.itemProps?.testID === 'memory-settings-embeddings-mode';
+        });
         expect(embeddingsModeDropdown).toBeTruthy();
-        if (!embeddingsModeDropdown) {
-            return;
-        }
 
         await act(async () => {
-            embeddingsModeDropdown.props.onSelect?.('preset:long_context');
+            embeddingsModeDropdown!.props.onSelect?.('preset:long_context');
         });
 
         const call = machineRpcSpy.mock.calls.find((c) => c?.[0]?.method === 'daemon.memory.settings.set');
@@ -718,7 +697,7 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        const reasoningItem = screen.findByTestId('memory-settings-content-reasoning-item');
+        const reasoningItem = screen.findAllByType(Item).find(node => node.props.testID === 'memory-settings-content-reasoning-item');
         expect(reasoningItem).toBeTruthy();
         const toggle = reasoningItem?.props?.rightElement;
         expect(toggle?.props?.testID).toBe('memory-settings-content-reasoning');

@@ -8,8 +8,6 @@ import { RemoteHostsActiveTask, RemoteHostsCollectionRoot, RemoteHostsRail } fro
 
 import { REMOTE_HOSTS_ROOT, recordRemoteHostVisit, resolveVisitedRemoteHostId } from './collection/remoteHostsRoutes';
 
-/** Rail width at normal text scale: a host mark, its name and its SSH target. */
-const REMOTE_HOSTS_RAIL_WIDTH_PX = 272;
 /** The narrowest page that still fits an SSH field beside its label. */
 const REMOTE_HOSTS_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -36,7 +34,7 @@ export const RemoteHostsSettingsLayout = React.memo(function RemoteHostsSettings
                 rootPathname={REMOTE_HOSTS_ROOT}
                 resolveChildRoute={resolveRemoteHostsChildRoute}
                 rail={<RemoteHostsRail />}
-                railWidthPx={REMOTE_HOSTS_RAIL_WIDTH_PX}
+                railWidth="standard"
                 detailMinWidthPx={REMOTE_HOSTS_DETAIL_MIN_WIDTH_PX}
                 testID="settings-remote-hosts"
                 detailTop={<RemoteHostsActiveTask />}

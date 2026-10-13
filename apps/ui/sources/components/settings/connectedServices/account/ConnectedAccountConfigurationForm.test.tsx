@@ -3,7 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import type { PluginConfigurationSettingFieldV2 } from '@happier-dev/protocol';
+import { Item } from '@/components/ui/lists/Item';
+import { PluginConfigurationSettingFieldV2Schema } from '@happier-dev/protocol';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -20,31 +21,8 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 vi.mock('@/text', () => ({ t: (key: string) => key }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    // The row stand-in keeps its control mounted so the field inside it can be exercised.
-    Item: (props: Record<string, unknown> & { rightElement?: React.ReactNode }) =>
-        React.createElement('Item', props, props.rightElement),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
-}));
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
 
-const fields = [
+const fields = PluginConfigurationSettingFieldV2Schema.array().parse([
     {
         id: 'endpoint',
         title: 'Endpoint',
@@ -76,7 +54,7 @@ const fields = [
         secret: true,
         required: true,
     },
-] satisfies PluginConfigurationSettingFieldV2[];
+]);
 
 describe('ConnectedAccountConfigurationForm', () => {
     afterEach(async () => {
@@ -100,7 +78,8 @@ describe('ConnectedAccountConfigurationForm', () => {
 
         const endpoint = tree.find((node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-configuration:endpoint');
         const secret = tree.find((node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-configuration:clientSecret');
-        const enabled = tree.find((node) => String(node.type) === 'Item' && node.props.title === 'Enabled');
+        const enabled = tree.findAllByType(Item).find((node) => node.props.title === 'Enabled');
+        if (!enabled) throw new Error('Expected the enabled configuration row');
         const region = tree.find((node) => node.props.testID === 'connected-account-configuration:region');
 
         await act(async () => {
@@ -124,7 +103,7 @@ describe('ConnectedAccountConfigurationForm', () => {
     });
 
     it('renders schema-only scalar and array enum choices without duplicate presentation metadata', async () => {
-        const schemaOnlyFields = [
+        const schemaOnlyFields = PluginConfigurationSettingFieldV2Schema.array().parse([
             {
                 id: 'tier',
                 title: 'Tier',
@@ -140,7 +119,7 @@ describe('ConnectedAccountConfigurationForm', () => {
                 },
                 default: ['read'],
             },
-        ] satisfies PluginConfigurationSettingFieldV2[];
+        ]);
         const { ConnectedAccountConfigurationForm } = await import('./ConnectedAccountConfigurationForm');
         const tree = (await renderScreen(
             <ConnectedAccountConfigurationForm
@@ -160,9 +139,8 @@ describe('ConnectedAccountConfigurationForm', () => {
             { id: JSON.stringify('free'), title: 'free', subtitle: undefined },
             { id: JSON.stringify('pro'), title: 'pro', subtitle: undefined },
         ]);
-        const scopeChoices = tree.findAll(
-            (node) => String(node.type) === 'Item'
-                && (node.props.title === 'read' || node.props.title === 'write'),
+        const scopeChoices = tree.findAllByType(Item).filter(
+            (node) => node.props.title === 'read' || node.props.title === 'write',
         );
         expect(scopeChoices.map((choice) => ({
             testID: choice.props.rightElement.props.testID,

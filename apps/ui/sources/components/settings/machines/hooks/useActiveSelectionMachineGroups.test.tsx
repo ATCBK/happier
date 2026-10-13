@@ -1,19 +1,11 @@
 import * as React from 'react';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { useActiveSelectionMachineGroups } from './useActiveSelectionMachineGroups';
 import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const selectionMockState = vi.hoisted(() => ({
-    serverIds: ['server-a'] as string[],
-}));
-
-vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
-    getEffectiveServerSelectionFromRawSettings: () => ({ serverIds: selectionMockState.serverIds }),
-}));
 
 type ProbeProps = Readonly<{
     allMachines: any[];
@@ -44,10 +36,6 @@ function Probe(props: ProbeProps) {
 }
 
 describe('useActiveSelectionMachineGroups', () => {
-    beforeEach(() => {
-        selectionMockState.serverIds = ['server-a'];
-    });
-
     it('filters revoked machines out of visible groups and hasAnyVisibleMachines', async () => {
         const captured: any[] = [];
         const allMachines = [
@@ -96,7 +84,6 @@ describe('useActiveSelectionMachineGroups', () => {
     });
 
     it('resolves machine groups with identity-backed server scope ids', async () => {
-        selectionMockState.serverIds = ['srv_identity_active'];
         const captured: any[] = [];
 
         function IdentityProbe() {

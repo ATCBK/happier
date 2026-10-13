@@ -50,7 +50,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     startAdding?: boolean;
 }>) {
     const { connectionId, connection, enabled, machineId, serverId, resolveCurrentTarget } = input;
-    const { mutateProviderModelSettings, probeProviderConnection } = useProviderActionClient(serverId);
+    const { mutateProviderModelSettings, probeProviderConnection, pendingApproval } = useProviderActionClient(serverId);
     const catalog = useProviderConnectionModels({ enabled, active: input.active, machineId, serverId, connectionId });
     const catalogCount = useProviderCatalogCounts(serverId)?.[connectionId] ?? null;
     const [showHidden, setShowHidden] = React.useState(false);
@@ -359,6 +359,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
 
     return {
         groups,
+        pendingApproval: pendingApproval ?? catalog.pendingApproval ?? modelLoad.pendingApproval,
         initialLoading: catalog.loading,
         modelCount: catalog.models.length,
         catalogCount,

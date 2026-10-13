@@ -100,10 +100,10 @@ describe('PluginListingScreen', () => {
         expect(screen.findByTestId('settings.plugins.listing.install')).toBeNull();
     });
 
-    it('asks for a machine instead of loading when none is chosen', async () => {
+    it('acquires its Account listing even when no install machine is chosen', async () => {
         state.value = screenState({ discoverEntries: [], daemonOperationsAvailable: false, administrationTargetSelection: { state: { kind: 'unselected' }, candidates: [] } });
         const screen = await renderListing();
-        expect(state.value.openDiscoverListing).not.toHaveBeenCalled();
+        expect(state.value.openDiscoverListing).toHaveBeenCalledWith({ sourceId: 'marketplace:curated', pluginId: 'acme.tools' });
         expect(screen.findByTestId('settings.plugins.listing.noTarget')).not.toBeNull();
     });
     it('explains an offline machine with a retry instead of loading forever', async () => {
@@ -116,7 +116,7 @@ describe('PluginListingScreen', () => {
             refreshPluginTruth,
         });
         const screen = await renderListing();
-        expect(state.value.openDiscoverListing).not.toHaveBeenCalled();
+        expect(state.value.openDiscoverListing).toHaveBeenCalledWith({ sourceId: 'marketplace:curated', pluginId: 'acme.tools' });
         expect(screen.findByTestId('settings.plugins.listing.loading')).toBeNull();
         expect(screen.findByTestId('settings.plugins.listing.readOnlySnapshot')).not.toBeNull();
     });

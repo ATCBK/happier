@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { AccountApiTokenSummaryV1 } from '@happier-dev/protocol';
 import { deriveEmbedAccessFromGrantV1 } from '@happier-dev/protocol/embed';
@@ -147,6 +147,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     previewPage: {
         flex: 1,
         minHeight: 0,
+    },
+    previewPageContent: {
+        flexGrow: 1,
     },
 }));
 
@@ -489,13 +492,17 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
         <View testID="settings-embed-detail-root" style={styles.root} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
             <View style={styles.settings}>
                 {step === 'preview' ? (
-                    // The pushed phone preview fills the pane under its header with a bounded height
-                    // (no scroll frame), above the floating tab bar, so the chat's composer stays
-                    // reachable in portrait and landscape (lab P3).
-                    <View testID="settings-embed-preview-step" style={[styles.previewPage, { paddingBottom: composerBottomChrome }]}>
+                    // The pushed phone preview fills the pane under its header, above the floating tab
+                    // bar (lab P3). Where the pane is shorter than the whole chat (a landscape phone),
+                    // the page scrolls so the chat's composer and Send stay reachable, never clipped.
+                    <ScrollView
+                        testID="settings-embed-preview-step"
+                        style={styles.previewPage}
+                        contentContainerStyle={[styles.previewPageContent, { paddingBottom: composerBottomChrome }]}
+                    >
                         {header}
                         {picker}
-                    </View>
+                    </ScrollView>
                 ) : (
                     <ItemList testID="settings-embed-detail">
                         {header}

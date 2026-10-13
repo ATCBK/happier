@@ -797,19 +797,6 @@ export function projectBrowseShelves(
 }
 
 /**
- * The one Discover query's filters: All sends no source filter (the daemon aggregates every
- * enabled source), a source narrows it, and a listing page resolves one exact source-qualified
- * listing through the same query.
- */
-export function buildDiscoverQueryFilters(params: Readonly<{ sourceId: string | null; pluginId?: string | null }>) {
-    return {
-        ...(params.sourceId === null ? {} : { sourceIds: [params.sourceId] }),
-        ...(params.pluginId ? { pluginIds: [params.pluginId] } : {}),
-        includeUnavailable: true as const,
-    };
-}
-
-/**
  * One row's state vocabulary, shared by the Installed and Development lists.
  *
  * A row states ONE status and, when something needs a decision, ONE actionable

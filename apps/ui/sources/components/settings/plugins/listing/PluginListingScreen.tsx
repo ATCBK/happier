@@ -72,7 +72,7 @@ export const PluginListingScreen = React.memo(function PluginListingScreen(props
 }>) {
     const isFocused = useIsFocused();
     const state = usePluginSettingsScreenState({ focused: isFocused });
-    const targetKey = JSON.stringify([state.executionServerId, state.executionServerIdentityId, state.executionMachineId]);
+    const targetKey = JSON.stringify([state.executionServerId, state.executionServerIdentityId]);
     // The request this page last made; until it exists for the current target, the page is loading.
     const [requestedKey, setRequestedKey] = React.useState<string | null>(null);
     const requestKey = `${targetKey}|${props.sourceId}|${props.pluginId}`;
@@ -80,10 +80,10 @@ export const PluginListingScreen = React.memo(function PluginListingScreen(props
     // Declared after the state owner's own effects, so this request is made after the owner has
     // settled the machine scope for this mount; made earlier, the scope reset would drop it.
     React.useEffect(() => {
-        if (!state.daemonOperationsAvailable || requestedKey === requestKey) return;
+        if (requestedKey === requestKey) return;
         setRequestedKey(requestKey);
         openDiscoverListing({ sourceId: props.sourceId, pluginId: props.pluginId });
-    }, [openDiscoverListing, props.pluginId, props.sourceId, requestKey, requestedKey, state.daemonOperationsAvailable]);
+    }, [openDiscoverListing, props.pluginId, props.sourceId, requestKey, requestedKey]);
     return (
         <PluginListingView
             sourceId={props.sourceId}

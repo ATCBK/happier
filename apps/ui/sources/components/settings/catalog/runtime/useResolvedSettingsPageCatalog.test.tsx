@@ -473,7 +473,6 @@ describe('useResolvedSettingsPageCatalog', () => {
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
 
         featureGateState.enabled = (featureId: string) => featureId === 'prompts.library'
-            || featureId === 'prompts.skills.registries'
             || featureId === 'prompts.assets.external';
         const enabledHook = await renderHook(() => useResolvedSettingsPageCatalog());
         expect(flattenIds(enabledHook.getCurrent().tree)).toEqual(expect.arrayContaining(['promptsRegistries', 'promptsAssets']));

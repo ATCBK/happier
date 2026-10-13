@@ -499,6 +499,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         if (asksForKey && !contributionSecretId && typedKey) {
             // PA1: the pasted key becomes a Saved Secret through its catalog owner, then the provider uses it.
             let created: string | null = null;
+            let declined = false;
             try {
                 created = await savedSecretCatalog.personalMutations.create({
                     name: (props.contributionKey
@@ -506,11 +507,14 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                         : draft.name.trim()) || t('settingsProviders.authoring.apiKey'),
                     value: typedKey,
                 }, { signal,
-                    onApprovalPending: secretApproval.requestApproval });
+                    onApprovalPending: secretApproval.requestApproval,
+                    onApprovalDeclined: () => { declined = true; } });
             } catch {
                 created = null;
             }
             if (!accountStillCurrent() || signal.aborted) return false;
+            // A declined approval leaves the draft as it was; only a real failure is presented.
+            if (!created && declined) return false;
             if (!created) {
                 setLocalError('provider_secret_unavailable');
                 return false;

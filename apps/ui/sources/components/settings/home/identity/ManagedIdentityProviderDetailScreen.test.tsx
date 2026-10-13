@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
@@ -18,15 +19,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { replace: replaceMock } }).module;
 });
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
 vi.mock('@/modal', () => ({
     Modal: {
@@ -128,7 +124,7 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
             <ManagedIdentityProviderDetailScreen serverId="home-1" providerId="provider-1" />,
         );
         const row = screen.findByTestId('identity-provider-callback-url');
-        expect(row?.props.subtitle).toBe('https://home.example.test/v1/oauth/provider-1/callback');
+        expect(findTestInstanceByTypeContainingText(row!, 'Text', 'https://home.example.test/v1/oauth/provider-1/callback')).toBeDefined();
 
         await screen.pressByTestIdAsync('identity-provider-callback-url');
 
@@ -168,9 +164,8 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
         expect(screen.findAllByProps({ title: 'identityAdministration.issuer' })).toHaveLength(0);
         expect(screen.findAllByProps({ title: 'identityAdministration.clientSecret' })).toHaveLength(0);
         expect(screen.findByTestId('identity-provider-test')).toBeNull();
-        expect(screen.findByTestId('identity-provider-team-consumer:connection-1')?.props.title).toBe('Acme');
-        expect(screen.findByTestId('identity-provider-team-consumer:connection-1')?.props.subtitle)
-            .toBe('identityAdministration.githubFacetSignIn');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-team-consumer:connection-1')!, 'Text', 'Acme')).toBeDefined();
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-team-consumer:connection-1')!, 'Text', 'identityAdministration.githubFacetSignIn')).toBeDefined();
 
         await screen.pressByTestIdAsync('identity-provider-enable');
         expect(executeMock).toHaveBeenCalledWith('identity.providers.enable', {
@@ -190,9 +185,8 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
 
         expect(screen.findByProps({ title: 'identityAdministration.clientSecret' }).props.detail)
             .toBe('identityAdministration.secretNeedsAttention');
-        expect(screen.findByTestId('identity-provider-secret-repair')?.props.detail)
-            .toBe('identityAdministration.secretRepair');
-        expect(screen.findByTestId('identity-provider-edit')?.props.disabled).toBe(false);
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-secret-repair')!, 'Text', 'identityAdministration.secretRepair')).toBeDefined();
+        expect(Boolean(screen.findByTestId('identity-provider-edit')!.props.disabled)).toBe(false);
     });
 
     it('withdraws mutation controls while the retained provider projection is stale', async () => {
@@ -299,7 +293,7 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
         expect(openExternalUrlMock).not.toHaveBeenCalled();
         expect(requestApprovalMock).toHaveBeenCalledWith(approval);
         expect(screen.findByTestId('identity-provider-notice')).toBeNull();
-        expect(screen.findByTestId('identity-provider-test')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('identity-provider-test')!.props.accessibilityState?.busy)).toBe(false);
 
         openExternalUrlMock.mockResolvedValueOnce(true);
         await completeApprovedTest?.({ attemptId: 'attempt-1', authorizeUrl: 'https://id.example/authorize' });
@@ -329,7 +323,7 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
         expect(replaceMock).not.toHaveBeenCalled();
         expect(requestApprovalMock).toHaveBeenCalledWith(approval);
         expect(screen.findByTestId('identity-provider-notice')).toBeNull();
-        expect(screen.findByTestId('identity-provider-disable')?.props.disabled).toBe(false);
+        expect(Boolean(screen.findByTestId('identity-provider-disable')!.props.disabled)).toBe(false);
 
         await completeApprovedLifecycle?.();
         expect(refreshMock).toHaveBeenCalledOnce();
@@ -360,7 +354,7 @@ describe('ManagedIdentityProviderDetailScreen diagnostics', () => {
         expect(replaceMock).not.toHaveBeenCalled();
         expect(requestApprovalMock).toHaveBeenCalledWith(approval);
         expect(screen.findByTestId('identity-provider-notice')).toBeNull();
-        expect(screen.findByTestId('identity-provider-remove')?.props.disabled).toBe(false);
+        expect(Boolean(screen.findByTestId('identity-provider-remove')!.props.disabled)).toBe(false);
 
         await completeApprovedRemoval?.();
         expect(replaceMock).toHaveBeenCalledWith('/settings/home/home-1/sign-in-providers');

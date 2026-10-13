@@ -10,8 +10,6 @@ import { API_TOKENS_COLLECTION_ROOT, recordApiTokenCollectionVisit, resolveSelec
 import { ApiTokensCollectionRail } from './ApiTokensCollectionRail';
 import { ApiTokenSettingsScope, useApiTokenSettingsScopeController } from './ApiTokenSettingsScope';
 
-/** Rail width at normal text scale: a token label with a pill and one access line. */
-const API_TOKENS_RAIL_WIDTH_PX = 300;
 /** The narrowest token detail that still fits a fact row beside its value. */
 const API_TOKENS_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -45,7 +43,7 @@ const ApiTokensCollection = React.memo(function ApiTokensCollection() {
             resolveChildRoute={resolveApiTokensChildRoute}
             // An empty collection is its page: no rail beside an empty state.
             rail={hasTokens ? <ApiTokensCollectionRail /> : null}
-            railWidthPx={API_TOKENS_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={API_TOKENS_DETAIL_MIN_WIDTH_PX}
             testID="settings-api-tokens"
         />

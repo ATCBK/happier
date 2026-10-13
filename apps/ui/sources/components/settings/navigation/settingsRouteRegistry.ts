@@ -5,6 +5,8 @@ import type { NativeStackNavigationOptions } from '@react-navigation/native-stac
 import { useLocalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import type { TranslationKeyNoParams } from '@/text';
+import { Typography } from '@/constants/Typography';
+import { Text } from '@/components/ui/text/Text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { MACHINE_RETENTION_CATEGORIES_V1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
@@ -216,18 +218,22 @@ function SettingsParentBackButton({
     accessibilityLabel,
     tintColor,
     hideOnTopLevel,
+    parentLabel,
 }: Readonly<{
     accessibilityLabel: string;
     tintColor?: string;
     hideOnTopLevel: boolean;
+    /** Names the parent screen beside the arrow, for a page whose own large title is the only title. */
+    parentLabel?: Translate;
 }>): React.ReactElement | null {
     const pathname = usePathname();
-    const { goToParent } = useSettingsParentBack('SettingsParentBackButton.back');
+    const { parentPathname, goToParent } = useSettingsParentBack('SettingsParentBackButton.back');
 
     if (!shouldShowSettingsParentBackButton({ pathname, hideOnTopLevel })) {
         return null;
     }
 
+    const parentTitleKey = parentLabel ? resolveSettingsRouteTitleKey(parentPathname) : null;
     return React.createElement(Pressable, {
         accessibilityLabel,
         accessibilityRole: 'button',
@@ -235,6 +241,7 @@ function SettingsParentBackButton({
         onPress: goToParent,
         style: {
             alignItems: 'center',
+            flexDirection: 'row',
             justifyContent: 'center',
             marginLeft: Platform.select({ ios: -8, default: 0 }) as number,
             paddingHorizontal: 8,
@@ -244,7 +251,10 @@ function SettingsParentBackButton({
         color: tintColor,
         name: Platform.OS === 'ios' ? 'chevron-back' : 'arrow-back',
         size: 28,
-    }));
+    }), parentLabel && parentTitleKey ? React.createElement(Text, {
+        numberOfLines: 1,
+        style: [Typography.default(), { color: tintColor, fontSize: 16, marginLeft: 4, flexShrink: 1 }],
+    }, parentLabel(parentTitleKey)) : null);
 }
 
 export function getSettingsStackScreenDefinitions(
@@ -272,6 +282,8 @@ export function getSettingsStackScreenDefinitions(
                 accessibilityLabel,
                 tintColor,
                 hideOnTopLevel: false,
+                // A page that heads itself leaves the bar untitled, so its back names the parent.
+                ...(definition.headsItself ? { parentLabel: t } : {}),
             });
         }
         return {

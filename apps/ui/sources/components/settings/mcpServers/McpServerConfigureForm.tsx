@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import {
     type McpServerRuleV1,
@@ -11,10 +13,13 @@ import { applyMcpServerConfigOverrideV1 } from '@happier-dev/protocol/mcp/server
 import { McpServerBindingEditor } from '@/components/settings/mcpServers/McpServerBindingEditor';
 import { McpServerBindingDraftExpander } from '@/components/settings/mcpServers/McpServerBindingDraftExpander';
 import { McpServerTestPanel } from '@/components/settings/mcpServers/McpServerTestPanel';
-import { McpValueRefMapEditor } from '@/components/settings/mcpServers/McpValueRefMapEditor';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { ValueRefRowsEditor } from '@/components/ui/forms/valueRefs/ValueRefRowsEditor';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
 import { StringListField } from '@/components/ui/forms/StringListField';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
@@ -23,7 +28,6 @@ import type { AccountSettingsScope } from '@/sync/domains/settings/scope/account
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
-import { parseMcpCommandLine } from '@/sync/domains/settings/mcpServers/parseMcpCommandLine';
 import { t } from '@/text';
 
 /**
@@ -43,42 +47,7 @@ export const McpServerConfigureForm = React.memo(function McpServerConfigureForm
 }>) {
     const [favoriteDirectoriesRaw, setFavoriteDirectoriesRaw] = useSettingMutable('favoriteDirectories');
     const favoriteDirectories = Array.isArray(favoriteDirectoriesRaw) ? favoriteDirectoriesRaw : [];
-    const [advancedCommandEditorOpen, setAdvancedCommandEditorOpen] = React.useState(false);
     const { onChangeServer } = props;
-
-    const transportOptions = React.useMemo(() => ([
-        { id: 'stdio' as const, label: t('settings.mcpServersTransportLocalTitle'), description: t('settings.mcpServersTransportLocalSubtitle') },
-        { id: 'http' as const, label: t('settings.mcpServersTransportHttpTitle'), description: t('settings.mcpServersTransportHttpSubtitle') },
-        { id: 'sse' as const, label: t('settings.mcpServersTransportSseTitle'), description: t('settings.mcpServersTransportSseSubtitle') },
-    ]), []);
-
-    const setTransport = React.useCallback((transport: McpServerCatalogEntryTransportV1) => {
-        onChangeServer((current) => {
-            const now = Date.now();
-            if (transport === 'stdio') {
-                return {
-                    ...current,
-                    transport,
-                    stdio: current.stdio ?? { command: '', args: [] },
-                    remote: undefined,
-                    updatedAt: now,
-                };
-            }
-            return {
-                ...current,
-                transport,
-                remote: current.remote ?? { url: '', headers: {} },
-                stdio: undefined,
-                updatedAt: now,
-            };
-        });
-    }, [onChangeServer]);
-
-    const commandLineValue = React.useMemo(() => {
-        const command = props.draftServer.stdio?.command?.trim() ?? '';
-        const args = props.draftServer.stdio?.args ?? [];
-        return [command, ...args].filter(Boolean).join(' ');
-    }, [props.draftServer.stdio?.args, props.draftServer.stdio?.command]);
 
     return (
         <>
@@ -119,158 +88,13 @@ export const McpServerConfigureForm = React.memo(function McpServerConfigureForm
                 />
             </ItemGroup>
 
-            <ItemGroup title={t('mcpSettings.connectionSection')} description={t('mcpSettings.connectionSectionDescription')}>
-                <SegmentedChoiceItem<McpServerCatalogEntryTransportV1>
-                    testID="mcp.server.transport"
-                    testIDPrefix="mcp.server.transport"
-                    title={t('settings.mcpServersFieldTransport')}
-                    value={props.draftServer.transport}
-                    options={transportOptions}
-                    onChange={setTransport}
-                />
-                {props.draftServer.transport === 'stdio' ? (
-                    <Item
-                        title={t('settings.mcpServersFieldCommandLine')}
-                        accessoryLayout="stacked"
-                        showChevron={false}
-                        rightElement={(
-                            <FieldTextInput
-                                testID="mcp.server.editor.commandLine"
-                                value={commandLineValue}
-                                onChangeText={(text) => {
-                                    const parsed = parseMcpCommandLine(text);
-                                    onChangeServer((current) => ({
-                                        ...current,
-                                        stdio: { command: parsed.command, args: parsed.args },
-                                        updatedAt: Date.now(),
-                                    }));
-                                }}
-                                accessibilityLabel={t('settings.mcpServersFieldCommandLine')}
-                                placeholder={t('settings.mcpServersFieldCommandLinePlaceholder')}
-                                monospace
-                            />
-                        )}
-                    />
-                ) : (
-                    <Item
-                        title={t('settings.mcpServersFieldUrl')}
-                        accessoryLayout="adaptive"
-                        showChevron={false}
-                        rightElement={(
-                            <FieldTextInput
-                                testID="mcp.server.editor.url"
-                                value={props.draftServer.remote?.url ?? ''}
-                                onChangeText={(text) => onChangeServer((current) => ({
-                                    ...current,
-                                    remote: { url: text, headers: current.remote?.headers ?? {} },
-                                    updatedAt: Date.now(),
-                                }))}
-                                accessibilityLabel={t('settings.mcpServersFieldUrl')}
-                                placeholder="https://example.com/mcp"
-                                keyboardType="url"
-                                monospace
-                            />
-                        )}
-                    />
-                )}
-                {props.draftServer.transport === 'stdio' ? (
-                    <ExpandableItem
-                        testID="mcp.server.editor.advancedCommand"
-                        expanded={advancedCommandEditorOpen}
-                        onExpandedChange={setAdvancedCommandEditorOpen}
-                        header={({ headerProps }) => (
-                            <Item
-                                {...headerProps}
-                                title={t('settings.mcpServersAdvancedCommandEditorTitle')}
-                                subtitle={t('settings.mcpServersAdvancedCommandEditorSubtitle')}
-                                showChevron={false}
-                            />
-                        )}
-                    >
-                        <Item
-                            title={t('settings.mcpServersFieldCommand')}
-                            accessoryLayout="adaptive"
-                            showChevron={false}
-                            showDivider={false}
-                            rightElement={(
-                                <FieldTextInput
-                                    testID="mcp.server.editor.command"
-                                    value={props.draftServer.stdio?.command ?? ''}
-                                    onChangeText={(text) => onChangeServer((current) => ({
-                                        ...current,
-                                        stdio: { command: text, args: current.stdio?.args ?? [] },
-                                        updatedAt: Date.now(),
-                                    }))}
-                                    accessibilityLabel={t('settings.mcpServersFieldCommand')}
-                                    placeholder="node"
-                                    monospace
-                                />
-                            )}
-                        />
-                        <Item
-                            title={t('settings.mcpServersFieldArgs')}
-                            accessoryLayout="stacked"
-                            showChevron={false}
-                            showDivider={false}
-                            rightElement={(
-                                <StringListField
-                                    testID="mcp.server.editor.args"
-                                    values={props.draftServer.stdio?.args ?? []}
-                                    onChange={(args) => onChangeServer((current) => ({
-                                        ...current,
-                                        stdio: { command: current.stdio?.command ?? '', args },
-                                        updatedAt: Date.now(),
-                                    }))}
-                                    itemLabel={(position) => t('settingsAgents.customAcp.argumentLabel', { position })}
-                                    removeLabel={(position) => t('settingsAgents.customAcp.removeArgument', { position })}
-                                    addLabel={t('settingsAgents.customAcp.addArgument')}
-                                    itemPlaceholder={t('settingsAgents.customAcp.argumentPlaceholder')}
-                                    monospace
-                                />
-                            )}
-                        />
-                    </ExpandableItem>
-                ) : null}
-            </ItemGroup>
-
-            <McpValueRefMapEditor
-                kind="env"
-                title={t('settings.mcpServersEditorEnv')}
-                description={t('mcpSettings.envDescription')}
-                iconName="code"
-                entries={props.draftServer.env}
+            <McpServerConfigurationSection
+                draftServer={props.draftServer}
                 secrets={props.secrets}
                 scope={props.scope}
-                onChangeEntries={(next) => onChangeServer((current) => ({ ...current, env: next, updatedAt: Date.now() }))}
-                addRowTitle={t('settings.mcpServersEnvAdd')}
-                addRowSubtitle={t('settings.mcpServersEnvAddSubtitle')}
-                emptyTitle={t('settings.mcpServersEnvEmptyTitle')}
-                emptySubtitle={t('settings.mcpServersEnvEmptySubtitle')}
-                testIdPrefix="mcp.server.env"
+                mode="create"
+                onChangeServer={onChangeServer}
             />
-
-            {props.draftServer.transport === 'stdio' ? null : (
-                <McpValueRefMapEditor
-                    kind="header"
-                    title={t('settings.mcpServersEditorHeaders')}
-                    description={t('mcpSettings.headersDescription')}
-                    iconName="key"
-                    entries={props.draftServer.remote?.headers ?? {}}
-                    secrets={props.secrets}
-                    scope={props.scope}
-                    onChangeEntries={(next) =>
-                        onChangeServer((current) => ({
-                            ...current,
-                            remote: { url: current.remote?.url ?? '', headers: next },
-                            updatedAt: Date.now(),
-                        }))}
-                    addRowTitle={t('settings.mcpServersHeadersAdd')}
-                    addRowSubtitle={t('settings.mcpServersHeadersAddSubtitle')}
-                    emptyTitle={t('settings.mcpServersHeadersEmptyTitle')}
-                    emptySubtitle={t('settings.mcpServersHeadersEmptySubtitle')}
-                    testIdPrefix="mcp.server.headers"
-                />
-            )}
 
             <ItemGroup title={t('settings.mcpServersEditorAppliesTo')} description={t('settings.mcpServersEditorAppliesToSubtitle')}>
                 {props.draftBindings.map((binding) => (
@@ -312,3 +136,222 @@ export const McpServerConfigureForm = React.memo(function McpServerConfigureForm
         </>
     );
 });
+
+export type McpConfigurationSaveState = 'idle' | 'saving' | 'saved' | 'failed';
+
+/**
+ * Everything the catalog entry holds about starting or reaching a server, edited in place (md C).
+ * Local: command, arguments (one field each), working folder, environment. Remote: address, headers.
+ * Each value commits when focus leaves it (`onCommit`); the server page saves there and says so in
+ * the section's action. The new-server form (`mode="create"`) also chooses the transport.
+ */
+export const McpServerConfigurationSection = React.memo(function McpServerConfigurationSection(props: Readonly<{
+    draftServer: McpServerCatalogEntryV1;
+    secrets: SavedSecret[];
+    scope?: AccountSettingsScope | null;
+    /** `create` adds the transport choice; a saved server's transport is a fact of its header. */
+    mode?: 'create' | 'edit';
+    /** Section title and purpose (the server page names it Configuration). */
+    title?: string;
+    description?: string;
+    /** A value was committed (field blur, a type or secret chosen, a row removed): save now. */
+    onCommit?: () => void;
+    saveState?: McpConfigurationSaveState;
+    /** Names whose value is missing (the banner's "Add key" lands here). */
+    attentionKeys?: ReadonlySet<string>;
+    onChangeServer: (updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1) => void;
+}>) {
+    const { theme } = useUnistyles();
+    const { onChangeServer, onCommit } = props;
+    const server = props.draftServer;
+    const local = server.transport === 'stdio';
+    const [folderMenuOpen, setFolderMenuOpen] = React.useState(false);
+    const [folderChoice, setFolderChoice] = React.useState<'session' | 'path'>(server.stdio?.cwd?.t === 'path' ? 'path' : 'session');
+    React.useEffect(() => { setFolderChoice(server.stdio?.cwd?.t === 'path' ? 'path' : 'session'); }, [server.stdio?.cwd?.t]);
+
+    const transportOptions = React.useMemo(() => ([
+        { id: 'stdio' as const, label: t('settings.mcpServersTransportLocalTitle'), description: t('settings.mcpServersTransportLocalSubtitle') },
+        { id: 'http' as const, label: t('settings.mcpServersTransportHttpTitle'), description: t('settings.mcpServersTransportHttpSubtitle') },
+        { id: 'sse' as const, label: t('settings.mcpServersTransportSseTitle'), description: t('settings.mcpServersTransportSseSubtitle') },
+    ]), []);
+
+    const setTransport = React.useCallback((transport: McpServerCatalogEntryTransportV1) => {
+        onChangeServer((current) => (transport === 'stdio'
+            ? { ...current, transport, stdio: current.stdio ?? { command: '', args: [] }, remote: undefined, updatedAt: Date.now() }
+            : { ...current, transport, remote: current.remote ?? { url: '', headers: {} }, stdio: undefined, updatedAt: Date.now() }));
+    }, [onChangeServer]);
+
+    const setStdio = React.useCallback((patch: (stdio: NonNullable<McpServerCatalogEntryV1['stdio']>) => NonNullable<McpServerCatalogEntryV1['stdio']>) => {
+        onChangeServer((current) => ({ ...current, stdio: patch(current.stdio ?? { command: '', args: [] }), updatedAt: Date.now() }));
+    }, [onChangeServer]);
+
+    const commitWith = React.useCallback((change: () => void) => {
+        change();
+        onCommit?.();
+    }, [onCommit]);
+
+    const folderItems = React.useMemo(() => [
+        { id: 'session', title: t('capabilities.mcp.config.sessionFolder') },
+        { id: 'path', title: t('capabilities.mcp.config.aFolder') },
+    ], []);
+
+    const savedLine = props.saveState === 'saved' || props.saveState === 'saving' || props.saveState === 'failed' ? (
+        <View testID="mcp.server.config.saveState" style={styles.saved}>
+            {props.saveState === 'saved' ? <Icon name="check" size={14} color={theme.colors.text.secondary} /> : null}
+            <Text variant="meta" style={{ color: props.saveState === 'failed' ? theme.colors.state.danger.foreground : theme.colors.text.secondary }}>
+                {props.saveState === 'saved' ? t('capabilities.mcp.config.saved')
+                    : props.saveState === 'saving' ? t('capabilities.mcp.config.saving')
+                        : t('capabilities.mcp.config.saveFailed')}
+            </Text>
+        </View>
+    ) : undefined;
+
+    return (
+        <ItemGroup
+            testID="mcp.server.config"
+            title={props.title ?? t('mcpSettings.connectionSection')}
+            description={props.description ?? t('mcpSettings.connectionSectionDescription')}
+            action={savedLine}
+        >
+            {props.mode === 'create' ? (
+                <SegmentedChoiceItem<McpServerCatalogEntryTransportV1>
+                    testID="mcp.server.transport"
+                    testIDPrefix="mcp.server.transport"
+                    title={t('settings.mcpServersFieldTransport')}
+                    value={server.transport}
+                    options={transportOptions}
+                    onChange={setTransport}
+                />
+            ) : null}
+            {local ? (
+                <>
+                    <FieldValueItem
+                        testID="mcp.server.config.command"
+                        fieldTestID="mcp.server.editor.command"
+                        title={t('capabilities.mcp.config.command')}
+                        subtitle={t('capabilities.mcp.config.commandDescription')}
+                        value={server.stdio?.command ?? ''}
+                        placeholder="npx"
+                        monospace
+                        onCommit={(draft) => {
+                            const command = draft.trim();
+                            commitWith(() => setStdio((stdio) => ({ ...stdio, command })));
+                        }}
+                    />
+                    <Item
+                        testID="mcp.server.config.arguments"
+                        title={t('capabilities.mcp.config.arguments')}
+                        // One field per argument, as wide as the values below it (Environment's rhythm).
+                        accessoryLayout="stacked"
+                        showChevron={false}
+                        rightElement={(
+                            <StringListField
+                                testID="mcp.server.editor.args"
+                                values={server.stdio?.args ?? []}
+                                onChange={(args) => setStdio((stdio) => ({ ...stdio, args }))}
+                                onCommit={onCommit}
+                                itemLabel={(position) => t('capabilities.mcp.config.argument', { position })}
+                                removeLabel={(position) => t('capabilities.mcp.config.removeArgument', { position })}
+                                addLabel={t('capabilities.mcp.config.addArgument')}
+                                monospace
+                            />
+                        )}
+                    />
+                    <DropdownMenu
+                        testID="mcp.server.config.folder"
+                        open={folderMenuOpen}
+                        onOpenChange={setFolderMenuOpen}
+                        variant="selectable"
+                        search={false}
+                        selectedId={folderChoice}
+                        showCategoryTitles={false}
+                        matchTriggerWidth
+                        connectToTrigger
+                        rowKind="item"
+                        itemTrigger={{ title: t('capabilities.mcp.config.workingFolder'), subtitle: t('capabilities.mcp.config.workingFolderDescription'), showSelectedSubtitle: false }}
+                        items={folderItems}
+                        onSelect={(id) => {
+                            setFolderMenuOpen(false);
+                            if (id === 'session') {
+                                setFolderChoice('session');
+                                commitWith(() => setStdio(({ cwd: _cwd, ...stdio }) => stdio));
+                            } else {
+                                setFolderChoice('path');
+                            }
+                        }}
+                    />
+                    {folderChoice === 'path' ? (
+                        <FieldValueItem
+                            testID="mcp.server.config.folderPath"
+                            fieldTestID="mcp.server.editor.cwd"
+                            title={t('capabilities.mcp.config.folderPath')}
+                            value={server.stdio?.cwd?.t === 'path' ? server.stdio.cwd.path : ''}
+                            placeholder="/srv/project"
+                            monospace
+                            autoFocus={server.stdio?.cwd?.t !== 'path'}
+                            onCommit={(draft) => {
+                                const path = draft.trim();
+                                if (!path) return;
+                                commitWith(() => setStdio((stdio) => ({ ...stdio, cwd: { t: 'path', path } })));
+                            }}
+                        />
+                    ) : null}
+                </>
+            ) : (
+                <FieldValueItem
+                    testID="mcp.server.config.address"
+                    fieldTestID="mcp.server.editor.url"
+                    title={t('capabilities.mcp.config.address')}
+                    subtitle={t('capabilities.mcp.config.addressDescription')}
+                    // An address is long: it takes the row's width under its label.
+                    accessoryLayout="stacked"
+                    value={server.remote?.url ?? ''}
+                    placeholder="https://example.com/mcp"
+                    monospace
+                    onCommit={(draft) => {
+                        const url = draft.trim();
+                        commitWith(() => onChangeServer((current) => ({ ...current, remote: { ...(current.remote ?? { headers: {} }), url }, updatedAt: Date.now() })));
+                    }}
+                />
+            )}
+            <Item
+                testID={local ? 'mcp.server.config.env' : 'mcp.server.config.headers'}
+                title={local ? t('capabilities.mcp.config.environment') : t('capabilities.mcp.config.headers')}
+                subtitle={local ? t('capabilities.mcp.config.environmentDescription') : t('capabilities.mcp.config.headersDescription')}
+                accessoryLayout="stacked"
+                showChevron={false}
+                rightElement={local ? (
+                    <ValueRefRowsEditor
+                        kind="env"
+                        entries={server.env}
+                        secrets={props.secrets}
+                        scope={props.scope}
+                        attentionKeys={props.attentionKeys}
+                        addLabel={t('capabilities.mcp.config.addVariable')}
+                        testIdPrefix="mcp.server.env"
+                        onChangeEntries={(env) => commitWith(() => onChangeServer((current) => ({ ...current, env, updatedAt: Date.now() })))}
+                    />
+                ) : (
+                    <ValueRefRowsEditor
+                        kind="header"
+                        entries={server.remote?.headers ?? {}}
+                        secrets={props.secrets}
+                        scope={props.scope}
+                        attentionKeys={props.attentionKeys}
+                        addLabel={t('capabilities.mcp.config.addHeader')}
+                        testIdPrefix="mcp.server.headers"
+                        onChangeEntries={(headers) => commitWith(() => onChangeServer((current) => ({ ...current, remote: { ...(current.remote ?? { url: '' }), headers }, updatedAt: Date.now() })))}
+                    />
+                )}
+            />
+        </ItemGroup>
+    );
+});
+
+const styles = StyleSheet.create((theme) => ({
+    saved: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
+    },
+}));

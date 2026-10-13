@@ -18,7 +18,7 @@ describe('qualified Context document choices', () => {
             isDecrypted: true, body: null, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
         expect(promptStackDocumentChoices({ artifacts: [artifact], serverId: 'home', attachedRefs: [], untitled: 'Untitled' })).toEqual([]);
     });
-    it('admits all Context document kinds but only PromptDocs for Instructions', () => {
+    it('offers documents and memory for Context while skills stay outside stacks', () => {
         const artifacts: DecryptedArtifact[] = [
             ['doc', 'prompt_doc.v2'], ['skill', 'prompt_bundle.v2'], ['memory', 'memory_doc.v1'], ['other', 'workflow-definition.v1'],
         ].map(([id, kind]) => ({ id: id!, title: id!, header: { kind, title: id, ...(kind === 'prompt_bundle.v2' ? { bundleSchemaId: 'skills.skill_md_v1' } : {}) }, isDecrypted: true,
@@ -26,11 +26,10 @@ describe('qualified Context document choices', () => {
         const input = { artifacts, serverId: 'captured-home', attachedRefs: [], untitled: 'Untitled' };
         expect(promptStackDocumentChoices(input).map(choice => [choice.kind, choice.value])).toEqual([
             ['doc', { kind: 'doc', artifactId: 'doc', serverId: 'captured-home' }],
-            ['skill', { kind: 'bundle', artifactId: 'skill', serverId: 'captured-home' }],
             ['memory', { kind: 'doc', artifactId: 'memory', serverId: 'captured-home' }],
         ]);
         expect(promptStackDocumentChoices({ ...input, purpose: 'instructions' }).map(choice => choice.id)).toEqual(['doc']);
-        expect(promptStackDocumentChoices({ ...input, attachedRefs: [{ kind: 'doc', artifactId: 'doc' }] }).map(choice => choice.id)).toEqual(['skill', 'memory']);
+        expect(promptStackDocumentChoices({ ...input, attachedRefs: [{ kind: 'doc', artifactId: 'doc' }] }).map(choice => choice.id)).toEqual(['memory']);
         expect(promptStackDocumentChoices({ ...input, artifacts: artifacts.map(artifact => ({ ...artifact, isDecrypted: false })) })).toEqual([]);
     });
 });

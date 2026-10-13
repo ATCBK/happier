@@ -40,6 +40,7 @@ import { recordMachineCollectionVisit, readLastVisitedMachine } from './machineC
 import { useMachineAddOptions, type MachineAddOption } from './useMachineAddOptions';
 import { useMachineAddDraftRow } from '@/components/machines/add/useMachineAddFlow';
 import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { CollectionIndexRow } from '@/components/ui/lists/collection/CollectionIndexRow';
 import { useRevealSelectedRow } from '@/components/ui/lists/collection/useRevealSelectedRow';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import { StatusDot } from '@/components/ui/status/StatusDot';
@@ -489,19 +490,11 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             } : null}
         >
             {/* The fleet first (lab `R`): All machines is the index of both doors. */}
-            <Item
+            <CollectionIndexRow
                 testID="settings.machines.rail.all"
                 title={t('allMachines.rowTitle')}
                 detail={fleetLookCount > 0 ? t('machineAttention.listNeedLook', { count: fleetLookCount }) : undefined}
-                icon={(
-                    <HappierCollectionListMark>
-                        <Icon name="squares-four" size={20} color={theme.colors.text.secondary} />
-                    </HappierCollectionListMark>
-                )}
                 selected={selectedKey === 'allMachines'}
-                density="compact"
-                showChevron={false}
-                pressableStyle={collectionListStyles.row}
                 onPress={() => openHref(router, doorRoot, onDetailRoute, 'MachineCollectionList.allMachines')}
             />
             <MachineDraftRow selected={selectedKey === 'machineDraft'} replace={replaceConfiguration} />

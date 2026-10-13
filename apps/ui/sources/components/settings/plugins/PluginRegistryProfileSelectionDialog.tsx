@@ -16,9 +16,9 @@ import { t } from '@/text';
 
 import { NpmRegistryProfilesSection, type NpmRegistryProfilesSectionProps } from './NpmRegistryProfilesSection';
 import {
-    useMarketplaceSourceRegistryAdministration,
-    type MarketplaceSourceRegistryAdministrationParamsV1,
-} from './model/useMarketplaceSourceRegistryAdministration';
+    usePluginRegistrySourceAdministration,
+    type PluginRegistrySourceAdministrationParamsV1,
+} from './model/usePluginRegistrySourceAdministration';
 
 type PluginRegistryProfileSelectionParams = Readonly<{
     /** What the daemon's change owner said this machine must select. */
@@ -31,7 +31,7 @@ type PluginRegistryProfileSelectionParams = Readonly<{
     daemonOperationsAvailable: boolean;
     targetSelection: NpmRegistryProfilesSectionProps['targetSelection'];
     sourceRegistry: Pick<
-        MarketplaceSourceRegistryAdministrationParamsV1,
+        PluginRegistrySourceAdministrationParamsV1,
         'scopeKey' | 'executionTarget' | 'resolveCurrentExecutionTarget'
     >;
 }>;
@@ -53,7 +53,7 @@ type PluginRegistryProfileSelectionDialogProps = CustomModalInjectedProps & Plug
 export function PluginRegistryProfileSelectionDialog(props: PluginRegistryProfileSelectionDialogProps) {
     const { theme } = useUnistyles();
     const { onClose, onResolve } = props;
-    const sourceRegistry = useMarketplaceSourceRegistryAdministration({
+    const sourceRegistry = usePluginRegistrySourceAdministration({
         ...props.sourceRegistry,
         enabled: props.daemonOperationsAvailable,
         focused: true,

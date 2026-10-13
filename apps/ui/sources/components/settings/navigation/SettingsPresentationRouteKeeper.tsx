@@ -23,15 +23,10 @@ function isSettingsPage(pathname: string | null): pathname is string {
  */
 export function SettingsPresentationRouteKeeper(props: Readonly<{
     deviceType: DeviceType;
-    /** The device type now (the window may already have changed); injectable for tests. */
-    readLiveDeviceType?: () => DeviceType;
 }>): null {
     const pathname = usePathname();
     const lastRef = React.useRef({ pathname, deviceType: props.deviceType });
     lastRef.current = { pathname, deviceType: props.deviceType };
-    const readLiveDeviceTypeRef = React.useRef(props.readLiveDeviceType ?? getDeviceType);
-    readLiveDeviceTypeRef.current = props.readLiveDeviceType ?? getDeviceType;
-
     React.useEffect(() => {
         const reopen = pageToReopen;
         pageToReopen = null;
@@ -42,7 +37,7 @@ export function SettingsPresentationRouteKeeper(props: Readonly<{
         return () => {
             // Closing Settings keeps the device type; only the presentation switch changes it under us.
             const last = lastRef.current;
-            if (readLiveDeviceTypeRef.current() !== last.deviceType && isSettingsPage(last.pathname)) {
+            if (getDeviceType() !== last.deviceType && isSettingsPage(last.pathname)) {
                 pageToReopen = last.pathname;
             }
         };

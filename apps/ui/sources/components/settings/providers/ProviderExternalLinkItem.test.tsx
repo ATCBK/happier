@@ -9,32 +9,8 @@ import { installUiListsCommonModuleMocks } from '@/components/ui/lists/uiListsTe
 
 installUiListsCommonModuleMocks();
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroupSelectionContext: React.createContext(null),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroupRowPosition', () => ({
-    useItemGroupRowPosition: () => 'middle',
-}));
-
-vi.mock('@/components/ui/lists/itemGroupRowCorners', () => ({
-    getItemGroupRowCornerRadii: () => ({}),
-}));
-
-vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
-    normalizeNodeForView: (node: unknown) => node,
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Text', props, children),
-}));
-
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 'comfortable',
 }));
 
 function findProviderLink(screen: Awaited<ReturnType<typeof renderScreen>>) {

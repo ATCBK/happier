@@ -27,7 +27,6 @@ import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
   UsageBodyInsufficient,
-  UsageCoverageLine,
   UsageShowAllRows,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -292,17 +291,13 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
         {depletingNote}
         {/* The legend explains pace marks; without any pace it explains nothing. */}
         {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
-        <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.model.refresh}
-          testID={`${props.testID}.coverage`} />
-        <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
+        <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice} onRetry={props.model.refresh}
           testID={`${props.testID}.state`} />
       </View>
     );
   }
   return (
     <View style={styles.body} testID={`${props.testID}.projections`}>
-      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
-        testID={`${props.testID}.state`} />
       {focus && focusName && pace ? (
         <View style={styles.chart}>
           {paced.length > 1 ? (
@@ -456,12 +451,8 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
           ]}
         />
       )}
-      <UsageCoverageLine
-        slice={props.slice}
-        sources={['quota']}
-        onRetry={props.model.refresh}
-        testID={`${props.testID}.coverage`}
-      />
+      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice}
+        onRetry={props.model.refresh} testID={`${props.testID}.state`} />
     </View>
   );
 }

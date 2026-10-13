@@ -3,12 +3,28 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+
+installDisconnectedServerSocketBoundary(socket => {
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+});
+
+const home = createHomeGovernanceHarness();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    await connection?.dispose();
+    connection = null;
+    await home.reset();
+    storage.setState(beforeStorage, true);
 });
 
 vi.mock('react-native-mmkv', () => {
@@ -92,62 +108,30 @@ vi.mock('expo-application', () => ({
     applicationId: 'dev.happier.test',
 }));
 
-vi.mock('expo-updates', () => ({
-    updateId: null,
-    createdAt: null,
-    channel: 'preview',
-    runtimeVersion: '18',
-    isEmbeddedLaunch: true,
-}));
+vi.mock('expo-updates', async () => (await import('@/dev/testkit/mocks/expoUpdates')).createExpoUpdatesMock());
 
-vi.mock('./OtaUpdateStatusSection', () => ({
-    OtaUpdateStatusSection: () => null,
-}));
-
-vi.mock('@/constants/Typography', async (importOriginal) => await importOriginal());
-
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ generation: 1, serverId: 'srv_1', serverUrl: 'https://api.happier.dev' }),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, { profiles: [] });
-});
-
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: async () => ({}),
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    return createStorageModuleStub({
-        useProfile: () => ({ id: 'acct_1', username: 'tester', connectedServices: [] }),
-        useIsDataReady: () => true,
-        useRealtimeStatus: () => 'connected',
-        useSocketStatus: () => ({ status: 'connected', lastError: null, lastErrorAt: null }),
-        useLastSyncAt: () => null,
-        // The active Home connection health reads these (another program's `useConnectionHealth` change).
-        useEndpointConnectivity: () => ({ status: 'online', reason: null, attempt: 1, nextRetryAt: null, lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null }),
-        useSyncError: () => null,
-        useMachineListForServer: () => [],
-        useMachineListStatusForServer: () => 'loaded',
-        useMachineListByServerId: () => ({
-            srv_1: [],
-        }),
-        useMachineListStatusByServerId: () => ({
-            srv_1: 'loaded',
-        }),
-    });
-});
-
-vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
-    isMachineOnline: () => false,
-}));
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { SystemStatusView } = await import('./SystemStatusView');
+const beforeStorage = storage.getState();
 
 describe('SystemStatusView vector icons missing', () => {
     it('renders System Status when @expo/vector-icons exports Ionicons as undefined', async () => {
-        const { SystemStatusView } = await import('./SystemStatusView');
+        const serverUrl = 'https://missing-icons.example.test';
+        const homeId = await home.addHome({
+            name: 'Personal Home', serverUrl, serverIdentityId: 'srv_missing_icons', accountId: 'account-a',
+        });
+        home.answer(homeId, '/v1/machines', { body: [] });
+        connection = await restoreServerAccountForTest({ serverUrl, request: home.request });
+        const activeServerId = getActiveServerSnapshot().serverId;
+        storage.setState(current => ({
+            isDataReady: true,
+            profileScope: { serverId: activeServerId, accountId: 'account-a' },
+            profile: { ...current.profile, id: 'prof_1', username: 'tester', connectedServices: [] },
+            machines: {},
+            machineListByServerId: { [activeServerId]: [] },
+            machineListStatusByServerId: { [activeServerId]: 'idle' },
+        }));
 
         const screen = await renderScreen(<SystemStatusView />);
 

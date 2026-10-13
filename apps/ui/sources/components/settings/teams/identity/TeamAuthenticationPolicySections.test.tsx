@@ -32,26 +32,6 @@ installSettingsViewCommonModuleMocks({
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
 }));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-    createBundledPluginUiAppExactArtifactSourceFromInventory: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(),
-    createPluginAccountAvailabilityReaderStore: () => Object.freeze({
-        replace: () => null,
-        clear: () => null,
-        subscribe: () => () => undefined,
-        bind: vi.fn(),
-    }),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(),
-}));
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);

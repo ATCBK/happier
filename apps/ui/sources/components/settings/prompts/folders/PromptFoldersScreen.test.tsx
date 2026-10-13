@@ -24,17 +24,18 @@ installPromptLibrarySettingsCommonModuleMocks({
     },
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-// The menu's popover is platform presentation; its items and selection stay the tree's own.
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
-}));
+// Replace only the portal/window boundary; the real menu renders its own rows and selection.
+vi.mock('@/components/ui/popover', async importOriginal => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal);
+});
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 let homeCount = 0;
-afterEach(() => {
+afterEach(async () => {
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
-    fixture?.dispose(); fixture = undefined;
+    await fixture?.dispose(); fixture = undefined;
     // Clear, not restore: restoring would strip the Modal boundary's delegation to these case spies.
     vi.clearAllMocks();
 });

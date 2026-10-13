@@ -10,7 +10,7 @@ import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { projectProviderAccountSubscriptionMonetaryFacts } from '@happier-dev/protocol/connect/accountSubscription';
 import type { UsagePlanInsights } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { UsageCoverageLine, usageDimensionLabel, type UsageBodyProps } from './usageBodyKit';
+import { usageDimensionLabel, type UsageBodyProps } from './usageBodyKit';
 import { summarizeUsagePlanFit, type UsagePlanAccount } from './plans/usagePlansModel';
 import { readUsagePersonalPaceTarget } from './plans/usagePacingTarget';
 import { UsageBillingButton, UsageSubscriptionPriceEditor } from './plans/UsagePlanActions';
@@ -23,7 +23,7 @@ import {
   formatPlanPercent,
   planPaceReasonText,
   UsagePlanIdentity,
-  UsagePlanAccountState,
+  UsagePlanAccountStates,
   UsagePlanSectionHead,
   UsagePlansNothingRead,
   usePlanText,
@@ -86,12 +86,8 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
           {t('usage.board.plans.moreDetailLater')}
         </Text>
       ) : null}
-      <UsageCoverageLine
-        slice={props.slice}
-        sources={['quota']}
-        onRetry={props.model.refresh}
-        testID={`${props.testID}.coverage`}
-      />
+      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice}
+        onRetry={props.model.refresh} testID={`${props.testID}.state`} />
     </View>
   );
 }
@@ -115,7 +111,8 @@ function PlanRow(
   if (!account.read?.current) {
     return <View testID={props.testID} style={styles.row}>
       <UsagePlanIdentity name={props.name} compact />
-      <UsagePlanAccountState account={account} name={props.name} testID={`${props.testID}.state`} onRetry={props.onSettled} />
+      {/* The read's state is said once under the list; the row stays calm. */}
+      <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.cellUnknown')}</Text>
     </View>;
   }
   const fitWindow = fit.window?.label ?? null;
@@ -237,7 +234,6 @@ function PlanRow(
           </View>
         </UsagePlanDisclosure>
       )}
-      <UsagePlanAccountState account={account} name={props.name} testID={`${props.testID}.state`} onRetry={props.onSettled} />
     </View>
   );
 }

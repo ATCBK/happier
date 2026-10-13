@@ -60,9 +60,15 @@ export function presentConnectedServiceIndexDiagnostics(params: Readonly<{
   if (entry.availability?.state === 'blocked') primary.add(t('common.blocked'));
   if (entry.availability?.state === 'disabled') primary.add(t('common.disabled'));
 
-  for (const diagnostic of entry.diagnostics ?? []) {
-    primary.add(presentConnectedServiceIndexDiagnosticCopy(diagnostic));
-    appendSafeSupportDetail(details, diagnostic);
+  // The descriptor producer keeps sound declarations available through plugin runtime
+  // diagnostics. An answered service cannot be presented as a failed registry read.
+  if (entry.projectionStatus === 'ready' && entry.availability?.state === 'available') {
+    if (entry.diagnostics?.length) details.add(t('settingsPlugins.diagnosticsSnapshotFooter'));
+  } else {
+    for (const diagnostic of entry.diagnostics ?? []) {
+      primary.add(presentConnectedServiceIndexDiagnosticCopy(diagnostic));
+      appendSafeSupportDetail(details, diagnostic);
+    }
   }
   if (entry.availability?.state !== 'available') {
     const reason = entry.availability?.reason;

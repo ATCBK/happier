@@ -15,7 +15,8 @@ vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
 
-import { formatPlanMoment } from './UsagePlanParts';
+import { formatPlanMoment, readPlanAccountsStatement } from './UsagePlanParts';
+import type { UsagePlanAccount } from './usagePlansModel';
 
 const previousLanguage = getPreferredLanguage();
 beforeEach(async () => {
@@ -59,5 +60,33 @@ describe('formatPlanMoment', () => {
     const options = { day: 'numeric', month: 'short' } as const;
     expect(date(at, options)).not.toBe(new Intl.DateTimeFormat(undefined, options).format(at));
     expect(formatPlanMoment(at, now)).toBe(date(at, options));
+  });
+});
+
+describe('readPlanAccountsStatement', () => {
+  const account = (id: string, status: UsagePlanAccount['state']['status'], current: boolean, asOfMs?: number) =>
+    ({ key: id, accountId: id, state: { source: 'quota', status, ...(asOfMs ? { asOfMs } : {}) },
+      read: current ? { current: {} } : null, observedAtMs: null }) as unknown as UsagePlanAccount;
+  const nameOf = (entry: UsagePlanAccount) => ({ title: entry.accountId, qualifier: null }) as never;
+
+  it('states one shared partial read once, for every account, with the oldest time', () => {
+    const statement = readPlanAccountsStatement([
+      account('a', 'stale', true, now - 2000), account('b', 'stale', true, now - 1000), account('c', 'partial', false),
+    ], nameOf);
+    expect(statement).toMatchObject({ kind: 'partial', asOf: now - 2000, accounts: 3 });
+    expect(statement?.reason).not.toMatch(/\ba\b.*\bb\b/);
+  });
+
+  it('names only the affected accounts and lets a failure lead', () => {
+    const statement = readPlanAccountsStatement([
+      account('fresh', 'available', true), account('lost', 'error', true), account('slow', 'pending', false),
+    ], nameOf);
+    expect(statement).toMatchObject({ kind: 'failed', accounts: 2 });
+    expect(statement?.reason).toContain('lost, slow');
+    expect(statement?.reason).not.toContain('fresh');
+  });
+
+  it('says nothing when every account read is current', () => {
+    expect(readPlanAccountsStatement([account('a', 'available', true), account('b', 'partial', true)], nameOf)).toBeNull();
   });
 });

@@ -14,7 +14,7 @@ const EMPTY_ATTACHED_REFS: readonly PromptArtifactRefV1[] = Object.freeze([]);
 
 /**
  * "Add document" for every Context layer (Settings, a Project, a Session's Work › Context): the
- * active Account's prompts, skills and memory documents in the one shared searchable menu, anchored
+ * active Account's prompts and memory documents in the one shared searchable menu, anchored
  * to its button on a pointer screen and a bottom sheet on a phone. The library list mounts only while
  * the menu is open; choosing hands back the qualified reference and the host runs its layer's writer.
  */
@@ -41,7 +41,7 @@ export function PromptStackDocumentMenu(props: Readonly<{
     const items = React.useMemo((): DropdownMenuItem[] => choices.map((choice) => ({
         id: choice.id,
         title: choice.label,
-        icon: <Icon name={choice.kind === 'skill' ? 'sparkle' : choice.kind === 'memory' ? 'bookmark' : 'file-text'} size={18} color={theme.colors.text.secondary} />,
+        icon: <Icon name={choice.kind === 'memory' ? 'bookmark' : 'file-text'} size={18} color={theme.colors.text.secondary} />,
     })), [choices, theme.colors.text.secondary]);
     return (
         <DropdownMenu

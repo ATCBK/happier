@@ -4,13 +4,13 @@ import { CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD, type ConnectedServicePoolS
 import { serveAccountHomes, installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import * as machineRpc from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { ServerScopedMachineRpcParams } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
-import { readUsageWidgetSelection } from './usageWidgetSelectionRead';
 
 installDisconnectedServerSocketBoundary();
+const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const machineRpc = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+const { readUsageWidgetSelection } = await import('./usageWidgetSelectionRead');
 afterEach(() => { vi.restoreAllMocks(); });
 
 const request: ConnectedServicePoolSelectionGetRequestV1 = {
@@ -38,7 +38,7 @@ async function serveSelectionHome(key: string) {
         { key, serverUrl: `https://usage-selection-${key}.test`, accountId: `${key}-account` },
     ], route: () => undefined });
     const account = await captureLazyActionAccountContext(homes.homes[key]!.id);
-    return { account, dispose: () => { account.dispose(); homes.dispose(); restoreExecutor(); bridge.dispose(); } };
+    return { account, dispose: async () => { account.dispose(); await homes.dispose(); restoreExecutor(); bridge.dispose(); } };
 }
 
 describe('Usage widget qualified pool selection read', () => {
@@ -61,7 +61,7 @@ describe('Usage widget qualified pool selection read', () => {
         });
         try {
             expect(await readUsageWidgetSelection({ lifetime: account.accountLifetime, request })).toEqual({ ok: true, result: response });
-        } finally { account.dispose(); homes.dispose(); restoreExecutor(); bridge.dispose(); }
+        } finally { account.dispose(); await homes.dispose(); restoreExecutor(); bridge.dispose(); }
     });
 
     it('keeps U3 unavailable evidence explicit and refuses a foreign qualified group through its real validator', async () => {

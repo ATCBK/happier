@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { StepTransitionFrame } from '@/components/ui/motion';
 import { SelectionListBackChip } from '@/components/ui/selectionList/SelectionListBackChip';
 import { Text } from '@/components/ui/text/Text';
@@ -80,18 +81,18 @@ export type ApiTokenGrantEditorProps = Readonly<{
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
-    stack: {
-        gap: theme.space.s20,
-    },
+    // The containing card body is a page: its sections carry the page's section rhythm themselves.
+    stack: {},
     pickerHead: {
         flexDirection: 'row',
         alignItems: 'center',
         marginBottom: theme.space.s4,
     },
+    // On the sheets' edge, like the section titles above it, one section gap below the last sheet.
     review: {
+        marginTop: PAGE_LIST_METRICS.sectionGapPx,
         color: theme.colors.text.secondary,
         ...Typography.variant('body'),
-        paddingHorizontal: theme.space.s2,
     },
     reviewLabel: {
         ...Typography.default('semiBold'),

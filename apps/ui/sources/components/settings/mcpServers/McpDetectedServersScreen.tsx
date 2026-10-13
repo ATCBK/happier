@@ -3,28 +3,25 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
-import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { Modal } from '@/modal';
-import { randomUUID } from '@/platform/randomUUID';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
-import { resolveImportedMcpServerFromDetectedV1 } from '@/sync/domains/settings/mcpServers/importDetectedMcpServerV1';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { useMachineAdministrationExecutionTargetBinding } from '@/sync/domains/machines/administration/useExecutionTargetBinding';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { requireUpdatedMcpServerCatalogMutation } from '@/sync/api/account/apiMcpServerCatalog';
+import { loadFoundWarmCacheEntry, saveFoundWarmCacheEntry, subscribeFoundWarmCacheEntry } from '@/sync/domains/state/warmCachePersistence';
 
 import { McpDetectedServersTab } from './McpDetectedServersTab';
 import { mcpServerRoute } from './collection/mcpServerCollectionModel';
-import { useMcpServersSettings } from './useMcpServersSettings';
+import { useMcpServersSettings, useMcpServerCatalogForServer } from './useMcpServersSettings';
 
 /**
  * `/settings/mcp/on-machine`: the MCP servers other agents configure on the managed machine, with an
@@ -33,16 +30,26 @@ import { useMcpServersSettings } from './useMcpServersSettings';
  */
 export const McpDetectedServersScreen = React.memo(function McpDetectedServersScreen() {
     const router = useRouter();
-    const { writable, snapshot, mutate, executeRules, approval: importApproval, scope } = useMcpServersSettings();
+    const { approval: importApproval, scope } = useMcpServersSettings();
     const targetSelection = useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers);
     const selectedTarget = targetSelection.selectedTarget;
     const { selectionKey, resolveExactExecutionTarget, isExecutionTargetCurrent } = useMachineAdministrationExecutionTargetBinding(targetSelection);
     const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
     const probeExecution = useMountedActionExecution(executionTarget?.serverId);
+    const snapshot = useMcpServerCatalogForServer(executionTarget?.serverId);
     const [directory, setDirectory] = React.useState('');
+    const directoryRef = React.useRef(directory);
+    directoryRef.current = directory;
     const [detected, setDetected] = React.useState<DetectedMcpServerV1[] | null>(null);
     const [warnings, setWarnings] = React.useState<DaemonMcpServersDetectWarningV1[] | null>(null);
     const previousSelectionKeyRef = React.useRef(selectionKey);
+    const cacheScope = probeExecution.binding?.scope;
+    const selectedMachineId = selectedTarget?.machineId ?? '';
+    const readFoundCache = React.useCallback(() => loadFoundWarmCacheEntry(cacheScope?.serverId, cacheScope?.accountId, 'mcp_server', selectedMachineId),
+        [cacheScope?.serverId, cacheScope?.accountId, selectedMachineId]);
+    const subscribeFoundCache = React.useCallback((listener: () => void) => subscribeFoundWarmCacheEntry(cacheScope?.serverId, cacheScope?.accountId,
+        'mcp_server', selectedMachineId, listener), [cacheScope?.serverId, cacheScope?.accountId, selectedMachineId]);
+    const lastKnown = React.useSyncExternalStore(subscribeFoundCache, readFoundCache, readFoundCache);
 
     // A different machine is a different place to look: its folder and its findings start empty.
     React.useLayoutEffect(() => {
@@ -52,9 +59,10 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
         setDirectory('');
     }, [selectionKey]);
     React.useEffect(() => {
-        setDetected(null);
-        setWarnings(null);
-    }, [selectionKey]);
+        const result = lastKnown?.kind === 'mcp_server' && lastKnown.result.ok ? lastKnown.result : null;
+        setDetected(result?.servers ?? null);
+        setWarnings(result?.warnings ?? null);
+    }, [selectionKey, lastKnown]);
 
     const detectAction = React.useCallback(async (intent?: 'retry') => {
         const requestedSelection = selectionKey;
@@ -65,77 +73,56 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
         // installed Agent contributes. Sending this app binary's bundled Agent
         // list instead would drop every installed Agent's source before
         // detection even runs.
-        const receipt = await probeExecution.execute('mcp.servers.probe', {
+        const receipt = await probeExecution.execute('mcp.found.list', {
             machineId: executionTarget.machine.id,
-            directory: directory.trim() || undefined,
+            directory: directoryRef.current.trim() || undefined,
         });
         if (!isExecutionTargetCurrent(requestedSelection, executionTarget, intent ? { intent } : undefined)) return;
         if (!receipt.ok) {
-            setDetected(null);
-            setWarnings(null);
             Modal.alert(t('common.error'), receipt.errorCode ?? receipt.error);
             return;
         }
-        const response = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.probe'].parse(receipt.result);
+        const response = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.found.list'].parse(receipt.result);
         if (!response.ok) {
-            setDetected(null);
-            setWarnings(null);
             Modal.alert(t('common.error'), response.error);
             return;
         }
         setDetected(response.servers);
         setWarnings(response.warnings ?? null);
-    }, [directory, isExecutionTargetCurrent, resolveExactExecutionTarget, selectedTarget, selectionKey, probeExecution.execute, probeExecution.ready]);
+        if (cacheScope) saveFoundWarmCacheEntry(cacheScope.serverId, cacheScope.accountId, { kind: 'mcp_server', machineId: executionTarget.machine.id,
+            observedAt: Date.now(), result: response });
+    }, [cacheScope, isExecutionTargetCurrent, resolveExactExecutionTarget, selectedTarget, selectionKey, probeExecution.execute, probeExecution.ready]);
     const [loading, runDetect] = useHappyAction(detectAction, { mode: 'rerun_latest' });
 
     React.useEffect(() => {
         void runDetect();
-    }, [directory, runDetect, selectionKey]);
+    }, [runDetect, selectionKey]);
 
     const importServer = React.useCallback(async (server: DetectedMcpServerV1) => {
-        if (!writable) {
+        if (snapshot.status !== 'ready' || snapshot.authority !== 'active' || snapshot.stale) {
             Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
             return;
         }
         const requestedSelection = selectionKey;
         const expectedTarget = selectedTarget;
         if (!expectedTarget) return;
-        const confirmed = await Modal.confirm(
-            t('settings.mcpServersImportTitle'),
-            t('settings.mcpServersImportConfirm', { provider: server.provider, name: server.name }),
-            { cancelText: t('common.cancel'), confirmText: t('settings.mcpServersImportAction') },
-        );
-        if (!confirmed) return;
         const executionTarget = resolveExactExecutionTarget(expectedTarget);
         if (!executionTarget || !isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
         try {
-            const imported = resolveImportedMcpServerFromDetectedV1({
-                existingSettings: writable,
-                detected: server,
-                machineId: executionTarget.machine.id,
-                nowMs: Date.now(),
-                generateId: randomUUID,
-            });
             if (snapshot.revision === 'absent') throw new Error('authority-not-confirmed');
-            if (imported.action === 'created') {
-                requireUpdatedMcpServerCatalogMutation(await mutate('mcp.servers.create', {
-                    expectedRevision: snapshot.revision, entry: imported.entry,
-                }));
-            } else if (imported.action === 'updated') {
-                const receipt = await executeRules({ items: [{ serverId: imported.entry.id }], change: { kind: 'write', write: {
-                    place: imported.binding.target, state: 'on', ...(imported.binding.agentId ? { agentId: imported.binding.agentId } : {}),
-                } } });
-                if (!receipt.ok) throw new Error(receipt.errorCode ?? receipt.error);
-                const result = McpRulesSetOutputV1Schema.parse(receipt.result);
-                if (!result.ok) throw new Error(result.code);
-            }
+            const receipt = await probeExecution.execute('mcp.found.adopt', { expectedRevision: snapshot.revision,
+                machineId: executionTarget.machine.id, items: [server] });
+            if (!receipt.ok) throw new Error(receipt.errorCode ?? receipt.error);
+            const imported = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.found.adopt'].parse(receipt.result);
             if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
-            const result = runGuardedNavigation(() => router.replace(mcpServerRoute(imported.entry.id) as never));
+            const serverId = imported.serverIds[0] ?? imported.duplicates.find(item => item.serverId)?.serverId;
+            if (!serverId) return;
+            const result = runGuardedNavigation(() => router.replace(mcpServerRoute(serverId) as never));
             if (result !== true) fireAndForget(result, { tag: 'McpDetectedServersScreen.import' });
         } catch (error) {
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
         }
-    }, [isExecutionTargetCurrent, resolveExactExecutionTarget, router, selectedTarget, selectionKey, mutate, executeRules, snapshot.revision, writable]);
+    }, [isExecutionTargetCurrent, resolveExactExecutionTarget, router, selectedTarget, selectionKey, probeExecution.execute, snapshot]);
 
     return (
         <ItemList keyboardShouldPersistTaps="handled">

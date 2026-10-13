@@ -10,8 +10,6 @@ import { TeamMembersCollectionRail } from '../members/TeamMembersCollectionRail'
 import { TeamsCollectionRail } from './TeamsCollectionRail';
 import { recordTeamsCollectionVisit, resolveSelectedTeamAddress, resolveSelectedTeamMember } from './teamsCollection';
 
-/** Rail width at normal text scale: a Team mark, a name and one role · Home line. */
-const TEAMS_RAIL_WIDTH_PX = 264;
 /** The narrowest Team page that still fits a field or segmented row beside its label. */
 const TEAMS_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -38,7 +36,7 @@ export const TeamsSettingsLayout = React.memo(function TeamsSettingsLayout() {
             rail={member
                 ? <TeamMembersCollectionRail address={member.address} selectedMembershipId={member.membershipId} />
                 : <TeamsCollectionRail />}
-            railWidthPx={TEAMS_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={TEAMS_DETAIL_MIN_WIDTH_PX}
             testID="settings-teams"
         />

@@ -42,7 +42,7 @@ import { ConnectedAccountPrivacyToggle } from './usage/ConnectedAccountPrivacyTo
 import { buildAgentDefaultChoices } from './defaults/agentDefaultChoices';
 import { ConnectedAccountIndexLiveFacts } from './index/ConnectedAccountIndexRow';
 import { ConnectedServicePoolIndexItem } from './index/ConnectedServicePoolIndexItem';
-import { ConnectedServicesGatewaysGroup } from './index/ConnectedServicesGatewaysGroup';
+import { ConnectedServicesGatewaysGroup, useConnectedServicesGatewaysUnavailable } from './index/ConnectedServicesGatewaysGroup';
 import { ConnectedServicesIndexView, type ConnectedServicesIndexPresentation } from './index/ConnectedServicesIndexView';
 import { NewPoolMenu, selectNewPoolServices } from './collection/NewPoolMenu';
 import { presentConnectedServiceRegistryReadFailure } from './model/presentConnectedServiceIndexDiagnostics';
@@ -68,6 +68,7 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   const providersEnabled = useFeatureEnabled('providers');
   const index = useConnectedServicesIndex({ agents: 'load', gateways: providersEnabled });
   const addGateway = index.addGateway;
+  const gatewaysUnavailable = useConnectedServicesGatewaysUnavailable(index.gatewayUnavailable, index.retryGateways);
   const { indexModel, agentEntries, agentsKnown, registrySnapshot, appShellProjection } = index;
   const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution: purposeExecution } = useConnectedAccountPurposeDefaults();
   const labelsByKey = useConnectedMetadataCatalog(activeAccountScope, selectConnectedMetadataLabels);
@@ -260,10 +261,12 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
       </>}
       connectMore={connectMore}
       // On wide layouts the rail lists the gateways and owns Add gateway; this group is the phone's way in.
-      gateways={compact && (index.gateways || index.gatewaysLoading) ? (
+      // D19: the place stays whenever gateways are on, saying why when they cannot be read.
+      gateways={compact && index.gatewaySectionVisible ? (
         <ConnectedServicesGatewaysGroup
           gateways={index.gateways ?? []}
           loading={index.gatewaysLoading}
+          unavailable={gatewaysUnavailable}
           onOpen={(gateway) => navigate(gateway.detailRoute as never, 'ConnectedServices.openGateway')}
           onAdd={addGateway ? () => {
             // Creates the gateway, then opens its page like any other gateway row.

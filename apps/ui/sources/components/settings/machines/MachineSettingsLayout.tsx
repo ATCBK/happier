@@ -6,8 +6,6 @@ import { MachineCollectionRail } from './collection/MachineCollectionList';
 import { MACHINES_COLLECTION_ROOT } from './collection/machineCollectionModel';
 import { MachinesRelayDriftBanner } from './MachinesRelayDriftBanner';
 
-/** Rail width at normal text scale: a device mark, a machine name and one status line. */
-const MACHINE_RAIL_WIDTH_PX = 272;
 /** The narrowest detail that still fits a machine's launch path field beside its label. */
 const MACHINE_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -34,7 +32,7 @@ export const MachineSettingsLayout = React.memo(function MachineSettingsLayout()
             rootPathname={MACHINES_COLLECTION_ROOT}
             resolveChildRoute={resolveMachinesChildRoute}
             rail={<MachineCollectionRail />}
-            railWidthPx={MACHINE_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={MACHINE_DETAIL_MIN_WIDTH_PX}
             testID="settings-machines"
             detailTop={<MachinesRelayDriftBanner />}

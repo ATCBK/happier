@@ -11,25 +11,23 @@ import {
     renderHook,
     standardCleanup,
 } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
     clearCachedMachineDoctorSnapshot,
     writeCachedMachineDoctorSnapshot,
 } from '@/components/machines/doctorSnapshot/machineDoctorSnapshotCache';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 // The status projection now needs the actual Home credential authority, not only display rows.
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
 
 const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
-const state = vi.hoisted(() => {
-    const createMachine = (displayName: string) => ({
-        id: 'machine-1',
-        active: true,
+const state = (() => {
+    const createMachine = (displayName: string) => createMachineFixture({
         activeAt: Date.now(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        seq: 1,
         metadata: {
             host: `${displayName.toLowerCase().replace(/\s+/g, '-')}.local`,
             displayName,
@@ -39,10 +37,6 @@ const state = vi.hoisted(() => {
             happyHomeDir: '/Users/tester/.happier',
             homeDir: '/Users/tester',
         },
-        metadataVersion: 1,
-        daemonState: null,
-        daemonStateVersion: 0,
-        revokedAt: null,
     });
 
     return {
@@ -68,7 +62,7 @@ const state = vi.hoisted(() => {
             };
         },
     };
-});
+})();
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -146,19 +140,7 @@ vi.mock('expo-application', () => ({
     applicationId: 'dev.happier.test',
 }));
 
-vi.mock('expo-updates', () => ({
-    updateId: null,
-    createdAt: null,
-    channel: 'preview',
-    runtimeVersion: '18',
-    isEmbeddedLaunch: true,
-}));
-
-vi.mock('./OtaUpdateStatusSection', () => ({
-    OtaUpdateStatusSection: () => null,
-}));
-
-vi.mock('@/constants/Typography', async (importOriginal) => await importOriginal());
+vi.mock('expo-updates', async () => (await import('@/dev/testkit/mocks/expoUpdates')).createExpoUpdatesMock());
 
 // Only the RPC transport is replaced; doctor parsing, caching, and admission remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
@@ -167,6 +149,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getVoiceSessionSnapshot, setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
 const { SystemStatusView } = await import('./SystemStatusView');
+const { OverviewMachinesSection } = await import('../overview/OverviewMachinesSection');
+const { useMachineFleetModel } = await import('@/components/machines/widgets/MachineFleetWidget');
+const { isMachineSelectableForFleet } = await import('@/sync/domains/machines/administration/fleetUnion');
 const beforeStorage = storage.getState();
 const beforeVoice = getVoiceSessionSnapshot();
 
@@ -415,7 +400,7 @@ describe('SystemStatusView runtime inventory', () => {
         expect(screen.findAll((node) => node.props?.title === 'systemStatus.identity.accountId').length).toBeGreaterThan(0);
     });
 
-    it('counts a machine the way the Overview does: a failed request overrides pushed presence, and a replaced machine is not listed', async () => {
+    it('projects the same reachable fleet through Administration, Overview and System Status', async () => {
         const { recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
         const reachable = state.createMachine('Reachable');
         const failing = { ...state.createMachine('Failing'), id: 'machine-f' };
@@ -423,20 +408,40 @@ describe('SystemStatusView runtime inventory', () => {
         const second = { ...state.createMachine('Second'), id: 'machine-s' };
         state.machineListByServerId = { srv_1: [reachable, second, failing, replaced] };
         recordMachineRequestFailed({ serverId: 'srv_1', accountId: 'acct_1', machineId: 'machine-f' });
-        const screen = await renderStatus();
-        await flushHookEffects({ cycles: 2, turns: 2 });
+        const connection = await restoreServerAccountForTest({
+            serverUrl: state.activeServerSnapshot.serverUrl, serverIdentityId: 'srv_1',
+            accountId: 'acct_1', request: home.request,
+        });
+        try {
+            const screen = await renderStatus();
+            const overview = await renderScreen(React.createElement(OverviewMachinesSection, { testID: 'overview' }));
+            const fleetModel = await renderHook(() => useMachineFleetModel());
+            await flushHookEffects({ cycles: 2, turns: 2 });
 
-        for (const header of screen.findAll((node) => node.props?.title === 'systemStatus.machines.calmOnline' && typeof node.props?.onPress === 'function')) {
-            await pressTestInstanceAsync(header, 'open calm machines');
+            const accountScope = { serverId: 'srv_1', accountId: 'acct_1' };
+            expect(isMachineSelectableForFleet(accountScope, reachable)).toBe(true);
+            expect(isMachineSelectableForFleet(accountScope, failing)).toBe(false);
+            expect(isMachineSelectableForFleet(accountScope, replaced)).toBe(false);
+            expect(fleetModel.getCurrent().fleet.map(({ machine, online }) => ({ id: machine.id, online })))
+                .toEqual([{ id: 'machine-1', online: true }, { id: 'machine-s', online: true }, { id: 'machine-f', online: false }]);
+            expect(overview.findByTestId('overview.all')).not.toBeNull();
+            expect(overview.getTextContent()).not.toContain('Replaced');
+
+            for (const header of screen.findAll((node) => node.props?.title === 'systemStatus.machines.calmOnline' && typeof node.props?.onPress === 'function')) {
+                await pressTestInstanceAsync(header, 'open calm machines');
+            }
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            const text = screen.getTextContent();
+            expect(text).toContain('Reachable');
+            expect(text).not.toContain('Replaced');
+            // The failing machine sits behind the Offline row, not among the online machines.
+            expect(text).not.toContain('Failing');
+            const offline = screen.findAll((node) => node.props?.title === 'systemStatus.machine.offline' && node.props?.detail === '1');
+            expect(offline.length).toBeGreaterThan(0);
+        } finally {
+            standardCleanup();
+            await connection.dispose();
         }
-        await flushHookEffects({ cycles: 2, turns: 2 });
-        const text = screen.getTextContent();
-        expect(text).toContain('Reachable');
-        expect(text).not.toContain('Replaced');
-        // The failing machine sits behind the Offline row, not among the online machines.
-        expect(text).not.toContain('Failing');
-        const offline = screen.findAll((node) => node.props?.title === 'systemStatus.machine.offline' && node.props?.detail === '1');
-        expect(offline.length).toBeGreaterThan(0);
     });
 
     it('reports the canonical Voice session status rather than a copied sync-store projection', async () => {

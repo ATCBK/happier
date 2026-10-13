@@ -34,35 +34,10 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemList', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => {
-        const trigger = typeof props.trigger === 'function'
-            ? props.trigger({
-                toggle: () => (props.onOpenChange as (open: boolean) => void)?.(!props.open),
-                selectedItem: null,
-            })
-            : null;
-        return React.createElement('DropdownMenu', props, trigger);
-    },
-}));
 
-vi.mock('@/components/ui/lists/SelectableRow', () => ({
-    SelectableRow: (props: Record<string, unknown>) => React.createElement('SelectableRow', props),
-}));
 
 function createDiscoveryRunner(): SystemTaskRunner {
     const snapshots = new Map<string, SystemTaskRunState | null>();
@@ -141,6 +116,9 @@ async function renderEditor(runner: SystemTaskRunner) {
     return { screen, editorSpy };
 }
 
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./RemoteHostForm');
+
 describe('RemoteHostEditorSections', () => {
     it('keeps the exact unsaved host identity across manual retry while a new editor owns a different identity', async () => {
         const { useRemoteHostEditor } = await import('./RemoteHostForm');
@@ -192,11 +170,12 @@ describe('RemoteHostEditorSections', () => {
 
         await flushHookEffects({ cycles: 3, turns: 3 });
 
-        const menu = screen.findByType('DropdownMenu' as never) as unknown as {
-            props: { onSelect: (id: string) => void };
-        };
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const menu = screen.findAllByType(DropdownMenu).find(node =>
+            node.props.items?.some((item: { id: string }) => item.id === 'ssh-config:devbox'));
+        expect(menu).toBeTruthy();
         await act(async () => {
-            menu.props.onSelect('ssh-config:devbox');
+            menu!.props.onSelect('ssh-config:devbox');
         });
 
         expect(screen.findByTestId('remote-host-form-ssh-sshUsernameInput')?.props.value).toBe('ubuntu');

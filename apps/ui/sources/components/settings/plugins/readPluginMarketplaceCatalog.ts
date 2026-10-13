@@ -1,235 +1,81 @@
-import type {
-    MarketplaceIndexItemV1,
-    MarketplaceIndexQueryResultV1,
-    PluginUpdatePolicyV1,
-} from '@happier-dev/protocol/marketplace';
-import {
-    decideMarketplaceListingInstallV1,
-    readMarketplaceListingRegistryProfileRequirementV1,
-    type MarketplaceListingInstallBlockV1,
-} from '@happier-dev/protocol/marketplace';
+import type { MarketplaceIndexEntryV1, PluginUpdatePolicyV1 } from '@happier-dev/protocol/marketplace';
+import { decideMarketplaceListingReviewV1 } from '@happier-dev/protocol/marketplace';
+import { RegistryItemV1Schema, type RegistryItemV1, type RegistryListPageV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
+import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 
 export type PluginMarketplaceCatalogSourceKind = 'curated' | 'community-npm' | 'user';
-
-/** The freshness the daemon actually had for a source when it served this page. */
-export type PluginMarketplaceSourceFreshness = MarketplaceIndexItemV1['freshness']['state'];
-
+export type PluginMarketplaceSourceFreshness = 'fresh' | 'stale' | 'stale-offline' | 'unavailable' | 'auth-unavailable' | 'corrupt';
 export type PluginMarketplaceCatalogEntry = Readonly<{
-    id: string;
-    sourceId: string;
-    sourceKind: PluginMarketplaceCatalogSourceKind;
-    sourceTitle: string;
-    reviewStatus: 'approved' | 'withdrawn' | 'blocked' | 'unreviewed';
-    updatePolicy: PluginUpdatePolicyV1;
-    /** Catalog-supplied publisher label. It is presentation, not verified identity. */
-    publisher: MarketplaceIndexItemV1['publisher'];
-    categories: MarketplaceIndexItemV1['categories'];
-    contributions: MarketplaceIndexItemV1['summary']['contributions'];
-    links: MarketplaceIndexItemV1['links'];
-    executableRealms: MarketplaceIndexItemV1['summary']['executableRealms'];
-    platforms: MarketplaceIndexItemV1['compatibility']['platforms'];
-    title: string;
-    description: string | null;
-    version: string | null;
-    /**
-     * The npm coordinate this listing publishes. It is not derivable from the
-     * manifest plugin id, so the install action carries it rather than letting
-     * a later owner guess the package from the id.
-     */
-    packageName: string;
-    installable: boolean;
-    /**
-     * The npm registry this machine must choose a profile for before the
-     * package can be fetched, or `null` when no registry selection is owed.
-     * Install stays offered: the daemon names the exact selection when asked,
-     * and the user answers it before the Install and Trust review.
-     */
-    registrySelectionOrigin: string | null;
-    warning?: 'withdrawn' | 'unreviewed';
+    id: string; sourceId: string; sourceKind: PluginMarketplaceCatalogSourceKind; sourceTitle: string;
+    reviewStatus: 'approved' | 'withdrawn' | 'blocked' | 'unreviewed'; updatePolicy: PluginUpdatePolicyV1;
+    publisher: MarketplaceIndexEntryV1['publisher']; categories: MarketplaceIndexEntryV1['categories'];
+    contributions: MarketplaceIndexEntryV1['summary']['contributions']; links: MarketplaceIndexEntryV1['links'];
+    executableRealms: MarketplaceIndexEntryV1['summary']['executableRealms'];
+    platforms: MarketplaceIndexEntryV1['compatibility']['platforms'];
+    title: string; description: string | null; version: string | null; packageName: string;
+    /** Published review eligibility only. Chosen-machine install admission stays with the daemon. */
+    installable: boolean; registrySelectionOrigin: string | null; warning?: 'withdrawn' | 'unreviewed';
 }>;
-
-/**
- * One daemon-reported diagnostic, carried with the source it belongs to.
- *
- * A Discover page is an aggregate over several independent indexes, so a
- * failure is normally partial: collapsing every diagnostic into one "catalog
- * error" would tell the reader that Discover is broken when in fact one
- * internal index is offline and everything else is current.
- */
 export type PluginMarketplaceDiscoverDiagnostic = Readonly<{
-    /** Source-qualified and collision-free even when one code repeats. */
-    id: string;
-    sourceId: string | null;
-    sourceTitle: string | null;
-    code: string;
-    message: string;
+    id: string; sourceId: string | null; sourceTitle: string | null; code: string; message: string;
 }>;
-
 export type PluginMarketplaceDiscoverSourceStatus = Readonly<{
-    id: string;
-    title: string;
-    kind: PluginMarketplaceCatalogSourceKind;
-    freshness: PluginMarketplaceSourceFreshness;
+    id: string; title: string; kind: PluginMarketplaceCatalogSourceKind; freshness: PluginMarketplaceSourceFreshness;
     diagnostics: readonly PluginMarketplaceDiscoverDiagnostic[];
 }>;
-
-/**
- * Why a listing the daemon returned cannot be installed on this machine now.
- *
- * These are kept rather than dropped: "no results" and "eleven results this
- * machine cannot reach right now" are different facts, and only the second one
- * tells the user to fix a registry profile or come back online.
- */
 export type PluginMarketplaceNonInstallableListing = Readonly<{
-    pluginId: string;
-    title: string;
-    sourceId: string;
-    sourceTitle: string;
+    pluginId: string; title: string; sourceId: string; sourceTitle: string;
     reason: 'sourceStale' | 'artifactUnavailable' | 'notApproved' | 'unsupportedSourceKind';
 }>;
-
 export type PluginMarketplaceDiscoverPage = Readonly<{
-    /** Index revision this page was served from; a change invalidates a cursor chain. */
-    revision: number;
-    nextCursor: string | null;
-    entries: readonly PluginMarketplaceCatalogEntry[];
+    /** Retained view-model paging demand; actual cursors remain source-owned Registry pages. */
+    nextCursor: string | null; entries: readonly PluginMarketplaceCatalogEntry[];
     sources: readonly PluginMarketplaceDiscoverSourceStatus[];
     diagnostics: readonly PluginMarketplaceDiscoverDiagnostic[];
     nonInstallable: readonly PluginMarketplaceNonInstallableListing[];
 }>;
 
-function isProjectedSourceKind(kind: string): kind is PluginMarketplaceCatalogSourceKind {
-    return kind === 'curated' || kind === 'community-npm' || kind === 'user';
+export function registryPluginSourceKind(source: RegistrySourceDescriptorV1): PluginMarketplaceCatalogSourceKind {
+    return source.format === 'happier-npm' ? 'community-npm' : source.origin.kind === 'built_in' ? 'curated' : 'user';
 }
 
-function discoverDiagnosticId(sourceId: string | null, code: string, occurrence: number): string {
-    const scope = sourceId === null ? 'index' : `source:${encodeURIComponent(sourceId)}`;
-    return `${scope}:${encodeURIComponent(code)}:${occurrence}`;
-}
-
-/**
- * Maps a shared Protocol install block to this projection's reason label.
- * The decision order (durable review trust before transient machine
- * reachability) comes from `decideMarketplaceListingInstallV1`; only the
- * user-facing label stays presentation-owned here. Withdrawn curated
- * listings never reach this mapper — they remain visible as warned entries.
- */
-function resolveNonInstallableReason(
-    block: MarketplaceListingInstallBlockV1,
-): PluginMarketplaceNonInstallableListing['reason'] {
-    switch (block) {
-        case 'unsupported-source-kind':
-            return 'unsupportedSourceKind';
-        case 'curated-review-withdrawn':
-        case 'curated-review-not-approved':
-        case 'full-review-unavailable':
-            return 'notApproved';
-        case 'source-not-fresh':
-            return 'sourceStale';
-        case 'artifact-unavailable':
-            return 'artifactUnavailable';
-    }
-}
-
-/**
- * Projects one aggregate index page for Discover.
- *
- * Source disclosure is a first-class fact: every entry names the marketplace
- * source it was discovered through. Curation recommends discovery only — a
- * curated approval never becomes install authorization (every install is the
- * full Install and Trust review), and a withdrawal is a warning, never a
- * decision that disables installed code.
- *
- * This is a projection of one page, not a catalog: the caller owns the cursor
- * chain and the accumulated list, so nothing here builds a second index.
- */
-export function projectDaemonMarketplaceIndexPage(
-    result: MarketplaceIndexQueryResultV1,
-): PluginMarketplaceDiscoverPage {
-    const entries: PluginMarketplaceCatalogEntry[] = [];
-    const nonInstallable: PluginMarketplaceNonInstallableListing[] = [];
-
-    for (const item of result.items) {
-        const sourceKind = item.source.kind;
-        // Installability is the one shared Protocol decision beside
-        // `MarketplaceIndexAdmissionV1`; this projection owns only
-        // presentation (entry shape, warnings, non-installable labels).
-        const decision = decideMarketplaceListingInstallV1(item);
-        // A withdrawal is a discovery warning the reader must see, never an
-        // authority decision over installed code.
+/** Published Registry metadata into the retained Discover presentation, with no machine facts. */
+export function projectRegistryMarketplacePage(input: Readonly<{
+    items: readonly RegistryItemV1[]; pages: readonly RegistryListPageV1[]; sources: readonly RegistrySourceDescriptorV1[];
+}>): PluginMarketplaceDiscoverPage {
+    const entries: PluginMarketplaceCatalogEntry[] = [], nonInstallable: PluginMarketplaceNonInstallableListing[] = [];
+    for (const raw of input.items) {
+        const item = RegistryItemV1Schema.parse(raw);
+        if (item.payload.kind !== 'plugin') throw new Error('registry_plugin_payload_required');
+        const { listing, source } = item.payload;
+        const decision = decideMarketplaceListingReviewV1({ source, review: listing.review });
         const withdrawn = !decision.installable && decision.block === 'curated-review-withdrawn';
-        // A registry this machine has no usable profile for is a selection the
-        // user can make, not a dead end. The daemon's profiles are not on this
-        // page, so no candidate is named here; the install request names it.
-        const registryRequirement = readMarketplaceListingRegistryProfileRequirementV1(item, []);
-
-        if (!decision.installable && !withdrawn && registryRequirement === null) {
-            nonInstallable.push({
-                pluginId: item.pluginId,
-                title: item.display.title,
-                sourceId: item.source.id,
-                sourceTitle: item.source.title,
-                reason: resolveNonInstallableReason(decision.block),
-            });
+        if (!decision.installable && !withdrawn) {
+            nonInstallable.push({ pluginId: listing.pluginId, title: listing.display.title, sourceId: source.id,
+                sourceTitle: source.title, reason: decision.block === 'unsupported-source-kind' ? 'unsupportedSourceKind' : 'notApproved' });
             continue;
         }
-
-        entries.push({
-            id: item.pluginId,
-            sourceId: item.source.id,
-            sourceKind,
-            sourceTitle: item.source.title,
-            reviewStatus: item.review.status,
-            updatePolicy: item.updatePolicy,
-            publisher: item.publisher,
-            categories: item.categories,
-            contributions: item.summary.contributions,
-            links: item.links,
-            executableRealms: item.summary.executableRealms,
-            platforms: item.compatibility.platforms,
-            title: item.display.title,
-            description: item.display.description,
-            version: item.distribution.version,
-            packageName: item.distribution.packageName,
-            installable: decision.installable || registryRequirement !== null,
-            registrySelectionOrigin: registryRequirement?.registryOrigin ?? null,
-            ...(withdrawn
-                ? { warning: 'withdrawn' as const }
-                : sourceKind !== 'curated' && item.review.status === 'unreviewed'
-                    ? { warning: 'unreviewed' as const }
-                    : {}),
-        });
+        entries.push({ id: listing.pluginId, sourceId: source.id, sourceKind: source.kind, sourceTitle: source.title,
+            reviewStatus: listing.review.status, updatePolicy: listing.updatePolicy, publisher: listing.publisher,
+            categories: listing.categories, contributions: listing.summary.contributions, links: listing.links,
+            executableRealms: listing.summary.executableRealms, platforms: listing.compatibility.platforms,
+            title: listing.display.title, description: listing.display.description, version: listing.distribution.version,
+            packageName: listing.distribution.packageName, installable: decision.installable, registrySelectionOrigin: null,
+            ...(withdrawn ? { warning: 'withdrawn' as const } : source.kind !== 'curated' && listing.review.status === 'unreviewed'
+                ? { warning: 'unreviewed' as const } : {}) });
     }
-
-    return {
-        revision: result.revision,
-        nextCursor: result.nextCursor,
-        entries,
-        sources: result.sources.flatMap((snapshot) => {
-            if (!isProjectedSourceKind(snapshot.source.kind)) return [];
-            return [{
-                id: snapshot.source.id,
-                title: snapshot.source.title,
-                kind: snapshot.source.kind,
-                freshness: snapshot.freshness.state,
-                diagnostics: snapshot.diagnostics.map((diagnostic, occurrence) => ({
-                    id: discoverDiagnosticId(snapshot.source.id, diagnostic.code, occurrence),
-                    sourceId: snapshot.source.id,
-                    sourceTitle: snapshot.source.title,
-                    code: diagnostic.code,
-                    message: diagnostic.message,
-                })),
-            }];
-        }),
-        diagnostics: result.diagnostics.map((diagnostic, occurrence) => ({
-            id: discoverDiagnosticId(null, diagnostic.code, occurrence),
-            sourceId: null,
-            sourceTitle: null,
-            code: diagnostic.code,
-            message: diagnostic.message,
-        })),
-        nonInstallable,
-    };
+    const sources = input.pages.map(page => {
+        const source = input.sources.find(source => source.id === page.sourceId);
+        const title = source?.title ?? page.sourceId;
+        const diagnostics = page.status.state === 'ok' ? [] : [{ id: 'source:' + encodeURIComponent(page.sourceId) + ':' + page.status.state,
+            sourceId: page.sourceId, sourceTitle: title, code: page.status.state, message: describeRegistrySourceStatus(page.status) }];
+        const freshness: PluginMarketplaceSourceFreshness = page.status.state === 'ok' ? 'fresh'
+            : page.status.state === 'auth_failed' ? 'auth-unavailable'
+                : page.status.state === 'invalid_source' || page.status.state === 'newer_format' ? 'corrupt' : 'unavailable';
+        return { id: page.sourceId, title, kind: source ? registryPluginSourceKind(source) : 'user' as const, freshness, diagnostics };
+    });
+    return { entries, sources, diagnostics: sources.flatMap(source => source.diagnostics), nonInstallable,
+        nextCursor: input.pages.some(page => page.nextCursor !== null) ? 'more' : null };
 }
 
 /** One listing's identity for the paged list: a plugin per source it was found in. */

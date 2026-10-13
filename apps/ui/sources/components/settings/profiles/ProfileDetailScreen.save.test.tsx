@@ -11,8 +11,6 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import type { AlertButton } from '@/modal/types';
 import { HeaderHeightContext } from '@react-navigation/elements';
-import { LaunchProfileEditForm } from '@/components/profiles/edit';
-import { createEmptyCustomProfile } from '@/sync/domains/profiles/profileMutations';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn(), back: vi.fn(), dispatch: vi.fn(), dirty: false,
@@ -35,16 +33,18 @@ vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/moc
 }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: { alert: alerts } }).module);
 
-import { storage } from '@/sync/domains/state/storageStore';
-import { refreshProfileCatalog, resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
-import { resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
-import { ProfileDetailScreen } from './ProfileDetailScreen';
-import { ProfileCollectionRail } from './ProfileCollectionList';
-import { ProfileSettingsIndex } from './ProfileSettingsIndex';
-import { CollectionList } from '@/components/ui/lists/collection/CollectionList';
-import ProfileEditScreen from '@/app/(app)/new/pick/profile-edit';
-
 installDisconnectedServerSocketBoundary();
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { refreshProfileCatalog, resetProfileCatalogEngineForTests } = await import('@/sync/engine/settings/profileCatalogEngine');
+const { resetProfileCatalogSnapshotsForTests } = await import('@/sync/store/settings/profileCatalogSnapshot');
+const { ProfileDetailScreen } = await import('./ProfileDetailScreen');
+const { ProfileCollectionRail } = await import('./ProfileCollectionList');
+const { ProfileSettingsIndex } = await import('./ProfileSettingsIndex');
+const { CollectionList } = await import('@/components/ui/lists/collection/CollectionList');
+const { default: ProfileEditScreen } = await import('@/app/(app)/new/pick/profile-edit');
+const { LaunchProfileEditForm } = await import('@/components/profiles/edit');
+const { createEmptyCustomProfile } = await import('@/sync/domains/profiles/profileMutations');
 
 async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: ProfileRecordV1; holdInitialCatalog?: boolean; useProfiles?: boolean }> = {}) {
         await loadSyncSingletonForTests();
@@ -61,6 +61,7 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
         const rows: Array<{ id: string; revision: number; content: unknown }> = options.initialRecord
             ? [{ id: options.initialRecord.id, revision: 1, content: { t: 'plain', v: options.initialRecord } }] : [];
         let writtenId: string | null = null;
+        let writtenRecord: ProfileRecordV1 | null = null;
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://profile-save.example.test', accountId: 'alice', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
@@ -82,6 +83,7 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
             if (path === PROFILE_RECORDS_ROUTE_V1) {
                 const mutation = ProfileRowMutationV1Schema.parse(JSON.parse(String(init?.body)));
                 writtenId = mutation.id;
+                writtenRecord = mutation.content?.t === 'plain' ? mutation.content.v : null;
                 const response = await acknowledgement.promise;
                 const outcome: unknown = await response.clone().json();
                 if (typeof outcome === 'object' && outcome !== null && 'status' in outcome && outcome.status === 'updated') {
@@ -108,6 +110,7 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
             retire: () => connection.dispose(),
             refreshWhilePending: () => { holdCatalog = true; return refreshProfileCatalog(scope); },
             writtenId: () => writtenId,
+            writtenRecord: () => writtenRecord,
             acknowledge: () => acknowledgement.resolve(Response.json({ status: 'updated', revision: 1, cursor: 1, referenceGuardRevision: 3 })),
             refuse: () => acknowledgement.resolve(Response.json({ status: 'conflict', revision: 1 })),
         };
@@ -290,6 +293,7 @@ describe('Profile editor acknowledged save', () => {
         await act(async () => { screen.tree.changeTextByTestId('profile-slim-name', 'Research'); });
         await act(async () => { screen.tree.pressByTestId('settings.profiles.detail.save'); });
         await vi.waitFor(() => expect(save.writtenId()).not.toBeNull());
+        expect(save.writtenRecord()).toMatchObject({ id: save.writtenId(), definition: { kind: 'inline', profile: { name: 'Research' } } });
         expect(screen.tree.findByTestId('profile-slim-name')?.props.value).toBe('Research');
         expect(navigation.dirty).toBe(true);
         expect(navigation.replace).not.toHaveBeenCalled();
@@ -304,6 +308,7 @@ describe('Profile editor acknowledged save', () => {
         await act(async () => { screen.tree.changeTextByTestId('profile-slim-name', 'Research'); });
         await act(async () => { screen.tree.pressByTestId('profile-edit-save'); });
         await vi.waitFor(() => expect(save.writtenId()).not.toBeNull());
+        expect(save.writtenRecord()).toMatchObject({ id: save.writtenId(), definition: { kind: 'inline', profile: { name: 'Research' } } });
         expect(navigation.dirty).toBe(true);
         expect(navigation.dispatch).not.toHaveBeenCalled();
         expect(navigation.back).not.toHaveBeenCalled();

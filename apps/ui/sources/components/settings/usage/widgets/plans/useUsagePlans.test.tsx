@@ -19,7 +19,7 @@ import { act } from 'react-test-renderer';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined; });
+afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
 
 it('changes the Usage selector when request reachability changes without a machine heartbeat', async () => {
   const { id: serverId } = await upsertAndActivateServer({ serverUrl: 'https://usage-selector.test', name: 'Usage Home' });

@@ -1,121 +1,46 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
-import {
-    installSessionSettingsCommonModuleMocks,
-} from './sessionSettingsViewTestHelpers';
+import { standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const settingsState: Record<string, any> = {};
-// The settings store is the boundary: a write re-renders subscribers, as the real store does.
-const settingsListeners = new Set<() => void>();
-function writeSetting(key: string, next: any) {
-    settingsState[key] = next;
-    settingsListeners.forEach((listener) => listener());
-}
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-installSessionSettingsCommonModuleMocks({
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-        theme: {
-            colors: {
-                accent: {
-                    blue: '#00f',
-                    green: '#0f0',
-                    orange: '#f80',
-                    indigo: '#80f',
-                },
-                textSecondary: '#999',
-                success: '#0f0',
-            },
-        },
-        });
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: (key: string) => [
-                    React.useSyncExternalStore(
-                        (listener) => {
-                            settingsListeners.add(listener);
-                            return () => settingsListeners.delete(listener);
-                        },
-                        () => settingsState[key],
-                    ),
-                    (next: any) => writeSetting(key, next),
-                ],
-            },
-        });
-    },
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+const account = createProviderSettingsAccountHarness();
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props, props.rightElement ?? null, props.children ?? null),
-}));
 
-vi.mock('@/components/ui/lists/ExpandableItem', () => ({
-    ExpandableItem: (props: any) => React.createElement(
-        'ExpandableItem',
-        props,
-        typeof props.header === 'function'
-            ? props.header({
-                expanded: props.expanded,
-                toggle: () => props.onExpandedChange(!props.expanded),
-                headerProps: {
-                    onPress: () => props.onExpandedChange(!props.expanded),
-                    accessibilityRole: 'button',
-                    accessibilityState: { expanded: props.expanded },
-                },
-            })
-            : props.header,
-        props.expanded ? props.children : null,
-    ),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: any) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: (props: any) => React.createElement('TextInput', props),
-}));
 
-vi.mock('@/components/workspaces/sync/WorkspaceSyncLegacyStateRecovery', () => ({
-    WorkspaceSyncLegacyStateRecovery: () => null,
-}));
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./SessionHandoffSettingsView');
 
 describe('SessionHandoffSettingsView', () => {
-    beforeEach(() => {
-        settingsState.sessionHandoffDefaultsV1 = {
+    beforeEach(async () => {
+        await account.restore({ settings: { sessionHandoffDefaultsV1: {
             v: 1,
             workspaceSyncMode: 'keep_synced',
             includeIgnoredMode: 'include_selected',
             ignoredIncludeGlobs: [],
             directTargetMode: 'keep_direct',
-        };
+        } } });
     });
+    afterEach(async () => { standardCleanup(); await account.reset(); });
 
     it('keeps common modes concise and reveals advanced modes and content policy through one disclosure', async () => {
         const mod = await import('./SessionHandoffSettingsView');
@@ -157,7 +82,7 @@ describe('SessionHandoffSettingsView', () => {
             && node.props?.accessibilityLabel === 'settingsSession.handoff.includeIgnoredMode.globsTitle')[0] ?? null;
         await act(async () => editedGlobInput?.props.onBlur());
 
-        expect(settingsState.sessionHandoffDefaultsV1).toEqual({
+        expect(storage.getState().settings.sessionHandoffDefaultsV1).toEqual({
             v: 1,
             workspaceSyncMode: 'mirror_exactly',
             includeIgnoredMode: 'include_selected',
@@ -183,7 +108,7 @@ describe('SessionHandoffSettingsView', () => {
         const input = screen.findAll((node) => String(node.type) === 'TextInput'
             && node.props?.accessibilityLabel === 'settingsSession.handoff.includeIgnoredMode.globsTitle')[0];
         await act(async () => input?.props.onBlur());
-        expect(settingsState.sessionHandoffDefaultsV1.ignoredIncludeGlobs).toEqual(['dist/**', '.env.local']);
+        expect(storage.getState().settings.sessionHandoffDefaultsV1.ignoredIncludeGlobs).toEqual(['dist/**', '.env.local']);
     });
 
     it('opens Advanced on arrival when "Include selected" needs its patterns, so the required field is never hidden', async () => {
@@ -205,7 +130,12 @@ describe('SessionHandoffSettingsView', () => {
 
         // A settings sync (another device, or the legacy-state reset on this page) writes new patterns.
         await act(async () => {
-            writeSetting('sessionHandoffDefaultsV1', { ...settingsState.sessionHandoffDefaultsV1, ignoredIncludeGlobs: ['build/**'] });
+            const state = storage.getState();
+            if (!state.settingsScope) throw new Error('Expected mounted Account settings');
+            state.applySettingsForScope(state.settingsScope, {
+                ...state.settings,
+                sessionHandoffDefaultsV1: { ...state.settings.sessionHandoffDefaultsV1, ignoredIncludeGlobs: ['build/**'] },
+            }, (state.settingsVersion ?? 0) + 1);
         });
 
         expect(field()?.props.value).toBe('build/**');

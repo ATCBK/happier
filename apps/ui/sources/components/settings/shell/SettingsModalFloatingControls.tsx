@@ -29,11 +29,15 @@ function useSettingsBackControl(collectionRootPathname: string | undefined) {
     const hosted = useDestinationInstanceKey() !== null;
     const railVisible = useSettingsRailVisible();
     const { parentPathname, goToParent: handleBack } = useSettingsParentBack('SettingsModalFloatingControls.back');
-    // A list-detail section's detail whose parent is that list gets no back control: the list is
-    // already beside it.
+    // In a list-detail section's split layout, neither the section's own page (landing, loading or
+    // empty) nor a detail whose parent is that list gets a back control: the list or the settings
+    // sidebar is already beside it. Once the section is pushed (stacked), its page keeps the back.
+    const besideCollection = collectionRootPathname !== undefined
+        && pathname.replace(/\/+$/, '') === collectionRootPathname;
     const visible = shouldShowSettingsParentBackButton({ pathname, hideOnTopLevel: !hosted || railVisible })
         && parentPathname !== null
-        && parentPathname !== collectionRootPathname;
+        && parentPathname !== collectionRootPathname
+        && !besideCollection;
     return { visible, handleBack };
 }
 

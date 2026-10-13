@@ -1,13 +1,12 @@
 import * as React from 'react';
 import { Redirect, useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { useUnistyles } from 'react-native-unistyles';
 import { resolveHappierCollectionInitialKey, useHappierCollectionIndexView } from '@happier-dev/plugin-ui/presentation';
 
 import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleMark } from '@/components/roles/catalog/useRoleMark';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
-import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -60,7 +59,6 @@ const RoleCollectionLanding = React.memo(function RoleCollectionLanding() {
 const RoleCollectionPage = React.memo(function RoleCollectionPage() {
     const phone = useDeviceType() === 'phone';
     const router = useRouter();
-    const { theme } = useUnistyles();
     const catalog = useRoleCatalog();
     const roleMark = useRoleMark();
     const describe = useDescribeRoleRow();
@@ -102,10 +100,9 @@ const RoleCollectionPage = React.memo(function RoleCollectionPage() {
                 />
             ) : null}
             <ItemGroup>
-                <Item
+                <ItemAddRow
                     testID="settings.roles.page.add"
                     title={t('roles.settings.newRole')}
-                    icon={<Icon name="plus" size={16} color={theme.colors.text.secondary} />}
                     onPress={() => openRoleCollectionHref(router, newRoleRoute(), false, 'RoleCollectionPage.add')}
                 />
             </ItemGroup>

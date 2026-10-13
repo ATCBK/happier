@@ -2,8 +2,8 @@ import * as React from 'react';
 
 import type {
     ImportedMcpInputDefinitionV1,
-} from '@/sync/domains/settings/mcpServers/parseImportedMcpServerJson';
-import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/materializeImportedMcpServerDrafts';
+} from '@happier-dev/protocol/mcp/servers/import/parseMcpServerImportV1';
+import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/mcpImportActionInputs';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';

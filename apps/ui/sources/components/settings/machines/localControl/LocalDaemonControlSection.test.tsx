@@ -1,8 +1,12 @@
 import * as React from 'react';
+import { Item } from '@/components/ui/lists/Item';
 import renderer from 'react-test-renderer';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/machines/machinesSettingsTestHelpers';
 
 (
@@ -10,16 +14,6 @@ import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/
         IS_REACT_ACT_ENVIRONMENT?: boolean;
     }
 ).IS_REACT_ACT_ENVIRONMENT = true;
-
-const activeServerSnapshot = vi.hoisted(() => ({
-    current: {
-        serverId: 'relay-example',
-        serverUrl: 'https://relay.example.test',
-        activeLocalRelayUrl: null as string | null,
-        generation: 1,
-    },
-    listeners: new Set<(snapshot: unknown) => void>(),
-}));
 
 installMachinesSettingsCommonModuleMocks({
     reactNative: async () => {
@@ -61,25 +55,6 @@ vi.mock('@expo/vector-icons', () => ({
     Octicons: 'Octicons',
 }));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, title, footer }: { children?: React.ReactNode; title?: React.ReactNode; footer?: React.ReactNode }) =>
-        React.createElement('Group', { title, footer }, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
-
 const approvalMocks = vi.hoisted(() => ({
     readCredentials: vi.fn(async (..._args: unknown[]) => ({ token: 'relay-a-bearer' }) as { token: string } | null),
     endpointFetch: vi.fn(async (..._args: unknown[]) => new Response('{}', { status: 200 })),
@@ -105,20 +80,6 @@ vi.mock('@/sync/http/client', async (importOriginal) => {
     };
 });
 
-vi.mock('@/sync/domains/server/serverProfiles', async () => {
-    const actual = await vi.importActual<typeof import('@/sync/domains/server/serverProfiles')>('@/sync/domains/server/serverProfiles');
-    return {
-        ...actual,
-        getActiveServerSnapshot: () => activeServerSnapshot.current,
-        subscribeActiveServer: (listener: (snapshot: unknown) => void) => {
-            activeServerSnapshot.listeners.add(listener);
-            return () => {
-                activeServerSnapshot.listeners.delete(listener);
-            };
-        },
-    };
-});
-
 describe('LocalDaemonControlSection', () => {
     // The component's cold module graph is large; loading it once here (after the module mocks above
     // are installed) keeps that one-time cost out of the first test's own timeout, where it timed out
@@ -127,13 +88,8 @@ describe('LocalDaemonControlSection', () => {
         await import('./LocalDaemonControlSection');
     }, 300_000);
 
-    beforeEach(() => {
-        activeServerSnapshot.current = {
-            serverId: 'relay-example',
-            serverUrl: 'https://relay.example.test',
-            activeLocalRelayUrl: null,
-            generation: 1,
-        };
+    beforeEach(async () => {
+        await upsertAndActivateServer({ serverUrl: 'https://relay.example.test', name: 'Home A' });
     });
 
     it('loads daemon status on mount and starts the local daemon service from the control row', async () => {
@@ -194,8 +150,8 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.status')?.props.subtitle).toBe('machine.thisComputer.description.daemon_not_running');
-        expect(screen.findByTestId('settings.localDaemonControl.machineId')?.props.subtitle).toBe('machine-local-1');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.status' })?.props.subtitle).toBe('machine.thisComputer.description.daemon_not_running');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.machineId' })?.props.subtitle).toBe('machine-local-1');
 
         await screen.pressByTestIdAsync('settings.localDaemonControl.start');
 
@@ -253,9 +209,9 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.status')?.props.subtitle)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.status' })?.props.subtitle)
             .toBe('machine.thisComputer.description.daemon_account_mismatch');
-        expect(screen.findByTestId('settings.localDaemonControl.repair')?.props.title)
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.repair' })?.props.title)
             .toBe('machine.thisComputer.action.daemon_account_mismatch');
 
         const confirm = vi.mocked(Modal.confirm);
@@ -312,7 +268,7 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.cliVersion')?.props.title)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.cliVersion' })?.props.title)
             .toBe('machine.thisComputer.cli.updateAvailable');
         await screen.pressByTestIdAsync('settings.localDaemonControl.cliUpdate');
         // The update restarts the app's own server's service, not the terminal's.
@@ -347,9 +303,9 @@ describe('LocalDaemonControlSection', () => {
                 }),
             });
         });
-        expect(screen.findByTestId('settings.localDaemonControl.cliVersion')?.props.subtitle)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.cliVersion' })?.props.subtitle)
             .toBe('machine.thisComputer.cli.notManaged');
-        expect(screen.findByTestId('settings.localDaemonControl.cliUpdate')).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.cliUpdate' })).toBeUndefined();
     });
 
     it('shares one CLI update run and one status across every surface that offers it (S-10)', async () => {
@@ -396,7 +352,7 @@ describe('LocalDaemonControlSection', () => {
         ));
         // One surface's status read is every surface's status.
         await deliver('task_1:daemon.service.status.v1', statusData('0.3.0'));
-        const updateButtons = () => screen.root.findAll((node) => node.type === ('RoundButton' as never) && node.props?.testID === 'settings.localDaemonControl.cliUpdate');
+        const updateButtons = () => screen.findAllByType(RoundButton).filter((node) => node.props.testID === 'settings.localDaemonControl.cliUpdate');
         expect(updateButtons()).toHaveLength(2);
 
         await renderer.act(async () => {
@@ -417,7 +373,7 @@ describe('LocalDaemonControlSection', () => {
         expect(statusReads).toHaveLength(statusReadsBefore + 1);
         const refreshTaskId = [...listeners.keys()].filter((id) => id.endsWith('daemon.service.status.v1')).at(-1)!;
         await deliver(refreshTaskId, statusData('0.3.1'));
-        expect(screen.root.findAll((node) => node.type === ('Item' as never) && node.props?.testID === 'settings.localDaemonControl.cliVersion')
+        expect(screen.findAllByType(Item).filter((node) => node.props.testID === 'settings.localDaemonControl.cliVersion')
             .map((node) => node.props.title)).toEqual(['machine.thisComputer.cli.version', 'machine.thisComputer.cli.version']);
     });
 
@@ -467,7 +423,7 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.install')).toBeTruthy();
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.install' })).toBeTruthy();
 
         await screen.pressByTestIdAsync('settings.localDaemonControl.install');
 
@@ -525,7 +481,7 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.install')).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.install' })).toBeUndefined();
     });
 
     it('says who manages the command line, shows the old copy, and reasks the one-CLI question (R12)', async () => {
@@ -580,9 +536,9 @@ describe('LocalDaemonControlSection', () => {
             });
         });
 
-        expect(screen.findByTestId('settings.localDaemonControl.cliVersion')?.props.subtitle)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.cliVersion' })?.props.subtitle)
             .toBe('machine.thisComputer.cliChoice.managed');
-        expect(screen.findByTestId('settings.localDaemonControl.oldCli')?.props).toMatchObject({
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.oldCli' })?.props).toMatchObject({
             title: 'machine.thisComputer.cliChoice.oldCopyTitle',
             subtitle: 'machine.thisComputer.cliChoice.oldCopyRemove',
             copy: 'npm uninstall -g @happier-dev/cli',
@@ -631,10 +587,10 @@ describe('LocalDaemonControlSection', () => {
                 },
             });
         });
-        expect(screen.findByTestId('settings.localDaemonControl.cliVersion')?.props.subtitle)
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.cliVersion' })?.props.subtitle)
             .toBe('machine.thisComputer.cliChoice.own');
-        expect(screen.findByTestId('settings.localDaemonControl.oldCli')).toBeNull();
-        expect(screen.findByTestId('settings.localDaemonControl.changeCli')).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.oldCli' })).toBeUndefined();
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.changeCli' })).toBeUndefined();
     });
 
     it('gives the exact command that updates the command line the person kept (A11-08)', async () => {
@@ -674,11 +630,11 @@ describe('LocalDaemonControlSection', () => {
                 },
             });
         });
-        const row = screen.findByTestId('settings.localDaemonControl.keptCliUpdate');
+        const row = findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.keptCliUpdate' });
         expect(row?.props.copy).toBe('npm install -g @happier-dev/cli@latest');
         expect(row?.props.subtitle).toBe('machine.thisComputer.cliChoice.keptUpdate');
         // Happier's own CLI update never runs on a command line the person kept.
-        expect(screen.findByTestId('settings.localDaemonControl.cliUpdate')).toBeNull();
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.cliUpdate' })).toBeUndefined();
     });
 
     it('starts the canonical background-service repair task against the active relay, for the app\'s own account (A11-06)', async () => {
@@ -709,7 +665,7 @@ describe('LocalDaemonControlSection', () => {
         const { LocalDaemonControlSection } = await import('./LocalDaemonControlSection');
         const screen = await renderScreen(React.createElement(LocalDaemonControlSection, { runner }));
 
-        expect(screen.findByTestId('settings.localDaemonControl.repair')?.props.title).toBe('machine.repairBackgroundServiceAction');
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.repair' })?.props.title).toBe('machine.repairBackgroundServiceAction');
 
         await screen.pressByTestIdAsync('settings.localDaemonControl.repair');
 
@@ -786,7 +742,7 @@ describe('LocalDaemonControlSection', () => {
 
         expect(approvalMocks.readCredentials).toHaveBeenCalledWith(
             'https://relay.example.test',
-            { serverId: 'relay-example' },
+            { serverId: getActiveServerSnapshot().serverId },
         );
         expect(respondMock).toHaveBeenCalledWith(repairTaskId, { approved: true });
     });
@@ -814,9 +770,9 @@ describe('LocalDaemonControlSection', () => {
         await renderer.act(async () => {});
 
         expect(startMock).toHaveBeenCalledTimes(1);
-        expect(screen.findByTestId('settings.localDaemonControl.status')?.props.subtitle).toBe('machine.daemonStatus.unknown');
+        expect(findTestInstanceByTypeWithProps(screen, Item, { testID: 'settings.localDaemonControl.status' })?.props.subtitle).toBe('machine.daemonStatus.unknown');
         expect(screen.findByProps({ subtitle: 'daemon status request failed' })).toBeTruthy();
-        expect(screen.findByTestId('settings.localDaemonControl.repair')?.props.disabled).toBe(false);
+        expect(findTestInstanceByTypeWithProps(screen, RoundButton, { testID: 'settings.localDaemonControl.repair' })?.props.disabled).toBe(false);
     });
 
     it('uses the latest active relay url when starting a repair after a server switch', async () => {
@@ -846,15 +802,8 @@ describe('LocalDaemonControlSection', () => {
 
         await renderer.act(async () => {});
 
-        activeServerSnapshot.current = {
-            ...activeServerSnapshot.current,
-            serverUrl: 'https://relay-updated.example.test',
-            generation: activeServerSnapshot.current.generation + 1,
-        };
         await renderer.act(async () => {
-            for (const listener of activeServerSnapshot.listeners) {
-                listener(activeServerSnapshot.current);
-            }
+            await upsertAndActivateServer({ serverUrl: 'https://relay-updated.example.test', name: 'Home B' });
         });
 
         await screen.pressByTestIdAsync('settings.localDaemonControl.repair');
@@ -919,7 +868,7 @@ describe('LocalDaemonControlSection', () => {
         });
 
         expect(starts.map((start) => start.kind)).toEqual(['daemon.service.status.v1']);
-        expect([0, 1, 2].map((index) => screen.findByTestId(`settings.localDaemonControl.servers.${index}`)?.props.subtitle)).toEqual([
+        expect([0, 1, 2].map((index) => findTestInstanceByTypeWithProps(screen, Item, { testID: `settings.localDaemonControl.servers.${index}` })?.props.subtitle)).toEqual([
             'machine.thisComputer.servers.connected',
             'machine.thisComputer.servers.offline',
             'machine.thisComputer.servers.attention',

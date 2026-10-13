@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
-import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/materializeImportedMcpServerDrafts';
-import type { ParseImportedMcpServerJsonResult } from '@/sync/domains/settings/mcpServers/parseImportedMcpServerJson';
+import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/mcpImportActionInputs';
+import type { ParseMcpServerImportV1Result as ParseImportedMcpServerJsonResult } from '@happier-dev/protocol/mcp/servers/import/parseMcpServerImportV1';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';

@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { t } from '@/text';
@@ -19,6 +21,47 @@ const target = { kind: 'group' as const, service, groupId: 'pool-a' };
 afterEach(async () => { standardCleanup(); await account.reset(); machineRpc.mockReset(); });
 
 describe('pool gateway Action wiring', () => {
+    it('continues an approved first-gateway creation and slot removal through the real Account Action family exactly once', async () => {
+        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
+        const stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
+        const resolveTarget = () => null;
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().firstGateway).toEqual({ purpose: 'openai-upstream' }));
+        let creating: Promise<boolean> | undefined;
+        await act(async () => { creating = hook.getCurrent().createFirstGateway(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval ?? hook.getCurrent().error).not.toBeNull());
+        expect(hook.getCurrent().error).toBeNull();
+        expect(hook.getCurrent().pendingApproval).not.toBeNull();
+        expect(stored.catalog.connections).toEqual([]);
+        expect(stored.writes).toBe(0);
+        const createApproval = hook.getCurrent().pendingApproval!.artifactId;
+        await hook.rerender();
+        await expect(decideApprovalAsInbox(serverId, createApproval, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+        await act(async () => { await expect(creating).resolves.toBe(true); });
+        expect(stored.writes).toBe(1);
+        expect(stored.catalog.connections).toHaveLength(1);
+        const created = stored.catalog.connections[0]!;
+        expect(created).toMatchObject({ deployment: { kind: 'managedLocal' }, purposeBindingDefaults: { 'openai-upstream': target } });
+        expect(stored.catalog.accountGrants.map(grant => grant.connectionId)).toEqual([created.id]);
+        await waitForHomeGovernance(() => expect(hook.getCurrent().choices).toEqual([
+            expect.objectContaining({ connectionId: created.id, enabled: true }),
+        ]));
+        expect(hook.getCurrent().pending).toBe(false);
+        let removing: Promise<boolean> | undefined;
+        await act(async () => { removing = hook.getCurrent().setEnabled(created.id, false); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval ?? hook.getCurrent().error).not.toBeNull());
+        expect(hook.getCurrent().error).toBeNull();
+        expect(hook.getCurrent().pendingApproval).not.toBeNull();
+        expect(stored.catalog.connections[0]?.purposeBindingDefaults).toEqual({ 'openai-upstream': target });
+        const slotApproval = hook.getCurrent().pendingApproval!.artifactId;
+        expect(slotApproval).not.toBe(createApproval);
+        await expect(decideApprovalAsInbox(serverId, slotApproval, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+        await act(async () => { await expect(removing).resolves.toBe(true); });
+        expect(stored.writes).toBe(2);
+        expect(stored.catalog.connections).toEqual([expect.objectContaining({ id: created.id, purposeBindingDefaults: {} })]);
+        expect(hook.getCurrent().pending).toBe(false);
+        expect(machineRpc).not.toHaveBeenCalled();
+    });
     it.each(['none', 'offline'] as const)('writes the Account slot with %s machine availability despite an unrelated unavailable declaration', async availability => {
         const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
             source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },

@@ -5,8 +5,6 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { ProfileCollectionRail } from './ProfileCollectionList';
 import { PROFILES_COLLECTION_ROOT, resolveProfilesChildRoute } from './profileCollectionRoutes';
 
-/** Rail width at normal text scale: a compatibility mark, a profile name and one summary line. */
-const PROFILE_RAIL_WIDTH_PX = 272;
 /** The narrowest detail that still fits an environment variable row beside its label. */
 const PROFILE_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -22,7 +20,7 @@ export const ProfileSettingsLayout = React.memo(function ProfileSettingsLayout()
             rootPathname={PROFILES_COLLECTION_ROOT}
             resolveChildRoute={resolveProfilesChildRoute}
             rail={useProfiles ? <ProfileCollectionRail /> : null}
-            railWidthPx={PROFILE_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={PROFILE_DETAIL_MIN_WIDTH_PX}
             testID="settings-profiles"
         />

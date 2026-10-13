@@ -25,7 +25,7 @@ async function mountHome(route: Parameters<typeof serveAccountHomes>[0]['route']
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     return (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
 }
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); home?.dispose(); home = undefined; });
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); await home?.dispose(); home = undefined; });
 
 describe('Usage widget shared Resource selection', () => {
     it('does not relabel a foreign Account query intent as the current Account read', async () => {

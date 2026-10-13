@@ -13,40 +13,14 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { replace: routerReplaceMock } }).module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 // The generated bundled-plugin inventory is an unrelated build boundary and
 // is intentionally absent from synchronized source-only test targets.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
-}));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-    createBundledPluginUiAppExactArtifactSourceFromInventory: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(),
-    createPluginAccountAvailabilityReaderStore: () => Object.freeze({
-        replace: () => null,
-        clear: () => null,
-        subscribe: () => () => undefined,
-        bind: vi.fn(),
-    }),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(),
 }));
 vi.mock('@/components/settings/home/identity/managedIdentityProviderClient', () => ({
     createManagedIdentityProviderClient: () => ({ execute: providerExecuteMock }),
@@ -201,7 +175,7 @@ describe('TeamIdentityProviderSetupScreen', () => {
         await screen.pressByTestIdAsync('team-oidc-create');
         expect(routerReplaceMock).not.toHaveBeenCalled();
         expect(complete).toBeTypeOf('function');
-        expect(screen.tree.root.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(screen.getTextContent())
             .not.toContain('identityAdministration.error');
 
         await act(async () => complete?.({ connection: { id: 'connection-approved' } }));
@@ -236,8 +210,8 @@ describe('TeamIdentityProviderSetupScreen', () => {
         expect(fail).toBeTypeOf('function');
         await act(async () => fail?.('approval_rejected'));
 
-        expect(screen.findByTestId('team-oidc-create')?.props.disabled).toBe(false);
-        expect(screen.tree.root.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(Boolean(screen.findByTestId('team-oidc-create')!.props.disabled)).toBe(false);
+        expect(screen.getTextContent())
             .toContain('identityAdministration.error');
         expect(routerReplaceMock).not.toHaveBeenCalled();
     });

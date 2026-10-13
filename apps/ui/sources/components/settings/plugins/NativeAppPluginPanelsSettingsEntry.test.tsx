@@ -33,14 +33,6 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ router: { push: routerPushSpy } }).module;
 });
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: React.PropsWithChildren) => React.createElement('ItemGroup', props, props.children),
-}));
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });

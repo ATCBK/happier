@@ -68,36 +68,28 @@ vi.mock('@/text', async () => {
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
+// The native recycler owns viewport mounting; keep Happier's list and row projection real.
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    const boundary = createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(),
+        renderItems: true,
+        get renderItemLimit() { return virtualizedBoundary.mountLimit; },
+    });
+    return { ...boundary.module, LegendList: React.forwardRef(function LegendListBoundary(props: Record<string, unknown>, ref) {
+        virtualizedBoundary.props = props;
+        return React.createElement(boundary.module.LegendList, { ...props, ref });
+    }) };
+});
+
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/virtualized', () => ({
-    VirtualizedList: (props: Record<string, any>) => {
-        virtualizedBoundary.props = props;
-        const data = (props.data ?? []).slice(0, virtualizedBoundary.mountLimit);
-        return React.createElement(
-            'VirtualizedList',
-            props,
-            props.ListHeaderComponent,
-            ...data.map((item: unknown, index: number) => props.renderItem({ item, index })),
-            props.ListFooterComponent,
-        );
-    },
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
@@ -133,14 +125,6 @@ vi.mock('@/sync/sync', () => ({
         mutateAccountSettingsOnce: effectBoundary.mutateAccountSettings,
     },
 }));
-
-vi.mock('@/sync/store/hooks', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useLocalSetting: () => null,
-        useSettingsVersion: () => 1,
-    });
-});
 
 vi.mock('@/sync/store/settingsWriters', () => ({
     useAccountSettingsScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
@@ -287,8 +271,15 @@ function requireItemGroupSurface(row: ReactTestInstance | null | undefined): Rea
     throw new Error('Expected Item row to be inside real ItemGroup surface chrome');
 }
 
+const { Item } = await import('@/components/ui/lists/Item');
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./ExternalSessionsSettingsView');
+
 describe('ExternalSessionsSettingsView passive shell', () => {
     beforeEach(async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.setState({ settingsVersion: 1, settingsScope: { serverId: 'server-1', accountId: 'account-1' } });
         effectBoundary.machines = [];
         effectBoundary.machineRpc.mockReset();
         effectBoundary.followPolicySet.mockReset();
@@ -374,8 +365,11 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             <ExternalSessionsSettingsView integrations={integrations} />,
         );
 
-        expect(screen.tree.root.findAllByType('ItemList' as never)).toHaveLength(0);
-        expect(screen.tree.root.findAllByType('VirtualizedList' as never)).toHaveLength(1);
+        const [{ ItemList }, { VirtualizedList }, { Item }] = await Promise.all([
+            import('@/components/ui/lists/ItemList'), import('@/components/ui/lists/virtualized'), import('@/components/ui/lists/Item'),
+        ]);
+        expect(screen.tree.root.findAllByType(ItemList)).toHaveLength(0);
+        expect(screen.tree.root.findAllByType(VirtualizedList)).toHaveLength(1);
         expect(virtualizedBoundary.props?.data.length).toBeGreaterThan(100);
         const supplementalRows = virtualizedBoundary.props?.data.filter(
             (row: { kind?: string }) => row.kind === 'supplemental',
@@ -384,7 +378,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         expect(supplementalRows.every((row: Record<string, unknown>) => (
             typeof row.render === 'function' && !React.isValidElement(row.element)
         ))).toBe(true);
-        expect(screen.findAllByType('Item' as never).length).toBeLessThanOrEqual(20);
+        expect(screen.findAllByType(Item).length).toBeLessThanOrEqual(20);
 
         await screen.unmount();
     });
@@ -757,7 +751,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
 
         const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
         const screen = await renderSettingsView(<ExternalSessionsSettingsView />);
-        const rows = screen.findAllByType('Item' as never).filter(
+        const rows = screen.findAllByType(Item).filter(
             (row) => row.props.testID === 'settings-external-sessions-auto-link-source',
         );
 

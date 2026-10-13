@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 // Keep this focused screen test off the aggregate testkit barrel: that barrel
 // intentionally exports unrelated Session fixtures and would make a GitHub
@@ -20,20 +21,13 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { replace: replaceMock, push: pushMock } }).module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
     announceAccessibilityMessage: announceMock,
 }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
 vi.mock('@/modal', () => ({
     Modal: {
@@ -151,16 +145,11 @@ describe('managed GitHub App approval-pending consumers', () => {
             <ManagedGitHubAppDetailContent surface={surface} registrationId="registration-1" />,
         );
 
-        expect(screen.findByTestId('github-app-sign-in')?.props.detail)
-            .toBe('identityAdministration.githubFacetConfigure');
-        expect(screen.findByTestId('github-app-directory')?.props.detail)
-            .toBe('identityAdministration.githubFacetConfigure');
-        expect(screen.findByTestId('github-app-team-consumer:identity_connection:connection-1')?.props.title)
-            .toBe('Acme');
-        expect(screen.findByTestId('github-app-team-consumer:directory_source:source-1')?.props.subtitle)
-            .toBe('identityAdministration.githubFacetDirectory');
-        expect(screen.findByTestId('github-app-installation:installation-1')?.props.detail)
-            .toBe('identityAdministration.githubVerified');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-sign-in')!, 'Text', 'identityAdministration.githubFacetConfigure')).toBeDefined();
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-directory')!, 'Text', 'identityAdministration.githubFacetConfigure')).toBeDefined();
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-team-consumer:identity_connection:connection-1')!, 'Text', 'Acme')).toBeDefined();
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-team-consumer:directory_source:source-1')!, 'Text', 'identityAdministration.githubFacetDirectory')).toBeDefined();
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-installation:installation-1')!, 'Text', 'identityAdministration.githubVerified')).toBeDefined();
 
         await screen.pressByTestIdAsync('github-app-sign-in');
         await screen.pressByTestIdAsync('github-app-directory');
@@ -250,7 +239,7 @@ describe('managed GitHub App approval-pending consumers', () => {
 
         expect(replaceMock).not.toHaveBeenCalled();
         expect(screen.findAll((node) => node.props.description === 'connect.waitingForApproval')).not.toHaveLength(0);
-        expect(screen.findByTestId('github-app-save')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('github-app-save')!.props.accessibilityState?.busy)).toBe(false);
         expect(screen.findByTestId('github-app-private-key')?.props.value).toBe('private-key');
         expect(announceMock).toHaveBeenCalledWith('connect.waitingForApproval');
         expect(approvalPendingMock).toHaveBeenCalledWith(pendingApproval);
@@ -319,7 +308,7 @@ describe('managed GitHub App approval-pending consumers', () => {
 
         expect(openExternalUrlMock).not.toHaveBeenCalled();
         expect(screen.findAll((node) => node.props.description === 'connect.waitingForApproval')).not.toHaveLength(0);
-        expect(screen.findByTestId('github-manifest-start')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('github-manifest-start')!.props.accessibilityState?.busy)).toBe(false);
         expect(approvalPendingMock).toHaveBeenCalledWith(pendingApproval);
     });
 
@@ -344,7 +333,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         expect(executeMock).toHaveBeenCalledTimes(1);
         expect(openExternalUrlMock).toHaveBeenCalledWith('https://github.com/settings/apps/new');
         expect(consumePendingGitHubAppManifestSetup()).toEqual({ kind: 'home', serverId: 'home-1' });
-        expect(screen.findByTestId('github-manifest-start')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('github-manifest-start')!.props.accessibilityState?.busy)).toBe(false);
     });
 
     it('does not open installation verification before approval', async () => {
@@ -361,9 +350,8 @@ describe('managed GitHub App approval-pending consumers', () => {
         await screen.pressByTestIdAsync('github-installation-verify');
 
         expect(openExternalUrlMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('github-app-notice')?.props.title)
-            .toBe('connect.waitingForApproval');
-        expect(screen.findByTestId('github-installation-verify')?.props.disabled).toBe(false);
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-notice')!, 'Text', 'connect.waitingForApproval')).toBeDefined();
+        expect(Boolean(screen.findByTestId('github-installation-verify')!.props.disabled)).toBe(false);
         expect(approvalPendingMock).toHaveBeenCalledWith(pendingApproval);
     });
 
@@ -414,7 +402,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         act(() => callbacks?.onApprovalFailed?.('approval_rejected'));
 
         expect(executeMock).toHaveBeenCalledTimes(1);
-        expect(screen.findByTestId('github-manifest-start')?.props.disabled).toBe(false);
+        expect(Boolean(screen.findByTestId('github-manifest-start')!.props.disabled)).toBe(false);
         expect(screen.findAll((node) => node.props.description === 'identityAdministration.error')).not.toHaveLength(0);
     });
 
@@ -429,9 +417,8 @@ describe('managed GitHub App approval-pending consumers', () => {
         await screen.pressByTestIdAsync('github-app-installation-remove:installation-1');
 
         expect(refreshMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('github-app-notice')?.props.title)
-            .toBe('connect.waitingForApproval');
-        expect(screen.findByTestId('github-app-installation-remove:installation-1')?.props.disabled).toBe(false);
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-notice')!, 'Text', 'connect.waitingForApproval')).toBeDefined();
+        expect(Boolean(screen.findByTestId('github-app-installation-remove:installation-1')!.props.disabled)).toBe(false);
     });
 
     it('preserves a Home-owned create draft and opens the exact Home policy after an unapproved enterprise origin', async () => {
@@ -455,11 +442,10 @@ describe('managed GitHub App approval-pending consumers', () => {
         await screen.pressByTestIdAsync('github-app-save');
 
         expect(replaceMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('github-app-save')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('github-app-save')!.props.accessibilityState?.busy)).toBe(false);
         expect(screen.findByTestId('github-app-host')?.props.value).toBe('https://github.corp.example');
         expect(screen.findByTestId('github-app-private-key')?.props.value).toBe('private-key');
-        expect(screen.findByTestId('github-enterprise-origin-policy')?.props.title)
-            .toBe('homeGovernance.githubEnterpriseOrigins');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-enterprise-origin-policy')!, 'Text', 'homeGovernance.githubEnterpriseOrigins')).toBeDefined();
         expect(screen.findAll((node) => node.props.description
             === 'identityAdministration.githubEnterpriseOriginNotApproved')).not.toHaveLength(0);
 
@@ -483,9 +469,8 @@ describe('managed GitHub App approval-pending consumers', () => {
         await screen.pressByTestIdAsync('github-installation-verify');
 
         expect(openExternalUrlMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('github-installation-verify')?.props.disabled).toBe(false);
-        expect(screen.findByTestId('github-enterprise-origin-policy')?.props.title)
-            .toBe('homeGovernance.githubEnterpriseOrigins');
+        expect(Boolean(screen.findByTestId('github-installation-verify')!.props.disabled)).toBe(false);
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-enterprise-origin-policy')!, 'Text', 'homeGovernance.githubEnterpriseOrigins')).toBeDefined();
         await screen.pressByTestIdAsync('github-enterprise-origin-policy');
         expect(pushMock).toHaveBeenCalledWith('/settings/home/home-1/policies');
     });

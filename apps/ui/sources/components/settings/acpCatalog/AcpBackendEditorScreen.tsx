@@ -17,7 +17,8 @@ import {
 } from '@/components/settings/agents/collection/useAgentAdministrationCatalog';
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
-import { McpValueRefMapEditor } from '@/components/settings/mcpServers/McpValueRefMapEditor';
+import { ValueRefRowsEditor } from '@/components/ui/forms/valueRefs/ValueRefRowsEditor';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -534,20 +535,22 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                 />
             </ItemGroup>
 
-            <McpValueRefMapEditor
-                kind="env"
-                scope={capturedScope}
+            <ItemGroup
                 title={t('settingsAgents.customAcp.environmentSection')}
                 description={t('settingsAgents.customAcp.environmentSectionDescription')}
-                iconName="flask"
-                entries={draft.env}
-                secrets={secrets}
-                onChangeEntries={(next) => update('env', (current) => ({ ...current, env: next }))}
-                addRowTitle={t('settingsAgents.customAcp.addVariable')}
-                emptyTitle={t('settingsAgents.customAcp.noVariablesTitle')}
-                emptySubtitle={t('settingsAgents.customAcp.noVariablesDescription')}
-                testIdPrefix="settings.acpCatalog.backend.env"
-            />
+            >
+                <SectionContentRow showDivider={false}>
+                    <ValueRefRowsEditor
+                        kind="env"
+                        scope={capturedScope}
+                        entries={draft.env}
+                        secrets={secrets}
+                        onChangeEntries={(next) => update('env', (current) => ({ ...current, env: next }))}
+                        addLabel={t('settingsAgents.customAcp.addVariable')}
+                        testIdPrefix="settings.acpCatalog.backend.env"
+                    />
+                </SectionContentRow>
+            </ItemGroup>
 
             <ItemGroup
                 title={t('settingsAgents.customAcp.signInSection')}

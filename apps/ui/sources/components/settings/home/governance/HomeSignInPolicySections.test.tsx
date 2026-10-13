@@ -33,22 +33,6 @@ installSettingsViewCommonModuleMocks({
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
 }));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: vi.fn(async () => null),
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(),
-    createPluginAccountAvailabilityReaderStore: () => Object.freeze({
-        replace: () => null,
-        clear: () => null,
-        subscribe: () => () => undefined,
-        bind: vi.fn(),
-    }),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(),
-}));
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -124,6 +108,7 @@ async function modal() {
 }
 
 beforeEach(async () => {
+    routerPush.mockClear();
     await harness.reset();
     const { storage } = await import('@/sync/domains/state/storage');
     storage.setState({ settingsScope: null, settings: {} as never });
@@ -254,7 +239,9 @@ describe('SignInPolicyEditor', () => {
         expect(screen.findByTestId('home-policy-auth-method:github.unavailable-key:0')).toBeNull();
         expect(screen.getTextContent()).not.toContain('GITHUB_CLIENT_ID');
         expect(screen.getTextContent()).toContain('homeGovernance.signInPolicy.needsGithubApp');
-        expect(screen.findByTestId('home-policy-auth-method:mtls')?.props.onPress).toBeUndefined();
+        await screen.pressByTestIdAsync('home-policy-auth-method:mtls');
+        expect(routerPush).not.toHaveBeenCalled();
+        expect(screen.findByTestId('home-policy-auth-method:mtls-switch')?.props.value).toBe(false);
         screen.findByTestId('home-policy-auth-method:github')?.props.onPress();
         expect(routerPush).toHaveBeenCalledWith(expect.stringMatching(
             /\/sign-in-providers\?setting=homeAdministration\.signInProviders\.githubSignIn$/,
@@ -283,7 +270,9 @@ describe('SignInPolicyEditor', () => {
 
         expect(screen.findByTestId('home-policy-auth-method:github.unavailable-key:0')?.children).toEqual(['DATABASE_URL']);
         expect(screen.findByTestId('home-policy-auth-method:github-switch')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('home-policy-auth-method:github')?.props.onPress).toBeUndefined();
+        await screen.pressByTestIdAsync('home-policy-auth-method:github');
+        expect(routerPush).not.toHaveBeenCalled();
+        expect(screen.findByTestId('home-policy-auth-method:github-switch')?.props.value).toBe(false);
     });
 
     it('shows the pending storage policy selected and says it applies after a restart', async () => {

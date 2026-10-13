@@ -84,56 +84,22 @@ installUiListsCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroupSelectionContext: React.createContext(null),
-    ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroupRowPosition', () => ({
-    useItemGroupRowPosition: () => 'single',
-}));
 
-vi.mock('@/components/ui/lists/itemGroupRowCorners', () => ({
-    getItemGroupRowCornerRadii: () => ({}),
-}));
 
-vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
-    normalizeNodeForView: (node: React.ReactNode) => node,
-}));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-}));
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: (key: string) => key === 'uiFontScale' ? 1 : 'comfortable',
-}));
+vi.mock('@legendapp/list/react-native', async importOriginal =>
+    (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(), renderItems: true,
+    }).module);
 
-vi.mock('@/components/ui/icons/SafeIonicons', () => ({
-    SafeIonicons: (props: any) => React.createElement('Ionicons', props),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: any) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/lists/virtualized', () => ({
-    // Native viewport scheduling is a platform boundary; mount its supplied real rows.
-    VirtualizedList: (props: Readonly<{
-        data: readonly unknown[];
-        keyExtractor: (item: unknown, index: number) => string;
-        renderItem: (args: Readonly<{ item: unknown; index: number }>) => React.ReactNode;
-    }>) => React.createElement('VirtualizedList', props,
-        props.data.map((item: unknown, index: number) => React.createElement(
-            'VirtualizedRow',
-            { key: props.keyExtractor(item, index) },
-            props.renderItem({ item, index }),
-        ))),
-}));
 
 vi.mock('@/components/settings/plugins/diagnostics/PluginDiagnosticsSection', () => ({
     PluginDiagnosticsSection: (props: any) => React.createElement('PluginDiagnosticsSection', props),
@@ -178,6 +144,9 @@ function autoLinkSource(
         setEnabled,
     };
 }
+
+// Prepare the real owner after native/router boundaries, outside behavior deadlines.
+await import('./ExternalSessionsIntegrationSection');
 
 describe('ExternalSessionsIntegrationSection Item boundary', () => {
     beforeEach(() => {

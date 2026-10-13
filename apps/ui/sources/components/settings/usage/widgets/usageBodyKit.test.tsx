@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
-import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { resolveUsagePageAggregation, type UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen } from '@/dev/testkit';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { resolveUsageShownCalendarRange, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
@@ -97,6 +98,16 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(describeUsagePagePendingSources([slice([{ source: 'accounting', status: 'partial' }])])).toBeNull();
         // A widget's own read (a pool selection) is said by that widget, not listed in the page header.
         expect(describeUsagePagePendingSources([slice([{ source: 'selection:openai-codex-pool', status: 'pending' }])])).toBeNull();
+    });
+    it('discloses a held account read after sibling allowances have arrived', () => {
+        // The aggregate Resource publishes each qualified account independently of its siblings.
+        const source = QualifiedConnectedServiceUsageSourceV4Schema.parse({ bindingKind: 'account',
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'held' } });
+        const held = `quota:${JSON.stringify(source)}`;
+        const sources = [{ source: 'quota', status: 'available' }, { source: held, status: 'pending' }] satisfies UsageQueryResultSlice['sources'];
+        expect(describeUsagePagePendingSources([{ sources }])).toBe(
+            t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
+        expect(describeUsagePagePendingSources([{ sources: sources.map(source => ({ ...source, status: 'available' })) }])).toBeNull();
     });
     it('humanizes unknown qualified producer identities without replacing a supplied display title', () => {
         const producer = 'third.party/research:remote';

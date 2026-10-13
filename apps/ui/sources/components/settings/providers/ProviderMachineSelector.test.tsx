@@ -1,19 +1,17 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
-installSettingsViewCommonModuleMocks();
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
-}));
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 
 describe('ProviderMachineSelector', () => {
     afterEach(standardCleanup);
 
     it('names machines through the machine naming owner: unnamed is never the raw id, same names are told apart', async () => {
         const { ProviderMachineSelector } = await import('./ProviderMachineSelector');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
         const { t } = await import('@/text');
         const screen = await renderScreen(
             <ProviderMachineSelector
@@ -26,9 +24,7 @@ describe('ProviderMachineSelector', () => {
                 onSelect={() => {}}
             />,
         );
-        const titles = (screen.findByType('DropdownMenu' as never) as unknown as {
-            props: { items: Array<{ title: string }> };
-        }).props.items.map((item) => item.title);
+        const titles = screen.findByType(DropdownMenu).props.items.map((item: { title: string }) => item.title);
         expect(titles[0]).toBe(t('machine.unnamedMachine'));
         expect(new Set(titles.slice(1)).size).toBe(2);
         expect(titles.join('\n')).not.toContain('f98b860d');

@@ -115,16 +115,6 @@ vi.mock('./PluginMarketplaceSections', async () => {
         PluginDiagnosticsSnapshotSection: createPassThroughComponent('PluginDiagnosticsSnapshotSection'),
     };
 });
-vi.mock('@/components/ui/lists/Item', async () => ({
-    Item: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('Item'),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', async () => ({
-    ItemGroup: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemGroup'),
-}));
-vi.mock('@/components/ui/lists/ItemList', async () => ({
-    ItemList: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemList'),
-}));
-
 import { PluginSettingsHomeScreen } from './PluginSettingsHomeScreen';
 
 /**

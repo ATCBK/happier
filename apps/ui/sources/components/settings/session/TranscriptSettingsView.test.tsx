@@ -66,36 +66,21 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, title }: { children?: React.ReactNode; title?: string }) =>
-        React.createElement('ItemGroup', { title }, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
 
 // Prepare the real component after the shared mock options are installed, outside behavior deadlines.
 const { TranscriptSettingsView } = await import('./TranscriptSettingsView');
+const { Item } = await import('@/components/ui/lists/Item');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
 
 describe('TranscriptSettingsView', () => {
     it('renders the Account Show tool calls default as on until chosen and writes the explicit choice', async () => {
         const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
 
-        const row = screen.findAll((node) => node.props?.testID === 'settings-session-transcript-show-tool-calls'
-            && (node.type as unknown) === 'Item')[0];
+        const row = screen.findAllByType(Item).find(node => node.props.testID === 'settings-session-transcript-show-tool-calls');
         expect(row).toBeTruthy();
         expect(row?.props?.title).toBe('settingsSession.transcript.showToolCallsTitle');
         expect(row?.props?.rightElement?.props?.value).toBe(true);
@@ -129,16 +114,9 @@ describe('TranscriptSettingsView', () => {
             'never',
         ]);
 
-        let current = dropdown?.parent;
-        let groupTitle: unknown;
-        while (current) {
-            if ((current.type as unknown) === 'ItemGroup') {
-                groupTitle = current.props?.title;
-                break;
-            }
-            current = current.parent;
-        }
-        expect(groupTitle).toBe('settingsSession.transcript.layoutTitle');
+        const group = screen.findAllByType(ItemGroup).find(group =>
+            group.findAll(node => node === dropdown).length > 0);
+        expect(group?.props.title).toBe('settingsSession.transcript.layoutTitle');
 
         dropdown?.props?.onSelect?.('always');
 
@@ -148,7 +126,8 @@ describe('TranscriptSettingsView', () => {
     it('shows thinking as picture choices and writes both settings behind the full inline choice in one write', async () => {
         const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
 
-        const tiles = (screen.findRow('settings-session-thinking-display')?.props.rightElement as React.ReactElement<any> | undefined);
+        const thinkingRow = screen.findAllByType(Item).find(node => node.props.testID === 'settings-session-thinking-display');
+        const tiles = (thinkingRow?.props.rightElement as React.ReactElement<any> | undefined);
         expect(tiles?.props.value).toBe('tool');
         expect(tiles?.props.options.map((option: { id: string }) => option.id)).toEqual(['inline_summary', 'inline_full', 'tool', 'hidden']);
         expect(tiles?.props.options.every((option: { preview?: unknown }) => option.preview != null)).toBe(true);
@@ -162,12 +141,12 @@ describe('TranscriptSettingsView', () => {
     it('renders the Network for agent HTML choices in the agent visuals group', async () => {
         const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
 
-        const row = screen.findAll((node) => node.props?.testID === 'settings-session-transcript-agent-html-network'
-            && (node.type as unknown) === 'Item')[0];
+        const row = screen.findAllByType(Item).find(node => node.props.testID === 'settings-session-transcript-agent-html-network');
+        expect(row).toBeTruthy();
         expect(row?.props?.title).toBe('settingsSession.transcript.agentHtmlNetworkPolicy');
         // It governs what agent pages may do, so it is not listed among the UI-only tool call preferences.
-        let group = row?.parent;
-        while (group && (group.type as unknown) !== 'ItemGroup') group = group.parent;
+        const group = screen.findAllByType(ItemGroup).find(group =>
+            group.findAll(node => node === row).length > 0);
         expect(group?.props?.title).toBe('settingsSessionPages.transcript.agentVisualsSection');
         const control = row?.props?.rightElement as React.ReactElement<any> | undefined;
         expect(control?.props?.activeTabId).toBe('allowed');

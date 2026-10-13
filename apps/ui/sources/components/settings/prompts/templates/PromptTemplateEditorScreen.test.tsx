@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { createPlainPromptLibraryCatalogHomeFixture } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import {
     installPromptTemplatesCommonModuleMocks,
@@ -12,7 +13,7 @@ import {
 const promptTemplatesRouterReplaceSpy = vi.hoisted(() => vi.fn());
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let catalog: Awaited<ReturnType<typeof createPlainPromptLibraryCatalogHomeFixture>>;
 
@@ -55,6 +56,8 @@ installPromptTemplatesCommonModuleMocks({
 });
 
 const { storage } = await import('@/sync/domains/state/storageStore');
+// Layout/menu consumers reach the router: load them after configuring its native boundary.
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
 const { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 
@@ -73,26 +76,32 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 1000 },
-    useLayoutMaxWidth: () => 1000,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 1000 }),
-}));
+// Only the browser portal and measured window frame are substituted; selection remains real.
+vi.mock('@/components/ui/popover', async importOriginal => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal);
+});
 
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', {
-        ...props,
-        // The target prompt select; the header's `⋯` menu keeps its own id.
-        testID: props.testID ?? 'promptTemplate.target',
-    }),
-}));
+function targetMenu(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const menu = screen.findAllByType(DropdownMenu).find(node => node.props.itemTrigger);
+    if (!menu) throw new Error('Missing target prompt selector');
+    return menu;
+}
 
-vi.mock('@/platform/randomUUID', () => ({
-    randomUUID: () => 'template-1',
-}));
+async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, artifactId: string) {
+    await act(async () => { targetMenu(screen).props.onOpenChange(true); });
+    await screen.pressByTestIdAsync(`dropdown-option-${artifactId}`);
+    // A real dropdown settles selection after its popover closes.
+    await vi.waitFor(() => expect(targetMenu(screen).props.selectedId).toBe(artifactId));
+}
 
 describe('PromptTemplateEditorScreen', () => {
+    afterEach(() => {
+        standardCleanup();
+        clearActiveUnsavedChangesGuard();
+    });
     beforeEach(async () => {
+        clearActiveUnsavedChangesGuard();
         resetPromptLibraryCatalogEngineForTests();
         resetPromptLibraryCatalogSnapshotsForTests();
         promptTemplatesRouterPushSpy.mockClear();
@@ -120,9 +129,9 @@ describe('PromptTemplateEditorScreen', () => {
 
         const screen = await renderScreen(React.createElement(PromptTemplateEditorScreen, { invocationId: null }));
 
-        const dropdown = screen.findByTestId('promptTemplate.target');
+        const dropdown = targetMenu(screen);
         expect(dropdown?.props?.selectedId).toBe('');
-        expect(dropdown?.props?.items?.map((item: any) => item.id)).toEqual(['doc-1', 'doc-2']);
+        expect(dropdown.props.items.map((item: { id: string }) => item.id)).toEqual(['doc-1', 'doc-2']);
 
         expect(screen.findByTestId('promptTemplate.target.edit')).toBeTruthy();
         expect(screen.findByTestId('promptTemplate.target.new')).toBeTruthy();
@@ -137,8 +146,8 @@ describe('PromptTemplateEditorScreen', () => {
         await act(async () => {
             screen.changeTextByTestId('promptTemplate.title', 'Clear');
             screen.changeTextByTestId('promptTemplate.token', '/clear');
-            screen.findByTestId('promptTemplate.target')?.props.onSelect('doc-1');
         });
+        await chooseTarget(screen, 'doc-1');
         await act(async () => {
             await screen.findByTestId('promptTemplate.save')?.props.onPress();
         });
@@ -154,21 +163,25 @@ describe('PromptTemplateEditorScreen', () => {
         await act(async () => {
             screen.changeTextByTestId('promptTemplate.title', 'Daily');
             screen.changeTextByTestId('promptTemplate.token', 'daily');
-            screen.findByTestId('promptTemplate.target')?.props.onSelect('doc-1');
         });
+        await chooseTarget(screen, 'doc-1');
         expect(preventRemoveState.last).toBe(true);
         await act(async () => {
             await screen.findByTestId('promptTemplate.save')?.props.onPress();
         });
-        // The saved draft has nothing left to lose, so opening the saved template is not held for a decision.
-        expect(preventRemoveState.last).toBe(false);
-
-        expect(catalog.read().record.value).toEqual({
+        // The header dispatches Save without returning its promise; wait for the real persisted outcome.
+        await vi.waitFor(() => expect(catalog.read().record.value).toEqual({
             v: 1,
-            entries: [expect.objectContaining({ id: 'template-1', token: '/daily', title: 'Daily' })],
-        });
+            entries: [expect.objectContaining({ id: expect.any(String), token: '/daily', title: 'Daily' })],
+        }));
+        // The saved draft has nothing left to lose, so opening it is not held for a decision.
+        await vi.waitFor(() => expect(preventRemoveState.last).toBe(false));
         expect(catalog.mutations).toEqual([{ key: 'invocations', expectedRevision: 4 }]);
         expect(catalog.settingsWrites()).toBe(0);
-        expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith('/settings/prompts/templates/template-1');
+        const record = catalog.read().record;
+        if (record.key !== 'invocations') throw new Error('Wrong template catalog fixture');
+        const saved = record.value.entries[0]!;
+        expect(saved.id).not.toBe('');
+        await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith(`/settings/prompts/templates/${saved.id}`));
     });
 });

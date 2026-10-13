@@ -79,6 +79,21 @@ describe('native embed preview frame', () => {
         expect(frame).toHaveLength(1);
         expect(frame[0]!.props.style).toMatchObject({ width: 375, height: 640, transform: [{ scale: 1 }] });
     });
+    it('keeps the whole chat, composer and Send included, when the pushed page is shorter than it (landscape)', async () => {
+        const { EmbedLivePreview, EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX } = await import('./EmbedLivePreview');
+        const screen = await renderScreen(
+            <EmbedLivePreview presentation="page" style={null} ui={{ attachments: true }} newChat={false} />,
+        );
+        // A landscape phone leaves less height under the page header than the chat needs.
+        await act(async () => {
+            screen.findByTestId('settings-embed-preview')!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 700, height: 244 } } });
+        });
+        const frame = screen.root.findAll((node) => typeof node.type === 'string' && node.props.style?.transformOrigin === 'top left');
+        expect(frame).toHaveLength(1);
+        // The chat keeps the height its composer needs; the page scrolls to reach it instead of clipping Send.
+        expect(frame[0]!.props.style).toMatchObject({ width: 700, height: EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX });
+        expect(EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX).toBeGreaterThan(244);
+    });
     it('loads the preview route of this Home\'s web app in the WebView engine and drives it with configure', async () => {
         const { EmbedPreviewFrame } = await import('./EmbedPreviewFrame');
         const render = (radius: 'soft' | 'round') => (

@@ -1,16 +1,30 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import {
-    installPromptStacksCommonModuleMocks,
-    promptStacksRouterPushSpy,
-} from './promptStacksScreenTestHelpers';
+import { renderScreen as renderWithoutAuth } from '@/dev/testkit';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-installPromptStacksCommonModuleMocks({
-    storage: importOriginal => importOriginal(),
+const promptStacksRouterPushSpy = vi.hoisted(() => vi.fn());
+async function renderScreen(element: React.ReactElement) {
+    return renderWithoutAuth(<InjectedAuthProvider credentials={null}>{element}</InjectedAuthProvider>);
+}
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View', ScrollView: 'ScrollView', Switch: 'Switch' });
+});
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ router: { push: promptStacksRouterPushSpy } }).module;
+});
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+// Replace the portal/window boundary, leaving row actions and menu content real.
+vi.mock('@/components/ui/popover', async importOriginal => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal);
 });
 
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -22,16 +36,6 @@ const scope = { serverId: 'prompt-stack-home', accountId: 'prompt-stack-account'
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 1000 },
-    useLayoutMaxWidth: () => 1000,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 1000 }),
-}));
-
-vi.mock('@/components/ui/lists/ItemRowActions', () => ({
-    ItemRowActions: (props: any) => React.createElement('ItemRowActions', props),
 }));
 
 describe('PromptStackEditorScreen', () => {
@@ -46,7 +50,7 @@ describe('PromptStackEditorScreen', () => {
             body: null, createdAt: 1, updatedAt: 1, seq: 1, isDecrypted: true }]);
         applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 4,
             record: { key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [{ id: 'entry-1',
-                ref: { kind: 'doc', artifactId: 'doc-1' }, enabled: true, placement: 'system_append', editPolicy: 'user_only' }] } } }],
+                ref: { kind: 'doc', artifactId: 'doc-1' }, enabled: true, placement: 'system_append' }] } } }],
             tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
     });
 
@@ -61,9 +65,8 @@ describe('PromptStackEditorScreen', () => {
         expect(screen.findByTestId('promptStack.entry.entry-1')).toBeTruthy();
         expect(screen.findByTestId('promptStack.add')).toBeTruthy();
 
-        const actions = screen.findAllByType('ItemRowActions' as any)[0];
-        expect(actions).toBeTruthy();
-        expect(actions?.props?.actions?.map((action: any) => action.id)).toEqual([
+        await screen.pressByTestIdAsync('promptStack.entry.entry-1.more');
+        const actionIds = [
             'edit',
             'moveUp',
             'moveDown',
@@ -72,7 +75,29 @@ describe('PromptStackEditorScreen', () => {
             'budget.9000',
             'budget.24000',
             'delete',
+        ];
+        for (const id of actionIds) expect(screen.findHostByTestId(id)).toBeTruthy();
+        await screen.pressByTestIdAsync('edit');
+        await vi.waitFor(() => expect(promptStacksRouterPushSpy).toHaveBeenCalledWith(
+            `/settings/prompts/docs/doc-1?serverId=${scope.serverId}`,
+        ));
+    });
+
+    it('offers documents but no skill bundles through its real add menu', async () => {
+        storage.getState().applyArtifacts([
+            { id: 'available-doc', title: 'Review notes', header: { kind: 'prompt_doc.v2', title: 'Review notes' },
+                ownerAccountId: scope.accountId, access: 'owner', isDecrypted: true, body: null,
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 },
+            { id: 'available-skill', title: 'Review skill', header: { kind: 'prompt_bundle.v2', title: 'Review skill', bundleSchemaId: 'skills.skill_md_v1' },
+                ownerAccountId: scope.accountId, access: 'owner', isDecrypted: true, body: null,
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 },
         ]);
+        const { PromptStackEditorScreen } = await import('./PromptStackEditorScreen');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const screen = await renderScreen(<PromptStackEditorScreen surface="coding" title="Context" />);
+        await screen.pressByTestIdAsync('promptStack.add');
+        const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'promptStack.addMenu');
+        expect(menu?.props.items.map((item: { id: string }) => item.id)).toEqual(['available-doc']);
     });
 
     it('opens the Account page with the three memory creation defaults, each saying the consequence of its state', async () => {
@@ -118,7 +143,8 @@ describe('PromptStackEditorScreen', () => {
         expect(screen.findByTestId('promptStack.entry.account.memory')).toBeNull();
         expect(screen.findByTestId('promptStack.entry.entry-1')).toBeTruthy();
         // The single remaining document cannot move past the memory entry it is listed without.
-        const moves = screen.findAllByType('ItemRowActions' as any)[0]?.props.actions.filter((action: any) => action.id.startsWith('move'));
-        expect(moves.map((action: any) => action.disabled)).toEqual([true, true]);
+        await screen.pressByTestIdAsync('promptStack.entry.entry-1.more');
+        expect(screen.findHostByTestId('moveUp')?.props.disabled).toBe(true);
+        expect(screen.findHostByTestId('moveDown')?.props.disabled).toBe(true);
     });
 });

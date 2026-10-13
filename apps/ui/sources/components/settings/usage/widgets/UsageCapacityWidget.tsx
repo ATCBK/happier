@@ -13,7 +13,6 @@ import {
   type UsageResetCelebrationWindow,
 } from './UsageResetCelebration';
 import {
-  UsageCoverageLine,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -32,7 +31,7 @@ import {
   UsagePlanRank,
   UsagePlansNothingRead,
   UsagePlanIdentity,
-  UsagePlanAccountState,
+  UsagePlanAccountStates,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { UsagePoolQueue, UsagePoolSteps } from './plans/UsagePoolOrder';
@@ -226,7 +225,6 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
                 nowMs={nowMs}
                 basis={run.pool ? cellBasis : undefined}
                 testID={`${props.testID}.cell.${cell.account.accountId}`}
-                onRetry={props.model.refresh}
               />
             ))}
           </View>
@@ -253,11 +251,12 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
           testID={`${props.testID}.usedFirst`}
         />
       )}
-      <UsageCoverageLine
+      <UsagePlanAccountStates
+        accounts={projection.accounts}
+        nameOf={nameOf}
         slice={props.slice}
-        sources={['quota']}
         onRetry={props.model.refresh}
-        testID={`${props.testID}.coverage`}
+        testID={`${props.testID}.state`}
       />
     </View>
   );
@@ -279,7 +278,6 @@ function CapacityCell(
     nowMs: number;
     basis?: `${number}%`;
     testID: string;
-    onRetry(): void | Promise<unknown>;
   }>,
 ) {
   const { cell, nowMs } = props;
@@ -370,8 +368,6 @@ function CapacityCell(
           {detail}
         </Text>
       ) : null}
-      <UsagePlanAccountState account={cell.account} name={props.name}
-        testID={`${props.testID}.state`} onRetry={props.onRetry} />
     </View>
   );
 }
@@ -395,8 +391,9 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
   },
-  bar: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s4, rowGap: theme.space.s12 },
-  run: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s4, rowGap: theme.space.s12, minWidth: 0 },
+  // The gap keeps one cell's account name clear of the next cell's mark; the bars still read as one row.
+  bar: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, rowGap: theme.space.s12 },
+  run: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s12, rowGap: theme.space.s12, minWidth: 0 },
   pool: {
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,

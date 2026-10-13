@@ -70,6 +70,7 @@ type ConnectedAccountOAuthFormProps = Readonly<{
         code: string;
         callbackUrl: string;
         state: string;
+        iss?: string;
     }>): Promise<boolean | void> | boolean | void;
 }>;
 
@@ -113,9 +114,10 @@ function ConnectedAccountOAuthFormBody(props: ConnectedAccountOAuthFormProps) {
             code: parsed.code,
             callbackUrl: props.callbackUrl,
             state: returnedState,
+            ...(parsed.iss === undefined ? {} : { iss: parsed.iss }),
         });
         return accepted !== false;
-    }, [parsed.code, returnedState, props, shapeOk]);
+    }, [parsed.code, parsed.iss, returnedState, props, shapeOk]);
     const discardDraft = React.useCallback(() => {
         setCallbackInput('');
         setValidationFailed(false);

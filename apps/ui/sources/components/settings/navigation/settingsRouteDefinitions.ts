@@ -1,7 +1,7 @@
 import type { TranslationKeyNoParams } from '@/text';
 
 /** Settings sections that own a nested layout; their screens resolve under `/settings/<navigator>`. */
-export type SettingsNestedNavigator = 'account/api-tokens' | 'connected-services' | 'providers' | 'agents' | 'teams' | 'mcp' | 'prompts' | 'prompts/docs' | 'prompts/skills' | 'prompts/templates' | 'machines' | 'embeds' | 'profiles' | 'roles' | 'remote-hosts' | 'home/[serverId]' | 'server';
+export type SettingsNestedNavigator = 'account/api-tokens' | 'connected-services' | 'providers' | 'agents' | 'teams' | 'mcp' | 'prompts' | 'prompts/docs' | 'prompts/templates' | 'skills' | 'machines' | 'embeds' | 'profiles' | 'roles' | 'remote-hosts' | 'home/[serverId]' | 'server';
 
 type SettingsRouteChromeDefinition = Readonly<{
     navigator?: SettingsNestedNavigator;
@@ -111,6 +111,13 @@ export const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefi
     { name: 'defaults', navigator: 'machines', titleKey: 'settingsMachines.defaultsTitle', headsItself: true },
     { name: 'pools/[poolId]', navigator: 'machines', titleKey: 'machinePools.title' },
     { name: 'pools/new', navigator: 'machines', titleKey: 'machinePools.add' },
+    // Skills: the list beside the selected skill or the homepage (P6 §4.1).
+    // On a phone the homepage is its own large title (lab hs A2p), so the bar carries only Back.
+    { name: 'skills', titleKey: 'capabilities.skills.title', headsItself: true },
+    { name: 'index', navigator: 'skills', titleKey: 'capabilities.skills.title', headsItself: true },
+    // A skill's page heads itself (its name, purpose and facts), so the bar carries only Back.
+    { name: 'new', navigator: 'skills', titleKey: 'promptLibrary.newSkill', headsItself: true },
+    { name: '[skillId]', navigator: 'skills', titleKey: 'capabilities.skills.title', headsItself: true },
     { name: 'mcp-server', titleKey: 'settings.mcpServersEditorTitle' },
     { name: 'mcp', titleKey: 'settings.mcpServers' },
     { name: 'index', navigator: 'mcp', titleKey: 'settings.mcpServers' },
@@ -150,18 +157,18 @@ export const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefi
     { name: '[id]/export', navigator: 'prompts/docs', titleKey: 'promptLibrary.externalAssetsExportTitle' },
     { name: 'new', navigator: 'prompts/docs', titleKey: 'promptLibrary.newPrompt' },
     { name: 'docs', navigator: 'prompts', titleKey: 'promptLibrary.prompts' },
-    { name: 'skills', navigator: 'prompts', titleKey: 'promptLibrary.skills' },
     { name: 'templates', navigator: 'prompts', titleKey: 'promptLibrary.templates' },
     { name: 'folders', navigator: 'prompts', titleKey: 'promptLibrary.folders' },
     { name: 'library', navigator: 'prompts', headerShown: false },
     { name: 'registries', navigator: 'prompts', titleKey: 'promptLibrary.registries' },
     { name: 'registries/item', navigator: 'prompts', titleKey: 'promptLibrary.registries' },
-    { name: 'index', navigator: 'prompts/skills', titleKey: 'promptLibrary.skills' },
-    { name: '[id]', navigator: 'prompts/skills', titleKey: 'promptLibrary.editSkill' },
-    { name: '[id]/export', navigator: 'prompts/skills', titleKey: 'promptLibrary.externalAssetsExportTitle' },
-    { name: '[id]/files/edit', navigator: 'prompts/skills', titleKey: 'promptLibrary.editSupportingFile' },
-    { name: '[id]/files/new', navigator: 'prompts/skills', titleKey: 'promptLibrary.newSupportingFile' },
-    { name: 'new', navigator: 'prompts/skills', titleKey: 'promptLibrary.newSkill' },
+    // 0.2 skill routes under prompts are thin redirects to the Skills page family (P6 §4.9).
+    { name: 'skills/index', navigator: 'prompts', titleKey: 'capabilities.skills.title' },
+    { name: 'skills/new', navigator: 'prompts', titleKey: 'promptLibrary.newSkill' },
+    { name: 'skills/[id]', navigator: 'prompts', titleKey: 'promptLibrary.editSkill' },
+    { name: 'skills/[id]/export', navigator: 'prompts', titleKey: 'promptLibrary.editSkill' },
+    { name: 'skills/[id]/files/edit', navigator: 'prompts', titleKey: 'promptLibrary.editSupportingFile' },
+    { name: 'skills/[id]/files/new', navigator: 'prompts', titleKey: 'promptLibrary.newSupportingFile' },
     { name: 'stacks', navigator: 'prompts', titleKey: 'contextPages.account.title' },
     { name: 'stacks/coding', navigator: 'prompts', titleKey: 'contextPages.account.title' },
     { name: 'stacks/profiles/index', navigator: 'prompts', titleKey: 'promptLibrary.profileStacks' },

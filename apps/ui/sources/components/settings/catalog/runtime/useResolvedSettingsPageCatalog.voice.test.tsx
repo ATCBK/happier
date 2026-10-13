@@ -15,7 +15,9 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ pathname: () => '/settings/voice/conversations', params: () => ({}) }).module;
 });
 
-// Initialize declarations before the real store's app-context import graph.
+// Start this fixture at the actual host app-context owner so its catalog
+// dependency finishes before declarations return through the store/app-shell graph.
+await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
 await import('../settingsPageDeclarations');
 const { storage } = await import('@/sync/domains/state/storage');
 
@@ -24,11 +26,11 @@ it('refreshes the root language search label when the same selected service enve
     onTestFinished(() => storage.setState(beforeStorage, true));
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     // No persisted credential is needed to exercise an already observed feature response.
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(null);
     onTestFinished(() => { vi.restoreAllMocks(); });
     const profiles = await import('@/sync/domains/server/serverProfiles');
     const priorView = profiles.loadHomeViewState();
     const home = await profiles.upsertServerProfile({ name: 'Language catalog', serverUrl: 'https://language-catalog.example' });
+    expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBeNull();
     onTestFinished(async () => {
         if (priorView) await profiles.saveHomeViewState(priorView);
         await profiles.removeServerProfile(home.id);

@@ -2,9 +2,10 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol';
+import { PromptBundleBodyV1Schema, decodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import { BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { installPromptRegistriesCommonModuleMocks, promptRegistriesRouterPushSpy } from './promptRegistriesScreenTestHelpers';
 
 const installAlert = vi.hoisted(() => vi.fn());
@@ -18,8 +19,9 @@ installPromptRegistriesCommonModuleMocks({ storage: original => original(), reac
     return createModalModuleMock({ confirmResult: true, spies: { alert: installAlert } }).module;
 } });
 const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
-const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+const { createPromptMachineTransferFixture, createPromptRegistrySkillFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
 installPromptMachineSocketBoundary();
+const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
 const { storage } = await import('@/sync/domains/state/storage');
 const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
@@ -27,11 +29,11 @@ const { PromptRegistryItemDetailsScreen } = await import('./PromptRegistryItemDe
 const projectType: PromptAssetTypeDescriptorV1 = { id: 'agents.skill', providerId: 'agents', title: 'Agent skills', description: 'Portable skills', libraryKind: 'bundle',
     supportsScope: { user: true, project: true }, supportsFiles: true, formatId: 'skill_md_v1', defaultRoots: [], capabilities: { supportsCatalogInstall: true, supportsSymlinkInstall: true } };
 const userType: PromptAssetTypeDescriptorV1 = { ...projectType, id: 'claude.user.skill', supportsScope: { user: true, project: false } };
-const item = { sourceId: 'skills_sh:featured', itemId: 'skills_sh:featured:item-1', title: 'frontend-design', description: 'Private skill',
-    bundleSchemaId: 'skills.skill_md_v1' as const, bundleBody: { v: 1 as const,
-        entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Frontend design — café').toString('base64'), contentKind: 'utf8' as const },
-            { path: 'templates/review.md', contentBase64: Buffer.from('review').toString('base64'), contentKind: 'utf8' as const }],
-        createdAtMs: 1, updatedAtMs: 1 } };
+const registry = createPromptRegistrySkillFixture({ sourceId: 'catalog-source', itemId: 'frontend-design', title: 'frontend-design',
+    files: [{ path: 'SKILL.md', content: '---\nname: frontend-design\ndescription: Design review\n---\n# Frontend design — café' },
+        { path: 'templates/review.md', content: 'review' }, { path: 'scripts/review.sh', content: '#!/bin/sh\necho review', unixMode: 0o755 }] });
+const item = registry.item;
+const { sourceId, itemId } = item.summary;
 let fixture: Awaited<ReturnType<typeof createPromptMachineTransferFixture>>;
 let catalog: ReturnType<typeof createPromptLibraryCatalogBoundary>;
 let previousState: ReturnType<typeof storage.getState>;
@@ -39,9 +41,13 @@ async function setup(mutationOutcome: 'updated' | 'conflict' = 'updated') {
     catalog = createPromptLibraryCatalogBoundary({ records: [
         { key: 'contexts', value: { v: 1, selectionsByKey: {} } },
         { key: 'external-links', value: { v: 1, links: [] } },
+        { key: 'registry-sources', value: { v: 2, sources: [{ id: sourceId, title: 'Private skills', format: 'git',
+            kinds: ['skill'], enabled: true, url: 'https://catalog.test/skills.git', addedAt: 1, token: { secretRef: 'registry-token' } }],
+            disabledSourceIds: BUILT_IN_REGISTRY_SOURCES_V1.map(source => source.id) } },
+        { key: 'skill-rules', value: { v: 1, rules: [] } },
     ], revision: 4, mutationOutcome });
     fixture = await createPromptMachineTransferFixture({ serverUrl: 'https://prompt-registry-details.test', serverIdentityId: 'srv_prompt_registry_details',
-        selectionKey: MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptRegistries, types: [userType, projectType], registryItem: item,
+        selectionKey: MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.promptRegistries, types: [userType, projectType], registryItem: item, registryFiles: registry.files,
         handleHomeRequest: catalog.handle });
     await refreshPromptLibraryCatalog(fixture.scope);
     for (const key of ['contexts', 'external-links'] as const) {
@@ -51,8 +57,7 @@ async function setup(mutationOutcome: 'updated' | 'conflict' = 'updated') {
 }
 function requests(method: string) { return fixture.daemonRequests.filter(request => request.method.endsWith(':' + method)); }
 async function mount() {
-    const screen = await renderScreen(<PromptRegistryItemDetailsScreen sourceId={item.sourceId} itemId={item.itemId}
-        configuredSources={[]} workspacePath="/repo" />);
+    const screen = await renderScreen(<PromptRegistryItemDetailsScreen sourceId={sourceId} itemId={itemId} workspacePath="/repo" />);
     await vi.waitFor(() => expect(screen.findAll(node => typeof node.props.children === 'string' &&
         node.props.children.includes('# Frontend design — café')).length).toBeGreaterThan(0));
     return screen;
@@ -87,7 +92,7 @@ afterEach(async () => { await standardCleanup(); await fixture?.dispose(); stora
 describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', () => {
     it('loads the addressed registry item and renders its UTF-8 supporting preview', async () => {
         await setup(); await mount();
-        expect(requests('daemon.directTransfer.export.prepare')[0]?.params).toMatchObject({ sourceId: item.sourceId, itemId: item.itemId, configuredSources: [] });
+        expect(requests('daemon.registries.fetch')[0]?.params).toEqual({ op: 'read', kind: 'skill', sourceId, itemId });
         expect(fixture.artifacts.list()).toEqual([]);
     });
     it('imports the fetched skill into the real Account Artifact store', async () => {
@@ -96,27 +101,53 @@ describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', (
         await vi.waitFor(() => expect(fixture.artifacts.list()).toHaveLength(1));
         const artifact = fixture.artifacts.list()[0]!;
         expect(fixture.artifacts.readPlainBody(artifact.id)).toContain('templates/review.md');
+        const body = PromptBundleBodyV1Schema.parse(JSON.parse(fixture.artifacts.readPlainBody(artifact.id)!));
+        expect(body.entries).toContainEqual(expect.objectContaining({ path: 'scripts/review.sh', unixMode: 0o755 }));
+        expect(decodePlainArtifactStoredContent(artifact.header)).toMatchObject({ skillLock: { provenance: { kind: 'registry',
+            registry: { sourceId, itemId, ref: { kind: 'gitTree', commit: item.summary.version } } } } });
+        await vi.waitFor(() => expect(catalog.read('skill-rules').value).toMatchObject({ rules: [{ skillId: artifact.id, enabled: true }] }));
+        expect(requests('daemon.directTransfer.export.prepare')[0]?.params).toEqual({ t: 'prompt_registry_download_v1',
+            kind: 'skill', sourceId, itemId, version: item.summary.version });
         await vi.waitFor(() => expect(promptRegistriesRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(artifact.id)));
+    });
+    it('previews a native install without creating library content or an external-link receipt', async () => {
+        await setup();
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { createUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+        const { installPromptRegistryItem } = await import('@/sync/ops/promptLibrary/installPromptRegistryItem');
+        const account = await captureLazyActionAccountContext(fixture.scope.serverId);
+        try {
+            if (!account.serverIdentityId) throw new Error('Missing admitted library identity');
+            const result = await installPromptRegistryItem({ machineId: 'machine-1', serverId: fixture.serverId,
+                machineTarget: { serverIdentityId: account.serverIdentityId, machineId: 'machine-1' }, libraryServerIdentityId: account.serverIdentityId,
+                sourceId, itemId, previewOnly: true, promptExternalLinks: { v: 1, links: [] },
+                installTarget: { assetTypeId: projectType.id, scope: 'project', directory: '/repo', targetName: 'review', installMode: 'symlink' },
+            }, createUiPromptLibraryArtifactStore(account.workflowArtifacts, account), account);
+            expect(result).toMatchObject({ ok: true, exported: false, response: { ok: true } });
+            expect(fixture.uploadedRequests).toMatchObject([{ previewOnly: true, installMode: 'symlink' }]);
+            expect(fixture.artifacts.list()).toEqual([]);
+            expect(catalog.requests).toEqual([]);
+        } finally { account.dispose(); }
     });
     it('previews and installs to a scope-compatible target, then acknowledges the exact external-links row', async () => {
         await setup(); const screen = await mount();
         await waitForInstall(screen);
         await screen.pressByTestIdAsync('promptRegistries.details.install');
-        await vi.waitFor(() => expect(requests('daemon.promptRegistry.install')).toHaveLength(2));
-        expect(requests('daemon.promptRegistry.install').map(request => request.params)).toMatchObject([
-            { sourceId: item.sourceId, itemId: item.itemId, previewOnly: true, installTarget: { assetTypeId: projectType.id, scope: 'project', directory: '/repo', installMode: 'symlink' } },
-            { previewOnly: false, installTarget: { assetTypeId: projectType.id, scope: 'project' } },
+        await vi.waitFor(() => expect(fixture.uploadedRequests).toHaveLength(2));
+        expect(fixture.uploadedRequests).toMatchObject([
+            { previewOnly: true, assetTypeId: projectType.id, scope: 'project', directory: '/repo', installMode: 'symlink' },
+            { previewOnly: false, assetTypeId: projectType.id, scope: 'project' },
         ]);
         await vi.waitFor(() => expect(catalog.requests.find(request => request.key === 'external-links')).toMatchObject({ expectedRevision: 4 }));
         const artifact = fixture.artifacts.list()[0]!;
         await vi.waitFor(() => expect(catalog.read('external-links').value).toMatchObject({ links: [{ artifactId: artifact.id, assetTypeId: projectType.id, machineId: 'machine-1' }] }));
         await vi.waitFor(() => expect(promptRegistriesRouterPushSpy).toHaveBeenCalledWith(expect.stringContaining(artifact.id)));
     });
-    it('does not use route state as a fallback when the Administration target is unavailable', async () => {
+    it('does not install externally when the Administration target is unavailable', async () => {
         await setup(); fixture.selectMachine(null);
-        await renderScreen(<PromptRegistryItemDetailsScreen sourceId={item.sourceId} itemId={item.itemId} configuredSources={[]} />);
+        await renderScreen(<PromptRegistryItemDetailsScreen sourceId={sourceId} itemId={itemId} />);
         await act(async () => {});
-        expect(fixture.daemonRequests).toEqual([]);
+        expect(requests('daemon.directTransfer.import.prepare')).toEqual([]);
         expect(fixture.artifacts.list()).toEqual([]);
     });
     it('keeps the displayed library Account when installing through an independent Machine Home', async () => {
@@ -125,7 +156,7 @@ describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', (
         const screen = await mount();
         await waitForInstall(screen);
         await screen.pressByTestIdAsync('promptRegistries.details.install');
-        await vi.waitFor(() => expect(requests('daemon.promptRegistry.install')).toHaveLength(2));
+        await vi.waitFor(() => expect(fixture.uploadedRequests).toHaveLength(2));
         await vi.waitFor(() => expect(promptRegistriesRouterPushSpy).toHaveBeenCalled());
         expect(fixture.artifacts.list()).toHaveLength(1);
         expect(machineHome.artifacts.list()).toEqual([]);
@@ -143,7 +174,7 @@ describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', (
         await screen.pressByTestIdAsync('promptRegistries.details.install');
         await vi.waitFor(() => expect(retired).toBe(true));
         await vi.waitFor(() => expect(screen.findAll(node => node.props.testID === 'promptRegistries.details.install' && node.props.loading === true)).toHaveLength(0));
-        expect(requests('daemon.promptRegistry.install')).toEqual([]);
+        expect(fixture.uploadedRequests).toEqual([]);
         expect(fixture.artifacts.list()).toEqual([]);
         expect(machineHome.artifacts.list()).toEqual([]);
         expect(catalog.requests).toEqual([]);
@@ -166,10 +197,10 @@ describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', (
             if (!account.serverIdentityId) throw new Error('Missing admitted library identity');
             const result = await installPromptRegistryItem({ machineId: 'machine-1', serverId: machineHome.serverId,
                 machineTarget: { serverIdentityId: 'srv_registry_ack_machine', machineId: 'machine-1' }, libraryServerIdentityId: account.serverIdentityId,
-                sourceId: item.sourceId, itemId: item.itemId, configuredSources: [], previewOnly: false,
+                sourceId, itemId, previewOnly: false,
                 installTarget: { assetTypeId: projectType.id, scope: 'project', directory: '/repo', targetName: 'review', installMode: 'symlink' },
-                promptExternalLinks: { v: 1, links: [] } }, createUiPromptLibraryArtifactStore(account.workflowArtifacts, account));
-            expect(requests('daemon.promptRegistry.install'), JSON.stringify({ result, ...fixture.diagnostic() })).toHaveLength(1);
+                promptExternalLinks: { v: 1, links: [] } }, createUiPromptLibraryArtifactStore(account.workflowArtifacts, account), account);
+            expect(fixture.uploadedRequests, JSON.stringify({ result, ...fixture.diagnostic() })).toHaveLength(1);
             expect(result, JSON.stringify({ result, ...fixture.diagnostic() })).toMatchObject({ ok: false, exported: true,
                 response: { ok: true, externalRef: { skillName: 'review' }, digest: 'digest-1' } });
             expect(fixture.artifacts.list()).toEqual([]);
@@ -182,8 +213,8 @@ describe('PromptRegistryItemDetailsScreen through Home and daemon boundaries', (
         await setup('conflict');
         const screen = await mount(); await waitForInstall(screen);
         await screen.pressByTestIdAsync('promptRegistries.details.install');
-        await vi.waitFor(() => expect(requests('daemon.promptRegistry.install')).toHaveLength(2));
-        await vi.waitFor(() => expect(installAlert.mock.calls.at(-1)?.[1]).toContain('.agents/skills/review'));
+        await vi.waitFor(() => expect(fixture.uploadedRequests).toHaveLength(2));
+        await vi.waitFor(() => expect(installAlert.mock.calls.at(-1)?.[1]).toContain('frontend-design'));
         expect(catalog.requests).toMatchObject([{ key: 'external-links', expectedRevision: 4 }]);
         expect(catalog.read('external-links').value).toEqual({ v: 1, links: [] });
         expect(fixture.artifacts.list()).toHaveLength(1);

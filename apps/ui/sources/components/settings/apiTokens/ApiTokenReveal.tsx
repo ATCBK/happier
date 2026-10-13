@@ -3,7 +3,7 @@ import { Animated, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens, slideTransitionTokens } from '@/components/ui/motion';
@@ -278,20 +278,23 @@ export function ApiTokenRevealBody(props: Readonly<{
             secret={(
                 <View style={styles.secretSurface}>
                     <Text selectable testID="settings-api-tokens-reveal-secret" style={styles.secret}>{token}</Text>
-                    <View style={styles.secretActions}>
-                        <View style={styles.secretAction}>
-                            <RoundButton
-                                testID="settings-api-tokens-reveal-copy"
-                                size="normal"
-                                display={props.accessory ? 'default' : 'secondary'}
-                                title={copyLabel}
-                                accessibilityLabel={copyLabel}
-                                leading={<Icon name={copied ? 'check' : 'copy'} size={18} color={props.accessory ? theme.colors.button.primary.tint : theme.colors.text.primary} />}
-                                action={copy}
-                            />
+                    {/* A pair shares one geometry: a filled Copy and its bordered sibling stand at the same height. */}
+                    <RoundButtonSizeScope size="normal" presentation={props.accessory ? 'uniform' : 'contextual'}>
+                        <View style={styles.secretActions}>
+                            <View style={styles.secretAction}>
+                                <RoundButton
+                                    testID="settings-api-tokens-reveal-copy"
+                                    size="normal"
+                                    display={props.accessory ? 'default' : 'secondary'}
+                                    title={copyLabel}
+                                    accessibilityLabel={copyLabel}
+                                    leading={<Icon name={copied ? 'check' : 'copy'} size={18} color={props.accessory ? theme.colors.button.primary.tint : theme.colors.text.primary} />}
+                                    action={copy}
+                                />
+                            </View>
+                            {props.accessory ? <View style={styles.secretAction}>{props.accessory}</View> : null}
                         </View>
-                        {props.accessory ? <View style={styles.secretAction}>{props.accessory}</View> : null}
-                    </View>
+                    </RoundButtonSizeScope>
                     {copyError ? (
                         <Text accessibilityLiveRegion="assertive" style={styles.error} testID="settings-api-tokens-copy-error">
                             {t('settingsApiTokens.errors.copyFailed')}

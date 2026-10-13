@@ -20,6 +20,7 @@ import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/ho
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { ConnectedServicesGatewaysUnavailableLine, useConnectedServicesGatewaysUnavailable } from '../index/ConnectedServicesGatewaysGroup';
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 
 import { ConnectedServiceMark } from '../ConnectedServiceMark';
@@ -80,6 +81,8 @@ export type ConnectedServicesRailViewProps = Readonly<{
     addGatewayError?: string | null;
     /** An approval the first gateway waits on; it takes the add row's place. */
     gatewayApproval?: React.ReactNode;
+    /** The gateways cannot be read: the group keeps its place and says so, with Retry (D19). */
+    gatewaysUnavailable?: Readonly<{ diagnosticCode: string; onRetry: () => void }> | null;
     /** Live rows read their own usage; a fixture preview passes it. */
     renderAccountMeta?: (sheet: ConnectedServicesIndexSheet, account: ConnectedServicesIndexAccount) => React.ReactNode;
 }>;
@@ -281,7 +284,7 @@ export const ConnectedServicesRailView = React.memo(function ConnectedServicesRa
                     })}
                 </>
             ) : null}
-            {(props.gateways && (props.gateways.length > 0 || props.onAddGateway || props.gatewayApproval)) || props.gatewaysLoading ? (
+            {(props.gateways && (props.gateways.length > 0 || props.onAddGateway || props.gatewayApproval)) || props.gatewaysLoading || props.gatewaysUnavailable ? (
                 <>
                     <CollectionListGroupLabel title={t('settingsProvidersCollection.gateway.railGroup')} />
                     {props.gatewayApproval ?? null}
@@ -296,6 +299,10 @@ export const ConnectedServicesRailView = React.memo(function ConnectedServicesRa
                             disabled
                             pressableStyle={collectionListStyles.row}
                         />
+                    ) : null}
+                    {props.gatewaysUnavailable && !props.gateways?.length && !props.gatewayApproval ? (
+                        <ConnectedServicesGatewaysUnavailableLine testID="connected-services-rail:gateways-unavailable"
+                            unavailable={props.gatewaysUnavailable} />
                     ) : null}
                     {props.onAddGateway && !props.gateways?.length && !needle && !props.gatewayApproval ? (
                         <Item
@@ -396,7 +403,8 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
     const params = useGlobalSearchParams();
     const { theme } = useUnistyles();
     const providersEnabled = useFeatureEnabled('providers');
-    const { indexModel, gateways, gatewaysLoading, addGateway, addingGateway, addGatewayError, gatewayApproval } = useConnectedServicesIndex({ agents: 'cached', gateways: providersEnabled });
+    const { indexModel, gateways, gatewaysLoading, addGateway, addingGateway, addGatewayError, gatewayApproval, gatewayUnavailable, retryGateways } = useConnectedServicesIndex({ agents: 'cached', gateways: providersEnabled });
+    const gatewaysUnavailable = useConnectedServicesGatewaysUnavailable(gatewayUnavailable, retryGateways);
     const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
     const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
     const selection = resolveConnectedServicesSelection(pathname, params);
@@ -428,6 +436,7 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
             onOpenAgentSignIn={() => open(CONNECTED_SERVICES_AGENT_SIGN_IN_ROUTE, 'ConnectedServicesRail.agentSignIn')}
             gateways={gateways ?? undefined}
             gatewaysLoading={gatewaysLoading}
+            gatewaysUnavailable={gatewaysUnavailable}
             onOpenGateway={(gateway) => {
                 // The gateway's page lives with Providers; it is entered, not swapped into this pane.
                 const result = runGuardedNavigation(() => router.push(gateway.detailRoute as never));

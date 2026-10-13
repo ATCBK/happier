@@ -3,14 +3,11 @@ import { useGlobalSearchParams, usePathname } from '@/components/appShell/worksp
 
 import { resolveSettingsNestedRouteName } from '@/components/settings/navigation/settingsRouteRegistry';
 import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCollectionLayout';
-import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 import { McpServerCollection } from './collection/McpServerCollection';
 import { MCP_COLLECTION_ROUTE } from './collection/mcpServerCollectionModel';
 import { useMcpServersSettings } from './useMcpServersSettings';
 
-/** Rail width at normal text scale: a transport mark, a server name and where it applies. */
-const MCP_RAIL_WIDTH_PX = 272;
 /** The narrowest detail that still fits a command field beside its label. */
 const MCP_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -20,20 +17,18 @@ function resolveMcpChildRoute(pathname: string): string {
 
 /**
  * MCP servers as a collection beside the selected detail: a server's editor, a new server, or one of
- * the two machine tools. Narrow: the list page pushes each detail. Absent while `mcp.servers` is off.
+ * the two machine tools. Narrow: the list page pushes each detail.
  */
 export const McpSettingsLayout = React.memo(function McpSettingsLayout() {
-    const enabled = useFeatureEnabled('mcp.servers');
     const pathname = usePathname().replace(/\/+$/, '');
     const { settings } = useMcpServersSettings();
-    if (!enabled) return null;
     return (
         <SettingsCollectionLayout
             navigator="mcp"
             rootPathname={MCP_COLLECTION_ROUTE}
             resolveChildRoute={resolveMcpChildRoute}
             rail={settings.servers.length === 0 && pathname === MCP_COLLECTION_ROUTE ? null : <McpServerRail />}
-            railWidthPx={MCP_RAIL_WIDTH_PX}
+            railWidth="detailed"
             detailMinWidthPx={MCP_DETAIL_MIN_WIDTH_PX}
             testID="settings-mcp"
         />

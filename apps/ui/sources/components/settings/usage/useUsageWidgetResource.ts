@@ -3,6 +3,7 @@ import type { PluginUiResourceEntry } from '@happier-dev/plugin-ui/advanced';
 import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
 import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 import { getUsageQueryBatchKey, getUsageQueryKey, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ServerAccountScopeLifetime, ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -35,7 +36,7 @@ export function useUsageWidgetResource(input: Readonly<{
     [input.enabled, input.credentials, lifetime, input.plan.scope.serverId, input.plan.scope.accountId]);
     const key = input.plan.input ? getUsageQueryBatchKey(input.plan.input) : null;
     const entry = React.useMemo(() => context && input.plan.input
-        ? getUsageQueryResourceStore(context).getEntry({ hostRead: 'usage.query', input: input.plan.input }) : null,
+        ? getUsageQueryResourceStore(context).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport(input.plan.input) }) : null,
     [context, key]);
     return React.useMemo(() => ({ entry, lifetime: context?.accountLifetime ?? null, plan: input.plan }),
         [entry, context, input.plan]);

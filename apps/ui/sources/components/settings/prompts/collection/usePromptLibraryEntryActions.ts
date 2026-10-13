@@ -4,11 +4,13 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Modal } from '@/modal';
 import { ArtifactActionOutputSchemasV1, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactOrganizationMutationFailureV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import { encodeSkillRevisionV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { duplicatePromptBundle } from '@/sync/ops/promptLibrary/promptBundles';
+import { duplicatePromptBundle, SkillAcknowledgedEffectsFailureV1 } from '@/sync/ops/promptLibrary/promptBundles';
 import { duplicatePromptDoc } from '@/sync/ops/promptLibrary/promptDocs';
 import { t } from '@/text';
 
@@ -31,12 +33,13 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
 
     /** Resolves `true` once the item is gone, so its editor can leave. */
     const remove = React.useCallback(async (artifactId: string): Promise<boolean> => {
-        const confirmed = await Modal.confirm(
-            t('promptLibrary.deleteLibraryItemTitle'),
-            t('promptLibrary.deleteLibraryItemBody'),
-            { confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed) return false;
+        // Actual skills use their Action's D22 confirmation; document deletion
+        // retains its existing generic Artifact presentation.
+        if (kind === 'doc') {
+            const confirmed = await Modal.confirm(t('promptLibrary.deleteLibraryItemTitle'), t('promptLibrary.deleteLibraryItemBody'),
+                { confirmText: t('common.delete'), destructive: true });
+            if (!confirmed) return false;
+        }
 
         if (!serverId || !accountId) {
             Modal.alert(t('common.error'), t('errors.unknownError'));
@@ -53,15 +56,33 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             retirement = context.accountLifetime.onRetire(() => controller.abort());
             const actionContext = { signal: controller.signal };
             let expectedRevision = review?.expectedRevision;
-            if (!expectedRevision) {
+            let isSkill = false;
+            if (!expectedRevision || kind === 'bundle') {
                 const opened = await execute('artifact.get', { artifactId }, actionContext);
                 if (!opened.ok) throw new Error(opened.errorCode);
                 const document = ArtifactActionOutputSchemasV1['artifact.get'].parse(opened.result).artifact;
                 if (!document) throw new Error('not_found');
-                expectedRevision = document.revision;
+                expectedRevision ??= document.revision;
+                if (kind === 'bundle' && (!document.header || typeof document.header.bundleSchemaId !== 'string'))
+                    throw new Error('bundle_identity_unavailable');
+                isSkill = document.header?.kind === 'prompt_bundle.v2' && document.header.bundleSchemaId === 'skills.skill_md_v1';
             }
             context.assertCurrent();
             review?.assertCurrent?.();
+            if (isSkill) {
+                const deleted = await execute('skills.delete', { skillId: artifactId, expectedRevision: encodeSkillRevisionV1(expectedRevision) }, actionContext);
+                if (!deleted.ok) throw new Error(deleted.errorCode);
+                const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.delete'].parse(deleted.result);
+                if (output.rulesLeft) Modal.alert(t('common.error'), t('promptLibrary.saveError'));
+                // Content deletion is acknowledged even if later cleanup or cancellation occurs.
+                return true;
+            }
+            if (kind === 'bundle') {
+                const confirmed = await Modal.confirm(t('promptLibrary.deleteLibraryItemTitle'), t('promptLibrary.deleteLibraryItemBody'),
+                    { confirmText: t('common.delete'), destructive: true });
+                if (!confirmed) return false;
+                context.assertCurrent(); review?.assertCurrent?.();
+            }
             const deleted = await execute('artifact.delete', { artifactId, expectedRevision }, actionContext);
             if (!deleted.ok) throw new Error(deleted.errorCode);
             ArtifactActionOutputSchemasV1['artifact.delete'].parse(deleted.result);
@@ -72,7 +93,7 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             Modal.alert(t('common.error'), t('errors.unknownError'));
             return false;
         } finally { retirement?.dispose(); context?.dispose(); }
-    }, [accountId, serverId, execute, review?.assertCurrent, review?.expectedRevision]);
+    }, [kind, accountId, serverId, execute, review?.assertCurrent, review?.expectedRevision]);
 
     const duplicate = React.useCallback(async (artifactId: string) => {
         let context: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
@@ -93,6 +114,12 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             review?.assertCurrent?.();
             router.push(promptCollectionItemHref(kind, nextArtifactId, { serverId }) as never);
         } catch (error) {
+            if (error instanceof SkillAcknowledgedEffectsFailureV1 && context && error.details.skillIds[0]) {
+                try {
+                    context.assertCurrent(); review?.assertCurrent?.();
+                    router.push(promptCollectionItemHref(kind, error.details.skillIds[0], { serverId: context.serverId }) as never);
+                } catch { /* A retired captured Home cannot adopt the copied Artifact. */ }
+            }
             if (error instanceof ArtifactOrganizationMutationFailureV1 && context) {
                 try {
                     context.assertCurrent();

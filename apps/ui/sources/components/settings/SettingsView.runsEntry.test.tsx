@@ -69,10 +69,6 @@ vi.mock('expo-image', () => ({
     Image: 'Image',
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'StyledText',
-    TextInput: 'TextInput',
-}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -96,17 +92,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -140,15 +127,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getAvatarUrl: () => null,
-    getBio: () => '',
-}));
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',

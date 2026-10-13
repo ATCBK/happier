@@ -14,6 +14,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { motionTokens, StepTransitionFrame } from '@/components/ui/motion';
 import { Text } from '@/components/ui/text/Text';
@@ -41,14 +42,19 @@ import { useApiTokenSettingsControllerState } from './useApiTokenSettingsControl
 
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // A contained page: its first section's own gap spaces it from the card header, and sections
+    // keep the page rhythm between them, so the body adds no top padding or gaps of its own.
     body: {
         paddingHorizontal: theme.space.s20,
-        paddingTop: 18,
         paddingBottom: theme.space.s24,
-        gap: 18,
     },
-    stack: {
-        gap: 18,
+    stack: {},
+    // The one-time reveal is not a page section: it keeps its own breath under the card header.
+    revealStep: {
+        paddingTop: theme.space.s20,
+    },
+    note: {
+        marginTop: theme.space.s16,
     },
     footer: {
         flexDirection: 'row',
@@ -221,6 +227,8 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
             {...(Platform.OS === 'ios' ? { automaticallyAdjustKeyboardInsets: true } : {})}
             contentContainerStyle={styles.body}
         >
+            {/* The card body is a contained page: section titles and descriptions above their sheets, on the body's one edge. */}
+            <ListPresentationProvider value="page" pageInsets="contained">
             <StepTransitionFrame
                 transitionKey={reveal ? 'reveal' : onAccessStage ? 'access' : 'create'}
                 direction={reveal ? 'replace' : onAccessStage ? 'forward' : 'backward'}
@@ -228,7 +236,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                 testID="settings-api-tokens-create-step"
             >
                 {reveal ? (
-                    <>
+                    <View style={styles.revealStep}>
                         <ApiTokenRevealBody
                             token={reveal.token}
                             reducedMotion={reducedMotion}
@@ -236,7 +244,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                             copy={props.revealCopy}
                             accessory={props.revealAccessory}
                         />
-                    </>
+                    </View>
                 ) : onAccessStage ? (
                     <View style={styles.stack}>
                         <ApiTokenGrantEditor
@@ -250,7 +258,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                             expiresAt={resolveApiTokenExpiryInstant(draft.expiryPreset, Date.now())}
                         />
                         {state.createError ? (
-                            <Text accessibilityLiveRegion="assertive" style={styles.error} testID="settings-api-tokens-create-error">
+                            <Text accessibilityLiveRegion="assertive" style={[styles.error, styles.note]} testID="settings-api-tokens-create-error">
                                 {t(resolveApiTokenOperationErrorMessageKey(state.createError))}
                             </Text>
                         ) : null}
@@ -332,7 +340,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                             />
                         </ItemGroup>
                         {!limited ? (
-                            <View style={styles.guidanceRow}>
+                            <View style={[styles.guidanceRow, styles.note]}>
                                 <Text style={styles.guidanceText}>{t('settingsApiTokens.create.actionSettingsPrefix')}</Text>
                                 <Pressable
                                     testID="settings-api-tokens-action-settings"
@@ -360,7 +368,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                             </View>
                         ) : null}
                 {state.createError ? (
-                    <Text accessibilityLiveRegion="assertive" style={styles.error} testID="settings-api-tokens-create-error">
+                    <Text accessibilityLiveRegion="assertive" style={[styles.error, styles.note]} testID="settings-api-tokens-create-error">
                         {t(resolveApiTokenOperationErrorMessageKey(state.createError))}
                     </Text>
                 ) : null}
@@ -408,6 +416,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
                     </View>
                 )}
             </StepTransitionFrame>
+            </ListPresentationProvider>
         </ScrollView>
     );
 }
@@ -468,6 +477,7 @@ function ApiTokenEditAccessContent(props: Readonly<{ controller: ApiTokenSetting
     if (!edit || !token) return null;
     return (
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+            <ListPresentationProvider value="page" pageInsets="contained">
             <ApiTokenGrantEditor
                 testID="settings-api-tokens-edit-editor"
                 value={edit.grant}
@@ -479,10 +489,11 @@ function ApiTokenEditAccessContent(props: Readonly<{ controller: ApiTokenSetting
                 expiresAt={token.expiresAt}
             />
             {edit.error ? (
-                <Text accessibilityLiveRegion="assertive" style={styles.error} testID="settings-api-tokens-edit-error">
+                <Text accessibilityLiveRegion="assertive" style={[styles.error, styles.note]} testID="settings-api-tokens-edit-error">
                     {t(resolveApiTokenOperationErrorMessageKey(edit.error))}
                 </Text>
             ) : null}
+            </ListPresentationProvider>
         </ScrollView>
     );
 }

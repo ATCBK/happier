@@ -86,21 +86,9 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => executionRunsEnabledState,
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, action }: any) => React.createElement('ItemGroup', null, action, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: 'Switch',
-}));
 
 vi.mock('@/constants/Typography', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/constants/Typography')>(),
@@ -153,6 +141,9 @@ vi.mock('@/agents/catalog/catalog', () => ({
 vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
     useEnabledAgentIds: () => ['claude', 'customAcp'],
 }));
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./SubAgentSettingsView');
 
 describe('SubAgentSettingsView', () => {
     beforeEach(() => {

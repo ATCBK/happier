@@ -98,7 +98,7 @@ export const PromptStackEditorScreen = React.memo(
             id: randomUUID(),
             ref,
             enabled: true,
-            placement: ref.kind === 'bundle' ? 'skill_instructions' : 'system_append',
+            placement: 'system_append',
           },
         });
       },

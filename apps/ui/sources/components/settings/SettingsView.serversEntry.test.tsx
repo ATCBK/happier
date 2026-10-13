@@ -1,10 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -24,14 +23,6 @@ const shared = vi.hoisted(() => ({
 const settingsViewWebDimensions = { width: 1600, height: 900, scale: 2, fontScale: 1 };
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
 
-function createPassthroughNode(name: string) {
-    return ({ children }: any) => React.createElement(name, null, children);
-}
-
-function createPropPassthroughNode(name: string) {
-    return (props: any) => React.createElement(name, props);
-}
-
 async function renderSettledSettingsView() {
     const { SettingsView } = await import('./SettingsView');
     const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
@@ -41,29 +32,6 @@ async function renderSettledSettingsView() {
         });
     }
     return screen;
-}
-
-function createSettingsViewStorageOverrides() {
-    return {
-        useEntitlement: () => false,
-        // Boundary mock: this suite only reads a boolean local setting toggle.
-        useLocalSettingMutable: (() => [false, vi.fn()]) as any,
-        useSetting: createUseSettingMock({ fallback: (key) => {
-            if (key === 'serverSelectionGroups') return [];
-            if (key === 'serverSelectionActiveTargetKind') return null;
-            if (key === 'serverSelectionActiveTargetId') return null;
-            if (key === 'experiments') return false;
-            if (key === 'featureToggles') return {};
-            if (key === 'useProfiles') return false;
-            if (key === 'sessionUseTmux') return false;
-            return null;
-        } }),
-        useAllMachines: () => [],
-        useMachineListByServerId: () => ({}),
-        useMachineListStatusByServerId: () => ({}),
-        // Boundary mock: SettingsView only consumes these profile fields in this suite.
-        useProfile: (() => ({ id: 'prof_1', firstName: '', connectedServices: [] })) as any,
-    };
 }
 
 installSettingsViewCommonModuleMocks({
@@ -89,10 +57,7 @@ installSettingsViewCommonModuleMocks({
             },
         }).module;
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub(createSettingsViewStorageOverrides());
-    },
+    storage: 'real',
 });
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -132,17 +97,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: createPassthroughNode('ItemList'),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: createPassthroughNode('ItemGroup'),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: createPropPassthroughNode('Item'),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -167,9 +123,6 @@ vi.mock('@/hooks/ui/useMultiClick', () => ({
     useMultiClick: (cb: () => void) => cb,
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => false,
-}));
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1000 },
@@ -181,18 +134,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
-    return {
-        ...actual,
-        getAvatarUrl: () => null,
-        getBio: () => '',
-    };
-});
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -245,6 +187,18 @@ afterEach(() => {
     shared.requestReviewSpy.mockClear();
     shared.canRequestReviewSpy.mockReset();
     shared.canRequestReviewSpy.mockResolvedValue(true);
+});
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
 });
 
 describe('SettingsView', () => {
@@ -380,7 +334,9 @@ describe('SettingsView', () => {
 
         const aboutGroup = screen.findGroup('settings.about');
         expect(aboutGroup).toBeTruthy();
-        const items = aboutGroup!.findAllByType('Item' as any);
+        const { Item } = await import('@/components/ui/lists/Item');
+        const items = screen.findAllByType(Item).filter(item =>
+            aboutGroup!.findAll(node => node === item).length > 0);
         const whatsNewIndex = items.findIndex((item: any) => item?.props?.title === 'settings.whatsNew');
         const rateUsIndex = items.findIndex((item: any) => item?.props?.title === 'settings.rateUs');
 

@@ -4,18 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } from '@/dev/testkit/harness/promptMachineTransferBoundary';
-import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { installPromptAssetsCommonModuleMocks } from './promptAssetsScreenTestHelpers';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
-installPromptMachineSocketBoundary();
 installPromptAssetsCommonModuleMocks({ storage: original => original(), reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
 } });
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+installPromptMachineSocketBoundary();
+const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
 const { storage } = await import('@/sync/domains/state/storage');
 const { PromptAssetExportScreen } = await import('./PromptAssetExportScreen');
 const docType: PromptAssetTypeDescriptorV1 = { id: 'claude.command', providerId: 'claude', title: 'Commands', description: 'Markdown',
@@ -81,7 +83,8 @@ describe('PromptAssetExportScreen through Home and native daemon boundaries', ()
             assetTypeId: docType.id, scope: 'project', directory: '/repo', targetPath: 'review/code.md',
             markdown: 'Review code carefully.',
         });
-        await vi.waitFor(() => expect(catalog.read('external-links').value).toMatchObject({ links: [{ artifactId,
+        const { PromptExternalLinksV1Schema } = await import('@happier-dev/protocol/prompts/library/promptExternalLinksV1');
+        await vi.waitFor(() => expect(PromptExternalLinksV1Schema.parse(catalog.read('external-links').value)).toMatchObject({ links: [{ artifactId,
             assetTypeId: docType.id, machineId: 'machine-1', serverIdentityId: 'srv_prompt_export_screen',
             syncMode: 'manual', baseDigest: 'digest-1', lastExternalDigest: 'digest-1' }] }));
         expect(catalog.requests).toMatchObject([{ key: 'external-links', expectedRevision: 4 }]);

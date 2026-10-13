@@ -17,7 +17,7 @@ import { captureActionAccountContext } from '@/sync/ops/actions/actionAccountCon
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined; });
+afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
 
 it('edits only displayed widget metric inputs through real Actions and Artifact CAS, retaining independent scopes', async () => {
     const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>;
@@ -85,8 +85,12 @@ it('edits only displayed widget metric inputs through real Actions and Artifact 
 it.each(['approve', 'reject', 'retire'] as const)('settles each metric approval before continuing displayed widgets (%s)', async decision => {
     const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>;
     const presets = createUsageWidgetPresets(names);
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {
+        'widgets.item.inputs.set': { approvalRequiredSurfaces: ['ui'] },
+    } });
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-metric-approval.test', accountId: 'account-a' }],
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-metric-approval.test', accountId: 'account-a',
+        settings: { actionsSettingsV1: actionsSettings } }],
         route: async request => request.path.startsWith('/v1/artifacts') ? (await artifacts.handle(request.path, {
             method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
         })) ?? undefined : undefined });
@@ -98,7 +102,7 @@ it.each(['approve', 'reject', 'retire'] as const)('settles each metric approval 
     const values = readUsageWidgetPageContext(readUsageWidgetPageScope(normalizeUsageQuery({ period: { startMs: 1000 } })));
     const context = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const },
         serverId: focused.id, expectedAccountId: 'account-a', widgetAreaContext: { surface, values },
-        actionsSettings: normalizeActionsSettingsV1({ v: 1 }) };
+        actionsSettings };
     const execute = createFrontDoorActionExecute(createDefaultActionExecutor({ resolveWidgetAreaPresets: () => presets }));
     const inboxExecute = createFrontDoorActionExecute(createDefaultActionExecutor());
     const before = await execute('widgets.item.list', { surface }, context);
@@ -134,6 +138,8 @@ it.each(['approve', 'reject', 'retire'] as const)('settles each metric approval 
         } };
     const writes = await setUsageWidgetMetric(request);
     await Promise.all(decisions);
+    expect(artifacts.list().filter(row => row.id !== buildWidgetSurfaceArtifactIdV1(surface)))
+        .toHaveLength(decision === 'approve' ? ids.length : 1);
     expect(writes, JSON.stringify(writes)).toHaveLength(decision === 'approve' ? ids.length : 1);
     expect(writes.every(write => decision === 'approve' ? write.result.ok : !write.result.ok)).toBe(true);
     const after = await execute('widgets.item.list', { surface }, context);

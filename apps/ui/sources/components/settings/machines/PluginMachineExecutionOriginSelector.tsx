@@ -109,6 +109,10 @@ function resolvePickerRowDetail(machine: PresentedPluginOrigin): string {
     return resolveCandidatePresentationDetail(candidate);
 }
 
+function resolvePickerRowPresentation(machine: PresentedPluginOrigin) {
+    return { subtitle: resolvePickerRowDetail(machine) };
+}
+
 function resolveCandidatePresentationDetail(candidate: PluginExecutionOriginCandidateV1): string {
     const version = `${t('common.version')} ${getPluginExecutionOriginCandidateVersion(candidate)}`;
     if (candidate.releaseContent === 'conflict') {
@@ -335,6 +339,7 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
                             detail: resolvePickerRowDetail(machine),
                             selectable: isPluginMachineExecutionOriginCandidateSelectable(machine.candidate),
                         })}
+                        resolveMachinePresentation={resolvePickerRowPresentation}
                         showFavorites={false}
                         showRecent={false}
                         showSearch={false}

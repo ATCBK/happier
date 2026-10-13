@@ -1,30 +1,14 @@
-import * as React from 'react';
-
-
 import { renderDropdownItemIcon } from '@/components/settings/pickers/renderDropdownItemIcon';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-
-function getMachineLabel(machine: Machine, unknownMachineLabel: string): string {
-    const meta: any = machine.metadata ?? null;
-    const displayName = typeof meta?.displayName === 'string' ? meta.displayName.trim() : '';
-    if (displayName) return displayName;
-    const host = typeof meta?.host === 'string' ? meta.host.trim() : '';
-    if (host) return host;
-    return String(machine.id ?? '').trim() || unknownMachineLabel;
-}
-
-function getMachineSubtitle(machine: Machine, onlineLabel: string, offlineLabel: string): string {
-    const host = typeof (machine.metadata as any)?.host === 'string' ? String((machine.metadata as any).host).trim() : '';
-    const id = String(machine.id ?? '').trim();
-    const status = machine.active ? onlineLabel : offlineLabel;
-    const hostPart = host && host !== id ? host : '';
-    const idPart = id ? `(${id})` : '';
-    return [status, hostPart, idPart].filter(Boolean).join(' ');
-}
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 export function getMachineDropdownMenuItems(params: Readonly<{
     machines: readonly Machine[];
+    scope?: MachineReachabilityScope | null;
     iconColor: string;
     iconSize?: number;
     includeAuto?: boolean;
@@ -32,7 +16,6 @@ export function getMachineDropdownMenuItems(params: Readonly<{
     autoSubtitle?: string;
     onlineLabel?: string;
     offlineLabel?: string;
-    unknownMachineLabel?: string;
 }>): readonly DropdownMenuItem[] {
     const iconSize = params.iconSize ?? 22;
     const items: DropdownMenuItem[] = [];
@@ -50,12 +33,14 @@ export function getMachineDropdownMenuItems(params: Readonly<{
         });
     }
 
-    for (const machine of params.machines ?? []) {
-        if (!machine || typeof machine.id !== 'string') continue;
+    const machines = params.machines.filter(isMachineVisibleForLaunchSelection);
+    const names = resolveMachineDisplayNames(machines);
+    for (const machine of machines) {
         items.push({
             id: machine.id,
-            title: getMachineLabel(machine, params.unknownMachineLabel ?? 'Unknown machine'),
-            subtitle: getMachineSubtitle(machine, params.onlineLabel ?? 'Online', params.offlineLabel ?? 'Offline'),
+            title: names.get(machine.id)!,
+            subtitle: resolveMachinePickerPresence(machine, undefined, params.scope).status === 'online'
+                ? params.onlineLabel ?? 'Online' : params.offlineLabel ?? 'Offline',
             icon: renderDropdownItemIcon({
                 name: 'desktop',
                 color: params.iconColor,

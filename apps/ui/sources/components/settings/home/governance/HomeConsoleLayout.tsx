@@ -12,8 +12,6 @@ import { homeAdministrationOverviewPath, homeAdministrationPeoplePath } from './
 
 const CONSOLE_NAVIGATOR = 'home/[serverId]' as const;
 
-/** People's rail at normal text scale: an avatar, a name and one role line, and a status pill. */
-const PEOPLE_RAIL_WIDTH_PX = 264;
 /**
  * The narrowest page: a person that still fits the role segmented control beside its label, and the
  * narrowest console page that keeps its rows' controls beside their labels.
@@ -61,7 +59,7 @@ export const HomeConsoleLayout = React.memo(function HomeConsoleLayout() {
                 rail={peopleRail
                     ? <HomePeopleCollectionRail serverId={serverId} selectedAccountId={selectedAccountId} />
                     : null}
-                railWidthPx={PEOPLE_RAIL_WIDTH_PX}
+                railWidth="standard"
                 detailMinWidthPx={CONSOLE_PAGE_MIN_WIDTH_PX}
                 testID="settings-home-console"
             />

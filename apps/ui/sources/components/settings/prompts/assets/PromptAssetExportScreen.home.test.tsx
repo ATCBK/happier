@@ -2,20 +2,22 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } from '@/dev/testkit/harness/promptMachineTransferBoundary';
-import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { installPromptAssetsCommonModuleMocks } from './promptAssetsScreenTestHelpers';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
-installPromptMachineSocketBoundary();
 installPromptAssetsCommonModuleMocks({ storage: original => original(), reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
 } });
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+installPromptMachineSocketBoundary();
+const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 const { storage } = await import('@/sync/domains/state/storage');
 const { PromptAssetExportScreen } = await import('./PromptAssetExportScreen');
 const docType: PromptAssetTypeDescriptorV1 = { id: 'claude.command', providerId: 'claude', title: 'Commands', description: 'Markdown',

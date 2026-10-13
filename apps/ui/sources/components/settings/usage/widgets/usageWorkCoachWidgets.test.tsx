@@ -288,13 +288,13 @@ describe('Work and Coach widget bodies', () => {
       metadata: { ...machine.metadata!, displayName: 'Evidence workstation' } } } });
     try {
       const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
-      const namedWork = allocateUsageOutcomes({ contributions: [{ ...contribution('named', 's1', 't1'), modelId: 'claude-opus-4-5' }], evidence: [] });
+      const namedWork = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: [{ ...contribution('named', 's1', 't1'), modelId: 'claude-opus-4-5' }], evidence: [] }));
       const screen = await renderScreen(<UsageSessionValueWidget {...props} query={sessionQuery}
         slice={{ ...slice, shownQuery: sessionQuery, work: namedWork }} id="usage_session_value" testID="value" />);
       expect(screen.getTextContent()).toContain('Opus 4.5');
       expect(screen.getTextContent()).toContain('Evidence workstation');
-      const unknownWork = allocateUsageOutcomes({ contributions: [{ ...contribution('unlisted', 's1', 't1'),
-        modelId: 'third-party/model-snapshot', machineId: 'unknown-machine-uuid' }], evidence: [] });
+      const unknownWork = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: [{ ...contribution('unlisted', 's1', 't1'),
+        modelId: 'third-party/model-snapshot', machineId: 'unknown-machine-uuid' }], evidence: [] }));
       await screen.update(<UsageSessionValueWidget {...props} query={sessionQuery}
         slice={{ ...slice, shownQuery: sessionQuery, work: unknownWork }} id="usage_session_value" testID="value" />);
       expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
@@ -308,13 +308,13 @@ describe('Work and Coach widget bodies', () => {
     { ...contribution('usd', 'usd-session', 'usd-turn'), projectKey: 'usd-project',
       cost: { reportedUsd: 0, estimatedUsd: 4, currency: 'USD', costSource: 'pricing_estimate' as const } }];
     const mixedQuery = normalizeUsageQuery({ ...query, costBasis: 'auto' });
-    const mixedSlice = { ...slice, shownQuery: mixedQuery,
-      work: allocateUsageOutcomes({ contributions: rows, evidence: [evidence('eur-session', 'eur-turn', 1),
-        evidence('usd-session', 'usd-turn', 2)] }),
+    const mixedSlice: UsageQueryResultSlice = { ...slice, shownQuery: mixedQuery,
+      work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [evidence('eur-session', 'eur-turn', 1),
+        evidence('usd-session', 'usd-turn', 2)] })),
       accounting: { ...slice.accounting!, totals: { ...slice.accounting!.totals,
         cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'MIXED' } } } };
-    for (const Widget of [UsageProjectLedgerWidget, UsageSessionValueWidget, UsageOutcomesWidget]) {
-      const screen = await renderScreen(<Widget {...props} query={mixedQuery} slice={mixedSlice} id="work" testID="work" />);
+    for (const [Widget, id] of [[UsageProjectLedgerWidget, 'usage_project_ledger'], [UsageSessionValueWidget, 'usage_session_value'], [UsageOutcomesWidget, 'usage_outcomes']] as const) {
+      const screen = await renderScreen(<Widget {...props} query={mixedQuery} slice={mixedSlice} id={id} testID="work" />);
       const text = screen.getTextContent();
       expect(text).toContain('€3.00');
       expect(text).toContain('$4.00');
@@ -347,7 +347,9 @@ describe('Work and Coach widget bodies', () => {
       expect(new URL(String(navigation.mock.calls.at(-1)?.[0]), 'https://usage.test').pathname).toBe('/session/s6/usage');
       // Outside the Usage page there is no filter row: narrowing opens Usage on this project.
       await screen.pressByTestIdAsync('ledger.project.p1.filter');
-      const narrowed = navigation.mock.calls.at(-1)?.[0] as Readonly<{ params: Readonly<{ scope: string }> }>;
+      const narrowed = navigation.mock.calls.at(-1)?.[0];
+      if (!narrowed || typeof narrowed !== 'object' || !('params' in narrowed) || !narrowed.params
+        || !('scope' in narrowed.params) || typeof narrowed.params.scope !== 'string') throw new Error('Expected a scoped Usage route');
       expect(JSON.parse(narrowed.params.scope)).toMatchObject({ projects: ['p1'] });
       await screen.pressByTestIdAsync('ledger.project.p1.toggle');
       expect(screen.findByTestId('ledger.project.p1.detail')).toBeFalsy();
@@ -465,7 +467,7 @@ describe('Work and Coach widget bodies', () => {
   });
 
   it('shows unlinked Sessions once when a wide scatter has no witnessed outcome axis', async () => {
-    const unlinked = allocateUsageOutcomes({ contributions, evidence: [] });
+    const unlinked = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions, evidence: [] }));
     const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'full',
       footprint: { columns: 2, columnSpan: 2, rowSpan: 2, width: 'full', height: 'tall' },
       geometry: { width: 700, height: 500 } }}>

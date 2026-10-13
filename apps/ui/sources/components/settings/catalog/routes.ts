@@ -34,6 +34,8 @@ export const SETTINGS_ROUTES = {
     connectedServicesAgentSignIn: '/settings/connected-services/sign-in',
     notifications: '/settings/notifications',
     notificationsPush: '/settings/notifications/push',
+    skills: '/settings/skills',
+    skillsNew: '/settings/skills/new',
     mcp: '/settings/mcp',
     mcpOnMachine: '/settings/mcp/on-machine',
     mcpPreview: '/settings/mcp/preview',

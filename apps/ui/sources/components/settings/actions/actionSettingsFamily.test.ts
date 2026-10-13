@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     ACTION_SETTINGS_FAMILY_ORDER,
+    resolveActionIdFamilySettingsFamily,
     resolveActionSettingsFamily,
 } from './actionSettingsFamily';
 
@@ -24,6 +25,11 @@ describe('resolveActionSettingsFamily', () => {
 
     it('maps plugin permission-grant actions to the plugins family', () => {
         expect(resolveActionSettingsFamily('plugins.permissions.grants.grant')).toBe('plugins');
+    });
+
+    it('keeps registries and skills in the extensions family', () => {
+        expect(resolveActionIdFamilySettingsFamily('registries')).toBe('plugins');
+        expect(resolveActionIdFamilySettingsFamily('skills')).toBe('plugins');
     });
 
     it('maps qualified contributed actions to the plugins family', () => {

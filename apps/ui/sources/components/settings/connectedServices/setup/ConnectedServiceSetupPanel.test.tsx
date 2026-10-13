@@ -25,10 +25,6 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: phoneNavigation.push } }).module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 // The media-query boundary selects a real animated collapse; timing stays pending until the driver settles.
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => false,
-    readReducedMotionPreference: () => false,
-}));
 
 afterEach(async () => { phoneNavigation.width = 390; await standardCleanup(); });
 

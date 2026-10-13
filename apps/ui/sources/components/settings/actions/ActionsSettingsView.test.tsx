@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen as renderRealScreen, standardCleanup } from '@/dev/testkit';
 import {
   installSettingsViewCommonModuleMocks,
   resetSettingsViewCommonModuleMockState,
@@ -21,17 +21,11 @@ import {
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capture = vi.hoisted(() => ({
-  items: [] as Array<Record<string, unknown>>,
-  searchHeaders: [] as Array<Record<string, unknown>>,
-  groupTitles: [] as Array<unknown>,
   virtualizedListProps: null as Record<string, unknown> | null,
   windowWidth: 800,
   setRawSettings: vi.fn(),
   routerPush: vi.fn(),
   reset() {
-    this.items = [];
-    this.searchHeaders = [];
-    this.groupTitles = [];
     this.virtualizedListProps = null;
     this.windowWidth = 800;
     this.setRawSettings.mockReset();
@@ -162,60 +156,11 @@ installSettingsViewCommonModuleMocks({
   },
 });
 
-vi.mock('@/components/ui/forms/SearchHeader', () => ({
-  SearchHeader: (props: Record<string, unknown>) => {
-    capture.searchHeaders.push(props);
-    return null;
-  },
-}));
 
-vi.mock('@/components/ui/forms/Switch', () => ({
-  Switch: (props: Record<string, unknown>) =>
-    React.createElement('Switch', props),
-}));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-  ItemList: ({ children }: { children?: React.ReactNode }) =>
-    React.createElement(React.Fragment, null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-  ItemGroup: ({
-    children,
-    title,
-  }: {
-    children?: React.ReactNode;
-    title?: unknown;
-  }) => {
-    if (title !== undefined) {
-      capture.groupTitles.push(title);
-    }
-    return React.createElement(React.Fragment, null, children);
-  },
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
-    capture.items.push(props);
-    return React.createElement(
-      React.Fragment,
-      null,
-      props.children,
-      props.subtitleAccessory as React.ReactNode,
-      props.rightElement as React.ReactNode,
-    );
-  },
-}));
 
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: (props: { children?: React.ReactNode; testID?: string }) => {
-    return React.createElement(
-      'TextMock',
-      { testID: props.testID },
-      props.children,
-    );
-  },
-}));
 
 afterEach(() => {
   standardCleanup();
@@ -228,6 +173,18 @@ afterEach(() => {
 
 // Resolve the catalog graph during collection, outside individual render-test deadlines.
 const { ActionsSettingsView } = await import('./ActionsSettingsView');
+const { Item } = await import("@/components/ui/lists/Item");
+const { ItemGroup } = await import("@/components/ui/lists/ItemGroup");
+const { SearchHeader } = await import("@/components/ui/forms/SearchHeader");
+let renderedScreen: Awaited<ReturnType<typeof renderRealScreen>> | null = null;
+async function renderScreen(...args: Parameters<typeof renderRealScreen>) {
+    renderedScreen = await renderRealScreen(...args);
+    return renderedScreen;
+}
+function renderedProps(component: React.ElementType): Array<Record<string, unknown>> {
+    return renderedScreen?.findAllByType(component).map(node => node.props) ?? [];
+}
+
 
 describe('ActionsSettingsView', () => {
   it('virtualizes the full catalog as bounded family segments', async () => {
@@ -247,19 +204,19 @@ describe('ActionsSettingsView', () => {
   it('shows separate Resources reading and changing sections', async () => {
     await renderScreen(<ActionsSettingsView />);
 
-    expect(capture.groupTitles).toContain(
+    expect(renderedProps(ItemGroup).map(props => props.title)).toContain(
       'settingsActions.families.resources.reading.title',
     );
-    expect(capture.groupTitles).toContain(
+    expect(renderedProps(ItemGroup).map(props => props.title)).toContain(
       'settingsActions.families.resources.changing.title',
     );
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) => item.testID === 'settings-actions:action:machines.vitals.get',
       ),
     ).toBe(true);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:machines.storage.trash.move',
       ),
@@ -270,7 +227,7 @@ describe('ActionsSettingsView', () => {
     capture.reset();
     await renderScreen(<ActionsSettingsView />);
 
-    const link = capture.items.find(
+    const link = renderedProps(Item).find(
       (item) => item.testID === 'settings-actions:related:session.stop',
     );
     expect(link).toBeTruthy();
@@ -280,7 +237,7 @@ describe('ActionsSettingsView', () => {
     );
     // One membership per Action: the row itself stays in its own family.
     expect(
-      capture.items.filter(
+      renderedProps(Item).filter(
         (item) => item.testID === 'settings-actions:action:session.stop',
       ),
     ).toHaveLength(1);
@@ -292,14 +249,14 @@ describe('ActionsSettingsView', () => {
 
     await renderScreen(<ActionsSettingsView />);
 
-    expect(capture.searchHeaders).toHaveLength(1);
+    expect(renderedProps(SearchHeader)).toHaveLength(1);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) => item.testID === 'settings-actions:action:review.start',
       ),
     ).toBe(true);
     expect(
-      capture.items.every((item) =>
+      renderedProps(Item).every((item) =>
         String(item.testID).startsWith('settings-actions:action:')
         || String(item.testID).startsWith('settings-actions:related:'),
       ),
@@ -358,48 +315,44 @@ describe('ActionsSettingsView', () => {
       options: undefined,
     });
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID ===
           'settings-actions:contributed:machine-selection-required',
       ),
     ).toBe(false);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
       ),
     ).toBe(false);
-
-    capture.items = [];
     await act(async () => {
       administrationTargetSelection.controller.select('machine-a');
     });
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
       ),
     ).toBe(true);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:com.acme.b/actions/review/b',
       ),
     ).toBe(false);
-
-    capture.items = [];
     await act(async () => {
       administrationTargetSelection.controller.select('machine-b');
     });
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:com.acme.a/actions/review/a',
       ),
     ).toBe(false);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:com.acme.b/actions/review/b',
       ),
@@ -415,29 +368,27 @@ describe('ActionsSettingsView', () => {
 
     await renderScreen(<ActionsSettingsView />);
 
-    const searchHeader = capture.searchHeaders[0];
+    const searchHeader = renderedProps(SearchHeader)[0];
     expect(typeof searchHeader?.onChangeText).toBe('function');
-
-    capture.items = [];
     await act(async () => {
       (searchHeader?.onChangeText as (value: string) => void)('browser');
     });
 
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID ===
           'settings-actions:action:browser.recording.attachToComposer',
       ),
     ).toBe(true);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) =>
           item.testID === 'settings-actions:action:browser.recording.start',
       ),
     ).toBe(true);
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) => item.testID === 'settings-actions:action:review.start',
       ),
     ).toBe(false);
@@ -449,19 +400,17 @@ describe('ActionsSettingsView', () => {
 
     await renderScreen(<ActionsSettingsView />);
 
-    const searchHeader = capture.searchHeaders[0];
-    capture.groupTitles = [];
-    capture.items = [];
+    const searchHeader = renderedProps(SearchHeader)[0];
     await act(async () => {
       (searchHeader?.onChangeText as (value: string) => void)('browser');
     });
 
     // A Browser family section header is rendered, and the grouped rows are browser actions.
-    expect(capture.groupTitles).toContain(
+    expect(renderedProps(ItemGroup).map(props => props.title)).toContain(
       'settingsActions.families.browser.title',
     );
     expect(
-      capture.items.some(
+      renderedProps(Item).some(
         (item) => item.testID === 'settings-actions:action:browser.navigate',
       ),
     ).toBe(true);
@@ -473,7 +422,7 @@ describe('ActionsSettingsView', () => {
 
     await renderScreen(<ActionsSettingsView />);
 
-    const reviewRow = capture.items.find(
+    const reviewRow = renderedProps(Item).find(
       (item) => item.testID === 'settings-actions:action:review.start',
     );
     expect(reviewRow).toBeTruthy();
@@ -518,7 +467,7 @@ describe('ActionsSettingsView', () => {
       administrationTargetSelection.controller.select('machine-a');
     });
 
-    const inspectorRow = capture.items.find(
+    const inspectorRow = renderedProps(Item).find(
       (item) =>
         item.testID ===
         'settings-actions:action:happier.inspector/actions/self-check',
@@ -538,7 +487,7 @@ describe('ActionsSettingsView', () => {
 
     const screen = await renderScreen(<ActionsSettingsView />);
 
-    const reviewRow = capture.items.find(
+    const reviewRow = renderedProps(Item).find(
       (item) => item.testID === 'settings-actions:action:review.start',
     );
     expect(reviewRow).toBeTruthy();

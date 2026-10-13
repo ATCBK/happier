@@ -4,8 +4,8 @@ import { act } from 'react-test-renderer';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
-const applySettingsSpy = vi.fn();
 const routerSetParamsSpy = vi.fn();
 const modalShowSpy = vi.fn();
 const modalAlertSpy = vi.fn();
@@ -33,30 +33,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key, params) => `${key}${params ? `:${JSON.stringify(params)}` : ''}` });
 });
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSettingsSelector: <T,>(selector: (settings: typeof settingsFixture) => T) => selector(settingsFixture),
-    });
-});
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => applySettingsSpy,
-}));
-vi.mock('@/components/ui/lists/ItemList', async () => {
-    const { createPassThroughModule } = await import('@/dev/testkit/mocks/components');
-    return createPassThroughModule(['ItemList']);
-});
-vi.mock('@/components/ui/lists/ItemGroup', async () => {
-    const { createPassThroughModule } = await import('@/dev/testkit/mocks/components');
-    return createPassThroughModule(['ItemGroup']);
-});
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props, props.rightElement as React.ReactNode),
-}));
-vi.mock('@/components/ui/forms/Switch', async () => {
-    const { createPassThroughModule } = await import('@/dev/testkit/mocks/components');
-    return createPassThroughModule(['Switch']);
-});
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
@@ -67,8 +43,17 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
+const account = createProviderSettingsAccountHarness();
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
+const { Switch } = await import('@/components/ui/forms/Switch');
+
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./KeyboardShortcutsSettingsView');
+
 describe('KeyboardShortcutsSettingsView', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         settingsFixture = {
             ...settingsDefaults,
             commandPaletteEnabled: true,
@@ -80,6 +65,7 @@ describe('KeyboardShortcutsSettingsView', () => {
                 'session.new': [{ binding: 'Mod+K' }],
             },
         };
+        await account.restore({ settings: settingsFixture });
         capturedShortcutModalProps = null;
         modalShowSpy.mockImplementation((config) => {
             capturedShortcutModalProps = config.props as typeof capturedShortcutModalProps;
@@ -87,9 +73,9 @@ describe('KeyboardShortcutsSettingsView', () => {
         });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
-        applySettingsSpy.mockClear();
+        await account.reset();
         routerSetParamsSpy.mockClear();
         modalShowSpy.mockReset();
         modalAlertSpy.mockReset();
@@ -104,14 +90,15 @@ describe('KeyboardShortcutsSettingsView', () => {
         expect(screen.findByTestId('settings-keyboard-shortcuts-enabled')).toBeTruthy();
         expect(screen.findByTestId('settings-keyboard-shortcuts-single-key-enabled')).toBeTruthy();
         expect(screen.findByTestId('settings-keyboard-shortcut-row-commandPalette.open')).toBeTruthy();
-        expect(screen.findByTestId('settings-keyboard-shortcut-row-commandPalette.open')?.props.title)
+        expect(screen.findByTestId('settings-keyboard-shortcut-row-workspace.tab.closeAll')).toBeTruthy();
+        expect(screen.findAll(node => node.props.testID === 'settings-keyboard-shortcut-row-commandPalette.open' && node.props.title)[0]?.props.title)
             .toBe('settingsKeyboard.commands.commandPaletteOpen');
         // Closed, a command shows its keys; its controls live inside the expanded row.
         expect(screen.findByTestId('settings-keyboard-shortcut-reset-commandPalette.open')).toBeFalsy();
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-row-commandPalette.open');
         expect(screen.findByTestId('settings-keyboard-shortcut-reset-commandPalette.open')).toBeTruthy();
         // The duplicate Mod+K binding names both commands in one conflict row.
-        const conflict = screen.findByTestId('settings-keyboard-shortcuts-conflict-duplicate:commandPalette.open:session.new');
+        const conflict = screen.findAll(node => node.props.testID === 'settings-keyboard-shortcuts-conflict-duplicate:commandPalette.open:session.new' && node.props.title)[0];
         expect(conflict?.props.title).toBe('settingsKeyboard.commands.commandPaletteOpen · settingsKeyboard.commands.sessionNew');
     });
 
@@ -131,7 +118,7 @@ describe('KeyboardShortcutsSettingsView', () => {
         const { KeyboardShortcutsSettingsView } = await import('./KeyboardShortcutsSettingsView');
         const screen = await renderSettingsView(<KeyboardShortcutsSettingsView />);
 
-        const sectionTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+        const sectionTitles = screen.findAllByType(ItemGroup).map((group) => group.props.title);
         expect(sectionTitles).toEqual(expect.arrayContaining([
             'settingsKeyboard.groupApp',
             'settingsKeyboard.groupSessions',
@@ -149,23 +136,24 @@ describe('KeyboardShortcutsSettingsView', () => {
             ...settingsFixture,
             keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open'],
         };
+        storage.setState({ settings: settingsFixture });
         const { KeyboardShortcutsSettingsView } = await import('./KeyboardShortcutsSettingsView');
         const screen = await renderSettingsView(<KeyboardShortcutsSettingsView />);
 
-        const enabledSwitch = screen.findByTestId('settings-keyboard-shortcuts-enabled');
-        enabledSwitch?.props.onValueChange(true);
-        expect(applySettingsSpy).toHaveBeenCalledWith({ keyboardShortcutsV2Enabled: true });
+        const enabledSwitch = screen.findAllByType(Switch).find(node => node.props.testID === 'settings-keyboard-shortcuts-enabled');
+        await act(async () => { enabledSwitch?.props.onValueChange(true); });
+        expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(true);
 
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-row-commandPalette.open');
-        const disabledCommandSwitch = screen.findByTestId('settings-keyboard-shortcut-enabled-commandPalette.open');
-        disabledCommandSwitch?.props.onValueChange(true);
-        expect(applySettingsSpy).toHaveBeenCalledWith({
+        const disabledCommandSwitch = screen.findAllByType(Switch).find(node => node.props.testID === 'settings-keyboard-shortcut-enabled-commandPalette.open');
+        await act(async () => { disabledCommandSwitch?.props.onValueChange(true); });
+        expect(storage.getState().settings).toMatchObject({
             keyboardShortcutDisabledCommandIdsV1: [],
             commandPaletteEnabled: true,
         });
 
-        screen.pressByTestId('settings-keyboard-shortcut-reset-commandPalette.open');
-        expect(applySettingsSpy).toHaveBeenCalledWith({
+        await screen.pressByTestIdAsync('settings-keyboard-shortcut-reset-commandPalette.open');
+        expect(storage.getState().settings).toMatchObject({
             keyboardShortcutDisabledCommandIdsV1: [],
             commandPaletteEnabled: true,
             keyboardShortcutOverridesV1: {
@@ -191,7 +179,7 @@ describe('KeyboardShortcutsSettingsView', () => {
             capturedShortcutModalProps?.onResolve(' Alt+S ');
         });
 
-        expect(applySettingsSpy).toHaveBeenCalledWith({
+        expect(storage.getState().settings).toMatchObject({
             keyboardShortcutDisabledCommandIdsV1: [],
             commandPaletteEnabled: true,
             keyboardShortcutOverridesV1: {
@@ -205,6 +193,8 @@ describe('KeyboardShortcutsSettingsView', () => {
         const { KeyboardShortcutsSettingsView } = await import('./KeyboardShortcutsSettingsView');
         const screen = await renderSettingsView(<KeyboardShortcutsSettingsView />);
 
+        const unchangedSettings = storage.getState().settings;
+
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-row-commandPalette.open');
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-set-commandPalette.open');
 
@@ -216,6 +206,6 @@ describe('KeyboardShortcutsSettingsView', () => {
             'settingsKeyboard.setShortcutInvalidTitle',
             'settingsKeyboard.setShortcutInvalidMessage',
         );
-        expect(applySettingsSpy).not.toHaveBeenCalled();
+        expect(storage.getState().settings).toBe(unchangedSettings);
     });
 });

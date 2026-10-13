@@ -16,6 +16,7 @@ import {
 } from './usageWidgetBatch';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { readUsageWidgetQueryOverrides, resolveUsageWidgetPageInitialQuery } from '../usageWidgetPageContext';
+import { resolveUsagePageInitialFilters } from '../usageRouteParams';
 import { buildUsageAnalyticsViewModel } from '@/sync/api/account/usageAnalytics';
 import { UsageWidgetBody } from './UsageWidgetBody';
 import { storage } from '@/sync/domains/state/storage';
@@ -47,14 +48,14 @@ const scope = {
   session: null,
   costBasis: 'auto',
 } as const;
-const clauses = { granularity: 'day', timeZoneOffsetMinutes: 0 } as const;
+const clauses = readUsageWidgetQueryOverrides(normalizeUsageQuery({ granularity: 'day', timeZoneOffsetMinutes: 0 }));
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => {
+afterEach(async () => {
   standardCleanup();
   retireActiveServerAccountScopeLifetime();
   invalidateUsageQueryResources();
-  home?.dispose();
+  await home?.dispose();
   home = undefined;
 });
 
@@ -122,7 +123,7 @@ describe('Usage page batch', () => {
   it.each([false, true])('requests both consumed activity sections despite route includeActivity=%s and partial resolution, preserving independently pinned scope', async includeActivity => {
     const days = [{ date: '2026-10-08', eventCount: 1 }, { date: '2026-10-09', eventCount: 2 }, { date: '2026-10-10', eventCount: 1 }];
     const page = resolveUsageWidgetPageInitialQuery({ nowMs: Date.UTC(2026, 9, 11), timeZoneOffsetMinutes: 120,
-      initialFilters: { queryOverrides: { includeActivity, activityResolution: 'weekdayHour' } } });
+      initialFilters: resolveUsagePageInitialFilters({ queryOverrides: JSON.stringify(readUsageWidgetQueryOverrides(normalizeUsageQuery({ includeActivity, activityResolution: 'weekdayHour' }))) }) });
     const input = { ...scope, period: { startMs: Date.UTC(2026, 9, 8), endMs: Date.UTC(2026, 9, 11) }, machines: ['pinned'], metric: 'tokens' as const, breakdown: [] };
     home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-activity.test', accountId: 'account-a' }], route: request => {
       if (request.path !== '/v2/usage/query') return undefined;

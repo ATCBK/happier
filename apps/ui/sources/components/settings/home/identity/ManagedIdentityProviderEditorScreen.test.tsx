@@ -2,6 +2,7 @@ import * as React from 'react';
 import { AppState } from 'react-native';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import type { ManagedIdentityProviderV1 } from '@happier-dev/protocol';
 
@@ -13,16 +14,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('./managedIdentityProviderClient', () => ({
     createManagedIdentityProviderClient: () => ({ execute: executeMock }),
 }));
@@ -139,10 +134,10 @@ describe('ManagedOidcProviderEditorContent', () => {
             />,
         );
 
-        expect(screen.findByTestId('identity-provider-test')?.props.title).toBe('identityAdministration.validate');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-test')!, 'Text', 'identityAdministration.validate')).toBeDefined();
         await screen.pressByTestIdAsync('identity-provider-test');
         expect(executeMock).toHaveBeenCalledWith('identity.providers.validate', expect.anything(), expect.anything());
-        expect(screen.findByTestId('identity-provider-test')?.props.detail).toBe('identityAdministration.validated');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-test')!, 'Text', 'identityAdministration.validated')).toBeDefined();
     });
 
     it('starts only one validation when pressed twice before React renders busy state', async () => {

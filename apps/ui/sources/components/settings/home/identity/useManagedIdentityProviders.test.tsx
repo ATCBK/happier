@@ -1,102 +1,70 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
-const executeMock = vi.hoisted(() => vi.fn());
+installSettingsViewCommonModuleMocks({ storage: 'real' });
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { useManagedIdentityProviders } = await import('./useManagedIdentityProviders');
+const LIST_PATH = '/v1/identity/providers/list';
 
-vi.mock('./managedIdentityProviderClient', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('./managedIdentityProviderClient')>();
-    return {
-        ...actual,
-        createManagedIdentityProviderClient: () => ({ execute: executeMock }),
-    };
-});
-
-import { useManagedIdentityProviders } from './useManagedIdentityProviders';
-
-const HOME_SCOPE = Object.freeze({ serverId: 'home-a', accountId: 'account-a' });
-
-function emptyProviderListResult() {
-    return Promise.resolve({
-        kind: 'succeeded' as const,
-        value: Object.freeze({ items: Object.freeze([]), unreadableCount: 0 }),
-    });
+async function home() {
+    const serverId = await harness.addHome({ name: 'Identity Home', serverUrl: 'https://identity-wakes.example', accountId: 'account-a', teamsEnabled: true });
+    harness.answer(serverId, LIST_PATH, { body: { items: [], unreadableCount: 0 } });
+    return { serverId, accountId: 'account-a' };
 }
 
-describe('useManagedIdentityProviders AccountChange freshness', () => {
-    afterEach(() => {
-        standardCleanup();
-        vi.clearAllMocks();
-    });
+describe('useManagedIdentityProviders AccountChange freshness through the real reader', () => {
+    afterEach(async () => { standardCleanup(); await harness.reset(); });
 
-    it('refreshes a mounted Home-owned query for exact Home governance and Team-consumer wakes', async () => {
-        executeMock.mockImplementation(emptyProviderListResult);
-        const rendered = await renderHook(() => useManagedIdentityProviders(HOME_SCOPE));
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(1));
-
-        await act(async () => {
-            publishHomeAccountChange('home-b', ['home-governance']);
-        });
-        expect(executeMock).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            publishHomeAccountChange('home-a', ['teams']);
-        });
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(2));
-
-        await act(async () => {
-            publishHomeAccountChange('home-a', ['home-governance']);
-        });
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(3));
-
-        await act(async () => {
-            publishHomeAccountChange('home-a');
-        });
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(4));
+    it('refreshes a Home-owned query for exact Home governance, Team-consumer and content-free wakes', async () => {
+        const scope = await home();
+        const rendered = await renderHook(() => useManagedIdentityProviders(scope));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 0 }));
+        harness.answer(scope.serverId, LIST_PATH, { body: { items: [], unreadableCount: 1 } });
+        await act(async () => { publishHomeAccountChange('other-home', ['home-governance']); });
+        expect(harness.requestsFor(LIST_PATH)).toHaveLength(1);
+        expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 0 });
+        for (const [index, entityIds] of [['teams'], ['home-governance'], undefined].entries()) {
+            harness.answer(scope.serverId, LIST_PATH, { body: { items: [], unreadableCount: index + 1 } });
+            await act(async () => { publishHomeAccountChange(scope.serverId, entityIds); });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: index + 1, refreshing: false }));
+        }
         await rendered.unmount();
     });
 
-    it('refreshes a Team-owned provider query for a Team or conservative content-free wake', async () => {
-        executeMock.mockImplementation(emptyProviderListResult);
-        const rendered = await renderHook(() => useManagedIdentityProviders(
-            HOME_SCOPE,
-            { kind: 'team', teamId: 'team-a' },
-        ));
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(1));
-
-        await act(async () => {
-            publishHomeAccountChange('home-a', ['home-governance']);
-        });
-        await Promise.resolve();
-        expect(executeMock).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            publishHomeAccountChange('home-a', ['teams']);
-        });
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(2));
-
-        await act(async () => {
-            publishHomeAccountChange('home-a');
-        });
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(3));
+    it('refreshes a Team-owned query for Team and content-free wakes while excluding Home governance', async () => {
+        const scope = await home();
+        const rendered = await renderHook(() => useManagedIdentityProviders(scope, { kind: 'team', teamId: 'team-a' }));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 0 }));
+        expect(harness.requestsFor(LIST_PATH)[0]?.input).toEqual({ owner: { kind: 'team', teamId: 'team-a' } });
+        harness.answer(scope.serverId, LIST_PATH, { body: { items: [], unreadableCount: 1 } });
+        await act(async () => { publishHomeAccountChange(scope.serverId, ['home-governance']); });
+        expect(harness.requestsFor(LIST_PATH)).toHaveLength(1);
+        expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 0 });
+        await act(async () => { publishHomeAccountChange(scope.serverId, ['teams']); });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 1 }));
+        harness.answer(scope.serverId, LIST_PATH, { body: { items: [], unreadableCount: 2 } });
+        await act(async () => { publishHomeAccountChange(scope.serverId); });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 2 }));
         await rendered.unmount();
     });
 
-    it('releases the wake observer on unmount and reads again on remount', async () => {
-        executeMock.mockImplementation(emptyProviderListResult);
-        const first = await renderHook(() => useManagedIdentityProviders(HOME_SCOPE));
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(1));
+    it('releases its subscription on unmount and reads current Home state on remount', async () => {
+        const scope = await home();
+        const first = await renderHook(() => useManagedIdentityProviders(scope));
+        await waitForHomeGovernance(() => expect(first.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 0 }));
         await first.unmount();
-
-        await act(async () => {
-            publishHomeAccountChange('home-a', ['home-governance']);
-        });
-        expect(executeMock).toHaveBeenCalledTimes(1);
-
-        const second = await renderHook(() => useManagedIdentityProviders(HOME_SCOPE));
-        await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(2));
+        const requestsBeforeWake = harness.requestsFor(LIST_PATH).length;
+        harness.answer(scope.serverId, LIST_PATH, { body: { items: [], unreadableCount: 1 } });
+        await act(async () => { publishHomeAccountChange(scope.serverId, ['home-governance']); });
+        expect(harness.requestsFor(LIST_PATH)).toHaveLength(requestsBeforeWake);
+        const second = await renderHook(() => useManagedIdentityProviders(scope));
+        await waitForHomeGovernance(() => expect(second.getCurrent().state).toMatchObject({ kind: 'ready', unreadableCount: 1 }));
         await second.unmount();
     });
 });

@@ -3,6 +3,8 @@ import { act, create } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
+import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { renderScreen } from '@/dev/testkit';
 
 const mocks = vi.hoisted(() => ({
     get: vi.fn(),
@@ -34,37 +36,6 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
         show: mocks.show,
     },
 }).module);
-vi.mock('@/components/ui/lists/ItemGroup', async () => ({
-    ItemGroup: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemGroup'),
-}));
-// A row's accessory is part of the row, so the stand-in renders it rather than
-// leaving the row's actions outside the tree the assertions can see.
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Readonly<{ rightElement?: React.ReactNode; children?: React.ReactNode }>) =>
-        React.createElement('Item', props, props.rightElement ?? props.children ?? null),
-}));
-vi.mock('@/components/ui/lists/ItemRowActions', async () => ({
-    ItemRowActions: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemRowActions'),
-}));
-// Only the popover machinery is stood in for: the trigger row it renders is the
-// real one, so a source's row keeps its own title, state and disabled logic.
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Readonly<{
-        open?: boolean;
-        onOpenChange?: (next: boolean) => void;
-        trigger?: unknown;
-    }>) => React.createElement(
-        'DropdownMenu',
-        props,
-        typeof props.trigger === 'function'
-            ? (props.trigger as (state: { open: boolean; toggle: () => void }) => React.ReactNode)({
-                open: props.open === true,
-                toggle: () => props.onOpenChange?.(props.open !== true),
-            })
-            : null,
-    ),
-}));
-
 import { NpmRegistryProfilesSection } from './NpmRegistryProfilesSection';
 
 type RegistryRowAction = Readonly<{
@@ -80,7 +51,7 @@ function profileActions(
     tree: ReturnType<typeof create>,
     profileId: string,
 ): readonly RegistryRowAction[] {
-    return tree.root.findAllByType('ItemRowActions' as never)
+    return tree.root.findAllByType(ItemRowActions)
         .flatMap((node) => (
             (node.props as Readonly<{ overflowTriggerTestID?: string }>).overflowTriggerTestID
                 === `settings.plugins.registries.profile.${profileId}.actions.overflow`
@@ -245,8 +216,9 @@ describe('NpmRegistryProfilesSection', () => {
     });
 
     it('loads secret-free profiles and exposes a sign-in action', async () => {
-        let tree!: ReturnType<typeof create>;
-        await act(async () => { tree = create(<TestSection daemonOperationsAvailable />); });
+        const { Item } = await import('@/components/ui/lists/Item');
+        const screen = await renderScreen(<TestSection daemonOperationsAvailable />);
+        const tree = screen.tree;
         await flush();
         expect(mocks.get).toHaveBeenCalledWith('machine-a', { serverId: 'server-a' });
         const profile = tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' });
@@ -255,7 +227,9 @@ describe('NpmRegistryProfilesSection', () => {
         // own actions rather than four more rows about the same registry.
         expect(profileActions(tree, 'registry_acme').map((action) => action.id))
             .toEqual(['edit', 'login', 'test', 'remove']);
-        expect(tree.root.findAllByProps({ testID: 'settings.plugins.registries.edit.registry_acme' })).toHaveLength(0);
+        expect(screen.findAllByType(Item).filter((node) => (
+            node.props.testID === 'settings.plugins.registries.edit.registry_acme'
+        ))).toHaveLength(0);
         // The repeated icon controls name the profile they act on.
         expect(profileAction(tree, 'registry_acme', 'login')?.accessibilityLabel)
             .toContain('Acme');

@@ -440,13 +440,19 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
             {notice ? <ItemGroup>{notice}</ItemGroup> : null}
             {firstLoad ? <ItemGroup><ProviderRailSkeleton /></ItemGroup> : null}
             {noMatches ? <ItemGroup><Item mode="info" title={t('settingsProviders.searchEmptyTitle')} subtitle={t('settingsProviders.searchEmptyDescription')} /></ItemGroup> : null}
-            {collection.connections.length > 0 ? (
+            {collection.connections.some(row => !row.gateway) ? (
                 <SettingAnchor setting={PROVIDERS_SETTINGS.settings.connections}>
                 {/* The page header already says what the list is (lab PI2p): the list follows it untitled. */}
                 <ItemGroup>
-                    {collection.connections.map(renderConnectionRow)}
+                    {collection.connections.filter(row => !row.gateway).map(renderConnectionRow)}
                 </ItemGroup>
                 </SettingAnchor>
+            ) : null}
+            {/* Gateways keep their own titled group, as in the rail (lab PI2p). */}
+            {collection.connections.some(row => row.gateway) ? (
+                <ItemGroup title={t('settingsProvidersCollection.gateway.railGroup')}>
+                    {collection.connections.filter(row => row.gateway).map(renderConnectionRow)}
+                </ItemGroup>
             ) : null}
             </SettingSection>
             {!localScopeShown && !availabilityPresentation && machineState.kind !== 'online' ? (

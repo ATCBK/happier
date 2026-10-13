@@ -1443,6 +1443,34 @@ describe('ProviderConnectionDetailScreen', () => {
         expect(router.back).not.toHaveBeenCalled();
     });
 
+    it('stops duplicate loading while its real in-place approval awaits a decision and preserves the draft after rejection', async () => {
+        await account.restore({ accountId: 'duplicate-approval-account', serverIdentityId: 'srv_provider_detail', machines: [] });
+        const stored = installDetailCatalog();
+        await account.home.selectHomes([account.serverId]);
+        await account.selectMachine(account.serverId, null);
+        const screen = await renderScreen(<ProviderConnectionDetailScreen connectionId="pc_a" />);
+        await waitForHomeGovernance(() => expect(findMenuAction(screen, 'duplicate')).toBeDefined());
+        await pressAndFlush(findMenuAction(screen, 'duplicate'));
+        await act(async () => { screen.changeTextByTestId('provider-connection-duplicate-name', 'Work copy'); });
+        const button = () => findComposite(screen, 'provider-connection-duplicate-save', 'loading');
+        await act(async () => { button()?.props.onPress(); });
+        await waitForHomeGovernance(() => expect(account.home.artifacts(account.serverId).list()).toHaveLength(1));
+        const artifactId = account.home.artifacts(account.serverId).list()[0]!.id;
+        await waitForHomeGovernance(() => expect(button()?.props.disabled).toBe(true));
+        expect(button()?.props.loading).toBe(false);
+        expect(stored.writes).toBe(0);
+        expect(router.push).not.toHaveBeenCalled();
+        expect(router.replace).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('provider-connection-duplicate-approval.open');
+        const { providerApprovalHref } = await import('@/providers/actions/useProviderActionClient');
+        expect(router.push).toHaveBeenCalledWith(providerApprovalHref(artifactId, account.serverId));
+        expect(findComposite(screen, 'provider-connection-duplicate-name', 'value')?.props.value).toBe('Work copy');
+        await decideApprovalAsInbox(account.serverId, artifactId, 'reject');
+        await waitForHomeGovernance(() => expect(button()?.props.disabled).toBe(false));
+        expect(findComposite(screen, 'provider-connection-duplicate-name', 'value')?.props.value).toBe('Work copy');
+        expect(stored.writes).toBe(0);
+    });
+
     it('keeps default Ask-first approval in place and navigates only after its real terminal result', async () => {
         await account.restore({ accountId: 'default-approval-account', serverIdentityId: 'srv_provider_detail', machines });
         const stored = installDetailCatalog();
@@ -1489,10 +1517,11 @@ describe('ProviderConnectionDetailScreen', () => {
         const artifactId = account.home.artifacts(account.serverId).list()[0]!.id;
         await act(async () => { await account.selectMachine(account.serverId, 'machine-b'); await flushHookEffects(); });
         await decideApprovalAsInbox(account.serverId, artifactId, 'approve');
+        await waitForHomeGovernance(() => expect(router.replace).toHaveBeenCalledWith('/(app)/settings/providers'));
         expect(stored.writes).toBe(1);
         expect(stored.catalog.connections).toEqual([]);
         expect(run).not.toHaveBeenCalled();
-        expect(router.replace).not.toHaveBeenCalled();
+        expect(router.replace).toHaveBeenCalledTimes(1);
     });
 
     it('admits one approval request and re-enables deletion after cancellation without writing', async () => {

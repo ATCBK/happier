@@ -221,7 +221,7 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                 <Item
                     testID={`connected-services-index:${sheet.serviceKey}:support-details`}
                     title={t('common.details')}
-                    subtitle={t('common.unavailable')}
+                    subtitle={sheet.statusLine ? t('common.unavailable') : t('settingsPlugins.diagnosticsTitle')}
                     // The sheet's leading column, widened so this title starts on the account names' edge
                     // (measured live: 48 vs 58 px), not on the generic row's.
                     iconBoxSize={props.compact ? undefined : SUPPORT_DETAILS_LEADING_BOX_PX}

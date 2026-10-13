@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useIsFocused, useNavigation } from '@/components/appShell/workspace/destinationRoute';
-import type { MarketplaceSourceV1 } from '@happier-dev/protocol/marketplace';
+import type { MarketplaceSourcePresentationV1 } from './model/usePluginRegistrySourceAdministration';
 
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -48,7 +48,7 @@ async function presentSourceMutationSettlement(
 type SourceDraft = Readonly<{ sourceUrl: string; title: string; description: string }>;
 
 function MarketplaceSourceEditor(props: Readonly<{
-    source: MarketplaceSourceV1 | null;
+    source: MarketplaceSourcePresentationV1 | null;
     disabled: boolean;
     onSave: (draft: SourceDraft) => Promise<void>;
     onCancel: () => void;
@@ -100,13 +100,13 @@ export const PluginMarketplaceSourcesScreen = React.memo(function PluginMarketpl
     const state = usePluginSettingsScreenState({ focused: isFocused });
     const [busySourceId, setBusySourceId] = React.useState<string | null>(null);
     const [editingSourceId, setEditingSourceId] = React.useState<string | null>(null);
-    React.useEffect(() => { setEditingSourceId(null); }, [state.executionMachineId, state.executionServerId]);
-    const configuredSources = state.marketplaceSourceRegistry?.sources ?? [];
-    const mutationsDisabled = !state.daemonAdministrationAvailable
+    React.useEffect(() => { setEditingSourceId(null); }, [state.marketplaceSourceRegistryScopeKey]);
+    const registrySources = state.marketplaceSourceRegistry?.sources ?? [];
+    const mutationsDisabled = !state.marketplaceSourceRegistryAvailable
         || busySourceId !== null
         || state.marketplaceSourceRegistryMutationInFlight;
 
-    const saveSource = React.useCallback(async (draft: SourceDraft, source: MarketplaceSourceV1 | null) => {
+    const saveSource = React.useCallback(async (draft: SourceDraft, source: MarketplaceSourcePresentationV1 | null) => {
         const sourceUrl = draft.sourceUrl.trim();
         const title = draft.title.trim();
         if (!sourceUrl || (source !== null && !title)) return;
@@ -126,7 +126,7 @@ export const PluginMarketplaceSourcesScreen = React.memo(function PluginMarketpl
         }
     }, [state]);
 
-    const remove = React.useCallback(async (source: MarketplaceSourceV1) => {
+    const remove = React.useCallback(async (source: MarketplaceSourcePresentationV1) => {
         const confirmed = await Modal.confirm(
             t('settingsPlugins.sourceAdministration.removeTitle'),
             t('settingsPlugins.sourceAdministration.removeBody', { name: source.title }),
@@ -224,20 +224,20 @@ export const PluginMarketplaceSourcesScreen = React.memo(function PluginMarketpl
                             ? `${state.administrationTargetLabel.machine} · ${state.administrationTargetLabel.server}`
                             : undefined}
                         subtitleLines={0}
-                        detail={state.daemonAdministrationAvailable ? t('common.retry') : undefined}
-                        onPress={state.daemonAdministrationAvailable ? state.refreshMarketplaceSourceRegistry : undefined}
-                        mode={state.daemonAdministrationAvailable ? 'interactive' : 'info'}
+                        detail={state.marketplaceSourceRegistryAvailable ? t('common.retry') : undefined}
+                        onPress={state.marketplaceSourceRegistryAvailable ? state.refreshMarketplaceSourceRegistry : undefined}
+                        mode={state.marketplaceSourceRegistryAvailable ? 'interactive' : 'info'}
                         showChevron={false}
                     />
                 ) : null}
-                {state.marketplaceSourceRegistry !== null && configuredSources.length === 0 && !state.marketplaceSourceRegistryLoading && !state.marketplaceSourceRegistryLoadError ? (
+                {state.marketplaceSourceRegistry !== null && registrySources.length === 0 && !state.marketplaceSourceRegistryLoading && !state.marketplaceSourceRegistryLoadError ? (
                     <Item
                         testID="settings.plugins.sources.empty"
                         title={t('settingsPlugins.sourceAdministration.configuredEmpty')}
                         mode="info"
                         showChevron={false}
                     />
-                ) : configuredSources.map((source) => {
+                ) : registrySources.map((source) => {
                     const userOwned = source.origin === 'user';
                     return (
                         <React.Fragment key={source.id}>
@@ -303,7 +303,7 @@ export const PluginMarketplaceSourcesScreen = React.memo(function PluginMarketpl
             <NpmRegistryProfilesSection
                 daemonOperationsAvailable={state.daemonAdministrationAvailable}
                 targetSelection={state.administrationTargetSelection}
-                marketplaceSources={configuredSources}
+                marketplaceSources={registrySources}
                 onSetMarketplaceSourceProfile={state.setMarketplaceSourceProfile}
                 marketplaceSourceMutationInFlight={state.marketplaceSourceRegistryMutationInFlight}
             />

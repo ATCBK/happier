@@ -24,7 +24,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 export const PromptsSettingsHome = React.memo(() => {
   const router = useRouter();
   const promptAssetsExternalEnabled = useFeatureEnabled('prompts.assets.external');
-  const promptRegistriesEnabled = useFeatureEnabled('prompts.skills.registries');
+  const promptRegistriesEnabled = useFeatureEnabled('prompts.library');
   const artifacts = useArtifacts();
   const artifactsLoaded = useArtifactsLoaded();
   const invocations = usePromptLibraryCatalogValue('invocations').value;

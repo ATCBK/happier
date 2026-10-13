@@ -50,20 +50,11 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: routerPushMock } }).module;
 });
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
-});
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-// Sections render their header action beside their rows, as the real section does.
-vi.mock('@/components/ui/lists/ItemGroup', async () => {
-    const React = await import('react');
-    return { ItemGroup: (props: { action?: unknown; children?: unknown }) => React.createElement('ItemGroup', props, props.action as never, props.children as never) };
-});
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
+});
 vi.mock('@/modal', () => ({ Modal: { confirm: vi.fn(async () => true) } }));
 vi.mock('./identityAdministrationClient', async (importOriginal) => ({
     ...await importOriginal<typeof import('./identityAdministrationClient')>(),

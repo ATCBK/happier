@@ -1,62 +1,15 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderSettingsView } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerPushSpy = vi.fn();
-const settingsViewMultiServerMachinesState = vi.hoisted(() => ({
-    sharedDeviceInventorySettings: { privacy: { shareDeviceInventory: true } },
-    localSettingMutable: [false, vi.fn()] as const,
-    settingMutable: [{ v: 1, actions: {} }, vi.fn()] as const,
-    profile: {
-        id: 'prof_1',
-        timestamp: 0,
-        firstName: null,
-        lastName: null,
-        username: null,
-        avatar: null,
-        linkedProviders: [],
-        connectedServices: [],
-        connectedServicesV2: [],
-        connectedServiceCredentialRevisionsV1: [],
-    },
-}));
-
-const activeSelectionMachineGroupsState = vi.hoisted(() => ({
-    value: {
-        hasAnyVisibleMachines: true,
-        showMachinesGroupedByServer: true,
-        visibleMachineGroups: [
-            {
-                serverId: 'srv-a',
-                serverName: 'Server A',
-                status: 'idle',
-                machines: [
-                    {
-                        id: 'mach-a1',
-                        metadata: { displayName: 'Machine A1', host: 'a.local' },
-                    },
-                ],
-            },
-            {
-                serverId: 'srv-b',
-                serverName: 'Server B',
-                status: 'idle',
-                machines: [
-                    {
-                        id: 'mach-b1',
-                        metadata: { displayName: 'Machine B1', host: 'b.local' },
-                    },
-                ],
-            },
-        ],
-    },
-}));
-
 installSettingsViewCommonModuleMocks({
     icons: async () => {
         const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
@@ -96,17 +49,7 @@ installSettingsViewCommonModuleMocks({
         });
         return routerMock.module;
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSetting: () => settingsViewMultiServerMachinesState.sharedDeviceInventorySettings,
-            useSettings: () => settingsViewMultiServerMachinesState.sharedDeviceInventorySettings,
-            useEntitlement: () => false,
-            useProfile: () => settingsViewMultiServerMachinesState.profile,
-            useLocalSettingMutable: () => settingsViewMultiServerMachinesState.localSettingMutable,
-            useSettingMutable: () => settingsViewMultiServerMachinesState.settingMutable,
-        });
-    },
+    storage: 'real',
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
@@ -131,22 +74,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, title }: any) =>
-        React.createElement(React.Fragment, null, title ? React.createElement('Title', null, title) : null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/settings/machines/hooks/useActiveSelectionMachineGroups', () => ({
-    useActiveSelectionMachineGroups: () => activeSelectionMachineGroupsState.value,
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -162,9 +91,6 @@ vi.mock('@/hooks/ui/useMultiClick', () => ({
     useMultiClick: (cb: () => void) => cb,
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => false,
-}));
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1000 },
@@ -176,9 +102,6 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -204,6 +127,25 @@ vi.mock('@/utils/platform/deferOnWeb', () => ({
     deferOnWeb: (fn: () => void) => fn(),
 }));
 
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { storage } = await import('@/sync/domains/state/storage');
+
+beforeEach(async () => {
+    await home.reset();
+    const serverA = await home.addHome({ name: 'Server A', serverUrl: 'https://settings-a.example', serverIdentityId: 'srv-a', accountId: 'owner' });
+    await home.addHome({ name: 'Server B', serverUrl: 'https://settings-b.example', serverIdentityId: 'srv-b', accountId: 'owner', active: false });
+    const machines = [
+        createMachineFixture({ id: 'mach-a1', metadata: { displayName: 'Machine A1', host: 'a.local' } }),
+        createMachineFixture({ id: 'mach-b1', metadata: { displayName: 'Machine B1', host: 'b.local' } }),
+    ];
+    storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { 'srv-a': [machines[0]!], 'srv-b': [machines[1]!] },
+        machineListStatusByServerId: { 'srv-a': 'idle', 'srv-b': 'idle' } });
+    home.answer(serverA, '/v1/machines/managed/actions/list', { body: { machines: [] } });
+    home.answer(serverA, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] } });
+});
+
 afterEach(() => {
     routerPushSpy.mockClear();
 });
@@ -219,7 +161,8 @@ describe('SettingsView (multi-server machines)', () => {
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
 
-        const items = tree!.findAllByType('Item' as any);
+        const { Item } = await import('@/components/ui/lists/Item');
+        const items = tree!.findAllByType(Item);
         const itemTitles = items.map((item: any) => String(item.props.title ?? ''));
 
         expect(itemTitles).not.toContain('Machine A1');

@@ -6,8 +6,6 @@ import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCo
 import { HomesCollectionProvider, HomesCollectionRail, useHomesCollection } from './HomesCollection';
 import { HOMES_COLLECTION_ROOT } from './homeCollectionModel';
 
-/** Rail width at normal text scale: a Home mark, its name and one status line. */
-const HOMES_RAIL_WIDTH_PX = 272;
 /** The narrowest page that still fits a Home page's header actions beside its title. */
 const HOMES_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -40,7 +38,7 @@ export const HomesSettingsLayout = React.memo(function HomesSettingsLayout() {
                 rootPathname={HOMES_COLLECTION_ROOT}
                 resolveChildRoute={resolveHomesChildRoute}
                 rail={<HomesCollectionRail />}
-                railWidthPx={HOMES_RAIL_WIDTH_PX}
+                railWidth="standard"
                 detailMinWidthPx={HOMES_DETAIL_MIN_WIDTH_PX}
                 testID="settings-homes"
                 detailTop={<HomesRelayDriftNotice />}

@@ -1,10 +1,8 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { resolveHappierIconSize } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Item } from '@/components/ui/lists/Item';
@@ -63,7 +61,6 @@ export function ProviderConnectionModelsPage(props: Readonly<{
                     onOpenChange={models.onEditorOpenChange}
                     title={t('settingsProviders.models.add')}
                     subtitle={t('settingsProviders.models.addDescription')}
-                    icon={<Icon name="plus" size={resolveHappierIconSize('medium')} color={theme.colors.text.secondary} />}
                     helpText={models.editorError ?? t('settingsProviders.models.addHelp')}
                     onCancel={() => models.onEditorOpenChange(false)}
                     onSave={models.onAddManualModels}

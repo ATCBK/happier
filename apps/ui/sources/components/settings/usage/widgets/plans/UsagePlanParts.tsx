@@ -5,7 +5,6 @@ import { ConnectedAccountIdentityText } from '@/components/settings/connectedSer
 import { ConnectedServiceMark } from '@/components/settings/connectedServices/ConnectedServiceMark';
 import { ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER } from '@/components/settings/connectedServices/account/accountBlockFormatters';
 import { Text } from '@/components/ui/text/Text';
-import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
@@ -27,6 +26,8 @@ import {
   UsageBodyInsufficient,
   UsageCoverageLine,
   readUsageCoverageGaps,
+  usageCoverageLineMode,
+  usageSourceTitle,
   UsageBodyReading,
 } from '../usageBodyKit';
 import { useUsageWidgetPageHasCoverageDetail } from '../usageWidgetBatch';
@@ -36,39 +37,71 @@ import type { UsagePlanAccountName } from './useUsagePlans';
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** A qualified allowance read's state, without turning an absent reading into plan facts. */
-export function UsagePlanAccountState(props: Readonly<{
-  account: UsagePlanAccount;
-  name: UsagePlanAccountName;
-  testID: string;
-  onRetry(): void | Promise<unknown>;
-}>) {
-  const { account } = props;
+type PlanAccountReadKind = 'failed' | 'pending' | 'partial';
+
+/** One account's read; a current, complete read says nothing. */
+function planAccountReadKind(account: UsagePlanAccount): PlanAccountReadKind | null {
   const status = account.state.status;
-  const pending = status === 'pending' || status === 'not_loaded';
-  const failed = status === 'error';
-  const reason = t(failed ? 'usage.board.page.coverageFailed'
-    : pending ? 'usage.board.page.coveragePending' : 'usage.board.page.coveragePartial', { sources: props.name.title });
-  const action = { label: t('common.retry'), onPress: props.onRetry };
-  if (account.read?.current) {
-    if (status !== 'stale' && !failed && !pending) return null;
-    return <SurfaceFreshnessLine testID={props.testID} asOf={account.state.asOfMs ?? account.observedAtMs}
-      reason={reason} busy={pending} tone={pending ? 'neutral' : 'warning'} {...(!pending ? { action } : {})} />;
-  }
-  return <SurfaceStateCard testID={props.testID} replacesContent={false} size="line"
-    kind={pending ? 'loading' : failed ? 'error' : 'unavailable'} title={reason}
-    diagnosticCode={account.state.errorCode} {...(!pending ? { action } : {})} />;
+  if (status === 'error') return 'failed';
+  if (status === 'pending' || status === 'not_loaded') return 'pending';
+  if (account.read?.current && status !== 'stale') return null;
+  return 'partial';
 }
 
-/** Projections and events cannot draw an account without a reading, but must still name its state. */
+/**
+ * A plan body's accounts usually share one read: four columns each saying "Partial … Retry" say one
+ * thing four times. This folds every affected account into one statement: a failure leads, "Still
+ * reading" only while all of them are, and the account names only when not every account is affected.
+ */
+export function readPlanAccountsStatement(
+  accounts: readonly UsagePlanAccount[],
+  nameOf: (account: UsagePlanAccount) => UsagePlanAccountName,
+): Readonly<{ kind: PlanAccountReadKind; reason: string; asOf: number | null; accounts: number }> | null {
+  const affected = accounts.flatMap((account) => {
+    const kind = planAccountReadKind(account);
+    return kind ? [{ account, kind }] : [];
+  });
+  if (affected.length === 0) return null;
+  const kind: PlanAccountReadKind = affected.some((entry) => entry.kind === 'failed') ? 'failed'
+    : affected.every((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
+  const sources = affected.length === accounts.length && accounts.length > 1
+    ? usageSourceTitle('quota')
+    : affected.map((entry) => nameOf(entry.account).title).join(', ');
+  const times = affected
+    .map((entry) => entry.account.read?.current ? entry.account.state.asOfMs ?? entry.account.observedAtMs : null)
+    .filter((time): time is number => typeof time === 'number');
+  return {
+    kind,
+    reason: t(kind === 'failed' ? 'usage.board.page.coverageFailed'
+      : kind === 'pending' ? 'usage.board.page.coveragePending' : 'usage.board.page.coveragePartial', { sources }),
+    asOf: times.length ? Math.min(...times) : null,
+    accounts: affected.length,
+  };
+}
+
+/**
+ * A plan body's read state, said once: one quiet line under the content with one Retry, for every
+ * account whose read is not current, else the body's source coverage. Columns keep their data or a calm
+ * placeholder; none repeats the state.
+ */
 export function UsagePlanAccountStates(props: Readonly<{
   accounts: readonly UsagePlanAccount[];
   nameOf(account: UsagePlanAccount): UsagePlanAccountName;
+  slice: UsageQueryResultSlice;
   testID: string;
   onRetry(): void | Promise<unknown>;
 }>) {
-  return <>{props.accounts.map(account => <UsagePlanAccountState key={account.key} account={account}
-    name={props.nameOf(account)} testID={`${props.testID}.${account.accountId}`} onRetry={props.onRetry} />)}</>;
+  const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
+  const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
+  if (!statement) {
+    return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
+  }
+  // The Usage page names partial and pending reads once in its header and Sources; a body keeps failures.
+  if (usageCoverageLineMode([{ status: statement.kind === 'failed' ? 'error' : statement.kind }], pageHasDetail) === 'hidden') return null;
+  const pending = statement.kind === 'pending';
+  return <SurfaceFreshnessLine testID={props.testID} asOf={statement.asOf} reason={statement.reason} busy={pending}
+    tone={statement.kind === 'failed' ? 'warning' : 'neutral'}
+    {...(!pending ? { action: { label: t('common.retry'), onPress: props.onRetry } } : {})} />;
 }
 
 export function formatPlanPercent(fraction: number): string {
@@ -204,9 +237,9 @@ export function UsagePlanIdentity(
         <ConnectedAccountIdentityText
           value={props.name.title}
           style={[styles.identityTitle, text.title]}
-          // Compact identities sit in narrow columns (capacity segments, reset rows): one line, so an
-          // account address can never run into its neighbour.
-          numberOfLines={props.compact ? 1 : 2}
+          // Two lines either way: in a narrow column (capacity segments, reset rows) a name wraps at a
+          // space instead of being cut, so "ChatGPT account 2" never reads as "ChatGPT account".
+          numberOfLines={2}
         />
         {qualifier && !props.compact ? (
           <ConnectedAccountIdentityText

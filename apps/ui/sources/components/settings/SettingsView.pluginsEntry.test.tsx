@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
@@ -40,27 +40,7 @@ installSettingsViewCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useEntitlement: () => false,
-            useLocalSettingMutable: () => [false, vi.fn()],
-            useSetting: (key: string) => {
-                if (key === 'serverSelectionGroups') return [];
-                if (key === 'serverSelectionActiveTargetKind') return null;
-                if (key === 'serverSelectionActiveTargetId') return null;
-                if (key === 'experiments') return false;
-                if (key === 'featureToggles') return {};
-                if (key === 'useProfiles') return false;
-                if (key === 'sessionUseTmux') return false;
-                return null;
-            },
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useProfile: () => ({ id: 'prof_1', firstName: '', connectedServices: [] }),
-        });
-    },
+    storage: 'real',
 });
 
 vi.mock('expo-image', () => ({
@@ -77,18 +57,11 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
 
 vi.mock('@/components/ui/media/SafeExpoImage', () => ({
     SafeExpoImage: 'SafeExpoImage',
 }));
 
-vi.mock('@/components/ui/icons/SafeIonicons', () => ({
-    SafeIonicons: 'SafeIonicons',
-}));
 
 vi.mock('@/utils/platform/navigateWithBlurOnWeb', () => ({
     navigateWithBlurOnWeb: (action: () => void) => action(),
@@ -107,17 +80,8 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     isDesktopHost: () => false,
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
 
 vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/components/appShell/plugins/AppShellPluginUiProjection')>(),
@@ -158,15 +122,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getAvatarUrl: () => null,
-    getBio: () => '',
-}));
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -215,6 +171,15 @@ afterEach(() => {
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
 
 describe('SettingsView plugin marketplace entry', () => {
     it('routes the curated plugin discovery entry to the new descriptor-only surface', async () => {

@@ -9,7 +9,7 @@ import { SurfaceStateCard, type SurfaceStateSize } from '@/components/ui/surface
 import { presentProviderError, presentProviderRecoveryAction } from '@/providers/connection/errorPresentation';
 import { dispatchProviderRecoveryAction } from '@/providers/connection/recovery';
 import { t } from '@/text';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { Text } from '@/components/ui/text/Text';
@@ -87,33 +87,21 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
         const code = typedError.success ? typedError.data.code : 'unknown';
         const actionTitle = actionPresentation && typedError.success ? t(actionPresentation.titleKey) : null;
         return (
-            <View
+            <ProviderPickerLine
                 testID={`provider-error:${code}`}
-                accessibilityLiveRegion="polite"
-                style={lineStyles.line}
-            >
-                <Tooltip
-                    testID={`provider-error-detail:${code}`}
-                    label={t(presentation.descriptionKey)}
-                >
-                    <Icon name={iconName} size={ICON_SIZE.sm} color={iconColor} />
-                </Tooltip>
-                <Text numberOfLines={1} style={lineStyles.title}>{t(presentation.titleKey)}</Text>
-                {actionTitle ? (
-                    <IconButton
-                        testID={`provider-error-action:${code}`}
-                        iconName={actionPresentation?.titleKey === 'settingsProviders.errors.actions.retry' ? 'arrow-clockwise' : 'caret-right'}
-                        accessibilityLabel={actionTitle}
-                        tooltip={actionTitle}
-                        variant="plain"
-                        size={24}
-                        iconSize={ICON_SIZE.sm}
-                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                        disabled={recoveryPending}
-                        onPress={() => void runRecovery()}
-                    />
-                ) : null}
-            </View>
+                tooltipTestID={`provider-error-detail:${code}`}
+                iconName={iconName}
+                iconColor={iconColor}
+                tooltip={t(presentation.descriptionKey)}
+                title={t(presentation.titleKey)}
+                action={actionTitle ? {
+                    testID: `provider-error-action:${code}`,
+                    label: actionTitle,
+                    iconName: actionPresentation?.titleKey === 'settingsProviders.errors.actions.retry' ? 'arrow-clockwise' : 'caret-right',
+                    disabled: recoveryPending,
+                    onPress: () => void runRecovery(),
+                } : undefined}
+            />
         );
     }
 
@@ -135,6 +123,49 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
         } : undefined}
     />;
 });
+
+/**
+ * One compact status line inside a picker: a glyph (its tooltip carries the detail), the title, and
+ * at most one next step as an icon-only control. Provider errors and a request waiting for its
+ * approval share it, so a picker's summary reads as one list of lines.
+ */
+export function ProviderPickerLine(props: Readonly<{
+    testID: string;
+    tooltipTestID?: string;
+    iconName: IconName;
+    iconColor: string;
+    tooltip?: string;
+    title: string;
+    action?: Readonly<{
+        testID: string;
+        label: string;
+        iconName: IconName;
+        disabled?: boolean;
+        onPress: () => void;
+    }>;
+}>) {
+    const icon = <Icon name={props.iconName} size={ICON_SIZE.sm} color={props.iconColor} />;
+    return (
+        <View testID={props.testID} accessibilityLiveRegion="polite" style={lineStyles.line}>
+            {props.tooltip ? <Tooltip testID={props.tooltipTestID} label={props.tooltip}>{icon}</Tooltip> : icon}
+            <Text numberOfLines={1} style={lineStyles.title}>{props.title}</Text>
+            {props.action ? (
+                <IconButton
+                    testID={props.action.testID}
+                    iconName={props.action.iconName}
+                    accessibilityLabel={props.action.label}
+                    tooltip={props.action.label}
+                    variant="plain"
+                    size={24}
+                    iconSize={ICON_SIZE.sm}
+                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                    disabled={props.action.disabled}
+                    onPress={props.action.onPress}
+                />
+            ) : null}
+        </View>
+    );
+}
 
 const lineStyles = StyleSheet.create((theme) => ({
     line: {

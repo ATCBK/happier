@@ -1,380 +1,90 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { MarketplaceIndexEntryV1Schema, type MarketplaceIndexEntryV1 } from '@happier-dev/protocol/marketplace';
+import { RegistryItemV1Schema, RegistryListPageV1Schema, RegistrySourceDescriptorV1Schema,
+    type RegistryItemV1, type RegistryListPageV1 } from '@happier-dev/protocol/registries';
+import { mergeDiscoverEntries, mergeDiscoverNonInstallableListings, projectRegistryMarketplacePage } from './readPluginMarketplaceCatalog';
 
-import type { MarketplaceIndexQueryResultV1 } from '@happier-dev/protocol';
+type Source = Extract<RegistryItemV1['payload'], { kind: 'plugin' }>['source'];
+const curated: Source = { id: 'marketplace:curated', title: 'Happier curated', kind: 'curated',
+    sourceUrl: 'https://marketplace.example.test/index.json' };
+const community: Source = { id: 'marketplace:community-npm', title: 'Community npm', kind: 'community-npm',
+    sourceUrl: 'https://registry.npmjs.org' };
+const internal: Source = { id: 'marketplace:internal', title: 'Internal index', kind: 'user',
+    sourceUrl: 'https://internal.example.test/index.json' };
 
-import {
-    mergeDiscoverEntries,
-    mergeDiscoverNonInstallableListings,
-    projectDaemonMarketplaceIndexPage,
-} from './readPluginMarketplaceCatalog';
-
-type IndexItem = MarketplaceIndexQueryResultV1['items'][number];
-
-const INTEGRITY = 'sha512-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==';
-const MANIFEST_DIGEST = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-
-const CURATED_SOURCE = {
-    id: 'marketplace:curated',
-    title: 'Happier curated',
-    kind: 'curated',
-    sourceUrl: 'https://marketplace.example.test/index.json',
-} as const satisfies IndexItem['source'];
-
-function createIndexItem(overrides: Partial<IndexItem> = {}): IndexItem {
-    return {
-        pluginId: 'sample.plugin',
-        publisher: { id: 'sample', displayName: 'Sample' },
-        display: { title: 'Sample Plugin', description: 'Daemon-owned marketplace entry' },
-        distribution: {
-            kind: 'npm',
-            registryOrigin: 'https://registry.npmjs.org',
-            packageName: 'sample-plugin',
-            version: '1.2.3',
-            integrity: INTEGRITY,
-        },
-        manifestDigest: MANIFEST_DIGEST,
-        compatibility: { happier: '>=1', platforms: ['web'] },
+function sourceDescriptor(source: Source) {
+    return RegistrySourceDescriptorV1Schema.parse({ id: source.id, title: source.title, url: source.sourceUrl,
+        format: source.kind === 'community-npm' ? 'happier-npm' : 'happier-catalog', kinds: ['plugin'],
+        enabled: true, addedAt: 1, origin: { kind: source.kind === 'user' ? 'user' : 'built_in' }, removable: source.kind === 'user' });
+}
+function registryItem(overrides: Partial<MarketplaceIndexEntryV1> = {}, source: Source = curated) {
+    const listing = MarketplaceIndexEntryV1Schema.parse({
+        pluginId: 'sample.plugin', publisher: { id: 'sample', displayName: 'Sample' },
+        display: { title: 'Sample Plugin', description: 'Marketplace listing' },
+        distribution: { kind: 'npm', registryOrigin: 'https://registry.npmjs.org', packageName: 'sample-plugin', version: '1.2.3',
+            integrity: 'sha512-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==' },
+        manifestDigest: 'sha256:' + 'a'.repeat(64), compatibility: { happier: '>=1', platforms: ['web'] },
         summary: { contributions: ['agents'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] },
-        review: { status: 'approved', reviewedAt: '2026-07-13T00:00:00.000Z' },
-        categories: ['agents'],
-        media: [],
-        updatePolicy: 'allowed',
-        links: {},
-        source: CURATED_SOURCE,
-        freshness: { state: 'fresh', fetchedAtMs: 1 },
-        admission: {
-            install: 'full-review',
-            mutatesInstalledTrust: false,
-            disablesInstalledCode: false,
-            directNpmRequiresFullReview: true,
-        },
-        artifactAccess: { state: 'public', registryProfileId: null },
+        review: { status: 'approved', reviewedAt: '2026-07-13T00:00:00.000Z' }, categories: ['agents'], media: [], updatePolicy: 'allowed', links: {},
         ...overrides,
-    };
+    });
+    return RegistryItemV1Schema.parse({ summary: { sourceId: source.id, kind: 'plugin', itemId: source.kind === 'community-npm' ? listing.distribution.packageName : listing.pluginId,
+        title: listing.display.title, version: listing.distribution.version }, payload: { kind: 'plugin', listing, source }, fetchedAt: 1 });
+}
+function page(items: readonly RegistryItemV1[], pages?: readonly RegistryListPageV1[], sources: readonly Source[] = [curated]) {
+    return projectRegistryMarketplacePage({ items, sources: sources.map(sourceDescriptor),
+        pages: pages ?? sources.map(source => RegistryListPageV1Schema.parse({ sourceId: source.id,
+            status: { state: 'ok', fetchedAt: 1 }, items: items.filter(item => item.summary.sourceId === source.id).map(item => item.summary), nextCursor: null })) });
 }
 
-function createPage(overrides: Partial<MarketplaceIndexQueryResultV1> = {}): MarketplaceIndexQueryResultV1 {
-    return {
-        revision: 4,
-        nextCursor: null,
-        sources: [],
-        diagnostics: [],
-        items: [],
-        ...overrides,
-    };
-}
-
-describe('projectDaemonMarketplaceIndexPage', () => {
-    it('keeps admitted links and contribution families for inspection before installation', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                links: { homepage: 'https://example.test/plugin', repository: 'https://example.test/source', support: null },
-                summary: { contributions: ['agents', 'tools'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] },
-            })],
-        }));
-
-        expect(page.entries[0]).toMatchObject({
-            links: { homepage: 'https://example.test/plugin', repository: 'https://example.test/source', support: null },
-            contributions: ['agents', 'tools'],
-        });
+describe('projectRegistryMarketplacePage', () => {
+    it('projects the pinned listing and its published install coordinate without machine admission facts', () => {
+        const projected = page([registryItem({ links: { homepage: 'https://example.test/plugin', repository: 'https://example.test/source', support: null },
+            summary: { contributions: ['agents', 'tools'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] } })]);
+        expect(projected.entries).toEqual([expect.objectContaining({ id: 'sample.plugin', sourceId: curated.id, sourceKind: 'curated',
+            title: 'Sample Plugin', version: '1.2.3', packageName: 'sample-plugin', installable: true, registrySelectionOrigin: null,
+            contributions: ['agents', 'tools'], links: { homepage: 'https://example.test/plugin', repository: 'https://example.test/source', support: null } })]);
+        expect(projected.nonInstallable).toEqual([]);
     });
-
-    it('projects a curated listing from the typed daemon page without fetching anything in the client', () => {
-        const fetchSpy = vi.spyOn(globalThis, 'fetch');
-
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            nextCursor: 'cursor-2',
-            items: [createIndexItem()],
-        }));
-
-        expect(page.revision).toBe(4);
-        expect(page.nextCursor).toBe('cursor-2');
-        expect(page.entries).toEqual([{
-            id: 'sample.plugin',
-            sourceId: 'marketplace:curated',
-            sourceKind: 'curated',
-            sourceTitle: 'Happier curated',
-            reviewStatus: 'approved',
-            updatePolicy: 'allowed',
-            publisher: { id: 'sample', displayName: 'Sample' },
-            categories: ['agents'],
-            contributions: ['agents'],
-            links: {},
-            executableRealms: ['daemon'],
-            platforms: ['web'],
-            title: 'Sample Plugin',
-            description: 'Daemon-owned marketplace entry',
-            version: '1.2.3',
-            // The npm coordinate is carried, not derived: it differs from the
-            // manifest plugin id and the install action depends on it.
-            packageName: 'sample-plugin',
-            installable: true,
-            registrySelectionOrigin: null,
-        }]);
-        expect(page.nonInstallable).toEqual([]);
-        expect(fetchSpy).not.toHaveBeenCalled();
-        fetchSpy.mockRestore();
+    it('keeps a pinned curated listing installable without advertising an update', () => {
+        expect(page([registryItem({ updatePolicy: 'pinned' })]).entries[0]).toMatchObject({ updatePolicy: 'pinned', installable: true });
     });
-
-    it('keeps a pinned curated listing installable while refusing to advertise an update from it', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ updatePolicy: 'pinned' })],
-        }));
-
-        expect(page.entries[0]).toMatchObject({
-            updatePolicy: 'pinned',
-            installable: true,
-        });
+    it.each([community, internal])('offers unreviewed code from $title to the daemon install review', source => {
+        const item = registryItem({ review: { status: 'unreviewed', reviewedAt: null } }, source);
+        const projected = page([item], undefined, [source]);
+        expect(projected.entries[0]).toMatchObject({ sourceId: source.id, installable: true, warning: 'unreviewed', registrySelectionOrigin: null });
+        expect(projected.nonInstallable).toEqual([]);
     });
-
-    it('surfaces an exact community npm listing as unreviewed code eligible for the normal trust flow', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                pluginId: 'community.plugin',
-                display: { title: 'Community Plugin', description: 'Third-party plugin from npm' },
-                review: { status: 'unreviewed', reviewedAt: null },
-                source: {
-                    id: 'marketplace:community-npm',
-                    title: 'Community npm',
-                    kind: 'community-npm',
-                    sourceUrl: 'https://registry.npmjs.org/-/v1/search?text=keywords:happier-plugin',
-                },
-            })],
-        }));
-
-        expect(page.entries).toEqual([{
-            id: 'community.plugin',
-            sourceId: 'marketplace:community-npm',
-            sourceKind: 'community-npm',
-            sourceTitle: 'Community npm',
-            reviewStatus: 'unreviewed',
-            updatePolicy: 'allowed',
-            publisher: { id: 'sample', displayName: 'Sample' },
-            categories: ['agents'],
-            contributions: ['agents'],
-            links: {},
-            executableRealms: ['daemon'],
-            platforms: ['web'],
-            title: 'Community Plugin',
-            description: 'Third-party plugin from npm',
-            version: '1.2.3',
-            packageName: 'sample-plugin',
-            installable: true,
-            registrySelectionOrigin: null,
-            warning: 'unreviewed',
-        }]);
+    it('keeps a withdrawn curated listing visible as a warning without granting install authority', () => {
+        const projected = page([registryItem({ review: { status: 'withdrawn', reviewedAt: null } })]);
+        expect(projected.entries[0]).toMatchObject({ id: 'sample.plugin', warning: 'withdrawn', installable: false });
+        expect(projected.nonInstallable).toEqual([]);
     });
-
-    it('retains a withdrawn curated listing as a non-installable warning without granting disable authority', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                pluginId: 'sample.withdrawn',
-                display: { title: 'Withdrawn Plugin', description: 'Previously curated plugin' },
-                review: { status: 'withdrawn', reviewedAt: null },
-            })],
-        }));
-
-        expect(page.entries).toEqual([{
-            id: 'sample.withdrawn',
-            sourceId: 'marketplace:curated',
-            sourceKind: 'curated',
-            sourceTitle: 'Happier curated',
-            reviewStatus: 'withdrawn',
-            updatePolicy: 'allowed',
-            publisher: { id: 'sample', displayName: 'Sample' },
-            categories: ['agents'],
-            contributions: ['agents'],
-            links: {},
-            executableRealms: ['daemon'],
-            platforms: ['web'],
-            title: 'Withdrawn Plugin',
-            description: 'Previously curated plugin',
-            version: '1.2.3',
-            packageName: 'sample-plugin',
-            installable: false,
-            registrySelectionOrigin: null,
-            warning: 'withdrawn',
-        }]);
-        // A withdrawal is a warning the reader must see, not a listing this
-        // machine merely failed to acquire.
-        expect(page.nonInstallable).toEqual([]);
+    it('refuses a blocked curated listing through the canonical review decision', () => {
+        const projected = page([registryItem({ review: { status: 'blocked', reviewedAt: null } })]);
+        expect(projected.entries).toEqual([]);
+        expect(projected.nonInstallable).toEqual([expect.objectContaining({ pluginId: 'sample.plugin', sourceId: curated.id, reason: 'notApproved' })]);
     });
-
-    it.each([
-        ['sourceStale', { freshness: { state: 'stale' as const, fetchedAtMs: 1, staleSinceMs: 1 } }],
-        ['notApproved', { review: { status: 'blocked' as const, reviewedAt: null } }],
-        ['artifactUnavailable', { artifactAccess: { state: 'offline' as const, registryProfileId: 'profile-1' } }],
-    ])('reports a dropped %s listing instead of silently discarding the source fact', (reason, override) => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem(override)],
-        }));
-
-        expect(page.entries).toEqual([]);
-        expect(page.nonInstallable).toEqual([{
-            pluginId: 'sample.plugin',
-            title: 'Sample Plugin',
-            sourceId: 'marketplace:curated',
-            sourceTitle: 'Happier curated',
-            reason,
-        }]);
-    });
-
-    it.each([
-        ['a bound profile that must sign in again', { state: 'auth-unavailable' as const, registryProfileId: 'profile-1' }],
-        ['a private registry no profile is bound for', { state: 'unverified-profile' as const, registryProfileId: null }],
-        ['a bound profile that was removed', { state: 'source-removed' as const, registryProfileId: 'profile-gone' }],
-    ])('keeps %s installable as a registry selection the user can make', (_name, artifactAccess) => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                distribution: { ...createIndexItem().distribution, registryOrigin: 'https://npm.acme.example' },
-                artifactAccess,
-            })],
-        }));
-
-        expect(page.nonInstallable).toEqual([]);
-        expect(page.entries).toEqual([expect.objectContaining({
-            id: 'sample.plugin',
-            installable: true,
-            registrySelectionOrigin: 'https://npm.acme.example',
-        })]);
-    });
-
-    it('never offers a registry selection past a durable review or freshness refusal', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                freshness: { state: 'stale', fetchedAtMs: 1, staleSinceMs: 1 },
-                artifactAccess: { state: 'unverified-profile', registryProfileId: null },
-            })],
-        }));
-
-        expect(page.entries).toEqual([]);
-        expect(page.nonInstallable).toEqual([expect.objectContaining({ reason: 'sourceStale' })]);
-    });
-
-    it('carries per-source freshness and diagnostics through instead of collapsing them into one failure', () => {
-        const page = projectDaemonMarketplaceIndexPage(createPage({
-            sources: [
-                {
-                    source: CURATED_SOURCE,
-                    freshness: { state: 'fresh', fetchedAtMs: 10 },
-                    diagnostics: [],
-                },
-                {
-                    source: {
-                        id: 'marketplace:user',
-                        title: 'Internal index',
-                        kind: 'user',
-                        sourceUrl: 'https://internal.example.test/index.json',
-                    },
-                    freshness: { state: 'stale-offline', fetchedAtMs: 5, staleSinceMs: 6 },
-                    diagnostics: [
-                        { code: 'source_offline', message: 'The index host could not be reached.' },
-                        { code: 'source_offline', message: 'The cached index is also unavailable.' },
-                    ],
-                },
-            ],
-            diagnostics: [
-                { code: 'index_partial', message: 'Some sources did not answer.' },
-                { code: 'index_partial', message: 'Some results may be missing.' },
-            ],
-        }));
-
-        expect(page.sources).toEqual([
-            {
-                id: 'marketplace:curated',
-                title: 'Happier curated',
-                kind: 'curated',
-                freshness: 'fresh',
-                diagnostics: [],
-            },
-            {
-                id: 'marketplace:user',
-                title: 'Internal index',
-                kind: 'user',
-                freshness: 'stale-offline',
-                diagnostics: [{
-                    id: 'source:marketplace%3Auser:source_offline:0',
-                    sourceId: 'marketplace:user',
-                    sourceTitle: 'Internal index',
-                    code: 'source_offline',
-                    message: 'The index host could not be reached.',
-                }, {
-                    id: 'source:marketplace%3Auser:source_offline:1',
-                    sourceId: 'marketplace:user',
-                    sourceTitle: 'Internal index',
-                    code: 'source_offline',
-                    message: 'The cached index is also unavailable.',
-                }],
-            },
-        ]);
-        expect(page.diagnostics).toEqual([{
-            id: 'index:index_partial:0',
-            sourceId: null,
-            sourceTitle: null,
-            code: 'index_partial',
-            message: 'Some sources did not answer.',
-        }, {
-            id: 'index:index_partial:1',
-            sourceId: null,
-            sourceTitle: null,
-            code: 'index_partial',
-            message: 'Some results may be missing.',
-        }]);
+    it('keeps a healthy source visible while a second source fails and preserves paging demand', () => {
+        const item = registryItem();
+        const pages = [RegistryListPageV1Schema.parse({ sourceId: curated.id, status: { state: 'ok', fetchedAt: 1 },
+            items: [item.summary], nextCursor: 'curated-next' }), RegistryListPageV1Schema.parse({ sourceId: internal.id,
+            status: { state: 'auth_failed' }, items: [], nextCursor: null })];
+        const projected = page([item], pages, [curated, internal]);
+        expect(projected.entries).toHaveLength(1);
+        expect(projected.nextCursor).not.toBeNull();
+        expect(projected.sources.find(source => source.id === internal.id)).toMatchObject({ title: internal.title });
+        expect(projected.sources.find(source => source.id === internal.id)?.diagnostics).not.toEqual([]);
     });
 });
 
-describe('mergeDiscoverEntries', () => {
-    it('appends a following page deterministically and drops listings already shown', () => {
-        const first = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ pluginId: 'a.plugin' }), createIndexItem({ pluginId: 'b.plugin' })],
-        })).entries;
-        const second = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ pluginId: 'b.plugin' }), createIndexItem({ pluginId: 'c.plugin' })],
-        })).entries;
-
-        expect(mergeDiscoverEntries(first, second).map((entry) => entry.id))
-            .toEqual(['a.plugin', 'b.plugin', 'c.plugin']);
-    });
-
-    it('keeps the same plugin listed once per marketplace source it was discovered through', () => {
-        const curated = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ pluginId: 'shared.plugin' })],
-        })).entries;
-        const community = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({
-                pluginId: 'shared.plugin',
-                review: { status: 'unreviewed', reviewedAt: null },
-                source: {
-                    id: 'marketplace:community-npm',
-                    title: 'Community npm',
-                    kind: 'community-npm',
-                    sourceUrl: 'https://registry.npmjs.org/-/v1/search?text=keywords:happier-plugin',
-                },
-            })],
-        })).entries;
-
-        expect(mergeDiscoverEntries(curated, community).map((entry) => entry.sourceId))
-            .toEqual(['marketplace:curated', 'marketplace:community-npm']);
-    });
-
-    it('returns the previous list unchanged when a following page adds nothing new', () => {
-        const first = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ pluginId: 'a.plugin' })],
-        })).entries;
-
+describe('marketplace listing merges', () => {
+    it('appends new identities, keeps the same plugin once per source and retains unchanged list identity', () => {
+        const first = page([registryItem({ pluginId: 'shared.plugin' })]).entries;
+        const following = page([registryItem({ pluginId: 'shared.plugin', review: { status: 'unreviewed', reviewedAt: null } }, community)], undefined, [community]).entries;
+        expect(mergeDiscoverEntries(first, following).map(entry => entry.sourceId)).toEqual([curated.id, community.id]);
         expect(mergeDiscoverEntries(first, first)).toBe(first);
-    });
-});
-
-describe('mergeDiscoverNonInstallableListings', () => {
-    it('deduplicates continuation pages by the same source and plugin identity as installable entries', () => {
-        const first = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ freshness: { state: 'stale', fetchedAtMs: 1 } })],
-        })).nonInstallable;
-        const duplicate = projectDaemonMarketplaceIndexPage(createPage({
-            items: [createIndexItem({ freshness: { state: 'stale', fetchedAtMs: 2 } })],
-        })).nonInstallable;
-
-        expect(mergeDiscoverNonInstallableListings(first, duplicate)).toBe(first);
+        const blocked = page([registryItem({ review: { status: 'blocked', reviewedAt: null } })]).nonInstallable;
+        expect(mergeDiscoverNonInstallableListings(blocked, blocked)).toBe(blocked);
     });
 });

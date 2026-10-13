@@ -42,6 +42,7 @@ export const SETTINGS_PAGE_IDS = {
     delegation: 'delegation',
     connectedServices: 'connectedServices',
     connectedServicesAgentSignIn: 'connectedServicesAgentSignIn',
+    skills: 'skills',
     mcp: 'mcp',
     plugins: 'plugins',
     prompts: 'prompts',

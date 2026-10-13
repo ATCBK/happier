@@ -1,60 +1,28 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
-import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { standardCleanup } from '@/dev/testkit';
 
-const setPresentation = vi.fn();
-const setColumnsEnabled = vi.fn();
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+const account = createProviderSettingsAccountHarness();
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            useSettingMutable: createUseSettingMutableMockFromReader((name) => {
-                if (name === 'newSessionWizardSectionPresentationV1') {
-                    return [{ models: 'dropdown' }, setPresentation];
-                }
-                if (name === 'newSessionWizardColumnsEnabled') {
-                    return [false, setColumnsEnabled];
-                }
-                return [null, vi.fn()];
-            }),
-        },
-    });
-});
-
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement(
-        React.Fragment,
-        null,
-        props.itemTrigger ? React.createElement('Item', { ...props.itemTrigger, ...(props.itemTrigger.itemProps ?? {}) }) : null,
-        ...(props.items ?? []).map((item: any) => React.createElement('Item', {
-            key: `${props.itemTrigger?.title ?? 'unknown'}:${item.id}`,
-            title: `DropdownItem:${props.itemTrigger?.title ?? 'unknown'}:${item.title}`,
-            onPress: () => props.onSelect?.(item.id),
-        })),
-    ),
-}));
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./NewSessionWizardSettingsView');
 
 describe('NewSessionWizardSettingsView', () => {
+    beforeEach(async () => { await account.restore({ settings: { newSessionWizardSectionPresentationV1: { models: 'dropdown' }, newSessionWizardColumnsEnabled: false } }); });
+    afterEach(async () => { standardCleanup(); await account.reset(); });
     it('renders every wizard selection section and updates one section without dropping the others', async () => {
         const { NewSessionWizardSettingsView } = await import('./NewSessionWizardSettingsView');
         const screen = await renderSettingsView(React.createElement(NewSessionWizardSettingsView));
@@ -70,16 +38,18 @@ describe('NewSessionWizardSettingsView', () => {
             ['settings-new-session-wizard-paths', 'Folder', 'auto'],
             ['settings-new-session-wizard-permissions', 'Permissions', 'auto'],
         ]);
-        expect(screen.findRow('settings-new-session-wizard-columns')?.props.subtitle).toBe('Stack every wizard selector in one column.');
+        expect(screen.findRowByTitle('Two-column layout')?.props.subtitle).toBe('Stack every wizard selector in one column.');
 
-        steps.find((step) => step.props.testID === 'settings-new-session-wizard-machines')?.props.onChange('dropdown');
-        expect(setPresentation).toHaveBeenCalledWith({
+        await act(async () => {
+            steps.find(step => step.props.testID === 'settings-new-session-wizard-machines')!.props.onChange('dropdown');
+        });
+        expect(storage.getState().settings.newSessionWizardSectionPresentationV1).toEqual({
             models: 'dropdown',
             machines: 'dropdown',
         });
 
         expect(screen.findRowByTitle('Two-column layout')).toBeTruthy();
-        screen.pressRowByTitle('Two-column layout');
-        expect(setColumnsEnabled).toHaveBeenCalledWith(true);
+        await act(async () => { screen.pressRowByTitle('Two-column layout'); });
+        expect(storage.getState().settings.newSessionWizardColumnsEnabled).toBe(true);
     });
 });

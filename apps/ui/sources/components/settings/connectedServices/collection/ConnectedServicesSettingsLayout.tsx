@@ -6,8 +6,6 @@ import { useProfile } from '@/sync/store/hooks';
 import { ConnectedServicesRail } from './ConnectedServicesRail';
 import { CONNECTED_SERVICES_COLLECTION_ROUTE, resolveConnectedServicesChildRoute } from './connectedServicesCollectionRoutes';
 
-/** Rail width at normal text scale: a service mark, an account name and its tightest limit. */
-const CONNECTED_SERVICES_RAIL_WIDTH_PX = 288;
 /** The narrowest detail that still fits an account's identity beside its meters. */
 const CONNECTED_SERVICES_DETAIL_MIN_WIDTH_PX = 560;
 
@@ -28,7 +26,7 @@ export const ConnectedServicesSettingsLayout = React.memo(function ConnectedServ
             rootPathname={CONNECTED_SERVICES_COLLECTION_ROUTE}
             resolveChildRoute={resolveConnectedServicesChildRoute}
             rail={hasAccounts ? <ConnectedServicesRail /> : null}
-            railWidthPx={CONNECTED_SERVICES_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={CONNECTED_SERVICES_DETAIL_MIN_WIDTH_PX}
             testID="settings-connected-services"
         />

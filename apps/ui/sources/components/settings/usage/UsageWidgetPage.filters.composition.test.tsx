@@ -62,9 +62,9 @@ function CurrentContextPort() {
     return null;
 }
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup(); unregister?.(); unregister = undefined; reader = null;
-    retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); home?.dispose(); home = undefined;
+    retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); await home?.dispose(); home = undefined;
 });
 
 describe('mounted Usage page scope commands', () => {

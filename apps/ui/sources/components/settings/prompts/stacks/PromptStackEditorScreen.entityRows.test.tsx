@@ -12,6 +12,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
+import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
 import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions';
 const promptStacksRouterPushSpy = vi.hoisted(() => vi.fn());
@@ -25,12 +26,6 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: promptStacksRouterPushSpy } }).module;
-});
-// Substitute Metro's module loader boundary; the Action front door and approval lifecycle stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute:
-        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
 });
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
@@ -106,8 +101,8 @@ describe('stack editor catalog source', () => {
             enabled: true, placement: 'system_append' as const }];
         const ready = { status: 'ready' as const, source: 'destination' as const, authority: 'inactive' as const,
             control: null, controlRevision: 'absent' as const, referenceGuardRevision: 1,
-            records: [{ record: { v: 1 as const, id: profile.id, definition: { kind: 'legacy' as const, profile },
-                enabled: true, promptStack: entries, secretBindings: {} }, revision: 3 }], diagnostics: [] };
+            records: [{ record: ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'legacy', profile },
+                enabled: true, promptStack: entries, secretBindings: {} }), revision: 3 }], diagnostics: [] };
         applyProfileCatalogSnapshot(scope, ready, true);
         vi.useFakeTimers();
         const screen = await renderScreen(<PromptStackEditorScreen surface="profile" profileId={profile.id} title="Profile Context" />);

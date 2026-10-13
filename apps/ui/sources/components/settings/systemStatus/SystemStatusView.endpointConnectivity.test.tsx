@@ -2,9 +2,25 @@ import * as React from 'react';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import type { DoctorSnapshotHomeTransportDiagnostics } from '@happier-dev/protocol';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { IrohHomeTransportDiagnosticsPublisher } from '@/sync/runtime/irohHomeTransportDiagnostics';
+
+installDisconnectedServerSocketBoundary(socket => {
+    vi.mocked(socket.connect).mockImplementation(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+});
+
+const home = createHomeGovernanceHarness();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let diagnosticsPublisher: IrohHomeTransportDiagnosticsPublisher | null = null;
+let activeHomeId: string | null = null;
+let carrierTarget: ReturnType<typeof captureActiveServerRuntimeTarget> | null = null;
 
 (
     globalThis as typeof globalThis & {
@@ -12,29 +28,17 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
     }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
-    serverProfilesState.publicServerUrl = null;
-    activeServerSnapshotState.snapshot = {
-        generation: 1,
-        serverId: 'home-stable-id',
-        serverUrl: 'https://legacy.example.test',
-        runtimeOrigin: 'http://127.0.0.1:43123',
-        carrier: 'https',
-    };
-    activeServerSnapshotState.listeners.clear();
-    irohDiagnosticsState.values = [{
-        homeServerIdentityId: 'home-stable-id',
-        state: 'reconnecting',
-        lastKnown: { carrier: 'iroh', observedPath: 'relay' },
-        effectiveConfiguration: {
-            policy: 'automatic',
-            relayUrls: ['https://relay.example.test'],
-            directAddressCount: 0,
-        },
-    }];
-    irohDiagnosticsState.revision = 0;
-    irohDiagnosticsState.listeners.clear();
+    if (carrierTarget) releaseActiveServerRuntimeOrigin({ target: carrierTarget, leaseId: 'endpoint-test-carrier' });
+    carrierTarget = null;
+    if (activeHomeId) retireIrohHomeTransportDiagnostics(activeHomeId);
+    diagnosticsPublisher = null;
+    activeHomeId = null;
+    await connection?.dispose();
+    connection = null;
+    await home.reset();
+    storage.setState(beforeStorage, true);
 });
 
 vi.mock('react-native-mmkv', () => {
@@ -95,177 +99,104 @@ vi.mock('expo-constants', () => ({
     default: { expoConfig: { version: '0.0.0-test' }, deviceName: 'test-device' },
 }));
 
-vi.mock('@/sync/runtime/readCurrentAppRuntimeInfo', () => ({
-    readCurrentAppRuntimeInfo: () => ({ appVersion: '0.0.0-test' }),
+vi.mock('expo-application', () => ({
+    nativeApplicationVersion: '0.0.0-test', nativeBuildVersion: '1', applicationId: 'dev.happier.test',
 }));
+
+vi.mock('expo-updates', async () => (await import('@/dev/testkit/mocks/expoUpdates')).createExpoUpdatesMock());
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
 }));
 
-vi.mock('@/constants/Typography', async (importOriginal) => await importOriginal());
-
-const activeServerSnapshotState = vi.hoisted(() => ({
-    snapshot: {
-        generation: 1,
-        serverId: 'home-stable-id',
-        serverUrl: 'https://legacy.example.test',
-        runtimeOrigin: 'http://127.0.0.1:43123',
-        carrier: 'https' as 'https' | 'iroh',
-    },
-    listeners: new Set<() => void>(),
-}));
-const useActiveServerSnapshotMock = vi.hoisted(() => vi.fn());
-const serverProfilesState = vi.hoisted(() => ({
-    publicServerUrl: null as string | null | undefined,
-}));
-const irohDiagnosticsState = vi.hoisted(() => ({
-    values: [{
-        homeServerIdentityId: 'home-stable-id',
-        state: 'reconnecting',
-        lastKnown: { carrier: 'iroh' as const, observedPath: 'relay' as const },
-        effectiveConfiguration: {
-            policy: 'automatic' as const,
-            relayUrls: ['https://relay.example.test'],
-            relayUrlCount: 3,
-            relayUrlsTruncated: true,
-            directAddressCount: 0,
-        },
-    }] as DoctorSnapshotHomeTransportDiagnostics[],
-    revision: 0,
-    listeners: new Set<() => void>(),
-}));
-
-useActiveServerSnapshotMock.mockImplementation(() => React.useSyncExternalStore(
-    (listener) => {
-        activeServerSnapshotState.listeners.add(listener);
-        return () => activeServerSnapshotState.listeners.delete(listener);
-    },
-    () => activeServerSnapshotState.snapshot,
-    () => activeServerSnapshotState.snapshot,
-));
-
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: useActiveServerSnapshotMock,
-}));
-
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => activeServerSnapshotState.snapshot,
-    isAppliedActiveServerRuntimeAvailable: () => true,
-    subscribeAppliedActiveServer: () => () => {},
-    subscribeAppliedActiveServerRuntimeAvailability: () => () => {},
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, {
-        overrides: {
-            listServerProfiles: () => [{
-                id: 'local-profile-id',
-                serverIdentityId: 'home-stable-id',
-                name: 'Personal Home',
-                serverUrl: 'https://legacy.example.test',
-                canonicalServerUrl: 'https://canonical.example.test',
-                publicServerUrl: serverProfilesState.publicServerUrl,
-                createdAt: 1,
-                updatedAt: 1,
-                lastUsedAt: 1,
-            }],
-        },
-    });
-});
-
-vi.mock('@/sync/runtime/irohHomeTransportDiagnostics', () => ({
-    retireIrohHomeTransportDiagnostics: vi.fn(),
-    readIrohHomeTransportDiagnostics: () => irohDiagnosticsState.values,
-    readIrohHomeTransportDiagnosticsRevision: () => irohDiagnosticsState.revision,
-    isIrohHomeTransportDiagnosticsCurrent: (diagnostics: { state?: unknown; current?: unknown } | null | undefined) => (
-        diagnostics?.state === 'connected' && diagnostics.current !== undefined
-    ),
-    subscribeIrohHomeTransportDiagnostics: (listener: () => void) => {
-        irohDiagnosticsState.listeners.add(listener);
-        return () => irohDiagnosticsState.listeners.delete(listener);
-    },
-}));
-
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: async () => ({}),
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useProfile: () => ({ id: 'prof_1', username: 'u1', connectedServices: [] }),
-    useIsDataReady: () => true,
-    useRealtimeStatus: () => 'connected',
-    useSocketStatus: () => ({ status: 'connected', lastError: null, lastErrorAt: null }),
-    useEndpointConnectivity: () => ({
-            status: 'online',
-            reason: null,
-            attempt: 1,
-            nextRetryAt: null,
-            lastConnectedAt: null,
-            lastDisconnectedAt: Date.now(),
-            lastErrorMessage: 'Network request failed',
-        }),
-    useSyncError: () => null,
-    useLastSyncAt: () => null,
-    useAllMachines: () => [{
-        id: 'machine-1',
-        active: true,
-        activeAt: Date.now(),
-        updatedAt: Date.now(),
-        metadata: { host: 'machine-one' },
-    }],
-    useMachineListForServer: () => [{
-        id: 'machine-1',
-        active: true,
-        activeAt: Date.now(),
-        updatedAt: Date.now(),
-        metadata: { host: 'machine-one' },
-    }],
-    useMachineListStatusForServer: () => 'loaded',
-    useMachineListByServerId: () => ({}),
-    useMachineListStatusByServerId: () => ({}),
-});
-});
-
 // Load real screen owners after boundary setup, outside behavior deadlines.
+const { adoptHomeProfile, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+const { getActiveServerSnapshot, captureActiveServerRuntimeTarget, publishActiveServerRuntimeOrigin, releaseActiveServerRuntimeOrigin } = await import('@/sync/domains/server/serverRuntime');
+const { createIrohHomeTransportDiagnosticsPublisher, retireIrohHomeTransportDiagnostics } = await import('@/sync/runtime/irohHomeTransportDiagnostics');
+const { storage } = await import('@/sync/domains/state/storageStore');
 const { SystemStatusView } = await import('./SystemStatusView');
+const { useActiveHomeConnectionHealth } = await import('@/components/navigation/connectionStatus/useConnectionHealth');
+const beforeStorage = storage.getState();
+
+async function prepareHome(publicServerUrl?: string | null, serverUrl = 'https://legacy.example.test') {
+    const serverIdentityId = `srv_${new URL(serverUrl).hostname}`;
+    const homeId = await home.addHome({
+        name: 'Personal Home', serverUrl, serverIdentityId,
+        ...(publicServerUrl !== undefined ? { publicServerUrl } : {}),
+        accountId: 'account-a',
+    });
+    if (typeof publicServerUrl === 'string') {
+        await adoptHomeProfile({
+            source: 'manual', descriptorAuthority: 'current_connection_observation',
+            descriptor: {
+                v: 1, homeServerIdentityId: serverIdentityId, canonicalServerUrl: serverUrl,
+                revision: 1, endpoints: [{ kind: 'https', url: publicServerUrl }],
+            },
+        });
+    }
+    home.answer(homeId, '/v1/machines', { body: [] });
+    connection = await restoreServerAccountForTest({ serverUrl, request: home.request });
+    activeHomeId = getActiveServerSnapshot().serverId;
+    expect(getServerProfileById(activeHomeId)?.publicServerUrl)
+        .toBe(publicServerUrl);
+    const appliedServerId = activeHomeId;
+    storage.setState(current => ({
+        isDataReady: true,
+        profileScope: { serverId: appliedServerId, accountId: 'account-a' },
+        profile: { ...current.profile, id: 'prof_1', username: 'u1', connectedServices: [] },
+        machines: {},
+        machineListByServerId: { [appliedServerId]: [] },
+        machineListStatusByServerId: { [appliedServerId]: 'idle' },
+    }));
+}
 
 describe('SystemStatusView (endpoint connectivity)', () => {
     it('subscribes to active Home diagnostics and separates effective carrier from last-known Iroh path', async () => {
+        await prepareHome('https://legacy.example.test');
+        if (!activeHomeId) throw new Error('Missing active Home');
+        expect(getActiveServerSnapshot().carrier).toBe('https');
+        diagnosticsPublisher = createIrohHomeTransportDiagnosticsPublisher({
+            producerId: 'system-status-test', leaseId: 'endpoint-test-diagnostics', homeServerIdentityId: activeHomeId,
+        });
+        diagnosticsPublisher.publish({
+            homeServerIdentityId: activeHomeId,
+            state: 'reconnecting',
+            lastKnown: { carrier: 'iroh', observedPath: 'relay' },
+            effectiveConfiguration: {
+                policy: 'automatic', relayUrls: ['https://relay.example.test'],
+                relayUrlCount: 3, relayUrlsTruncated: true, directAddressCount: 0,
+            },
+        });
         const screen = await renderScreen(<SystemStatusView />);
+        const health = await renderHook(() => useActiveHomeConnectionHealth());
+        expect(health.getCurrent().kind).toBe('no_machine');
 
-        expect(useActiveServerSnapshotMock).toHaveBeenCalled();
         const joined = screen.getTextContent();
-        expect(joined).toContain('home-stable-id');
-        expect(joined).toContain('https://canonical.example.test');
-        expect(joined).toContain('connectionStatus.values.publicIngressAbsent');
+        expect(joined).toContain(activeHomeId);
+        expect(joined).toContain('https://legacy.example.test');
+        expect(joined).toContain('connectionStatus.labels.publicIngress https://legacy.example.test');
         expect(joined).toContain('connectionStatus.labels.effectiveCarrier');
         expect(joined).toContain('HTTPS');
         expect(joined).toContain('Iroh');
         expect(joined).toContain('systemStatus.transport.irohHistory');
         expect(joined).not.toContain('systemStatus.transport.irohCurrent');
         expect(joined).toContain('systemStatus.server.activeHomeHealth');
-        // Home health reads in the Home summary vocabulary, like the popover.
-        expect(joined).toContain('connectionStatus.summary.connected');
+        // The active Home's health is connected even though Iroh history can say reconnecting.
+        expect(screen.findAll((node) => node.props?.title === 'systemStatus.server.activeHomeHealth'
+            && node.props?.detail === 'connectionStatus.summary.connected').length).toBeGreaterThan(0);
         expect(joined).toContain('connectionStatus.labels.lastKnownPath');
         expect(joined).toContain('connectionStatus.values.pathRelay');
-        expect(joined).not.toContain('connectionStatus.summary.reconnecting');
         expect(joined).toContain('connectionStatus.labels.relayConfiguration');
         expect(joined).toContain('1/3');
         expect(joined).not.toContain('connectionStatus.labels.currentPath');
 
-        irohDiagnosticsState.values = [{
-            homeServerIdentityId: 'home-stable-id',
-            state: 'connected',
-            current: { carrier: 'iroh', observedPath: 'direct' },
-            lastKnown: { carrier: 'iroh', observedPath: 'direct' },
-        }];
-        irohDiagnosticsState.revision += 1;
+        carrierTarget = captureActiveServerRuntimeTarget();
         await act(async () => {
-            for (const listener of irohDiagnosticsState.listeners) listener();
+            diagnosticsPublisher!.publish({
+                homeServerIdentityId: activeHomeId!, state: 'connected',
+                current: { carrier: 'iroh', observedPath: 'direct' },
+                lastKnown: { carrier: 'iroh', observedPath: 'direct' },
+            });
         });
 
         const updated = screen.getTextContent();
@@ -275,15 +206,13 @@ describe('SystemStatusView (endpoint connectivity)', () => {
         expect(updated).not.toContain('connectionStatus.labels.currentPath');
         expect(updated).toContain('connectionStatus.values.pathDirect');
 
-        expect(activeServerSnapshotState.listeners.size).toBeGreaterThan(0);
-        activeServerSnapshotState.snapshot = {
-            ...activeServerSnapshotState.snapshot,
-            carrier: 'iroh',
-            generation: activeServerSnapshotState.snapshot.generation + 1,
-        };
         await act(async () => {
-            for (const listener of activeServerSnapshotState.listeners) listener();
+            expect(publishActiveServerRuntimeOrigin({
+                target: carrierTarget!, leaseId: 'endpoint-test-carrier',
+                runtimeOrigin: 'http://127.0.0.1:43123', carrier: 'iroh',
+            })).toBe(true);
         });
+        expect(getActiveServerSnapshot().carrier).toBe('iroh');
 
         const liveIroh = screen.getTextContent();
         expect(liveIroh).toContain('systemStatus.transport.irohCurrent');
@@ -292,12 +221,20 @@ describe('SystemStatusView (endpoint connectivity)', () => {
     });
 
     it('keeps unknown public ingress distinct from a Home known to have no public ingress', async () => {
-        serverProfilesState.publicServerUrl = undefined;
+        await prepareHome(undefined, 'https://unknown.example.test');
         const screen = await renderScreen(<SystemStatusView />);
 
         const joined = screen.getTextContent();
         expect(joined).toContain('connectionStatus.labels.publicIngress');
-        expect(joined).toContain('status.unknown');
+        expect(joined).toContain('connectionStatus.labels.publicIngress —');
         expect(joined).not.toContain('connectionStatus.values.publicIngressAbsent');
+    });
+
+    it('shows a Home known to have no public ingress distinctly from an unknown endpoint', async () => {
+        await prepareHome(null, 'https://absent.example.test');
+        const screen = await renderScreen(<SystemStatusView />);
+
+        expect(screen.getTextContent()).toContain('connectionStatus.values.publicIngressAbsent');
+        expect(screen.getTextContent()).not.toContain('connectionStatus.labels.publicIngress —');
     });
 });

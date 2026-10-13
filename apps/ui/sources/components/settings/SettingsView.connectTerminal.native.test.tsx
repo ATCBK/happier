@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, pressTestInstanceAsync, renderSettingsView } from '@/dev/testkit';
 import {
     installSettingsViewCommonModuleMocks,
@@ -65,28 +65,13 @@ installSettingsViewCommonModuleMocks({
             },
         }).module;
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useEntitlement: () => false,
-            useLocalSettingMutable: () => [false, vi.fn()],
-            useSetting: () => null,
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useProfile: () => ({ id: 'prof_1', firstName: '', connectedServices: [] }),
-        });
-    },
+    storage: 'real',
 });
 
 vi.mock('expo-image', () => ({
     Image: 'Image',
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'StyledText',
-    TextInput: 'TextInput',
-}));
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -114,18 +99,8 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
     };
 });
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: any) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    // The row's actions (its right element) render inside it, as the real row does.
-    Item: (props: any) => React.createElement('Item', props, props.rightElement ?? null),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: connectTerminalSpy, connectWithUrl: vi.fn(), isLoading: false }),
@@ -149,9 +124,6 @@ vi.mock('@/hooks/ui/useMultiClick', () => ({
     useMultiClick: (cb: () => void) => cb,
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => false,
-}));
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 1000 },
@@ -163,18 +135,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
-    return {
-        ...actual,
-        getAvatarUrl: () => null,
-        getBio: () => '',
-    };
-});
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -222,7 +183,7 @@ function findPressableByTestId(tree: ReactTestRenderer, testID: string) {
 }
 
 function findItemByTitle(tree: ReactTestRenderer, title: string) {
-    return tree.findAllByType('Item' as any).find((item: any) => item?.props?.title === title);
+    return tree.findAll((node) => node.props.title === title && typeof node.props.onPress === 'function')[0];
 }
 
 async function flushDeferredSettingsDelay(delayMs = 0): Promise<void> {
@@ -239,6 +200,15 @@ async function flushDeferredSettingsDelay(delayMs = 0): Promise<void> {
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
 
 describe('SettingsView (native connect terminal)', () => {
     it('shows terminal connect actions on native platforms', async () => {

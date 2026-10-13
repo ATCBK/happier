@@ -10,8 +10,6 @@ import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCo
 import { EmbedsCollectionRail } from './EmbedsCollectionRail';
 import { EMBED_DETAIL_TWO_COLUMN_MIN_WIDTH_PX, EMBEDS_COLLECTION_ROOT, isEmbedToken, recordEmbedCollectionVisit, resolveSelectedEmbedTokenId } from './embedsCollection';
 
-/** Rail width at normal text scale: an embed's name and one line of facts. */
-const EMBEDS_RAIL_WIDTH_PX = 300;
 
 function resolveEmbedsChildRoute(pathname: string): string {
     return resolveSettingsNestedRouteName('embeds', pathname) ?? 'index';
@@ -44,7 +42,7 @@ const EmbedsCollection = React.memo(function EmbedsCollection() {
             resolveChildRoute={resolveEmbedsChildRoute}
             // No embeds yet: the page is its empty state, with no rail beside it.
             rail={hasEmbeds ? <EmbedsCollectionRail /> : null}
-            railWidthPx={EMBEDS_RAIL_WIDTH_PX}
+            railWidth="standard"
             // Inside the settings modal the collection pushes its detail; a wider window places the rail beside it.
             detailMinWidthPx={EMBED_DETAIL_TWO_COLUMN_MIN_WIDTH_PX}
             testID="settings-embeds"

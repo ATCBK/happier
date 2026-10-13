@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -171,7 +172,7 @@ describe('MCP servers collection and tools', () => {
         rpcRequests.length = 0;
         targetMachineUnavailable = false;
         accountSettings = { mcpServersStrictMode: false, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
-            'mcp.servers.probe': ['ui'], 'mcp.servers.create': ['ui'], 'settings.set': ['ui'],
+            'mcp.found.list': ['ui'], 'mcp.servers.create': ['ui'], 'settings.set': ['ui'],
         } } };
         settingsState.value = {
             v: 1,
@@ -280,7 +281,6 @@ describe('MCP servers collection and tools', () => {
         connection = await restoreServerAccountForTest({ serverUrl: 'https://mcp-collection.test',
             serverIdentityId: 'srv_mcp_collection', accountId: 'collection-owner', credentials, request });
         await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id }, credentials);
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
         setRuntimeFetch(request);
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId: 'collection-owner' };
         storage.setState({ isDataReady: true, settings: settingsParse(accountSettings), settingsVersion: 1,
@@ -341,12 +341,13 @@ describe('MCP servers collection and tools', () => {
 
         const bound = screen.findRow('mcp.server.card.server-1');
         expect(bound!.props.title).toBe('playwright');
-        expect(bound!.props.subtitle).toBe('Machine 1');
+        expect(bound!.props.titleMeta.props.children).toBe('capabilities.where.only');
         expect(bound!.props.selected).toBe(true);
-        expect(bound!.props.subtitleLeading).toBeUndefined();
         const unbound = screen.findRow('mcp.server.card.server-2');
-        expect(unbound!.props.subtitle).toBe('mcpSettings.unbound');
-        expect(unbound!.props.subtitleLeading).toBeTruthy();
+        expect(unbound!.props.titleMeta.props.children).toBe('capabilities.where.off');
+        expect(screen.findGroup('capabilities.mcp.inUse')).not.toBeNull();
+        expect(screen.findGroup('capabilities.mcp.off')).not.toBeNull();
+        expect(screen.findByTestId('settings.mcpServers.builtIn.happier')).not.toBeNull();
 
         await screen.pressRow('mcp.server.card.server-2');
         await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenLastCalledWith('/settings/mcp/server-2'));
@@ -383,6 +384,8 @@ describe('MCP servers collection and tools', () => {
             { home: connection!.home.serverUrl, method: `machine-1:${RPC_METHODS.DAEMON_MCP_SERVERS_DETECT}`, input: { machineId: 'machine-1' } },
         ]));
         await vi.waitFor(() => expect(screen.findByTestId('mcp.detected.import.0')).not.toBeNull());
+        // The scan and catalog read are independent; adoption needs the settled catalog authority.
+        await act(async () => { await refreshCatalogFixture(); });
 
         await act(async () => {
             await screen.find((node) => node.props?.testID === 'mcp.detected.import.0' && typeof node.props?.onPress === 'function').props.onPress();
@@ -390,13 +393,14 @@ describe('MCP servers collection and tools', () => {
         await flushHookEffects();
 
         const { Modal } = await import('@/modal');
-        expect(Modal.confirm).toHaveBeenCalled();
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        expect(Modal.alert).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(catalogWrites).toHaveLength(1));
         const written = settingsState.value;
         const imported = written.servers.find((server) => server.name === 'github');
         expect(imported).toBeTruthy();
         await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenLastCalledWith(`/settings/mcp/${imported!.id}`));
-        expect(written.bindings.find(binding => binding.serverId === imported!.id)?.target).toEqual({ t: 'machine', machineId: 'machine-1' });
+        expect(written.bindings.find(binding => binding.serverId === imported!.id)?.target).toEqual({ t: 'allMachines' });
         expect(accountSettingsWrites).toEqual([]);
     });
 
@@ -523,6 +527,9 @@ describe('MCP servers collection and tools', () => {
 
         const detectedRowAfterRefresh = screen.findRow('mcp.detected.card.0');
         expect(detectedRowAfterRefresh).toBeTruthy();
+        expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toHaveLength(1);
+        await act(async () => { await screen.pressByTestIdAsync('settings.mcpServers.detect.refresh'); });
+        await flushHookEffects();
 
         await vi.waitFor(() => expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT)).at(-1)).toEqual({
             home: connection!.home.serverUrl, method: `machine-1:${RPC_METHODS.DAEMON_MCP_SERVERS_DETECT}`,

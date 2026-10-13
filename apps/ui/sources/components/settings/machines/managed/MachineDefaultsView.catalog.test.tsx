@@ -45,10 +45,10 @@ describe('Machine Defaults declarations and controller-local availability', () =
             { key: 'build', serverUrl: `https://par-defaults-${operation}.test`, accountId: 'owner', settings, currentAccount: true },
         ], route: request => request.path === '/v1/features' || request.path === '/v1/features/authenticated'
             ? Response.json(features) : undefined });
-        onTestFinished(() => {
+        onTestFinished(async () => {
             storage.setState({ settings: previous.settings, settingsScope: previous.settingsScope,
                 profileScope: previous.profileScope, machineListByServerId: previous.machineListByServerId });
-            home.dispose();
+            await home.dispose();
         });
         storage.setState({ machineListByServerId: {} });
         await loadSyncSingletonForTests();
@@ -105,10 +105,10 @@ describe('Machine Defaults declarations and controller-local availability', () =
             return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
                 execution: { ok: true, result: { provisioners: rows } } });
         } });
-        onTestFinished(() => {
+        onTestFinished(async () => {
             storage.setState({ settings: previous.settings, settingsScope: previous.settingsScope,
                 profileScope: previous.profileScope, machineListByServerId: previous.machineListByServerId });
-            home.dispose();
+            await home.dispose();
         });
         expect(await getServerFeaturesSnapshot({ serverId: home.homes.build!.id })).toMatchObject({ status: 'ready', serverIdentityId: 'srv_build' });
         const focusedHome = resolveServerProfileScopeIdForIdentifier(home.homes.build!.id);
@@ -186,10 +186,10 @@ describe('Machine Defaults declarations and controller-local availability', () =
             return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
                 execution: { ok: true, result: { provisioners: [provisioner('Local guest', 'local')] } } });
         } });
-        onTestFinished(() => {
+        onTestFinished(async () => {
             storage.setState({ settings: previous.settings, settingsScope: previous.settingsScope,
                 profileScope: previous.profileScope, machineListByServerId: previous.machineListByServerId });
-            home.dispose();
+            await home.dispose();
         });
         expect(await getServerFeaturesSnapshot({ serverId: home.homes.build!.id })).toMatchObject({ status: 'ready' });
         const focusedHome = resolveServerProfileScopeIdForIdentifier(home.homes.build!.id);

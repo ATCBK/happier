@@ -9,6 +9,21 @@ import {
 } from './presentConnectedServiceIndexDiagnostics';
 
 describe('Connected service index read diagnostics', () => {
+    it('keeps an answered available service usable when its plugin reports an unrelated runtime diagnostic', () => {
+        const entry: ConnectedServiceRegistryEntry = { serviceId: 'openai-codex',
+            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+            connectCommand: '', supportsOauth: true, executable: true, projectionStatus: 'ready',
+            availability: { state: 'available', reason: 'resolved' }, diagnostics: ['plugin_external_session_source_refused'] };
+        const result = presentConnectedServiceIndexDiagnostics({ entry });
+        expect(result.primary).toBeNull();
+        expect(result.supportDetails).toBe(t('settingsPlugins.diagnosticsSnapshotFooter'));
+        const index = buildConnectedServicesIndexModel({
+            transport: 'advertised-v4', entries: [entry], qualifiedAccounts: [], qualifiedGroups: [], legacyServices: [],
+            defaultAccountByServiceKey: {}, resolveLabel: () => 'ChatGPT', resolveFallbackEntry: () => null,
+            loadingLabel: t('common.loading'), presentDiagnostics: candidate => presentConnectedServiceIndexDiagnostics({ entry: candidate }),
+        });
+        expect(index.connectable.map(service => service.service)).toEqual([entry.service]);
+    });
     it('keeps unknown boundary diagnostics on the read-failure path without disclosing boundary text', () => {
         expect(presentConnectedServiceIndexDiagnosticCopy('untrusted registry response https://private.example'))
             .toBe(presentConnectedServiceRegistryReadFailure(null));

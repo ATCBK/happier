@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { Item } from '@/components/ui/lists/Item';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -10,17 +11,6 @@ vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mock
 const fixture = vi.hoisted(() => ({
     materializationAdmission: null as unknown,
     snapshots: [] as readonly unknown[],
-}));
-const capturedItemProps = vi.hoisted(() => [] as Readonly<Record<string, unknown>>[]);
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Readonly<Record<string, unknown>>) => {
-        capturedItemProps.push(props);
-        return React.createElement('Item');
-    },
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: React.PropsWithChildren) => React.createElement('ItemGroup', props, props.children),
 }));
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/sync/domains/plugins/availability/projection', () => ({
@@ -68,11 +58,11 @@ function materialization(machineId: string, overrides: Readonly<Record<string, u
 
 describe('PluginMachineMatrixSection', () => {
     beforeEach(() => {
-        capturedItemProps.length = 0;
         fixture.snapshots = [{
             kind: 'resolved',
             profileId: 'profile-one',
             serverIdentityId: 'srv_one',
+            accountId: 'account-a',
             serverName: 'Server One',
             observation: 'live',
             machines: [machine('machine-a', true), machine('machine-b', false)],
@@ -97,7 +87,8 @@ describe('PluginMachineMatrixSection', () => {
 
     it('summarizes where the plugin is current and lists only the machines that need a look', async () => {
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
-        await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
 
         expect(capturedItemProps.find((props) => props.testID === 'settings.plugins.machineMatrix.summary'))
             .toMatchObject({
@@ -115,7 +106,8 @@ describe('PluginMachineMatrixSection', () => {
 
     it('does not repeat the Account release, which its own section owns', async () => {
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
-        await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
         expect(capturedItemProps.some((props) => String(props.testID).endsWith('.account'))).toBe(false);
     });
 
@@ -125,7 +117,8 @@ describe('PluginMachineMatrixSection', () => {
             materializations: [materialization('machine-a'), materialization('machine-gone', { version: '0.9.0' })],
         };
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
-        await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
         const titles = capturedItemProps
             .filter((props) => props.testID === 'settings.plugins.machineMatrix.exception')
             .map((props) => props.title);
@@ -135,7 +128,8 @@ describe('PluginMachineMatrixSection', () => {
 
     it('renders no interactive row, so a machine can never retarget administration', async () => {
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
-        await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
 
         expect(capturedItemProps.length).toBeGreaterThan(0);
         const interactive = capturedItemProps.filter((props) => (
@@ -150,7 +144,8 @@ describe('PluginMachineMatrixSection', () => {
             code: 'account_availability_not_loaded',
         };
         const { PluginMachineMatrixSection } = await import('./PluginMachineMatrixSection');
-        await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const screen = await renderScreen(<PluginMachineMatrixSection pluginId="acme.plugin" />);
+        const capturedItemProps = screen.findAllByType(Item).map((node) => node.props);
 
         expect(capturedItemProps.map((props) => props.title)).toEqual([
             'settingsPlugins.machineMatrix.unavailable',

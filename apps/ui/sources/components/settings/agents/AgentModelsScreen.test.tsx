@@ -139,7 +139,7 @@ describe('AgentModelsScreen provider settings safety', () => {
     const { installProviderConnectionsCatalogHttpBoundary } = await import('@/dev/testkit/harness/providerSettingsHarness');
     const stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog });
     const { AgentModelsScreen } = await import('./AgentModelsScreen');
-    const screen = await renderScreen(<AgentModelsScreen agentTargetKey={agentTargetKey} runtimeAgentId="codex" />);
+    const screen = await renderScreen(<AgentModelsScreen agentTargetKey={agentTargetKey} runtimeAgentId={kind === 'gateway' ? null : 'codex'} />);
     await waitForHomeGovernance(() => expect(screen.findByTestId('agent-models-source-visibility:pc_a')).not.toBeNull());
     expect(screen.getTextContent()).not.toContain('Off source model');
     expect(screen.getTextContent()).not.toContain('Hidden favorite model');
@@ -279,7 +279,7 @@ describe('AgentModelsScreen provider settings safety', () => {
       screen.findByType(ProviderModelManager).props.groups[0].rows.find((row: ModelRow) => row.ref.modelId === 'boundary-model')?.descriptor.name,
     ).toBe('Boundary agent model');
   });
-  it('shows the saved gateway identity with the shared gateway glyph in its model source heading', async () => {
+  it('shows the saved gateway identity with its packaged mark or canonical gateway fallback in the model source heading', async () => {
     const contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
     const base = createModelPageCatalog();
     await account.restore({
@@ -295,12 +295,18 @@ describe('AgentModelsScreen provider settings safety', () => {
     });
     const { AgentModelsScreen } = await import('./AgentModelsScreen');
     const { ProviderIcon } = await import('@/providers/connection/ProviderIcon');
+    const { Icon } = await import('@/components/ui/icons/Icon');
+    const { PROVIDER_GATEWAY_ICON } = await import('@/components/settings/providers/collection/providerCollectionModel');
     const screen = await renderScreen(
       <AgentModelsScreen agentTargetKey="agent:happier.agent.codex/codex" runtimeAgentId={null} />,
     );
     await waitForHomeGovernance(() => {
-      expect(screen.findAllByType(ProviderIcon).find(node => node.props.contributionKey === contributionKey)?.props.icon)
-        .toBe('path');
+      const mark = screen.findAllByType(ProviderIcon).find(node => node.props.contributionKey === contributionKey);
+      expect(mark).toBeDefined();
+      // Packaged brand artwork takes precedence over the resolver's glyph.
+      // Inspect the visible identity, so a neutral fallback cannot silently pass.
+      expect(mark!.findAllByType('Image').length > 0
+        || mark!.findAllByType(Icon).some(node => node.props.name === PROVIDER_GATEWAY_ICON)).toBe(true);
     });
   });
   it('names a plugin Agent from its exact admitted catalog entry without another daemon read', async () => {

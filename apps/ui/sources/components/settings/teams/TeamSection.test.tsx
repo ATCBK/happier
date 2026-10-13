@@ -15,7 +15,6 @@ import {
     waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import type { TeamBinding } from '@/hooks/teams/useTeamBinding';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import type { TeamSectionContext } from './teamSectionContext';
@@ -23,44 +22,20 @@ import type { TeamSectionContext } from './teamSectionContext';
 /**
  * The approval shell of a Team section, over the real approval lifecycle.
  *
- * The Team projection is the one stand-in (`useTeamBinding`): it lets a case
- * switch the bound Account. The approval itself is real end to end — a
+ * Credential binding, Team projection and refresh run through the real owners.
+ * The approval is real end to end — a
  * present-user Team mutation creates it through the shared Action front door,
  * the Inbox decides it through the generic executor, and the section reads the
  * outcome through the real `useApprovalArtifact` over the Home's stateful
  * Artifact store. No terminal record is written by hand.
  */
-const useTeamBinding = vi.hoisted(() => vi.fn());
 
-vi.mock('@/hooks/teams/useTeamBinding', () => ({ useTeamBinding }));
-
-// App-bundled plugin bytes are a generated build boundary and unrelated to this shell.
-// The synchronized test target intentionally has no generated inventory.
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-    createBundledPluginUiAppExactArtifactSourceFromInventory: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: async () => null,
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(),
-    createPluginAccountAvailabilityReaderStore: () => Object.freeze({
-        replace: () => null,
-        clear: () => null,
-        subscribe: () => () => undefined,
-        bind: vi.fn(),
-    }),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(),
-}));
+// The package Vitest config supplies the canonical empty app-asset boundary.
+// Artifact sources, availability readers and stores stay real.
 
 installSettingsViewCommonModuleMocks({
     router: async () => ({
-        useRouter: () => ({ push: vi.fn() }),
-        useNavigation: () => ({ setOptions: vi.fn() }),
+        ...(await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module,
     }),
     // The real client store: the approval writer publishes the settled
     // Artifact into it and the mounted approval reader observes it there.
@@ -72,6 +47,7 @@ installHomeGovernanceBoundaries(harness);
 
 const ACCOUNT_ID = 'account-a';
 const TEAM_UPDATE_PATH = '/v1/teams/update';
+const TEAM_GET_PATH = '/v1/teams/get';
 
 /** One Team Home whose Account requires approval for a Team rename. */
 async function addTeamHome(): Promise<string> {
@@ -80,6 +56,9 @@ async function addTeamHome(): Promise<string> {
         serverUrl: 'https://team-section.example',
         accountId: ACCOUNT_ID,
         teamsEnabled: true,
+    });
+    harness.answer(serverId, TEAM_GET_PATH, {
+        body: teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ manageSettings: true }) }),
     });
     await harness.requireUiApproval(serverId, 'teams.update');
     return serverId;
@@ -93,34 +72,6 @@ async function openTeamRenameApproval(serverId: string, requestId: string): Prom
         actionInput: { v: 1, teamId: 'team-1', name: 'Renamed' },
         actionRequestId: requestId,
     });
-}
-
-function readyBinding(serverId: string, accountId: string): Extract<TeamBinding, { kind: 'bound' }> {
-    const scope = { serverId, accountId };
-    const address = { serverId, teamId: 'team-1' };
-    const team = teamSummaryFixture({
-        capabilities: teamCapabilitiesFixture({ manageSettings: true }),
-    });
-    return {
-        kind: 'bound',
-        scope,
-        address,
-        homeName: 'Home One',
-        snapshot: null,
-        refresh: vi.fn(),
-        state: {
-            kind: 'ready',
-            scope,
-            address,
-            team,
-            refreshing: false,
-            stale: false,
-            lastObservedAt: 1,
-            mutationsAvailable: true,
-            archived: false,
-            error: null,
-        },
-    };
 }
 
 let nextMountId = 0;
@@ -149,7 +100,10 @@ describe('TeamSection Account binding', () => {
     beforeEach(async () => {
         standardCleanup();
         await harness.reset();
-        useTeamBinding.mockReset();
+        const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+        const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+        resetTeamsDirectoryEngineForTests();
+        resetTeamsSnapshotsForTests();
         renderedContexts.length = 0;
         nextMountId = 0;
     });
@@ -159,22 +113,22 @@ describe('TeamSection Account binding', () => {
     it('remounts section-local state and rejects a stale approval registration after AccountChange', async () => {
         const serverId = await addTeamHome();
         const staleArtifactId = await openTeamRenameApproval(serverId, 'team-rename-stale');
-        useTeamBinding.mockReturnValue(readyBinding(serverId, ACCOUNT_ID));
         const renderSection = (title: string) => (
             <TeamSection serverId={serverId} teamId="team-1" title={title}>
                 {(context) => <ChildProbe context={context} />}
             </TeamSection>
         );
         const screen = await renderScreen(renderSection('Team A'));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-section-child-probe')).not.toBeNull());
         const firstMountId = screen.findByTestId('team-section-child-probe')?.props.mountId;
         const staleRequestApproval = renderedContexts.at(-1)!.requestApproval;
 
-        useTeamBinding.mockReturnValue(readyBinding(serverId, 'account-b'));
         await act(async () => {
+            await harness.switchAccount(serverId, 'account-b');
             screen.tree.update(renderSection('Team B'));
         });
 
-        expect(screen.findByTestId('team-section-child-probe')?.props.accountId).toBe('account-b');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-section-child-probe')?.props.accountId).toBe('account-b'));
         expect(screen.findByTestId('team-section-child-probe')?.props.mountId).not.toBe(firstMountId);
 
         // A genuinely open approval begun as the previous Account must not be
@@ -201,13 +155,13 @@ describe('TeamSection Account binding', () => {
             const serverId = await addTeamHome();
             if (homeAnswer) harness.answer(serverId, TEAM_UPDATE_PATH, homeAnswer);
             const artifactId = await openTeamRenameApproval(serverId, `team-rename-${status}`);
-            const binding = readyBinding(serverId, ACCOUNT_ID);
-            useTeamBinding.mockReturnValue(binding);
             const screen = await renderScreen(
                 <TeamSection serverId={serverId} teamId="team-1">
                     {(context) => <ChildProbe context={context} />}
                 </TeamSection>,
             );
+            await waitForHomeGovernance(() => expect(screen.findByTestId('team-section-child-probe')).not.toBeNull());
+            const initialReads = harness.requestsFor(TEAM_GET_PATH).length;
             const onTerminal = vi.fn();
 
             await act(async () => renderedContexts.at(-1)!.requestApproval({
@@ -227,7 +181,7 @@ describe('TeamSection Account binding', () => {
             expect(onTerminal).toHaveBeenCalledWith(status, expect.objectContaining({ id: artifactId }));
             expect(renderedContexts.at(-1)!.approvalPending).toBe(false);
             expect(renderedContexts.at(-1)!.canMutate).toBe(true);
-            expect(binding.refresh).not.toHaveBeenCalled();
+            expect(harness.requestsFor(TEAM_GET_PATH)).toHaveLength(initialReads);
             // The only Team mutation is the Inbox's own replay, if it approved.
             expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(decision === 'approve' ? 1 : 0);
         },
@@ -239,14 +193,17 @@ describe('TeamSection Account binding', () => {
             body: teamSummaryFixture({ name: 'Renamed', capabilities: teamCapabilitiesFixture({ manageSettings: true }) }),
         });
         const artifactId = await openTeamRenameApproval(serverId, 'team-rename-executed');
-        const binding = readyBinding(serverId, ACCOUNT_ID);
-        useTeamBinding.mockReturnValue(binding);
         const renderSection = () => (
             <TeamSection serverId={serverId} teamId="team-1">
                 {(context) => <ChildProbe context={context} />}
             </TeamSection>
         );
         const screen = await renderScreen(renderSection());
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-section-child-probe')).not.toBeNull());
+        const initialReads = harness.requestsFor(TEAM_GET_PATH).length;
+        harness.answer(serverId, TEAM_GET_PATH, {
+            body: teamSummaryFixture({ name: 'Renamed', capabilities: teamCapabilitiesFixture({ manageSettings: true }) }),
+        });
         const onExecuted = vi.fn(async () => 'consumed' as const);
 
         await act(async () => renderedContexts.at(-1)!.requestApproval({
@@ -262,14 +219,17 @@ describe('TeamSection Account binding', () => {
 
         await waitForHomeGovernance(() => expect(onExecuted).toHaveBeenCalledOnce());
         expect(onExecuted).toHaveBeenCalledWith(expect.objectContaining({ id: artifactId }));
-        expect(binding.refresh).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(renderedContexts.at(-1)!.team.name).toBe('Renamed'));
+        expect(harness.requestsFor(TEAM_GET_PATH)).toHaveLength(initialReads + 1);
+        const refreshRequest = harness.requestsFor(TEAM_GET_PATH).at(-1);
+        expect({ serverId: refreshRequest?.serverId, input: refreshRequest?.input }).toMatchObject({ serverId, input: { teamId: 'team-1' } });
         expect(screen.findByTestId('team-approval')).toBeNull();
         expect(renderedContexts.at(-1)!.approvalPending).toBe(false);
         expect(renderedContexts.at(-1)!.canMutate).toBe(true);
 
         await act(async () => screen.tree.update(renderSection()));
         expect(onExecuted).toHaveBeenCalledTimes(1);
-        expect(binding.refresh).toHaveBeenCalledTimes(1);
+        expect(harness.requestsFor(TEAM_GET_PATH)).toHaveLength(initialReads + 1);
         expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(1);
     });
 });

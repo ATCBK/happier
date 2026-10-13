@@ -68,10 +68,6 @@ vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', as
 vi.mock('./NpmRegistryProfilesSection', async () => ({
     NpmRegistryProfilesSection: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('NpmRegistryProfilesSection'),
 }));
-vi.mock('@/components/ui/forms/Switch', async () => ({
-    Switch: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('Switch'),
-}));
-
 import { PluginMarketplaceSourcesScreen } from './PluginMarketplaceSourcesScreen';
 
 /** The section's "Add source" action: the button owner, which carries its busy and disabled state. */

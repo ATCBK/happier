@@ -119,6 +119,15 @@ describe('ConnectedServicesRailView (lab csvc C1 rail)', () => {
         expect(loading.findByTestId('connected-services-rail:add-gateway')).toBeNull();
     });
 
+    it('keeps the Gateways place when its catalog cannot be read, and retries from it', async () => {
+        const retry = vi.fn();
+        const screen = await render({ gateways: undefined, gatewaysUnavailable: { diagnosticCode: 'encryption-material-unavailable', onRetry: retry } });
+        expect(screen.findByTestId('connected-services-rail:gateways-unavailable')).toBeTruthy();
+        await screen.pressByTestIdAsync('connected-services-rail:gateways-unavailable.retry');
+        expect(retry).toHaveBeenCalledOnce();
+        expect(screen.findByTestId('connected-services-rail:add-gateway')).toBeNull();
+    });
+
     it('names accounts through the privacy presenter: an address used as a name is masked when identities are hidden', async () => {
         const screen = await render({
             present: (input) => presentConnectedAccountIdentity({ ...input, hidden: true, label: input.label ?? null, email: input.email ?? null, accountId: input.accountId ?? null }),

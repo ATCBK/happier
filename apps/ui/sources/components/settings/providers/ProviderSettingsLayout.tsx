@@ -6,8 +6,6 @@ import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCo
 
 import { ProviderConnectionsSettingsScreen, PROVIDERS_COLLECTION_ROUTE } from './ProviderConnectionsSettingsScreen';
 
-/** Rail width at normal text scale: a provider mark, a name and one status line. */
-const PROVIDER_RAIL_WIDTH_PX = 272;
 /** The narrowest detail that still fits a field select beside its label. */
 const PROVIDER_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -47,7 +45,7 @@ export const ProviderSettingsLayout = React.memo(function ProviderSettingsLayout
                     rootPathname={PROVIDERS_COLLECTION_ROUTE}
                     resolveChildRoute={resolveProvidersChildRoute}
                     rail={landingOwnsPane ? null : <ProviderCollectionRail />}
-                    railWidthPx={PROVIDER_RAIL_WIDTH_PX}
+                    railWidth="standard"
                     detailMinWidthPx={PROVIDER_DETAIL_MIN_WIDTH_PX}
                     testID="settings-providers"
                 />

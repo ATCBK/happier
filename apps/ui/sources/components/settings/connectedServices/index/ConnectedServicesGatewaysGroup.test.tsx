@@ -40,6 +40,17 @@ describe('ConnectedServicesGatewaysGroup', () => {
     ).toBe(false);
   });
 
+  it('keeps its place when the gateways cannot be read, and retries from there', async () => {
+    const retry = vi.fn();
+    const screen = await renderScreen(
+      <ConnectedServicesGatewaysGroup gateways={[]} onOpen={vi.fn()}
+        unavailable={{ diagnosticCode: 'encryption-material-unavailable', onRetry: retry }} />,
+    );
+    expect(screen.findHostByTestId('connected-services-index:gateways-unavailable') !== null).toBe(true);
+    await screen.pressByTestIdAsync('connected-services-index:gateways-unavailable.retry');
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it('says what each gateway draws on, and holds its place while the gateways load', async () => {
     const listed = await renderScreen(
       <ConnectedServicesGatewaysGroup

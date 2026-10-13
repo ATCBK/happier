@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
-import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/materializeImportedMcpServerDrafts';
+import type { ImportedMcpInputResolutionV1 } from '@/sync/domains/settings/mcpServers/mcpImportActionInputs';
 import type { McpQuickInstallPresetId } from '@/sync/domains/settings/mcpServers/mcpQuickInstallCatalog';
 import { buildQuickInstallMcpDraft, listMcpQuickInstallPresets } from '@/sync/domains/settings/mcpServers/mcpQuickInstallCatalog';
 

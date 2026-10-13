@@ -15,7 +15,6 @@ import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   UsageBodyInsufficient,
-  UsageCoverageLine,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -96,8 +95,6 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
   });
   return (
     <View style={styles.body} testID={`${props.testID}.resets`}>
-      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
-        testID={`${props.testID}.state`} />
       {projection.events.length === 0 ? projection.accounts.some(account => !account.read?.current) ? null : (
         <UsageBodyInsufficient
           testID={`${props.testID}.noResets`}
@@ -205,12 +202,8 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
           testID={`${props.testID}.resetStart`}
         />
       ) : null}
-      <UsageCoverageLine
-        slice={props.slice}
-        sources={['quota']}
-        onRetry={props.model.refresh}
-        testID={`${props.testID}.coverage`}
-      />
+      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice}
+        onRetry={props.model.refresh} testID={`${props.testID}.state`} />
     </View>
   );
 }

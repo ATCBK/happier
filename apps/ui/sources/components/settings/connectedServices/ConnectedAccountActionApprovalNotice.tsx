@@ -7,7 +7,10 @@ import type { ProviderPendingApproval } from '@/providers/actions/useProviderAct
 
 /** Presentation only: the mounted Action owner retains result and Account custody. */
 export function ConnectedAccountActionApprovalNotice(props: Readonly<{
-    execution?: Pick<ReturnType<typeof useMountedActionExecution>, 'approval' | 'binding'>;
+    execution?: Readonly<{
+        approval: Pick<ReturnType<typeof useMountedActionExecution>['approval'], 'approvalId' | 'approvalPending'>;
+        binding: Pick<NonNullable<ReturnType<typeof useMountedActionExecution>['binding']>, 'scope'> | null;
+    }>;
     pendingApproval?: ProviderPendingApproval | null;
     testID?: string;
 }>) {
@@ -18,5 +21,5 @@ export function ConnectedAccountActionApprovalNotice(props: Readonly<{
         ? `/inbox/approvals/${encodeURIComponent(approvalId)}?serverId=${encodeURIComponent(scope.serverId)}` : null);
     if (!href) return null;
     return <ActionApprovalPendingNotice testID={props.testID} message={t('secrets.catalog.approvalPending')}
-        onOpenApproval={() => props.pendingApproval ? router.pushRetainingCurrent(href) : router.push(href)} />;
+        onOpenApproval={() => router.pushRetainingCurrent(href)} />;
 }

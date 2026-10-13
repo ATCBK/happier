@@ -20,8 +20,8 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { MCP_PREVIEW_SETTINGS } from './mcpSettings';
 
 const emptyCatalog = emptyMcpServerCatalogV1();
-export type McpCatalogAuthoringActionId = Exclude<McpServerActionIdV1,
-    'mcp.servers.list' | 'mcp.servers.read' | 'mcp.servers.test' | 'mcp.servers.probe'>;
+export type McpCatalogAuthoringActionId = Extract<McpServerActionIdV1,
+    'mcp.servers.create' | 'mcp.servers.update' | 'mcp.servers.duplicate' | 'mcp.servers.delete'>;
 type ExecuteMcpCatalogMutation = <A extends McpCatalogAuthoringActionId>(actionId: A,
     input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>) => Promise<McpServerCatalogRowMutationResponseV1>;
 

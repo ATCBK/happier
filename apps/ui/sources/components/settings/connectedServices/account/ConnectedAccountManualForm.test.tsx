@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConnectedAccountManualForm } from './ConnectedAccountManualForm';
 
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import type { PluginSettingFieldV2 } from '@happier-dev/protocol';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PluginSettingFieldV2Schema } from '@happier-dev/protocol';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -21,25 +22,8 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 vi.mock('@/text', () => ({ t: (key: string) => key }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    // The row stand-in keeps its control mounted so the field inside it can be exercised.
-    Item: (props: Record<string, unknown> & { rightElement?: React.ReactNode }) =>
-        React.createElement('Item', props, props.rightElement),
-}));
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
-}));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-    TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
-}));
 
-const fields = [
+const fields = PluginSettingFieldV2Schema.array().parse([
     {
         id: 'identity',
         title: 'Email or username',
@@ -51,7 +35,7 @@ const fields = [
         schema: { type: 'string', minLength: 1 },
         secret: true,
     },
-] satisfies PluginSettingFieldV2[];
+]);
 
 describe('ConnectedAccountManualForm', () => {
     afterEach(async () => {
@@ -122,7 +106,7 @@ describe('ConnectedAccountManualForm', () => {
         );
 
         expect(onSubmit).not.toHaveBeenCalled();
-        expect(tree.findByType('ItemGroup').props.description).toBe('common.error');
+        expect(tree.findByType(ItemGroup).props.description).toBe('common.error');
         const token = tree.find(
             (node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-manual:token',
         );

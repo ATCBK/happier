@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     renderSettingsView,
@@ -8,7 +8,6 @@ import {
 } from '@/dev/testkit';
 
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,34 +17,7 @@ const shared = vi.hoisted(() => ({
 }));
 
 installSettingsViewCommonModuleMocks({
-    storage: async () => {
-        const {
-            createStorageModuleStub,
-            createUseLocalSettingMock,
-            createUseLocalSettingMutableMock,
-        } = await import('@/dev/testkit/mocks/storage');
-        const { profileDefaults } = await import('@/sync/domains/profiles/profile');
-        const useLocalSetting = createUseLocalSettingMock({ values: { devModeEnabled: false } });
-        return createStorageModuleStub({
-            useEntitlement: () => false,
-            useLocalSetting,
-            useLocalSettingMutable: createUseLocalSettingMutableMock(useLocalSetting),
-            useSetting: createUseSettingMock({ fallback: (key) => {
-                if (key === 'serverSelectionGroups') return [];
-                if (key === 'serverSelectionActiveTargetKind') return null;
-                if (key === 'serverSelectionActiveTargetId') return null;
-                if (key === 'experiments') return false;
-                if (key === 'featureToggles') return {};
-                if (key === 'useProfiles') return false;
-                if (key === 'sessionUseTmux') return false;
-                return null;
-            } }),
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useProfile: () => ({ ...profileDefaults, id: 'prof_1', name: '', connectedServices: [] }),
-        });
-    },
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
@@ -68,17 +40,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -112,18 +75,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (handler: () => unknown) => [false, handler],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
-    return {
-        ...actual,
-        getAvatarUrl: () => null,
-        getBio: () => '',
-    };
-});
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: 'MachineCliGlyphs',
@@ -169,6 +121,15 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
 
 describe('SettingsView pets entry', () => {
     afterEach(() => {

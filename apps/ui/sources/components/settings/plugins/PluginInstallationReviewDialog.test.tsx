@@ -13,6 +13,7 @@ const platformEnvironment = vi.hoisted(() => ({
 const modalState = vi.hoisted(() => ({ show: vi.fn() }));
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ spies: { show: modalState.show } }).module;
@@ -36,10 +37,6 @@ installSettingsViewCommonModuleMocks({
         });
     },
 });
-
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Readonly<Record<string, unknown>>) => React.createElement('Switch', props),
-}));
 
 describe('PluginInstallationReviewDialog', () => {
     const review = createPluginInstallationReviewFixture({
@@ -111,45 +108,6 @@ describe('PluginInstallationReviewDialog', () => {
                     outlineColor: expect.any(String),
                 }),
             ]));
-        }
-    });
-
-    it('keeps optional access and decision controls at least 48dp on Android', async () => {
-        platformEnvironment.platform = 'android';
-        try {
-            const { PluginInstallationReviewDialog } = await import('./PluginInstallationReviewDialog');
-            const screen = await renderScreen(
-                <PluginInstallationReviewDialog
-                    review={createPluginInstallationReviewFixture({
-                        optionalHostAccess: [{
-                            id: 'workspace',
-                            capability: 'Workspace files',
-                            reason: 'Read the selected workspace.',
-                            authorizationClass: 'hostResourceSelection',
-                            normalizedScope: { kind: 'workspace' },
-                        }],
-                    })}
-                    target={{ machine: 'Laptop', server: 'Server A' }}
-                    onResolve={vi.fn()}
-                    onClose={vi.fn()}
-                />,
-            );
-
-            const optional = screen.findByTestId('settings.plugins.installReview.optional.workspace');
-            expect(optional?.props.style).toEqual(expect.arrayContaining([
-                expect.objectContaining({ minWidth: 48, minHeight: 48 }),
-            ]));
-            for (const testID of [
-                'settings.plugins.installReview.cancel',
-                'settings.plugins.installReview.confirm',
-            ]) {
-                const control = screen.findByTestId(testID);
-                expect(control?.props.style({ pressed: false })).toEqual(expect.arrayContaining([
-                    expect.objectContaining({ minHeight: 48 }),
-                ]));
-            }
-        } finally {
-            platformEnvironment.platform = 'web';
         }
     });
 

@@ -264,6 +264,9 @@ installSettingsViewCommonModuleMocks({
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
+
 vi.mock('@/components/systemTasks', () => ({
     getDefaultSystemTaskRunner: () => ({
         mode: systemTaskState.mode,
@@ -339,21 +342,9 @@ vi.mock('@/components/systemTasks/nativeSshBridgeInterruptionStore', () => ({
     }),
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: (props: any) => React.createElement('ItemList', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props, props.children, props.rightElement),
-}));
 
-vi.mock('@/components/ui/lists/ItemRowActions', () => ({
-    ItemRowActions: (props: any) => React.createElement('ItemRowActions', props),
-}));
 
 	    afterEach(async () => {
 	        await standardCleanup();
@@ -493,6 +484,13 @@ async function loadRemoteHostsScreen() {
     return { RemoteHostsScreen };
 }
 
+// Keep the real store and collection graph out of each behavior-test deadline.
+await import('@/sync/domains/state/storageStore');
+await import('@/sync/store/hooks');
+await import('./collection/RemoteHostsCollection');
+await import('./collection/RemoteHostPage');
+await import('./collection/remoteHostsCollectionController');
+
 	describe('RemoteHosts collection', () => {
 	    it('renders a desktop-only notice when not running on desktop', async () => {
 	        setTauriDesktop(false);
@@ -549,7 +547,7 @@ async function loadRemoteHostsScreen() {
         await flushHookEffects({ cycles: 1, turns: 6 });
         await vi.waitFor(() => { expect(startMock.mock.calls.some(([spec]) => spec.kind === 'remote.ssh.manageHost.v1')).toBe(true); });
 
-        expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual(expect.objectContaining({
             kind: 'remote.ssh.manageHost.v1',
             params: expect.objectContaining({
                 action: 'testConnection',
@@ -599,7 +597,7 @@ async function loadRemoteHostsScreen() {
         await flushHookEffects({ cycles: 1, turns: 6 });
         await vi.waitFor(() => { expect(startMock.mock.calls.some(([spec]) => spec.kind === 'remote.ssh.manageHost.v1')).toBe(true); });
 
-        expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual(expect.objectContaining({
             kind: 'remote.ssh.manageHost.v1',
             params: expect.objectContaining({
                 action: 'testConnection',
@@ -800,7 +798,7 @@ async function loadRemoteHostsScreen() {
         await flushHookEffects({ cycles: 1, turns: 6 });
         await vi.waitFor(() => { expect(startMock.mock.calls.some(([spec]) => spec.kind === 'remote.ssh.bootstrapMachine.v1')).toBe(true); });
 
-        expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual(expect.objectContaining({
             kind: 'remote.ssh.bootstrapMachine.v1',
             params: expect.objectContaining({
                 ssh: expect.objectContaining({
@@ -920,7 +918,7 @@ async function loadRemoteHostsScreen() {
             '10.0.0.1',
             expect.objectContaining({ inputType: 'secure-text' }),
         );
-        expect(startMock).not.toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).not.toContainEqual(expect.objectContaining({
             kind: 'daemon.sshTunnel.ensure.v1',
         }));
     });
@@ -1035,7 +1033,8 @@ async function loadRemoteHostsScreen() {
 
         const interrupted = screen.findByTestId('settings.remoteHosts.interruptedBootstrap.host-a');
         expect(interrupted).toBeTruthy();
-        const interruptedRowActions = interrupted!.findAll((node) => (node.type as unknown) === 'ItemRowActions')[0]?.props as
+        const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
+        const interruptedRowActions = interrupted!.findAllByType(ItemRowActions)[0]?.props as
             { actions?: Array<{ id: string; onPress: () => void }> } | undefined;
         const clearAction = interruptedRowActions?.actions?.find((action) => action.id === 'clearInterruptedBootstrap');
         expect(clearAction).toBeTruthy();
@@ -1212,7 +1211,7 @@ async function loadRemoteHostsScreen() {
         await vi.waitFor(() => { expect(screen.findByTestId('settings.remoteHosts.relayAccess.host-a')).toBeTruthy(); });
 
         expect(screen.findByTestId('settings.remoteHosts.relayAccess.host-a')).toBeTruthy();
-        expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual(expect.objectContaining({
             kind: 'relay.access.status.v1',
             params: {
                 target: {
@@ -1275,7 +1274,7 @@ async function loadRemoteHostsScreen() {
         await vi.waitFor(() => { expect(screen.findByTestId('settings.remoteHosts.relayAccess.host-a')).toBeTruthy(); });
 
         expect(screen.findByTestId('settings.remoteHosts.relayAccess.host-a')).toBeTruthy();
-        expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual(expect.objectContaining({
             kind: 'relay.access.status.v1',
             params: expect.objectContaining({
                 target: expect.objectContaining({
@@ -1381,7 +1380,7 @@ async function loadRemoteHostsScreen() {
         const screen = await renderScreen(React.createElement(RemoteHostsScreen));
         await flushHookEffects({ cycles: 3, turns: 6 });
 
-        expect(startMock).toHaveBeenCalledWith({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual({
             protocolVersion: 1,
             kind: 'daemon.sshTunnel.list.v1',
             params: {},
@@ -1392,7 +1391,7 @@ async function loadRemoteHostsScreen() {
         screen.findByTestId('settings.remoteHosts.sshTunnel.stop.host-a')!.props.onPress();
         await flushHookEffects({ cycles: 3, turns: 6 });
 
-        expect(startMock).toHaveBeenCalledWith({
+        expect(startMock.mock.calls.map(([spec]) => spec)).toContainEqual({
             protocolVersion: 1,
             kind: 'daemon.sshTunnel.stop.v1',
             params: {

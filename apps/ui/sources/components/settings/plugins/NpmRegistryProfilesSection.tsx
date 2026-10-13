@@ -5,7 +5,7 @@ import type {
     DaemonNpmRegistryProfileSnapshotV1,
 } from '@happier-dev/protocol/rpc';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol';
-import type { MarketplaceSourceV1 } from '@happier-dev/protocol/marketplace';
+import type { MarketplaceSourcePresentationV1 } from './model/usePluginRegistrySourceAdministration';
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -87,7 +87,7 @@ type NpmRegistryProfilesTargetSelection = Pick<
 export type NpmRegistryProfilesSectionProps = Readonly<{
     daemonOperationsAvailable: boolean;
     targetSelection: NpmRegistryProfilesTargetSelection;
-    marketplaceSources?: readonly MarketplaceSourceV1[];
+    marketplaceSources?: readonly MarketplaceSourcePresentationV1[];
     onSetMarketplaceSourceProfile?: (
         sourceId: string,
         profileId: string | null,

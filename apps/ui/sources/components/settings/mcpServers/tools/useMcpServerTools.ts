@@ -1,0 +1,117 @@
+import * as React from 'react';
+import type { z } from 'zod';
+import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import type { McpServerToolSettingsPatchV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+export type McpServerToolsList = z.infer<(typeof MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1)['mcp.servers.tools.list']>;
+
+// Share only an active identical observation; settled responses remain local to each mounted consumer.
+const readsInFlight = new Map<string, Promise<ActionExecuteResult>>();
+function readTools(key: string, scope: ServerAccountScope, serverId: string): Promise<ActionExecuteResult> {
+    const existing = readsInFlight.get(key);
+    if (existing) return existing;
+    // The Action captures its own Account lifetime, so either observer can leave without cancelling the other.
+    const execute = createFrontDoorActionExecute();
+    const pending = Promise.resolve().then(() => execute('mcp.servers.tools.list', { serverId }, {
+        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+        serverId: scope.serverId, expectedAccountId: scope.accountId,
+    })).finally(() => { if (readsInFlight.get(key) === pending) readsInFlight.delete(key); });
+    readsInFlight.set(key, pending);
+    return pending;
+}
+
+export type McpServerTools = Readonly<{
+    status: 'loading' | 'ready' | 'unavailable';
+    /** Why the last read failed (a diagnostic code), while `unavailable`. */
+    errorCode: string | null;
+    /** Last-known list; kept while a refresh or a change is in flight. */
+    list: McpServerToolsList | null;
+    /** One user change = one `mcp.servers.tools.set` (D22: applied directly). Resolves with an error message on refusal. */
+    set: (patch: McpServerToolSettingsPatchV1) => Promise<string | null>;
+    reload: () => void;
+}>;
+
+/** Apply a patch to a list the way the server will, so the control answers on press (rolled back on refusal). */
+function applyPatch(list: McpServerToolsList, patch: McpServerToolSettingsPatchV1): McpServerToolsList {
+    const nextDefault = patch.default ?? list.settings.default;
+    const overrides = { ...list.settings.tools };
+    for (const [name, value] of Object.entries(patch.tools ?? {})) {
+        if (value === 'inherit') delete overrides[name];
+        else overrides[name] = value;
+    }
+    return {
+        ...list,
+        settings: { default: nextDefault, tools: overrides },
+        tools: list.tools.map((tool) => Object.hasOwn(overrides, tool.name)
+            ? { ...tool, setting: overrides[tool.name]!, source: 'tool' as const }
+            : { ...tool, setting: 'inherit' as const, source: 'server_default' as const }),
+    };
+}
+
+/**
+ * A server's tools and their settings through the `mcp.servers` Actions: the strict `tools.list` result
+ * (snapshot, settings, cost, per-Agent facts), re-read when the catalog revision moves.
+ */
+export function useMcpServerTools(serverId: string | null, catalogRevision: number | 'absent' | null, installedAgentIds: readonly string[] = []): McpServerTools {
+    const activeScope = useAccountSettingsScope();
+    const homeId = activeScope?.serverId;
+    const accountId = activeScope?.accountId;
+    const scope = React.useMemo(() => (homeId && accountId ? { serverId: homeId, accountId } : null), [homeId, accountId]);
+    const execution = useMountedActionExecution(scope);
+    const execute = execution.execute;
+    const ready = execution.ready;
+    const binding = execution.binding;
+    const [state, setState] = React.useState<Readonly<{ key: string | null; status: McpServerTools['status']; list: McpServerToolsList | null; errorCode?: string | null }>>(
+        { key: null, status: 'loading', list: null });
+    const [nonce, setNonce] = React.useState(0);
+    const key = scope && serverId ? JSON.stringify([scope.serverId, scope.accountId, serverId]) : null;
+    // Membership, not publication timestamps or caller array identity, changes the per-Agent facts.
+    const installedKey = JSON.stringify([...new Set(installedAgentIds)].sort());
+    const readKey = JSON.stringify([key, binding?.revision, catalogRevision, installedKey, nonce]);
+
+    React.useEffect(() => {
+        // Read once the Account binding is current; asking earlier only answers "scope changed".
+        if (!serverId || !scope || !ready) return;
+        let cancelled = false;
+        void (async () => {
+            const result = await readTools(readKey, scope, serverId).catch((error: unknown) => ({
+                ok: false as const, errorCode: error instanceof Error ? error.message : 'mcp_tools_list_failed', error: '' }));
+            if (cancelled || !binding?.isCurrent()) return;
+            const parsed = result?.ok ? MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].safeParse(result.result) : null;
+            setState((current) => parsed?.success
+                ? current.key === key && current.status === 'ready' && JSON.stringify(current.list) === JSON.stringify(parsed.data)
+                    ? current : { key, status: 'ready', list: parsed.data }
+                : { key, status: 'unavailable', list: current.key === key ? current.list : null,
+                    errorCode: !result.ok ? result.errorCode ?? 'mcp_tools_list_failed' : parsed ? 'mcp_tools_list_invalid' : 'mcp_tools_list_failed' });
+        })();
+        return () => { cancelled = true; };
+    }, [readKey, ready, scope, serverId]);
+
+    const current = state.key === key ? state : { key, status: 'loading' as const, list: null };
+    const listRef = React.useRef(current.list);
+    listRef.current = current.list;
+
+    const set = React.useCallback(async (patch: McpServerToolSettingsPatchV1): Promise<string | null> => {
+        if (!serverId) return null;
+        const before = listRef.current;
+        if (before) setState({ key, status: 'ready', list: applyPatch(before, patch) });
+        const result = await execute('mcp.servers.tools.set', { serverId, ...patch }).catch((error: unknown) => ({
+            ok: false as const, errorCode: error instanceof Error ? error.message : 'mcp_tools_set_failed', error: '' }));
+        if (!result.ok) {
+            if (before) setState({ key, status: 'ready', list: before });
+            return result.errorCode ?? 'mcp_tools_set_failed';
+        }
+        setNonce((value) => value + 1);
+        return null;
+    }, [execute, key, serverId]);
+
+    const reload = React.useCallback(() => setNonce((value) => value + 1), []);
+    const errorCode = current.status === 'unavailable' ? state.errorCode ?? null : null;
+    return React.useMemo(() => ({ status: current.status, list: current.list, errorCode, set, reload }), [current.list, current.status, errorCode, reload, set]);
+}

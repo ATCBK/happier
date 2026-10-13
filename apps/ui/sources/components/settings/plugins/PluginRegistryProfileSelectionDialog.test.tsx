@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act, create } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -36,23 +37,6 @@ vi.mock('@/sync/ops/machineMarketplaceSources', () => ({
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: { show: mocks.show, prompt: mocks.prompt, alert: mocks.alert },
 }).module);
-vi.mock('@/components/ui/lists/ItemGroup', async () => ({
-    ItemGroup: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemGroup'),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Readonly<{ rightElement?: React.ReactNode; children?: React.ReactNode }>) =>
-        React.createElement('Item', props, props.rightElement ?? props.children ?? null),
-}));
-vi.mock('@/components/ui/lists/ItemRowActions', async () => ({
-    ItemRowActions: (await import('@/dev/testkit/mocks/components')).createPassThroughComponent('ItemRowActions'),
-}));
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: Readonly<Record<string, unknown>>) => React.createElement('RoundButton', props),
-}));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Readonly<Record<string, unknown>>) => React.createElement('DropdownMenu', props),
-}));
-
 import { PluginRegistryProfileSelectionDialog } from './PluginRegistryProfileSelectionDialog';
 
 const TEAM_SOURCE = {
@@ -141,7 +125,7 @@ describe('PluginRegistryProfileSelectionDialog', () => {
         const { tree } = await renderDialog();
 
         // Only the source the install resolves through is offered for binding.
-        const menus = tree.root.findAllByType('DropdownMenu' as never);
+        const menus = tree.root.findAllByType(DropdownMenu);
         expect(menus.map((node) => node.props.testID)).toEqual(['settings.plugins.registries.marketplaceBinding.marketplace:team']);
         expect(menus[0]!.props.selectedId).toBe('');
 

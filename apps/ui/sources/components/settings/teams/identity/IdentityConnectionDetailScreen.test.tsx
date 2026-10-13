@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { t } from '@/text';
@@ -97,14 +98,6 @@ vi.mock('react-native', async (importOriginal) => {
         },
     };
 });
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
-});
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: openExternalUrlMock }));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -318,13 +311,13 @@ describe('IdentityConnectionDetailScreen test return', () => {
 
         expect(screen.findByTestId('identity-connection-provider')).toBeNull();
         expect(screen.getTextContent()).toContain(t('identityAdministration.providerWorkosSso'));
-        expect(screen.findByTestId('identity-workos-current-connection')?.props.subtitle)
-            .toBe(`Ok · ${t('identityAdministration.workosStrategySaml')} · ${t('identityAdministration.active')}`);
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-workos-current-connection')!, 'Text',
+            `Ok · ${t('identityAdministration.workosStrategySaml')} · ${t('identityAdministration.active')}`)).toBeDefined();
 
         await screen.pressByTestIdAsync('team-identity-workos-reconcile');
         const candidate = screen.findByTestId('identity-workos-candidate:candidate-1');
-        expect(candidate?.props.subtitle)
-            .toBe(`${t('identityAdministration.workosStrategySaml')} · ${t('identityAdministration.active')}`);
+        expect(findTestInstanceByTypeContainingText(candidate!, 'Text',
+            `${t('identityAdministration.workosStrategySaml')} · ${t('identityAdministration.active')}`)).toBeDefined();
         expect(screen.getTextContent()).not.toContain('SAML · active');
     });
 
@@ -408,8 +401,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
         await vi.waitFor(() => expect(
             screen.findByTestId('identity-test-diagnostics:mappedGroups'),
         ).not.toBeNull());
-        expect(screen.findByTestId('identity-test-diagnostics:mappedGroups')?.props.detail)
-            .toBe('Engineering');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-test-diagnostics:mappedGroups')!, 'Text', 'Engineering')).toBeDefined();
         expect(screen.findByTestId('identity-test-diagnostics:rule:email_domains')).not.toBeNull();
     });
 
@@ -506,9 +498,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
         />);
 
         await vi.waitFor(() => expect(executeMock).toHaveBeenCalledOnce());
-        expect(screen.findByTestId('identity-connection-test-status')).toMatchObject({
-            props: { loading: true },
-        });
+        expect(screen.findByTestId('identity-connection-test-status')?.props.accessibilityState?.busy).toBe(true);
         expect(screen.findByTestId('team-identity-test')?.props.disabled).toBe(true);
         expect(screen.findByTestId('team-identity-disable')?.props.disabled).toBe(true);
 
@@ -875,7 +865,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
         expect(announceMock).toHaveBeenCalledWith(t('identityAdministration.workosChooseConnection'));
         const candidate = screen.findByTestId('identity-workos-candidate:workos-connection-a');
         expect(candidate?.props.accessibilityRole).toBe('radio');
-        expect(candidate?.props.accessibilityChecked).toBe(false);
+        expect(candidate?.props.accessibilityState?.checked).toBe(false);
         expect(screen.findByTestId('identity-workos-candidate:workos-connection-b')?.props.disabled).toBe(true);
         // Nothing is committed until a candidate is chosen.
         expect(screen.findByTestId('team-identity-workos-use')?.props.disabled).toBe(true);
@@ -884,7 +874,7 @@ describe('IdentityConnectionDetailScreen test return', () => {
         executeMock.mockResolvedValue({ ok: true, value: { v: 1 } });
         await screen.pressByTestIdAsync('identity-workos-candidate:workos-connection-a');
         expect(executeMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('identity-workos-candidate:workos-connection-a')?.props.accessibilityChecked).toBe(true);
+        expect(screen.findByTestId('identity-workos-candidate:workos-connection-a')?.props.accessibilityState?.checked).toBe(true);
 
         await screen.pressByTestIdAsync('team-identity-workos-use');
         expect(Modal.confirm).not.toHaveBeenCalled();

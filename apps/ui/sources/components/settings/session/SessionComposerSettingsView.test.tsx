@@ -1,66 +1,27 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
+import { standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
-const setNewSessionDraftEntryMode = vi.fn();
-const setSessionInactiveResumePolicy = vi.fn();
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSettingMutable: (name: string) => {
-            if (name === 'newSessionDraftEntryMode') {
-                return ['resumePrevious', setNewSessionDraftEntryMode];
-            }
-            if (name === 'sessionInactiveResumePolicy') {
-                return ['online_only', setSessionInactiveResumePolicy];
-            }
-            const defaults: Record<string, unknown> = {
-                sessionMessageSendMode: 'agent_queue',
-                sessionBusySteerSendPolicy: 'steer_immediately',
-                sessionNonSteerableSendPrompt: 'ask',
-                sessionPendingQueueDrainMode: 'one_at_a_time',
-                sessionPendingQueueDeliveryTiming: 'after_foreground_ready',
-                agentInputEnterToSend: true,
-                agentInputEnterToSendNative: false,
-                agentInputHistoryScope: 'perSession',
-                agentInputActionBarLayout: 'auto',
-                agentInputChipDensity: 'auto',
-                newSessionPresentationModeV1: 'auto',
-                composerSurfaceStyle: 'standard',
-                sessionComposerRememberBannerVisibility: false,
-            };
-            return [defaults[name], vi.fn()];
-        },
-    });
-});
-
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement('ItemGroup', props, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+const account = createProviderSettingsAccountHarness();
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
 
 function findChoice(screen: Awaited<ReturnType<typeof renderSettingsView>>, testIDPrefix: string) {
     return screen.findAll((node) => node.props?.testIDPrefix === testIDPrefix)[0] ?? null;
 }
 
+// Load the real owner after boundaries during collection, outside behavior deadlines.
+await import('./SessionComposerSettingsView');
+
 describe('SessionComposerSettingsView', () => {
+    beforeEach(async () => { await account.restore({ settings: { newSessionDraftEntryMode: 'resumePrevious', sessionInactiveResumePolicy: 'online_only', sessionMessageSendMode: 'agent_queue', sessionBusySteerSendPolicy: 'steer_immediately' } }); });
+    afterEach(async () => { standardCleanup(); await account.reset(); });
     it('shows explicit resume and fresh ordinary-entry choices and persists the selection', async () => {
         const { SessionComposerSettingsView } = await import('./SessionComposerSettingsView');
         const screen = await renderSettingsView(React.createElement(SessionComposerSettingsView));
@@ -72,8 +33,8 @@ describe('SessionComposerSettingsView', () => {
             ['alwaysFresh', 'Start fresh'],
         ]);
 
-        draftEntry?.props.onChange('alwaysFresh');
-        expect(setNewSessionDraftEntryMode).toHaveBeenCalledWith('alwaysFresh');
+        await screen.pressByTestIdAsync('settings-new-session-draft-entry:alwaysFresh');
+        expect(storage.getState().settings.newSessionDraftEntryMode).toBe('alwaysFresh');
     });
 
     it('offers the inactive-session resume policies and persists changes', async () => {
@@ -87,8 +48,8 @@ describe('SessionComposerSettingsView', () => {
         });
         expect(policy?.props.options.map((option: { id: string }) => option.id)).toEqual(['when_available', 'online_only', 'manual']);
 
-        policy?.props.onChange('when_available');
-        expect(setSessionInactiveResumePolicy).toHaveBeenCalledWith('when_available');
+        await screen.pressByTestIdAsync('settings-composer-inactive-resume:when_available');
+        expect(storage.getState().settings.sessionInactiveResumePolicy).toBe('when_available');
     });
 
     it('keeps steering and pending-queue choices visible but locked, with the reason, while nothing can use them', async () => {

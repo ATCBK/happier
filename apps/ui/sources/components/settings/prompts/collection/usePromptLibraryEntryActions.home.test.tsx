@@ -9,13 +9,8 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-  return { ...original, createFrontDoorActionExecute:
-    (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
-});
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
-afterEach(() => { fixture?.dispose(); fixture = undefined; });
+afterEach(async () => { await fixture?.dispose(); fixture = undefined; });
 
 async function seed(boundary: ReturnType<typeof createArtifactStoreBoundary>, id: string) {
   await boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id,

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
@@ -48,26 +49,14 @@ const identityStateMock = vi.hoisted(() => ({
     },
 }));
 
-vi.mock('expo-router', () => ({
-    useRouter: () => ({ push: routerPushMock }),
-    useLocalSearchParams: () => ({}),
-}));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ router: { push: routerPushMock } }).module;
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-// A section renders its trailing action ("Add connection") as the real group does.
-vi.mock('@/components/ui/lists/ItemGroup', async () => {
-    const React = await import('react');
-    return {
-        ItemGroup: (props: { action?: unknown; children?: unknown }) =>
-            React.createElement('ItemGroup', props, props.action as never, props.children as never),
-    };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('./TeamGitHubAppScreens', () => ({ TeamGitHubAppsSection: teamGitHubAppsSectionMock }));
 vi.mock('./TeamMemberSignInLinkSection', () => ({ TeamMemberSignInLinkSection: () => null }));
 vi.mock('./TeamAuthenticationPolicySections', () => ({ TeamAuthenticationPolicySections: () => null }));
@@ -100,8 +89,13 @@ vi.mock('../TeamSection', async () => {
     };
 });
 
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { TeamAuthenticationSettingsScreen } from './TeamAuthenticationSettingsScreen';
+const { ItemList } = await import('@/components/ui/lists/ItemList');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { TeamAuthenticationSettingsScreen } = await import('./TeamAuthenticationSettingsScreen');
+
+function SettingsPage({ children }: React.PropsWithChildren) {
+    return <ItemList>{children}</ItemList>;
+}
 
 type AddMenu = Readonly<{
     open: boolean;
@@ -178,7 +172,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
     ] as const)('renders the safe Directory fact (%s) for a read-only member without requesting source administration', async (state, label) => {
         teamContextMock.manageAuthentication = false;
         teamContextMock.directoryMembership = { providerDisplayName: 'Okta via WorkOS', state };
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
         const fact = screen.findAllByTestId('team-authentication-fact-directory')[0];
         expect(fact?.props).toMatchObject({
             title: 'Okta via WorkOS', subtitle: `teams.authentication.directory.state.${label}`,
@@ -195,7 +189,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
     ] as const)('distinguishes absent Directory from an omitted older-server fact (%s)', async (fact, title) => {
         teamContextMock.manageAuthentication = false;
         teamContextMock.directoryMembership = fact;
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
         const row = screen.findAllByTestId('team-authentication-fact-directory')[0];
         expect(row?.props).toMatchObject({ title, mode: 'info', showChevron: false });
         expect(row?.props.onPress).toBeUndefined();
@@ -204,7 +198,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
 
     it('uses the translated canonical provider-kind label when the catalog has no display name', async () => {
         identityStateMock.current.eligibleProviders[0]!.displayName = null;
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
         expect(menuChoice(screen, 'team-eligible-provider:provider-1')?.title)
             .toBe('identityAdministration.providerOidc');
     });
@@ -263,7 +257,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
             },
         }));
 
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(screen.findByTestId('team-authentication-connection-connection-100')).toBeTruthy();
         // The ways to add another are the section's own "+" menu, closed until asked for.
@@ -272,7 +266,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
     });
 
     it('keeps provider setup visible but disables it for a read-only Team', async () => {
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(menuChoice(screen, 'team-eligible-provider:provider-1')?.disabled).toBe(true);
         await choose(screen, 'team-eligible-provider:provider-1');
@@ -281,7 +275,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
 
     it('blocks setup from a stale allowed-action projection while refreshing', async () => {
         identityStateMock.current.refreshing = true;
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(menuChoice(screen, 'team-eligible-provider:provider-1')?.disabled).toBe(true);
         await choose(screen, 'team-eligible-provider:provider-1');
@@ -320,7 +314,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
             ok: true,
             value: { connection: { id: 'connection-1' } },
         });
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         await choose(screen, 'team-eligible-provider:github-provider-1');
 
@@ -358,7 +352,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
                 failure: { code: 'approval_pending', retryable: false },
             };
         });
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         await choose(screen, 'team-eligible-provider:provider-1');
         expect(routerPushMock).not.toHaveBeenCalled();
@@ -385,7 +379,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
             },
         }];
 
-        await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(teamGitHubAppsSectionMock).toHaveBeenCalled();
         expect(teamGitHubAppsSectionMock.mock.lastCall?.[0]).toEqual(expect.objectContaining({
@@ -408,7 +402,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
             },
         }];
 
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(menuChoice(screen, 'team-eligible-provider:github_app_identity')?.disabled).toBe(true);
         expect(teamGitHubAppsSectionMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
@@ -430,7 +424,7 @@ describe('TeamAuthenticationSettingsScreen', () => {
             },
         }];
 
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         expect(menuChoice(screen, 'team-eligible-provider:github_app_identity')?.disabled).toBe(false);
         expect(teamGitHubAppsSectionMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
@@ -464,18 +458,18 @@ describe('TeamAuthenticationSettingsScreen', () => {
                 nextCursor: null,
             },
         });
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         await vi.waitFor(() => {
             expect(screen.findByTestId('team-authentication-directory-source:source-acme')).toBeTruthy();
         });
-        expect(screen.findByTestId('team-authentication-directory-source:source-acme')?.props.title).toBe('Acme directory');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('team-authentication-directory-source:source-acme')!, 'Text', 'Acme directory')).toBeDefined();
         await screen.pressByTestIdAsync('team-authentication-directory-source:source-acme');
         expect(routerPushMock).toHaveBeenCalledWith('/settings/teams/home-1/team-1/authentication/directory/source-acme');
     });
 
     it('says a Team without a directory in one quiet line and offers "Add source" as the section action', async () => {
-        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />, { wrapper: SettingsPage });
 
         await vi.waitFor(() => {
             expect(screen.findByTestId('team-authentication-directory')).toBeTruthy();

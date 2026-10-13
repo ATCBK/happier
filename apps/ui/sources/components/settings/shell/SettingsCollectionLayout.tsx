@@ -2,7 +2,12 @@ import * as React from 'react';
 import { Stack, usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierListDetailLayout, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
+import {
+    HAPPIER_COLLECTION_RAIL_WIDTH_PX,
+    HappierListDetailLayout,
+    useHappierCollectionLayout,
+    type HappierCollectionRailWidth,
+} from '@happier-dev/plugin-ui/presentation';
 
 import {
     getSettingsStackScreenDefinitions,
@@ -10,10 +15,13 @@ import {
 } from '@/components/settings/navigation/settingsRouteRegistry';
 import { SettingsFloatingControlsHost } from '@/components/settings/shell/SettingsModalFloatingControls';
 import { NavigationBackChromeProvider } from '@/components/ui/layout/NavigationBackChrome';
+import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 import { getPreferredLanguage, t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 export type SettingsCollectionLayoutProps = Readonly<{
+    /** The rail's width at normal text scale: a role from the one metrics owner, never a page-local number. */
+    railWidth: HappierCollectionRailWidth;
     navigator: SettingsNestedNavigator;
     /** The collection's own route (`/settings/machines`): the back control of its details stops here. */
     rootPathname: string;
@@ -24,8 +32,6 @@ export type SettingsCollectionLayoutProps = Readonly<{
      * collection's list (People before a person is open): no rail column is reserved then.
      */
     rail: React.ReactNode;
-    /** Rail width at normal text scale. */
-    railWidthPx: number;
     /** The narrowest detail that still fits the collection's widest row beside its label. */
     detailMinWidthPx: number;
     /** Test id prefix: `<testID>-layout`, `-list-pane`, `-detail-pane`. */
@@ -63,13 +69,13 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
         <View style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base }}>
             {/* The collection header names the collection itself; back belongs to the detail pane below it. */}
             {isModalPresentation && props.collectionHeader
-                ? <NavigationBackChromeProvider control={null}>{props.collectionHeader}</NavigationBackChromeProvider>
+                ? <NavigationTitleChromeProvider showsTitle={false}><NavigationBackChromeProvider control={null}>{props.collectionHeader}</NavigationBackChromeProvider></NavigationTitleChromeProvider>
                 : null}
             <HappierListDetailLayout
                 testID={`${props.testID}-layout`}
                 listTestID={`${props.testID}-list-pane`}
                 detailTestID={`${props.testID}-detail-pane`}
-                minListWidth={hasRail ? props.railWidthPx * scale : 0}
+                minListWidth={hasRail ? HAPPIER_COLLECTION_RAIL_WIDTH_PX[props.railWidth] * scale : 0}
                 minDetailWidth={props.detailMinWidthPx * scale}
                 // The rail keeps its own width; every extra pixel goes to the detail.
                 preferredListRatio={0}
@@ -93,7 +99,11 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
     </>;
 });
 
-/** Beside the rail, the settings back control belongs to the detail pane, never over the rail. */
+/**
+ * Split, the settings back control belongs to the detail pane, never over the rail, and the collection's
+ * own page (landing, loading or empty, rail or not) has none: it was opened from the settings sidebar
+ * beside it. Stacked, the page is pushed and the shell owns back.
+ */
 const CollectionDetailControlsHost = React.memo(function CollectionDetailControlsHost(props: Readonly<{
     enabled: boolean;
     rootPathname: string;

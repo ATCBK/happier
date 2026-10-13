@@ -50,8 +50,6 @@ import {
 
 /** The collection offers a search field only once it no longer fits at a glance. */
 const SEARCH_THRESHOLD = 8;
-/** Rail width at normal text scale: a name and, for templates, a slash command. */
-const PROMPT_RAIL_WIDTH_PX = 260;
 /** The narrowest editor that still fits a field beside its label. */
 const PROMPT_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -375,7 +373,7 @@ export const PromptCollectionLayout = React.memo(function PromptCollectionLayout
             rootPathname={promptCollectionRoot(props.kind)}
             resolveChildRoute={resolveChildRoute}
             rail={<PromptCollectionRail kind={props.kind} />}
-            railWidthPx={PROMPT_RAIL_WIDTH_PX}
+            railWidth="standard"
             detailMinWidthPx={PROMPT_DETAIL_MIN_WIDTH_PX}
             testID={`settings-prompts-${props.kind}`}
         />

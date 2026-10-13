@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+import { ProviderPickerLine } from './ProviderErrorItems';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -46,9 +47,29 @@ export function ProviderSavedSecretControl(props: Readonly<{
  */
 export function ProviderApprovalPendingBanner(props: Readonly<{
     testID: string;
-    providerName: string;
     onOpen: () => void;
-}>) {
+} & (
+    | { presentation?: 'banner'; providerName: string }
+    /** The compact form inside a picker, beside its other status lines. */
+    | { presentation: 'line' }
+)>) {
+    const { theme } = useUnistyles();
+    if (props.presentation === 'line') {
+        return (
+            <ProviderPickerLine
+                testID={props.testID}
+                iconName="info"
+                iconColor={theme.colors.text.secondary}
+                title={t('settingsProvidersCollection.approvalPendingTitle')}
+                action={{
+                    testID: `${props.testID}.open`,
+                    label: t('settingsProvidersCollection.openApproval'),
+                    iconName: 'caret-right',
+                    onPress: props.onOpen,
+                }}
+            />
+        );
+    }
     return (
         <AttentionBanner
             testID={props.testID}

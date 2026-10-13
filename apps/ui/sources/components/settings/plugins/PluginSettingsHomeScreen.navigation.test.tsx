@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import type { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
 
@@ -29,17 +30,12 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-const routerMock = vi.hoisted(() => ({ value: null as ReturnType<typeof createRouterMock> | null }));
-function createRouterMock() {
-    return { push: vi.fn(), back: vi.fn(), replace: vi.fn(), setParams: vi.fn(), dismissTo: vi.fn(), dismissAll: vi.fn() };
-}
-vi.mock('expo-router', () => ({
-    useRouter: () => routerMock.value,
-    useLocalSearchParams: () => mocks.params,
-    useGlobalSearchParams: () => mocks.params,
-    usePathname: () => mocks.pathname,
-    Stack: Object.assign(() => null, { Screen: () => null }),
-}));
+const routerMock = vi.hoisted(() => ({ value: null as ReturnType<typeof createExpoRouterMock> | null }));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    routerMock.value = createExpoRouterMock({ pathname: () => mocks.pathname, params: () => mocks.params });
+    return routerMock.value.module;
+});
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => false }));
 // Whether a side pane exists is the platform's answer (phone or not); the shared details pane itself is real.
 vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
@@ -182,7 +178,9 @@ describe('Settings > Plugins information architecture', () => {
         mocks.deviceType = 'tablet';
         mocks.installedPlugins = [];
         mocks.setActiveView.mockClear();
-        routerMock.value = createRouterMock();
+        if (!routerMock.value) throw new Error('Router boundary must be installed');
+        routerMock.value.resetParams();
+        for (const spy of Object.values(routerMock.value.spies)) spy.mockClear();
     });
 
     afterEach(() => {
@@ -247,8 +245,8 @@ describe('Settings > Plugins information architecture', () => {
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         const installedSection = screen.findAll((node) => typeof node.props?.onNavigateToPlugin === 'function')[0];
         await act(async () => { installedSection?.props.onNavigateToPlugin('acme.plugin'); });
-        expect(routerMock.value?.setParams).toHaveBeenCalledWith({ plugin: 'acme.plugin', source: undefined });
-        expect(routerMock.value?.push).not.toHaveBeenCalled();
+        expect(routerMock.value?.spies.setParams).toHaveBeenCalledWith({ plugin: 'acme.plugin', source: undefined });
+        expect(routerMock.value?.spies.push).not.toHaveBeenCalled();
     });
 
     it('shows the plugin the route names in the shared details pane, and closing clears it', async () => {
@@ -262,7 +260,7 @@ describe('Settings > Plugins information architecture', () => {
         const installedSection = screen.findAll((node) => typeof node.props?.onNavigateToPlugin === 'function')[0];
         expect(installedSection?.props.selectedPluginId).toBe('acme.plugin');
         await act(async () => { screen.pressByTestId('settings.plugins.detailPane.header.close'); });
-        expect(routerMock.value?.setParams).toHaveBeenCalledWith({ plugin: undefined, source: undefined });
+        expect(routerMock.value?.spies.setParams).toHaveBeenCalledWith({ plugin: undefined, source: undefined });
     });
 
     it('opens a plugin as its own page where there is no side pane (phones)', async () => {
@@ -271,7 +269,7 @@ describe('Settings > Plugins information architecture', () => {
         const installedSection = screen.findAll((node) => typeof node.props?.onNavigateToPlugin === 'function')[0];
         await act(async () => { installedSection?.props.onNavigateToPlugin('acme.plugin'); });
         expect(screen.findByTestId('settings.plugins.detailPane.header')).toBeNull();
-        expect(routerMock.value?.push).toHaveBeenCalledWith(expect.objectContaining({
+        expect(routerMock.value?.spies.push).toHaveBeenCalledWith(expect.objectContaining({
             params: expect.objectContaining({ pluginId: 'acme.plugin' }),
         }));
     });
@@ -282,7 +280,7 @@ describe('Settings > Plugins information architecture', () => {
         screen.pressByTestId('settings.plugins.development');
         screen.pressByTestId('settings.plugins.diagnostics');
 
-        expect(routerMock.value?.push.mock.calls.map(([route]) => route)).toEqual([
+        expect(routerMock.value?.spies.push.mock.calls.map(([route]) => route)).toEqual([
             '/settings/plugins/development',
             '/settings/plugins/diagnostics',
         ]);

@@ -1,5 +1,8 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AccountProfileSchema } from '@happier-dev/protocol';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { storage } from '@/sync/domains/state/storageStore';
 
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import type { ConnectedAccountIndexFacts } from './index/ConnectedAccountIndexRow';
@@ -43,28 +46,6 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
     }),
 }));
 
-vi.mock('@/sync/store/hooks', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useActiveServerAccountScope: () => null,
-    useAllMachines: () => [],
-    useProfile: () => ({
-        connectedServicesV2: profileState.connectedServicesV2,
-        connectedAccountsV4: profileState.connectedAccountsV4,
-        connectedAccountGroupsV4: profileState.connectedAccountGroupsV4,
-    }),
-    useSettings: () => ({
-        connectedServicesDefaultProfileByServiceId: {},
-        connectedServicesProfileLabelByKey: {},
-        connectedServicesProviderStateSharingSettingsV1: {},
-        connectedServicesDefaultAuthByAgentIdV1: {},
-    }),
-    useSettingMutable: () => [{}, vi.fn()],
-    useSetting: () => undefined,
-    useLocalSetting: () => undefined,
-    useLocalSettingMutable: () => [undefined, vi.fn()],
-    });
-});
 
 vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
     useHomeTeamCredentialModelCatalog: () => ({
@@ -137,17 +118,6 @@ vi.mock('./setup/ConnectedServicesConnectMore', () => ({
         React.createElement('ConnectedServicesConnectMore', props),
 }));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemList', null, children),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, ...props }: { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, children),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: { rightElement?: React.ReactNode; leftElement?: React.ReactNode }) =>
-        React.createElement('Item', props, props.leftElement, props.rightElement),
-}));
 
 function account(service: { pluginId: string; localId: string }, accountId: string, status: string) {
     return {
@@ -155,7 +125,7 @@ function account(service: { pluginId: string; localId: string }, accountId: stri
         status,
         authenticationModeId: 'oauth',
         revisionSemantics: 'revisioned',
-        credentialRevision: `cred-${accountId}`,
+        credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
         configurationReady: true,
         configurationRevision: null,
         scopes: [],
@@ -175,15 +145,20 @@ function entry(service: { pluginId: string; localId: string }, title: string) {
 }
 
 async function renderView() {
+    storage.setState({ profile: AccountProfileSchema.parse({ ...profileDefaults, ...profileState }) });
     const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
     return (await renderScreen(<ConnectedServicesSettingsView />)).tree;
 }
+
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
 
 function byTestId(tree: Awaited<ReturnType<typeof renderView>>, testID: string) {
     return tree.root.findAll((node) => node.props?.testID === testID);
 }
 
 describe('ConnectedServicesSettingsView services', () => {
+    const initialState = storage.getState();
+    afterEach(() => storage.setState(initialState, true));
     beforeEach(() => {
         registryState.status = 'ready';
         registryState.entries = [entry(CLAUDE, 'Claude subscription'), entry(CODEX, 'ChatGPT subscription'), entry(VAULT, 'Acme Vault')];
@@ -203,8 +178,9 @@ describe('ConnectedServicesSettingsView services', () => {
         expect(header.props.mode).toBe('info');
         expect(header.props.onPress).toBeUndefined();
         expect(header.props.showChevron).toBe(false);
-        let claudeSheet = header.parent;
-        while (claudeSheet && claudeSheet.type !== ('ItemGroup' as never)) claudeSheet = claudeSheet.parent;
+        const claudeSheet = tree.findAllByType(ItemGroup).find((group) => (
+            group.findAll((node) => node === header).length > 0
+        ));
         expect(claudeSheet).toBeTruthy();
         const rows = claudeSheet!.findAll((node) => node.props.facts && node.props.accountId);
         // Attention first: the account that needs a new sign-in leads.

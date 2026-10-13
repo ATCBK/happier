@@ -27,7 +27,7 @@ installSettingsViewCommonModuleMocks({
 const { SettingsCollectionLayout } = await import('./SettingsCollectionLayout');
 const { SettingsFloatingControlsHost } = await import('./SettingsModalFloatingControls');
 const { PageHeader } = await import('@/components/ui/layout/PageHeader');
-const { useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
+const { useHappierCollectionLayout, HAPPIER_COLLECTION_RAIL_WIDTH_PX } = await import('@happier-dev/plugin-ui/presentation');
 
 const modeSeen: Array<string | null> = [];
 const detailMounts = { count: 0 };
@@ -48,7 +48,7 @@ async function renderCollection() {
             rootPathname="/settings/machines"
             resolveChildRoute={() => '[id]'}
             rail={<View testID="machines-rail" />}
-            railWidthPx={272}
+            railWidth="standard"
             detailMinWidthPx={480}
             testID="settings-machines"
             detailTop={<DetailProbe />}
@@ -94,7 +94,7 @@ describe('SettingsCollectionLayout', () => {
                 rootPathname="/settings/teams"
                 resolveChildRoute={() => childRoute}
                 rail={<View testID="teams-rail" />}
-                railWidthPx={272}
+                railWidth="standard"
                 detailMinWidthPx={480}
                 testID="settings-teams"
             />,
@@ -140,7 +140,7 @@ describe('SettingsCollectionLayout', () => {
         const screen = await renderScreen(
             <SettingsCollectionLayout navigator="machines" rootPathname="/settings/machines"
                 resolveChildRoute={() => '[id]'} rail={<View testID="machines-rail" />}
-                railWidthPx={272} detailMinWidthPx={480} testID="settings-machines"
+                railWidth="standard" detailMinWidthPx={480} testID="settings-machines"
                 detailTop={<DetailProbe />}
             />,
         );
@@ -161,6 +161,22 @@ describe('SettingsCollectionLayout', () => {
         expect(hostByTestID(screen, 'machines-rail')).not.toBeNull();
     });
 
+    it('reads the rail width from its role: standard and detailed each need their own rail plus the detail minimum', async () => {
+        const renderRole = (railWidth: 'standard' | 'detailed') => renderScreen(
+            <SettingsCollectionLayout navigator="machines" rootPathname="/settings/machines"
+                resolveChildRoute={() => '[id]'} rail={<View testID="machines-rail" />}
+                railWidth={railWidth} detailMinWidthPx={480} testID="settings-machines" />,
+        );
+        for (const role of ['standard', 'detailed'] as const) {
+            const screen = await renderRole(role);
+            const needed = HAPPIER_COLLECTION_RAIL_WIDTH_PX[role] + 480;
+            await layoutAt(screen, needed - 1);
+            expect(hostByTestID(screen, 'machines-rail'), `${role} one pixel short`).toBeNull();
+            await layoutAt(screen, needed);
+            expect(hostByTestID(screen, 'machines-rail'), `${role} exact fit`).not.toBeNull();
+        }
+    });
+
     it('gives the whole width to a page shown without its rail (a collection index that is itself the list)', async () => {
         const screen = await renderScreen(
             <SettingsCollectionLayout
@@ -168,7 +184,7 @@ describe('SettingsCollectionLayout', () => {
                 rootPathname="/settings/machines"
                 resolveChildRoute={() => 'index'}
                 rail={null}
-                railWidthPx={272}
+                railWidth="standard"
                 detailMinWidthPx={480}
                 testID="settings-machines"
                 detailTop={<DetailProbe />}
@@ -201,7 +217,7 @@ describe('SettingsCollectionLayout', () => {
                     rootPathname="/settings/machines"
                     resolveChildRoute={() => '[id]'}
                     rail={<View testID="machines-rail" />}
-                    railWidthPx={272}
+                    railWidth="standard"
                     detailMinWidthPx={480}
                     testID="settings-machines"
                     collectionHeader={<PageHeader testID="collection-header" title="Machines" />}

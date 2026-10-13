@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { adoptPersonalHomeProfileAndComplete, listServerProfiles, removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 // `t` is a genuine module boundary owned by the testkit. Mocking it here keeps
 // these assertions about which message a failure maps to, rather than about the
@@ -8,36 +9,28 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-// Saved Home profiles are persisted device state: the testkit owns that storage boundary, while the
-// real naming rules (`readServerProfileHomeName`) stay under test.
-const savedProfiles: Record<string, Record<string, unknown>> = {};
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, {
-        overrides: { getServerProfileById: (id: string) => (savedProfiles[id] ?? null) as never },
-    });
-});
-
 import { HappyError } from '@/utils/errors/errors';
 
 import { accountErasureFailureNotice, homeDisplayName, homeGovernanceFailureNotice } from './homeGovernanceLabels';
 
-describe('homeDisplayName', () => {
-    it('names a Home the way the rest of the app does, never by its address when a name exists', () => {
-        savedProfiles['home-named'] = { id: 'home-named', name: 'Studio', serverUrl: 'https://studio.example' };
-        savedProfiles['home-personal'] = {
-            id: 'home-personal',
-            name: '127.0.0.1:53288',
-            serverUrl: 'http://127.0.0.1:53288',
-            personalHomeBootstrapCompleted: true,
-        };
-        savedProfiles['home-unnamed'] = { id: 'home-unnamed', name: 'unnamed.example', serverUrl: 'https://unnamed.example' };
+beforeEach(async () => {
+    for (const profile of listServerProfiles()) await removeServerProfile(profile.id);
+});
 
-        expect(homeDisplayName('home-named')).toBe('Studio');
+describe('homeDisplayName', () => {
+    it('names a Home the way the rest of the app does, never by its address when a name exists', async () => {
+        const named = await upsertServerProfile({ name: 'Studio', serverUrl: 'https://studio.example' });
+        const personal = await adoptPersonalHomeProfileAndComplete({
+            descriptor: { serverUrl: 'http://127.0.0.1:53288', homeServerIdentityId: 'srv_personal' },
+            source: 'desktop-personal-home',
+        });
+        const unnamed = await upsertServerProfile({ name: 'unnamed.example', serverUrl: 'https://unnamed.example' });
+
+        expect(homeDisplayName(named.id)).toBe('Studio');
         // The Personal Home of this device is "Personal Home", not the host it happens to run on.
-        expect(homeDisplayName('home-personal')).toBe('personalHome.settings.defaultHomeLabel');
+        expect(homeDisplayName(personal.id)).toBe('personalHome.settings.defaultHomeLabel');
         // Unnamed and unavailable Homes still get a human title, never an address or storage id.
-        expect(homeDisplayName('home-unnamed')).toBe('settingsAccount.thisHomeTitle');
+        expect(homeDisplayName(unnamed.id)).toBe('settingsAccount.thisHomeTitle');
         expect(homeDisplayName('home-unknown')).toBe('settingsAccount.thisHomeTitle');
     });
 });

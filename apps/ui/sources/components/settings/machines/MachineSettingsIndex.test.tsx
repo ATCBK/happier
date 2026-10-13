@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installMachinesSettingsCommonModuleMocks } from './machinesSettingsTestHelpers';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { recordMachineCollectionVisit } from './collection/machineCollectionVisit';
@@ -27,42 +29,23 @@ type Group = {
 const routerPushSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 const desktopState = vi.hoisted(() => ({ value: false }));
-const viewModelState = vi.hoisted(() => ({
-  value: null as unknown as {
-    activeServerId: string;
-    allMachines: Group['machines'];
-    hasMachines: boolean;
-    isLoadingMachines: boolean;
-    machineRows: unknown[];
-    showMachinesGroupedByServer: boolean;
-    visibleMachineGroups: Group[];
+type InventorySeed = {
     managedByServerId?: Readonly<Record<string, readonly ManagedMachineV1[]>>;
     managedInventory?: {
       entries: Record<
         string,
         { status: 'error' | 'denied'; errorCode: string }
       >;
-      accountScopes: ReadonlyMap<
-        string,
-        { resolution: { kind: 'unavailable' } }
-      >;
-      refresh(): void;
     };
-  },
-}));
-const syncBoundary = vi.hoisted(() => ({
-  refreshMachines: vi.fn(async () => undefined),
-}));
-// The sync singleton is the transport boundary; the list only asks it to read the machines again.
-vi.mock('@/sync/sync', () => ({
-  sync: { refreshMachines: syncBoundary.refreshMachines },
-}));
+};
 const poolFeatureState = vi.hoisted(() => ({
   value: 'disabled' as 'disabled' | 'enabled',
 }));
 const relayDriftState = vi.hoisted(() => ({
   value: null as null | { title: string; description: string },
 }));
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
 
 installMachinesSettingsCommonModuleMocks({
   reactNative: async () => {
@@ -130,22 +113,12 @@ vi.mock('@/components/settings/shell/SettingsPageHeader', () => ({
 vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
   MachineCliGlyphs: () => null,
 }));
-// The Home's pool feature decision and rows come from the network-backed projection owner.
-vi.mock('@/sync/engine/machines/useMachinePoolProjections', () => ({
-  useMachinePoolProjections: (groups: ReadonlyArray<{ serverId: string }>) =>
-    groups.map((group) => ({
-      serverId: group.serverId,
-      accountId: 'account-a',
-      featureStatus: poolFeatureState.value,
-      featureEnabled: poolFeatureState.value === 'enabled',
-      pools: [],
-      status: 'idle',
-      ready: true,
-    })),
-}));
-vi.mock('./machinesSettingsViewModel', () => ({
-  useMachinesSettingsViewModel: () => viewModelState.value,
-}));
+// Metro's lazy module loader is the boundary; the real Action executor runs beneath it.
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+  const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
+});
 vi.mock('@/components/settings/server/useRelayDriftBanner', () => ({
   useRelayDriftBanner: () => relayDriftState.value,
 }));
@@ -162,40 +135,75 @@ vi.mock('@/components/ui/lists/AttentionBanner', () => ({
 const { AllMachinesIndex: MachinesSettingsView } =
   await import('@/components/machines/index/AllMachinesIndex');
 const { MachinesRelayDriftBanner } = await import('./MachinesRelayDriftBanner');
+const { storage } = await import('@/sync/domains/state/storage');
+const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
+const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
+const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+const homeProfiles = new Map<string, string>();
+let selectedGroups: Group[] = [];
 
 function machine(id: string, displayName: string, host: string) {
   // `activeAt: 0` leaves presence to `active`, so a slow run cannot age the machine offline.
-  return {
+  return createMachineFixture({
     id,
+    installationId: `${id}-installation`,
     active: true,
     activeAt: 0,
     metadata: { displayName, host, platform: 'darwin' },
-  };
+  });
 }
 
-function setMachines(
+async function setMachines(
   groups: Group[],
-  overrides: Partial<typeof viewModelState.value> = {},
+  overrides: InventorySeed = {},
 ) {
+  await home.reset();
+  resetScopedHomeActionExecutorsForTests();
+  homeProfiles.clear();
+  selectedGroups = groups;
+  for (const [index, group] of groups.entries()) {
+    const profileId = await home.addHome({ name: group.serverName, serverUrl: `https://${group.serverId}.example`,
+      serverIdentityId: group.serverId, accountId: group.status === 'signedOut' ? null : 'account-a', active: index === 0 });
+    homeProfiles.set(group.serverId, profileId);
+    const error = overrides.managedInventory?.entries[group.serverId];
+    home.answer(profileId, '/v1/machines/managed/actions/list', error
+      ? { status: 500, body: { code: error.errorCode } }
+      : { body: { machines: (overrides.managedByServerId?.[group.serverId] ?? []).map(row => ({ ...row, homeId: group.serverId })) } });
+    home.answer(profileId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] } });
+    home.answer(profileId, '/v1/machines/pools/list', { body: { pools: [] } });
+  }
   const allMachines = groups.flatMap((group) => group.machines);
-  viewModelState.value = {
-    activeServerId: groups[0]?.serverId ?? 'srv-a',
-    allMachines,
-    hasMachines: allMachines.length > 0,
-    isLoadingMachines: false,
-    machineRows: [],
-    showMachinesGroupedByServer: groups.length > 1,
-    // The real projection supplies authenticated Home/Account custody; presence alone is not admission.
-    visibleMachineGroups: groups.map(group => ({ ...group,
-      accountScope: { serverId: group.serverId, accountId: 'account-a' },
-    })),
-    ...overrides,
-  };
+  storage.setState({ machines: Object.fromEntries(allMachines.map(row => [row.id, createMachineFixture(row)])),
+    machineListByServerId: Object.fromEntries(groups.map(group => [group.serverId, group.machines.map(row => createMachineFixture(row))])),
+    machineListStatusByServerId: Object.fromEntries(groups.map(group => [group.serverId, group.status])) });
+  await updateEffectiveHomeViewState(() => ({ version: 1,
+    groups: [{ id: 'test-fleet', name: 'Fleet', serverIds: groups.map(group => group.serverId), presentation: 'grouped' }],
+    activeTargetKind: 'group', activeTargetId: 'test-fleet' }), { scope: 'device' });
 }
 
 async function renderPage() {
-  return (await renderScreen(React.createElement(MachinesSettingsView))).tree;
+  for (const [serverId, profileId] of homeProfiles) {
+    const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: serverId } } });
+    const { tryWriteServerEnabledBitInPlace } = await import('@happier-dev/protocol/features/serverEnabledBit');
+    expect(tryWriteServerEnabledBitInPlace(features, 'machines.pools', poolFeatureState.value === 'enabled')).toBe(true);
+    home.answer(profileId, '/v1/features', { body: features });
+    home.answer(profileId, '/v1/features/authenticated', { body: features });
+    // Prime through the existing feature owner, as addHome does when a Home is discovered.
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+  }
+  const screen = await renderScreen(React.createElement(MachinesSettingsView));
+  await waitForHomeGovernance(() => {
+    for (const group of selectedGroups.filter(group => group.status !== 'signedOut')) {
+      expect(home.requests.some(request => request.path === '/v1/machines/presets/list'
+        && request.serverUrl === `https://${group.serverId}.example`)).toBe(true);
+    }
+  });
+  await flushHookEffects();
+  return screen.tree;
 }
+
+afterEach(() => standardCleanup());
 
 function addMenuItemIds(
   tree: Awaited<ReturnType<typeof renderPage>>,
@@ -207,7 +215,7 @@ function addMenuItemIds(
 }
 
 describe('All machines (the Settings door index)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     routerPushSpy.mockClear();
     routerReplaceSpy.mockClear();
     desktopState.value = false;
@@ -215,12 +223,12 @@ describe('All machines (the Settings door index)', () => {
     relayDriftState.value = null;
     recordMachineCollectionVisit({
       machineId: 'machine-a1',
-      serverId: 'srv-a',
+      serverId: 'srv_a',
       query: '',
     });
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [machine('machine-a1', 'Machine A1', 'a.local')],
@@ -231,9 +239,11 @@ describe('All machines (the Settings door index)', () => {
   it('lists the machines and opens a machine in the collection, scoped to its Home', async () => {
     const tree = await renderPage();
 
+    expect(home.requests.some(request => request.path === '/v1/machines/managed/actions/list')).toBe(true);
+
     const row = tree.findAll(
       (node) =>
-        node.props?.testID === 'machines.index.row.machine:srv-a:machine-a1' &&
+        node.props?.testID === 'machines.index.row.machine:srv_a:machine-a1' &&
         typeof node.props?.onPress === 'function',
     )[0]!;
     expect(row.props.accessibilityLabel).toContain('Machine A1');
@@ -241,7 +251,7 @@ describe('All machines (the Settings door index)', () => {
       await pressTestInstanceAsync(row);
     });
     expect(routerPushSpy).toHaveBeenCalledWith(
-      '/settings/machines/machine-a1?serverId=srv-a',
+      '/settings/machines/machine-a1?serverId=srv_a',
     );
     // No desktop-only row on the web.
     expect(
@@ -272,9 +282,9 @@ describe('All machines (the Settings door index)', () => {
         ],
       },
     };
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [
@@ -295,7 +305,7 @@ describe('All machines (the Settings door index)', () => {
     expect(header.props.title).toContain('machineAttention.phrases.diskFull');
     // This file mocks Item, so the row's one action is read from the row it belongs to.
     const row = tree.findAll(
-      (node) => node.props?.testID === 'machines.needs-you.srv-a.machine-a1',
+      (node) => node.props?.testID === 'machines.needs-you.srv_a.machine-a1',
     )[0]!;
     const action = (
       row.props.rightElement as React.ReactElement<{
@@ -308,7 +318,7 @@ describe('All machines (the Settings door index)', () => {
     // "Free up space" opens Storage prepared for the disk the reason names (plan 40 STO-23).
     expect(routerPushSpy).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^\/settings\/machines\/machine-a1\?serverId=srv-a&tab=storage&.*prepare=lowDisk/u,
+        /^\/settings\/machines\/machine-a1\?serverId=srv_a&tab=storage&.*prepare=lowDisk/u,
       ),
     );
     expect(routerPushSpy.mock.calls.at(-1)?.[0]).toContain('volumeId=v');
@@ -334,37 +344,37 @@ describe('All machines (the Settings door index)', () => {
       retention: { kind: 'until-delete' },
       wakeOnAcceptedMessage: false,
     };
-    setMachines(
+    await setMachines(
       [
         {
-          serverId: 'srv-a',
+          serverId: 'srv_a',
           serverName: 'Home A',
           status: 'idle',
           machines: [],
         },
       ],
-      { hasMachines: true, managedByServerId: { 'srv-a': [row] } },
+      { managedByServerId: { 'srv_a': [row] } },
     );
     const tree = await renderPage();
     const pending = tree.findAll(
       (node) =>
-        node.props?.testID === 'machines.index.row.managed:srv-a:pending' &&
+        node.props?.testID === 'machines.index.row.managed:srv_a:pending' &&
         typeof node.props?.onPress === 'function',
     )[0]!;
     await act(async () => {
       await pressTestInstanceAsync(pending);
     });
     expect(routerPushSpy).toHaveBeenCalledWith(
-      '/settings/machines/managed/pending?serverId=srv-a',
+      '/settings/machines/managed/pending?serverId=srv_a',
     );
     expect(tree.findAllByType('SelectionTiles' as never)).toHaveLength(0);
   });
 
   it('does not present an unreadable managed inventory as an empty Home', async () => {
-    setMachines(
+    await setMachines(
       [
         {
-          serverId: 'srv-a',
+          serverId: 'srv_a',
           serverName: 'Home A',
           status: 'idle',
           machines: [],
@@ -373,26 +383,24 @@ describe('All machines (the Settings door index)', () => {
       {
         managedInventory: {
           entries: {
-            'srv-a': { status: 'error', errorCode: 'managed_request_failed' },
+            'srv_a': { status: 'error', errorCode: 'managed_request_failed' },
           },
-          accountScopes: new Map(),
-          refresh: () => undefined,
         },
       },
     );
     const tree = await renderPage();
     expect(
       tree.findAll(
-        (node) => node.props?.testID === 'settings.machines.managed.read.srv-a',
+        (node) => node.props?.testID === 'settings.machines.managed.read.srv_a',
       ).length,
     ).toBeGreaterThan(0);
     expect(tree.findAllByType('SelectionTiles' as never)).toHaveLength(0);
   });
 
   it('restores the collection search after opening a row and returning on a phone', async () => {
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: Array.from({ length: 9 }, (_, index) =>
@@ -411,7 +419,7 @@ describe('All machines (the Settings door index)', () => {
     await act(async () => search.props.onChangeText('Build'));
     const selected = tree.findAll(
       (node) =>
-        node.props?.testID === 'machines.index.row.machine:srv-a:machine-0' &&
+        node.props?.testID === 'machines.index.row.machine:srv_a:machine-0' &&
         typeof node.props?.onPress === 'function',
     )[0]!;
     await act(async () => {
@@ -426,7 +434,7 @@ describe('All machines (the Settings door index)', () => {
     expect(
       returned.findAll(
         (node) =>
-          node.props?.testID === 'machines.index.row.machine:srv-a:machine-1',
+          node.props?.testID === 'machines.index.row.machine:srv_a:machine-1',
       ),
     ).toHaveLength(0);
   });
@@ -437,9 +445,9 @@ describe('All machines (the Settings door index)', () => {
       active: false,
       activeAt: 1,
     }));
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [machine('machine-a1', 'Machine A1', 'a.local'), ...offline],
@@ -449,7 +457,7 @@ describe('All machines (the Settings door index)', () => {
     const visible = (key: string) =>
       tree.findAll(
         (node) =>
-          node.props?.testID === `machines.index.row.machine:srv-a:${key}`,
+          node.props?.testID === `machines.index.row.machine:srv_a:${key}`,
       ).length > 0;
 
     expect(visible('machine-a1')).toBe(true);
@@ -474,7 +482,7 @@ describe('All machines (the Settings door index)', () => {
     expect(
       fresh.findAll(
         (node) =>
-          node.props?.testID === 'machines.index.row.machine:srv-a:old-3',
+          node.props?.testID === 'machines.index.row.machine:srv_a:old-3',
       ).length,
     ).toBeGreaterThan(0);
   });
@@ -509,8 +517,8 @@ describe('All machines (the Settings door index)', () => {
   });
 
   it('shows the ways to add a machine when there are none, and offers a pool where the Home supports pools', async () => {
-    setMachines([
-      { serverId: 'srv-a', serverName: 'Home A', status: 'idle', machines: [] },
+    await setMachines([
+      { serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [] },
     ]);
     poolFeatureState.value = 'enabled';
     const tree = await renderPage();
@@ -526,21 +534,20 @@ describe('All machines (the Settings door index)', () => {
     };
     await act(async () => menu.props.onSelect('pool'));
     expect(routerPushSpy).toHaveBeenCalledWith(
-      '/settings/machines/pools/new?serverId=srv-a',
+      '/settings/machines/pools/new?serverId=srv_a',
     );
   });
 
   it('holds the collection loading, not the add tiles, while the first machine list loads', async () => {
-    setMachines(
+    await setMachines(
       [
         {
-          serverId: 'srv-a',
+          serverId: 'srv_a',
           serverName: 'Home A',
           status: 'loading',
           machines: [],
         },
       ],
-      { isLoadingMachines: true },
     );
     const tree = await renderPage();
 
@@ -555,9 +562,9 @@ describe('All machines (the Settings door index)', () => {
   });
 
   it('ends in a named failure with Retry, not the add tiles, when the Home cannot list its machines', async () => {
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'error',
         machines: [],
@@ -587,15 +594,15 @@ describe('All machines (the Settings door index)', () => {
   });
 
   it('groups machines by Home when several Homes are shown, keeping a Home that has none', async () => {
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [machine('machine-a1', 'Machine A1', 'a.local')],
       },
       {
-        serverId: 'srv-b',
+        serverId: 'srv_b',
         serverName: 'Home B',
         status: 'signedOut',
         machines: [],
@@ -620,14 +627,14 @@ describe('All machines (the Settings door index)', () => {
 });
 
 describe('the machine list column in the rail door', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     routerPushSpy.mockClear();
     routerReplaceSpy.mockClear();
     desktopState.value = false;
     poolFeatureState.value = 'disabled';
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [machine('machine-a1', 'Machine A1', 'a.local')],
@@ -645,12 +652,12 @@ describe('the machine list column in the rail door', () => {
       );
 
     const row = tree.findAll(
-      (node) => node.props?.testID === 'settings.machines.row.srv-a.machine-a1',
+      (node) => node.props?.testID === 'settings.machines.row.srv_a.machine-a1',
     )[0]!;
     await act(async () => {
       await pressTestInstanceAsync(row);
     });
-    expect(navigatedTo()).toContain('/machines/machine-a1?serverId=srv-a');
+    expect(navigatedTo()).toContain('/machines/machine-a1?serverId=srv_a');
 
     const all = tree.findAll(
       (node) => node.props?.testID === 'settings.machines.rail.all',
@@ -679,7 +686,7 @@ describe('the machine list column in the rail door', () => {
     const order = [
       'settings.machines.rail.all',
       'settings.machines.defaults',
-      'settings.machines.row.srv-a.machine-a1',
+      'settings.machines.row.srv_a.machine-a1',
     ];
     const seen: string[] = [];
     tree
@@ -701,9 +708,9 @@ describe('the machine list column in the rail door', () => {
       active: false,
       activeAt: 1,
     }));
-    setMachines([
+    await setMachines([
       {
-        serverId: 'srv-a',
+        serverId: 'srv_a',
         serverName: 'Home A',
         status: 'idle',
         machines: [machine('machine-a1', 'Machine A1', 'a.local'), ...offline],
@@ -715,7 +722,7 @@ describe('the machine list column in the rail door', () => {
     const visible = (testID: string) =>
       tree.findAll((node) => node.props?.testID === testID).length > 0;
 
-    expect(visible('settings.machines.row.srv-a.machine-a1')).toBe(true);
+    expect(visible('settings.machines.row.srv_a.machine-a1')).toBe(true);
     const fold = tree.findAll(
       (node) =>
         typeof node.props?.testID === 'string' &&
@@ -723,41 +730,44 @@ describe('the machine list column in the rail door', () => {
         node.props.detail !== undefined,
     )[0];
     expect(fold?.props.detail).toBe('9');
-    expect(visible('settings.machines.row.srv-a.old-0')).toBe(false);
+    expect(visible('settings.machines.row.srv_a.old-0')).toBe(false);
 
     await act(async () => {
       await pressTestInstanceAsync(fold!);
     });
-    expect(visible('settings.machines.row.srv-a.old-0')).toBe(true);
+    expect(visible('settings.machines.row.srv_a.old-0')).toBe(true);
   });
 });
 
 describe('the presets group in the rail', () => {
-  const withPresets = (state: { value: unknown[] | null; loading: boolean }) => {
-    setMachines([{ serverId: 'srv-a', serverName: 'Home A', status: 'idle', machines: [machine('machine-a1', 'Machine A1', 'a.local')] }]);
-    viewModelState.value = {
-      ...viewModelState.value,
-      presetsByServerId: state.value ? { 'srv-a': state.value } : {},
-      presetInventory: { statesByServerId: { 'srv-a': { ...state, error: null } }, refresh: vi.fn() },
-    } as typeof viewModelState.value;
-  };
   const sectionIds = (tree: Awaited<ReturnType<typeof renderScreen>>['tree']) => tree.findAll((node) => typeof node.props?.testID === 'string'
     && node.props.testID.startsWith('settings.machines.presets.')).map((node) => node.props.testID as string);
 
   it('keeps its group and its add control while the list is read again, and only waits for the first answer', async () => {
     const { MachinesColumn } = await import('@/components/machines/collection/MachinesColumn');
-    withPresets({ value: [], loading: true });
-    const rereading = sectionIds((await renderScreen(React.createElement(MachinesColumn))).tree);
-    expect(rereading).toContain('settings.machines.presets.new.srv-a');
-
-    withPresets({ value: null, loading: true });
-    const first = sectionIds((await renderScreen(React.createElement(MachinesColumn))).tree);
-    expect(first).not.toContain('settings.machines.presets.new.srv-a');
+    await setMachines([{ serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [machine('machine-a1', 'Machine A1', 'a.local')] }]);
+    const profileId = homeProfiles.get('srv_a')!;
+    const firstReply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] }, respondAfter: firstReply.promise });
+    const screen = await renderScreen(React.createElement(MachinesColumn));
+    await waitForHomeGovernance(() => expect(home.requests.some(request => request.path === '/v1/machines/presets/list')).toBe(true));
+    expect(sectionIds(screen.tree)).not.toContain('settings.machines.presets.new.srv_a');
+    await act(async () => firstReply.resolve());
+    await waitForHomeGovernance(() => expect(sectionIds(screen.tree)).toContain('settings.machines.presets.new.srv_a'));
+    const refreshReply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [] }, respondAfter: refreshReply.promise });
+    const initialRequests = home.requests.filter(request => request.path === '/v1/machines/presets/list').length;
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    await act(async () => publishHomeAccountChange('srv_a'));
+    await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path === '/v1/machines/presets/list').length).toBeGreaterThan(initialRequests));
+    expect(sectionIds(screen.tree)).toContain('settings.machines.presets.new.srv_a');
+    await act(async () => refreshReply.resolve());
+    await screen.unmount();
   });
 });
 
 describe('MachinesRelayDriftBanner', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     desktopState.value = false;
     relayDriftState.value = {
       title: 'Drift',

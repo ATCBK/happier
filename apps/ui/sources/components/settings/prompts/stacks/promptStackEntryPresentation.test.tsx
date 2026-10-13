@@ -10,6 +10,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,7 +35,6 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
-vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => async () => {} }));
 vi.mock('@/components/ui/popover', async (importOriginal) => {
     const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
     return createInlinePopoverModuleMock(importOriginal);
@@ -66,7 +66,7 @@ async function seed(home: Home, kind: string, title: string) {
 }
 
 describe('qualified Context presentation', () => {
-    it('offers docs, skills and memory in Context but only instruction documents in Instructions', async () => {
+    it('offers documents and memory in Context, excludes skill bundles, and limits Instructions to documents', async () => {
         const active = await createPlainArtifactHomeFixture('https://context-kinds.test'); fixtures.push(active);
         storage.setState({ isDataReady: true });
         storage.getState().applyArtifacts([
@@ -75,7 +75,7 @@ describe('qualified Context presentation', () => {
             body: null, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 })));
         const menu = await renderScreen(<PromptStackDocumentMenu testID="all-context" anchorRef={{ current: null }}
             serverId={active.home.id} attachedRefs={[]} onClose={() => {}} onPick={() => {}} />);
-        expect(menu.findByType(DropdownMenu).props.items.map((item: { id: string }) => item.id)).toEqual(['doc', 'skill', 'memory']);
+        expect(menu.findByType(DropdownMenu).props.items.map((item: { id: string }) => item.id)).toEqual(['doc', 'memory']);
         const onAttach = vi.fn();
         const instructions = await renderScreen(<AttachExistingMenu anchorRef={{ current: null }} serverId={active.home.id}
             onClose={() => {}} onAttach={onAttach} />);
@@ -104,9 +104,10 @@ describe('qualified Context presentation', () => {
             header: { kind: 'prompt_doc.v2', title: 'Local instructions' }, isDecrypted: true,
             body: null, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } } });
         const session = createSessionFixture({ id: 'session-exclusion' });
-        const screen = await renderScreen(<SessionContextSection serverId={active.home.id} session={{ ...session,
+        if (!session.metadata) throw new Error('Missing Session fixture metadata');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><SessionContextSection serverId={active.home.id} session={{ ...session,
             metadata: { ...session.metadata, work: { promptStack: [{ id: 'foreign',
-                ref: { kind: 'doc', artifactId: 'same-id', serverId: foreign.home.id }, placement: 'system_append', enabled: true }] } } }} />);
+                ref: { kind: 'doc', artifactId: 'same-id', serverId: foreign.home.id }, placement: 'system_append', enabled: true }] } } }} /></InjectedAuthProvider>);
         const add = screen.findAllByTestId('session-work-context.add').find(node => typeof node.props.onPress === 'function');
         expect(add).toBeDefined();
         await React.act(async () => { add!.props.onPress(); });
@@ -129,7 +130,7 @@ describe('qualified Context presentation', () => {
             return await target.boundary.handle(path, init) ?? Response.json({ error: 'not_found' }, { status: 404 });
         });
         const scope = { serverId: active.home.id, accountId: 'artifact-account' };
-        storage.setState({ isDataReady: true, artifacts: { 'same-id': { id: 'same-id', title: 'Active instructions',
+        storage.setState({ isDataReady: true, settingsVersion: 7, artifacts: { 'same-id': { id: 'same-id', title: 'Active instructions',
             header: { kind: 'prompt_doc.v2', title: 'Active instructions' }, isDecrypted: true,
             body: null, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } } });
         applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 1, record: { key: 'voice',
@@ -137,8 +138,8 @@ describe('qualified Context presentation', () => {
                 { id: 'active', ref: { kind: 'doc', artifactId: 'same-id' }, placement: 'system_append', enabled: true },
                 { id: 'foreign', ref: { kind: 'doc', artifactId: 'same-id', serverId: foreign.home.id }, placement: 'system_append', enabled: true },
                 { id: 'unknown', ref: { kind: 'doc', artifactId: 'missing', serverId: foreign.home.id }, placement: 'system_append', enabled: true },
-            ] } } }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: storage.getState().settingsVersion }, true);
-        const screen = await renderScreen(<PromptStackEditorScreen surface="voice" title="Voice" />);
+            ] } } }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><PromptStackEditorScreen surface="voice" title="Voice" /></InjectedAuthProvider>);
         const title = (id: string) => screen.findAllByTestId(`promptStack.entry.${id}`).map(node => node.props.title).find(value => typeof value === 'string');
         expect(title('active')).toBe('Active instructions');
         await vi.waitFor(() => expect(title('foreign')).toBe('Foreign memory'));
@@ -170,8 +171,9 @@ describe('qualified Context presentation', () => {
             kind: 'doc', title: 'Changed foreign instructions', on: true, off: null,
         }));
         const session = createSessionFixture({ id: 'session' });
-        const workScreen = await renderScreen(<SessionContextSection serverId={active.home.id}
-            session={{ ...session, metadata: { ...session.metadata, work: { promptStack: entries } } }} />);
+        if (!session.metadata) throw new Error('Missing Session fixture metadata');
+        const workScreen = await renderScreen(<InjectedAuthProvider credentials={null}><SessionContextSection serverId={active.home.id}
+            session={{ ...session, metadata: { ...session.metadata, work: { promptStack: entries } } }} /></InjectedAuthProvider>);
         let open: (() => void) | undefined;
         await vi.waitFor(() => {
             open = workScreen.findAllByTestId('session-work-context.entry.session.foreign')

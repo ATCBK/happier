@@ -7,8 +7,6 @@ import { t } from '@/text';
 import { RoleCollectionRail } from './RoleCollectionRail';
 import { ROLES_COLLECTION_ROOT, resolveRolesChildRoute } from './roleCollectionRoutes';
 
-/** Rail width at normal text scale: an engine mark, a role name and its engine · runs-as line. */
-const ROLE_RAIL_WIDTH_PX = 320;
 /** The narrowest detail that keeps the engine field beside its label. */
 const ROLE_DETAIL_MIN_WIDTH_PX = 480;
 
@@ -20,7 +18,7 @@ export const RoleSettingsLayout = React.memo(function RoleSettingsLayout() {
             rootPathname={ROLES_COLLECTION_ROOT}
             resolveChildRoute={resolveRolesChildRoute}
             rail={<RoleCollectionRail />}
-            railWidthPx={ROLE_RAIL_WIDTH_PX}
+            railWidth="detailed"
             detailMinWidthPx={ROLE_DETAIL_MIN_WIDTH_PX}
             testID="settings-roles"
             // The list and detail below are full-bleed, so the header spans the pane and shares the rail's edge.

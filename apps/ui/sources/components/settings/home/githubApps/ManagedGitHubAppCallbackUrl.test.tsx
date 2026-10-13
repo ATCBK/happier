@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
@@ -13,17 +14,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/utils/url/openExternalUrl', () => ({ openExternalUrl: vi.fn(async () => true) }));
 vi.mock('@/modal', () => ({ Modal: { alert: vi.fn(), alertAsync: vi.fn(async () => {}), confirm: vi.fn(async () => true) } }));
 vi.mock('./useManagedGitHubApps', () => ({
@@ -85,8 +79,7 @@ describe('managed GitHub App callback URL', () => {
             <ManagedGitHubAppDetailContent surface={surface} registrationId="registration-1" />,
         );
 
-        expect(screen.findByTestId('github-app-callback-url')?.props.subtitle)
-            .toBe('https://home.example.test/v1/oauth/github-app/callback');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-callback-url')!, 'Text', 'https://home.example.test/v1/oauth/github-app/callback')).toBeDefined();
 
         await screen.pressByTestIdAsync('github-app-callback-url');
 
@@ -104,8 +97,7 @@ describe('managed GitHub App callback URL', () => {
             />,
         );
 
-        expect(screen.findByTestId('github-app-callback-url')?.props.subtitle)
-            .toBe('https://home.example.test/v1/oauth/github-app/callback');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-app-callback-url')!, 'Text', 'https://home.example.test/v1/oauth/github-app/callback')).toBeDefined();
     });
 
     it('renders no callback row when the Home publishes no public URL to derive one from', async () => {

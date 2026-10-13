@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UsageRecapComposeResultSchema } from '@happier-dev/protocol';
+import { composeUsageRecap, UsageAnalyticsQueryResponseSchema, UsageRecapComposeInputSchema } from '@happier-dev/protocol';
+import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ModalProvider } from '@/modal';
 import { renderUsageRecapImage } from './renderUsageRecapImage';
@@ -19,13 +21,16 @@ vi.mock('react-native-view-shot/src/RNViewShot.web', () => ({ default: { capture
 } } }));
 afterEach(() => { standardCleanup(); capture.run.mockReset(); modal.module.Modal.hideAll(); });
 
-const parsed = UsageRecapComposeResultSchema.parse({ kind: 'composed', v: 1, style: 'sigil', format: 'story', selectedFields: ['tokens'],
-  unavailableFields: [], period: { startMs: 100, endMs: 900, timeZoneOffsetMinutes: 0 }, asOfMs: 900,
-  coverage: { accounting: null, sourceCoverage: [], sourceStatuses: [], pending: false },
-  facts: { tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 } },
+const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 900 } });
+const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+  totals: { eventCount: 1, tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
+    cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
 });
-if (parsed.kind !== 'composed') throw new Error('invalid fixture');
-const composed = parsed;
+const composed = composeUsageRecap({
+  input: UsageRecapComposeInputSchema.parse({ query, style: 'sigil', format: 'story', selectedFields: ['tokens'] }),
+  snapshot: resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: accounting, status: 'available', asOfMs: 900 }] }).results[0]!,
+});
+if (composed.kind !== 'composed') throw new Error('The canonical recap producer must admit the image fixture');
 
 describe('client recap image rendering through the shared private card', () => {
   it('produces pixels from the real selected preview without sharing or uploading them', async () => {

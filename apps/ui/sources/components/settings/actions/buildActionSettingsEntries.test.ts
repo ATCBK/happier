@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ActionsSettingsV1Schema, DEFAULT_ACTIONS_SETTINGS_V1, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { PLUGIN_MANIFEST as githubManifest } from '../../../../../../packages/plugins/scm-github/src/manifest';
 
 describe('buildActionSettingsEntries', () => {
     it('preserves GitHub mutation approval defaults through projection, waiver and reset', async () => {
@@ -9,21 +10,21 @@ describe('buildActionSettingsEntries', () => {
         const { buildActionSettingsContributedActions, buildActionSettingsEntries } = await import('./buildActionSettingsEntries');
         const { resolveActionSettingsEntryStatusSummary } = await import('./resolveActionSettingsEntryStatusSummary');
         const { applyActionSettingsTargetControlState, resolveActionSettingsTargetControlState } = await import('./actionSettingsTargets');
-        const pluginId = 'happier.scm.forge.github';
-        for (const [localId, dangerLevel] of [
-            ['github/pull-request/merge', 'destructive'],
-            ['github/pull-request/close', 'writesRemote'],
-            ['github/pull-request/mark-ready', 'externalSideEffect'],
+        const pluginId = githubManifest.id;
+        for (const localId of [
+            'github/pull-request/merge',
+            'github/pull-request/close',
+            'github/pull-request/mark-ready',
         ] as const) {
+            const declaration = githubManifest.contributes.actions.find((action) => action.id === localId);
+            if (!declaration) throw new Error(`GitHub Action ${localId} is not declared`);
+            const dangerLevel = declaration.dangerLevel;
             const projection = PluginProjectionV2Schema.parse({
                 v: 2, generation: 1,
                 installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'GitHub', enabled: true,
                     source: { kind: 'bundled', locator: '@happier-dev/plugin-scm-github' } } },
                 actionsById: { [`${pluginId}/${localId}`]: {
-                    id: localId, pluginId, occurrenceId: 'github-occurrence', title: localId,
-                    scopes: ['settings'], surfaces: ['ui', 'agent', 'mcp', 'cli'],
-                    execution: { target: 'daemon' }, placementBindings: ['detailsPanel'], dangerLevel,
-                    confirmation: { title: 'Confirm GitHub mutation', body: 'Changes GitHub state.' },
+                    ...declaration, pluginId, occurrenceId: 'github-occurrence',
                 } },
             });
             const inputs = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);

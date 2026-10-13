@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { createPassThroughComponent } from '@/dev/testkit/mocks/components';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
@@ -57,18 +57,7 @@ installSettingsViewCommonModuleMocks({
         });
         return routerMock.module;
     },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useEntitlement: () => false,
-            useLocalSettingMutable: () => [false, vi.fn()],
-            useSetting: () => null,
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useProfile: () => ({ id: 'prof_1', firstName: '', connectedServices: [] }),
-        });
-    },
+    storage: 'real',
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
@@ -105,17 +94,8 @@ vi.mock('expo-constants', () => ({
 }));
 
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: createPassThroughComponent('ItemList'),
-}));
 
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: createPassThroughComponent('ItemGroup'),
-}));
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: createPassThroughComponent('Item'),
-}));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: vi.fn(), connectWithUrl: vi.fn(), isLoading: false }),
@@ -152,15 +132,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
     useHappyAction: (fn: any) => [false, fn],
 }));
 
-vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getAvatarUrl: () => null,
-    getBio: () => null,
-}));
 
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: 'Avatar',
-}));
 
 vi.mock('@/components/settings/supportUsBehavior', () => ({
     resolveSupportUsAction: () => 'github',
@@ -209,6 +181,15 @@ vi.mock('@/components/settings/machines/hooks/useActiveSelectionMachineGroups', 
 }));
 
 const { SettingsView } = await import('./SettingsView');
+
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+beforeEach(() => {
+    storage.setState({ settings: { ...settingsDefaults, useProfiles: false },
+        profile: { ...profileDefaults, id: 'prof_1' }, machines: {},
+        machineListByServerId: {}, machineListStatusByServerId: {} });
+});
 
 describe('SettingsView (web)', () => {
     afterEach(() => {

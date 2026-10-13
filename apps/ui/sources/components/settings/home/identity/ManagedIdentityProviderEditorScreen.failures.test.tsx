@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
 import type { ManagedIdentityProviderV1 } from '@happier-dev/protocol';
 
@@ -13,16 +14,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
-vi.mock('@/components/ui/forms/FieldItem', () => ({ FieldItem: 'FieldItem' }));
-// Rows render their right-hand control, as the real row does; page fields are text inputs.
-vi.mock('@/components/ui/lists/Item', async () => {
-    const React = await import('react');
-    return { Item: (props: { rightElement?: unknown }) => React.createElement('Item', props, props.rightElement as never) };
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/components/ui/forms/FieldTextInput', () => ({ FieldTextInput: 'TextInput' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text', TextInput: 'TextInput' }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
     announceAccessibilityMessage: announceMock,
 }));
@@ -106,7 +101,7 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
 
         await screen.pressByTestIdAsync('identity-provider-save');
 
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description)).toContain(expected);
+        expect(screen.getTextContent()).toContain(expected);
     });
 
     it('announces the failure so a screen reader hears it away from the pressed control', async () => {
@@ -127,7 +122,7 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
 
         await screen.pressByTestIdAsync('identity-provider-test');
 
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(screen.getTextContent())
             .toContain('identityAdministration.errorInvalid');
     });
 
@@ -139,7 +134,7 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
 
         await screen.pressByTestIdAsync('identity-provider-save');
 
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(screen.getTextContent())
             .toContain('identityAdministration.invalidIssuer');
         expect(executeMock).not.toHaveBeenCalled();
     });
@@ -169,9 +164,9 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
 
         await screen.pressByTestIdAsync('identity-provider-save');
 
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(screen.getTextContent())
             .not.toContain('connect.waitingForApproval');
-        expect(screen.findByTestId('identity-provider-save')?.props.loading).toBe(false);
+        expect(Boolean(screen.findByTestId('identity-provider-save')!.props.accessibilityState?.busy)).toBe(false);
         expect(onSaved).not.toHaveBeenCalled();
         expect(onApprovalPending).toHaveBeenCalledWith(approval);
         expect(announceMock).not.toHaveBeenCalledWith('connect.waitingForApproval');
@@ -205,9 +200,9 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
 
         await screen.pressByTestIdAsync('identity-provider-test');
 
-        expect(screen.findByTestId('identity-provider-test')?.props.detail).toBeUndefined();
-        expect(screen.findByTestId('identity-provider-test')?.props.loading).toBe(false);
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-test')!, 'Text', 'identityAdministration.validated')).toBeUndefined();
+        expect(Boolean(screen.findByTestId('identity-provider-test')!.props.accessibilityState?.busy)).toBe(false);
+        expect(screen.getTextContent())
             .not.toContain('connect.waitingForApproval');
         expect(onApprovalPending).toHaveBeenCalledWith(approval);
 
@@ -215,8 +210,7 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
             await completeApprovedValidation?.(provider(5));
         });
 
-        expect(screen.findByTestId('identity-provider-test')?.props.detail)
-            .toBe('identityAdministration.validated');
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('identity-provider-test')!, 'Text', 'identityAdministration.validated')).toBeDefined();
     });
 
     it('surfaces an approved result failure and leaves the save available for retry', async () => {
@@ -237,9 +231,9 @@ describe('ManagedOidcProviderEditorContent failure presentation', () => {
         await screen.pressByTestIdAsync('identity-provider-save');
         await act(async () => reportApprovedFailure?.('home_unreachable'));
 
-        expect(screen.findAllByType('ItemGroup').map((group) => group.props.description))
+        expect(screen.getTextContent())
             .toContain('teams.unavailable.offline');
-        expect(screen.findByTestId('identity-provider-save')?.props.disabled).toBe(false);
+        expect(Boolean(screen.findByTestId('identity-provider-save')!.props.disabled)).toBe(false);
     });
 
     it('finishes a newly created provider from the approved result', async () => {

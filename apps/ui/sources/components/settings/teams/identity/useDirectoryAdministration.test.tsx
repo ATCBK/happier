@@ -1,6 +1,6 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TeamDirectorySourceRemovalPreflightV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TeamDirectorySourceRemovalPreflightV1Schema, TeamDirectorySourceSummaryV1Schema, type TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
@@ -14,10 +14,6 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
-// Hook tests do not render rows; these platform view boundaries keep unrelated
-// rendering modules out while the storage, Actions and read lifecycle stay real.
-vi.mock('@/components/ui/lists/Item', () => ({ Item: 'Item' }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
 
 // Keep the real Actions policy, Artifact lifecycle, response parser and hook
 // state transitions. Only the Home network and device credential store change.
@@ -35,7 +31,7 @@ const PREVIEW_PATH = `${SOURCE_PATH}/removal-impact`;
 const onExecuted = () => undefined;
 
 function directorySource(id: string, teamId = 'team-1'): TeamDirectorySourceSummaryV1 {
-    return {
+    return TeamDirectorySourceSummaryV1Schema.parse({
         v: 1,
         id,
         teamId,
@@ -53,10 +49,10 @@ function directorySource(id: string, teamId = 'team-1'): TeamDirectorySourceSumm
             nextScheduledAt: null,
         },
         error: null,
-    };
+    });
 }
 
-const removalImpact: TeamDirectorySourceRemovalPreflightV1 = {
+const removalImpact = TeamDirectorySourceRemovalPreflightV1Schema.parse({
     v: 1,
     status: 'allowed',
     sourceId: 'source-1',
@@ -69,7 +65,7 @@ const removalImpact: TeamDirectorySourceRemovalPreflightV1 = {
         nativeMembershipsPreserved: 5,
         nativeGroupContributionsPreserved: 6,
     },
-};
+});
 
 async function addHome(): Promise<ServerAccountScope> {
     const serverId = await harness.addHome({
