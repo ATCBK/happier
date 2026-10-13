@@ -55,7 +55,7 @@ describe("system-record failure diagnostics", () => {
 
         expect(await run()).toEqual({ ok: false, error: "internal" });
         expect(logError.mock.calls).toEqual([[
-            { module: "session-system-record-service", operation, prismaCode: "P2021", errorType: "PrismaClientKnownRequestError" },
+            { module: "session-system-record-service", operation, reason: "exception", prismaCode: "P2021", errorType: "PrismaClientKnownRequestError" },
             expect.any(String),
         ]]);
         expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
@@ -68,7 +68,7 @@ describe("system-record failure diagnostics", () => {
 
         expect(await getLatestSessionSystemRecord(params)).toEqual({ ok: false, error: "internal" });
         expect(logError.mock.calls).toEqual([[
-            { module: "session-system-record-service", operation: "latest", prismaCode: null, errorType: "Error" },
+            { module: "session-system-record-service", operation: "latest", reason: "exception", prismaCode: null, errorType: "Error" },
             expect.any(String),
         ]]);
         expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
@@ -81,7 +81,7 @@ describe("system-record failure diagnostics", () => {
 
         expect(await listSessionSystemRecords(params)).toEqual({ ok: false, error: "internal" });
         expect(logError.mock.calls).toEqual([[
-            { module: "session-system-record-service", operation: "list", prismaCode: null, errorType: "object" },
+            { module: "session-system-record-service", operation: "list", reason: "exception", prismaCode: null, errorType: "object" },
             expect.any(String),
         ]]);
         expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
@@ -99,8 +99,26 @@ describe("system-record failure diagnostics", () => {
         dbMocks.db.sessionSystemRecord.create.mockRejectedValue(uniqueRace);
         expect(await upsertSessionSystemRecord(params)).toEqual({ ok: false, error: "internal" });
         expect(logError.mock.calls).toEqual([[
-            { module: "session-system-record-service", operation: "upsert", prismaCode: "P2002", errorType: "Error" },
+            { module: "session-system-record-service", operation: "upsert", reason: "exception", prismaCode: "P2002", errorType: "Error" },
             expect.any(String),
         ]]);
+    });
+
+    it.each([
+        ["upsert", () => upsertSessionSystemRecord(params), "findUnique"],
+        ["list", () => listSessionSystemRecords(params), "findMany"],
+        ["get", () => getSessionSystemRecord(params), "findUnique"],
+        ["latest", () => getLatestSessionSystemRecord(params), "findFirst"],
+    ] as const)("reports %s invalid stored data without copying the rejected row", async (operation, run, method) => {
+        const row = { ...params, id: "private-record", content: { t: "plain", v: "private-invalid-payload" },
+            createdAt: new Date(), updatedAt: new Date() };
+        dbMocks.db.sessionSystemRecord[method].mockResolvedValue(method === "findMany" ? [row] : row);
+
+        expect(await run()).toEqual({ ok: false, error: "internal" });
+        expect(logError.mock.calls).toEqual([[
+            { module: "session-system-record-service", operation, reason: "invalid-stored-record", prismaCode: null, errorType: null },
+            expect.any(String),
+        ]]);
+        expect(JSON.stringify(logError.mock.calls)).not.toContain("private-");
     });
 });
