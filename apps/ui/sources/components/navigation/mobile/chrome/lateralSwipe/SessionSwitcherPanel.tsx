@@ -73,7 +73,7 @@ const styles = StyleSheet.create((theme) => ({
         height: SESSION_SWITCHER_ROW_HEIGHT,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 18,
+        paddingHorizontal: theme.space.s16,
         gap: theme.space.s12,
     },
     mark: {
@@ -121,7 +121,7 @@ const styles = StyleSheet.create((theme) => ({
         left: 0,
         right: 0,
         height: 30,
-        paddingHorizontal: 18,
+        paddingHorizontal: theme.space.s16,
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingBottom: theme.space.s4,
@@ -142,7 +142,7 @@ const styles = StyleSheet.create((theme) => ({
         height: 60,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 18,
+        paddingHorizontal: theme.space.s16,
         gap: theme.space.s12,
     },
     dockedHeader: {
@@ -150,7 +150,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 18,
+        paddingHorizontal: theme.space.s16,
     },
     dockedTitle: {
         ...Typography.variant('heading'),
@@ -168,9 +168,9 @@ const styles = StyleSheet.create((theme) => ({
     },
     peek: {
         position: 'absolute',
-        left: 18,
-        right: 18,
-        paddingHorizontal: 14,
+        left: theme.space.s16,
+        right: theme.space.s16,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: theme.space.s10,
         gap: theme.space.s4,
     },
@@ -412,7 +412,7 @@ const SwitcherPeek = React.memo(function SwitcherPeek(props: Readonly<{ row: Ses
     const where = [row.status?.text, row.timeLabel].filter(Boolean).join(' · ');
     return (
         <View style={[styles.peek, { bottom: '100%', marginBottom: theme.space.s10 }]} pointerEvents="none">
-            <GlassPanel radius={20} surfaceColor={theme.colors.surface.base} style={{ paddingHorizontal: 14, paddingVertical: theme.space.s10, gap: theme.space.s4 }}>
+            <GlassPanel radius={20} surfaceColor={theme.colors.surface.base} style={{ paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s10, gap: theme.space.s4 }}>
                 <View style={styles.peekWhere}>
                     <RowMark row={row} size={13} />
                     <Text style={styles.peekWhereText} numberOfLines={1}>{where || row.title}</Text>

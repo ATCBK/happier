@@ -26,21 +26,10 @@ vi.mock(
   async () =>
     (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module,
 );
-// Portal measurement is a platform boundary; the rail's popover owner stays real.
-vi.mock('@/components/ui/popover', () => ({
-  Popover: (props: {
-    children: (layout: {
-      maxHeight: number;
-      maxWidth: number;
-    }) => React.ReactNode;
-  }) => <>{props.children({ maxHeight: 600, maxWidth: 400 })}</>,
-}));
-// The Inbox's own body has its suite (`InboxPopover.test.tsx`); here it only has to appear.
-vi.mock('@/components/inbox/InboxPopover', () => ({
-  InboxPopoverContent: (props: { onOpenInbox: () => void }) => (
-    <View testID="inbox-popover-content" onTouchEnd={props.onOpenInbox} />
-  ),
-}));
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+  (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal,
+    { maxHeight: 600, maxWidth: 400, placement: 'bottom' }),
+);
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -80,12 +69,15 @@ describe('AppRail Inbox (lab inbox-I2)', () => {
   it('opens the Inbox popover beside the rail instead of leaving the page', async () => {
     const onOpen = vi.fn();
     const screen = await renderRail(null, onOpen);
-    expect(screen.findByTestId('inbox-popover-content')).toBeNull();
+    expect(screen.findByTestId('inbox.popover.open')).toBeNull();
 
     await screen.pressByTestIdAsync('app-rail:inbox');
 
-    expect(screen.findByTestId('inbox-popover-content')).not.toBeNull();
+    expect(screen.findByTestId('inbox.popover.open')).not.toBeNull();
     expect(onOpen).not.toHaveBeenCalled();
+    await screen.pressByTestIdAsync('inbox.popover.open');
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'inbox' }));
+    expect(screen.findByTestId('inbox.popover.open')).toBeNull();
   });
 
   it('opens the Inbox page itself while the Inbox is already on screen', async () => {
@@ -94,7 +86,7 @@ describe('AppRail Inbox (lab inbox-I2)', () => {
 
     await screen.pressByTestIdAsync('app-rail:inbox');
 
-    expect(screen.findByTestId('inbox-popover-content')).toBeNull();
+    expect(screen.findByTestId('inbox.popover.open')).toBeNull();
     expect(onOpen).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'inbox' }),
     );

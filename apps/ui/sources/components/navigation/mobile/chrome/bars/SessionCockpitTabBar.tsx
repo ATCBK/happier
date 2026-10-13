@@ -180,7 +180,10 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
             if (entry.id === 'chat') {
                 return {
                     id: 'chat',
-                    label: agentCore ? t(agentCore.displayNameKey) : formatAgentLikeIdForDisplay(agentId),
+                    label: agentCore
+                        ? t(agentCore.displayNameKey)
+                        // No Agent to name yet (unhydrated or unpublished): the tab names its pane.
+                        : agentId ? formatAgentLikeIdForDisplay(agentId) : t('phoneNav.rail.chatPane'),
                     icon: {
                         render: ({ size, tintColor }) => (
                             <SessionAgentCatalogIdentityIcon

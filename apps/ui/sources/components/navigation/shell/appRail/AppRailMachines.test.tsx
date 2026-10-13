@@ -27,12 +27,12 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
     clearMachineRequestReachabilityForTest();
     machineResourceStore.reset();
     vitalsRpc.mockClear();
-    servedHome?.dispose();
+    await servedHome?.dispose();
     servedHome = undefined;
 });
 

@@ -459,6 +459,9 @@ describe('cockpit tab bars', () => {
 
         expect(screen.getTextContent()).not.toContain('en:agentInput.agent.claude');
         expect(screen.findHostByTestId('session-cockpit-tab-chat-agent-icon')?.props.agentId).not.toBe('claude');
+        // With no Agent to name, the tab names its pane instead of a raw placeholder.
+        expect(screen.getTextContent()).toContain('en:phoneNav.rail.chatPane');
+        expect(screen.getTextContent()).not.toContain('Unknown Backend');
     });
 
     it('renders an external Agent through the machine-scoped catalog identity owner', async () => {

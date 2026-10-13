@@ -1,10 +1,12 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
+import { HappierWorkRowShell } from '@happier-dev/plugin-ui/presentation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installNavigationShellCommonModuleMocks } from './navigationShellTestHelpers';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -13,10 +15,11 @@ import { getActiveServerId, listServerProfiles, removeServerProfile, setActiveSe
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 installDisconnectedServerSocketBoundary();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const alerts = vi.hoisted(() => ({ titles: [] as string[] }));
 const routeParams = vi.hoisted(() => ({ item: undefined as string | string[] | undefined }));
 let harness: Awaited<ReturnType<typeof serveActionHomes>>;
 const readAnswers = new Map<string, { status?: number; body: unknown; respondAfter?: Promise<void> }>();
@@ -80,101 +83,30 @@ function unreadSession(serverId: string) {
     });
 }
 
-installNavigationShellCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ params: () => routeParams }).module;
-    },
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            Text: 'Text',
-            ScrollView: 'ScrollView',
-            Pressable: ({ children, ...props }: any) => React.createElement('Pressable', props, children),
-            ActivityIndicator: 'ActivityIndicator',
-        });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                alert: (title: string) => {
-                    alerts.titles.push(title);
-                },
-            },
-        }).module;
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-    // Exercise both the Inbox model and the Action executor with the real store.
-    storage: async (importOriginal) => importOriginal(),
-});
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: () => routeParams,
+}).module);
+// Expo's native Route context is an SDK boundary absent from this host renderer.
+// The canonical root router mock does not cover this deep SDK entry; the route body stays real.
+vi.mock('expo-router/build/Route', () => ({ useRouteNode: () => null }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Only Radix's DOM host is substituted; the app owns alert custody and controls.
+vi.mock('@/utils/web/radixCjs', async () =>
+    (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
 // Configure the shared boundaries before these imports can initialize their store graph.
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { ModalProvider } = await import('@/modal/ModalProvider');
+const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
 const initialStorageState = storage.getState();
 
 vi.mock('expo-image', () => ({ Image: 'Image' }));
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
-// Analytics leaves the process; the real module retains every Sync lifecycle export.
-vi.mock('@/track/tracking', () => ({ tracking: null }));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text' }));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/ui/icons/Icon')>(),
-    Icon: 'Icon',
-}));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
-    ActivitySpinner: 'ActivitySpinner',
-    iconMatchedSpinnerSize: () => 'small',
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    // Like the real section, the header's `action` slot renders beside the title.
-    ItemGroup: ({ children, title, action }: any) => React.createElement('ItemGroup', { title }, action, children),
-}));
-// Accessory slots must render: the per-row mark-read control lives in
-// `rightElement`, and a passthrough would leave it as an inert prop.
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: ({ children, leftElement, rightElement, ...props }: any) => React.createElement(
-        'Item',
-        props,
-        leftElement,
-        rightElement,
-        children,
-    ),
-}));
-vi.mock('@/components/ui/cards/UserCard', () => ({ UserCard: 'UserCard' }));
-vi.mock('@/components/account/RecoveryKeyReminderBanner', () => ({
-    RecoveryKeyReminderBanner: 'RecoveryKeyReminderBanner',
-}));
-// Rendered, not stubbed away: the mark-all action lives in the header slot and
-// this suite is about that action.
-vi.mock('@/components/navigation/Header', () => ({
-    Header: ({ title, headerLeft, headerRight }: any) => React.createElement(
-        'Header',
-        null,
-        title,
-        headerLeft?.(),
-        headerRight?.(),
-    ),
-}));
-vi.mock('@/components/inbox/cards/ApprovalInboxCard', () => ({ ApprovalInboxCard: 'ApprovalInboxCard' }));
-vi.mock('@/components/inbox/actionOperations/ActionOperationLedger', () => ({
-    ActionOperationLedger: 'ActionOperationLedger',
-}));
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({ isReady: true }),
-}));
-vi.mock('@/hooks/server/useFriendsEnabled', () => ({ useFriendsEnabled: () => false }));
-vi.mock('@/utils/platform/responsive', () => ({ useIsTablet: () => false }));
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 960 },
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 960 }),
-    useLayoutMaxWidth: () => 960,
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 /** Module init for the whole Inbox tree is the cost here, not the assertions. */
 const SLOW_RENDER_TIMEOUT_MS = 240_000;
@@ -195,7 +127,7 @@ async function press(node: { props: { onPress?: () => void } }): Promise<void> {
 
 /** Finished sessions to read live under the Inbox's Updates view (lab `inbox-I1`). */
 async function renderUpdates(InboxView: React.ComponentType) {
-    const tree = (await renderScreen(<InboxView />)).tree;
+    const tree = (await renderScreen(<ModalProvider><InboxView /></ModalProvider>)).tree;
     const [updatesTab] = nodesByTestId(tree, 'inbox.view:updates');
     await press(updatesTab);
     return tree;
@@ -209,7 +141,6 @@ describe('InboxView mark as read', () => {
         await loadSyncSingletonForTests();
         storage.setState(initialStorageState, true);
         readAnswers.clear();
-        alerts.titles = [];
         routeParams.item = undefined;
         harness = await serveActionHomes({
             homes: [
@@ -217,6 +148,9 @@ describe('InboxView mark as read', () => {
                 { key: 'a', serverUrl: 'https://inbox-a.test', accountId: 'me' },
             ],
             route: ({ home, path }) => {
+                if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
+                    features: { workflows: { enabled: false }, automations: { enabled: false }, social: { friends: { enabled: false } } },
+                }));
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path !== readStatePath) return undefined;
                 const answer = readAnswers.get(harness.homes[home].id);
@@ -253,7 +187,7 @@ describe('InboxView mark as read', () => {
     afterEach(async () => {
         standardCleanup();
         await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
-        harness?.dispose();
+        await harness?.dispose();
         await setActiveServerId(initialServerId);
         for (const id of [homeA, homeB]) if (id && !initialProfileIds.has(id)) await removeServerProfile(id);
         storage.setState(initialStorageState, true);
@@ -286,7 +220,9 @@ describe('InboxView mark as read', () => {
 
         routeParams.item = [createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'needs-focus' }).params.item];
         await screen.update(<InboxPage />);
-        expect(nodesByTestId(screen.tree, 'inbox.session.needs-focus')[0]?.props.selected).toBe(true);
+        const focusedRow = () => screen.findAllByType(HappierWorkRowShell)
+            .find(node => node.props.testID === 'inbox.session.needs-focus');
+        expect(focusedRow()?.props.selected).toBe(true);
         await press(nodesByTestId(screen.tree, 'inbox.view:updates')[0]);
         await screen.update(<InboxPage />);
         // A render with the same item preserves the person's chosen Updates tab.
@@ -294,10 +230,10 @@ describe('InboxView mark as read', () => {
 
         routeParams.item = createInboxItemRoute({ kind: 'session', serverId: homeA, id: 'missing' }).params.item;
         await screen.update(<InboxPage />);
-        expect(nodesByTestId(screen.tree, 'inbox.session.needs-focus')[0]?.props.selected).toBe(false);
+        expect(focusedRow()?.props.selected).toBe(false);
         routeParams.item = 'session: ';
         await screen.update(<InboxPage />);
-        expect(nodesByTestId(screen.tree, 'inbox.session.needs-focus')[0]?.props.selected).toBe(false);
+        expect(focusedRow()?.props.selected).toBe(false);
     }, SLOW_RENDER_TIMEOUT_MS);
 
     it('acknowledges every ready-for-review Home at its own exact server-scoped address', async () => {
@@ -317,7 +253,7 @@ describe('InboxView mark as read', () => {
             { serverId: homeB, input: { state: 'read' } },
         ]));
         await waitForHomeGovernance(() => expect(nodesByTestId(tree, 'inbox.ready.mark_all_read')).toHaveLength(0));
-        expect(alerts.titles).toEqual([]);
+        expect(tree.root.findAllByType(WebAlertModal)).toHaveLength(0);
     }, SLOW_RENDER_TIMEOUT_MS);
 
     it('keeps mark-all truthful and non-duplicating while one row is still settling', async () => {
@@ -337,7 +273,7 @@ describe('InboxView mark as read', () => {
         // One row in flight is not "the whole Inbox is being cleared": the header
         // action stays available and must only submit what is not already going.
         const [markAll] = nodesByTestId(tree, 'inbox.ready.mark_all_read');
-        expect(markAll.findAll((node) => String(node.type) === 'ActivitySpinner')).toHaveLength(0);
+        expect(markAll.findAll((node) => node.type === ActivitySpinner)).toHaveLength(0);
 
         await press(markAll);
         await waitForHomeGovernance(() => expect(readRequests()).toHaveLength(2));
@@ -347,7 +283,7 @@ describe('InboxView mark as read', () => {
         expect(readRequests()).toHaveLength(2);
         await act(async () => { release(); });
         await waitForHomeGovernance(() => expect(nodesByTestId(tree, 'inbox.ready.mark_all_read')).toHaveLength(0));
-        expect(alerts.titles).toEqual([]);
+        expect(tree.root.findAllByType(WebAlertModal)).toHaveLength(0);
     }, SLOW_RENDER_TIMEOUT_MS);
 
     it('reports a failed acknowledgement instead of silently leaving the ready row pending', async () => {
@@ -358,9 +294,14 @@ describe('InboxView mark as read', () => {
         const [markAll] = nodesByTestId(tree, 'inbox.ready.mark_all_read');
         await press(markAll);
 
-        await waitForHomeGovernance(() => expect(alerts.titles).toEqual(['common.error']));
+        await waitForHomeGovernance(() => expect(tree.root.findAllByType(WebAlertModal)
+            .map(node => node.props.config.title)).toEqual(['common.error']));
         expect(nodesByTestId(tree, `inbox.ready_session.${homeB}.session-x`)).toHaveLength(1);
         expect(nodesByTestId(tree, `inbox.ready_session.${homeA}.session-x`)).toHaveLength(0);
+        const dismiss = nodesByTestId(tree, 'web-modal-button-0');
+        expect(dismiss).toHaveLength(1);
+        await press(dismiss[0]);
+        expect(tree.root.findAllByType(WebAlertModal)).toHaveLength(0);
         answerReadState(homeB);
         await press(nodesByTestId(tree, 'inbox.ready.mark_all_read')[0]);
         await waitForHomeGovernance(() => expect(nodesByTestId(tree, 'inbox.ready.mark_all_read')).toHaveLength(0));

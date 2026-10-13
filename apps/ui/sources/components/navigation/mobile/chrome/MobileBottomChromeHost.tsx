@@ -176,9 +176,8 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const cockpitRegistration = useSessionCockpitChromeRegistration();
     const dismissingSessionId = useSessionCockpitDismissingSessionId();
     const explicitMobileSurfaceHint = normalizeRouteParam(params.mobileSurface);
-    const paneRouteQuery = React.useMemo(() => serializeSessionPaneUrlState(
-        parseSessionPaneUrlState(params) ?? {},
-    ), [params]);
+    const paneUrlState = React.useMemo(() => parseSessionPaneUrlState(params), [params]);
+    const paneRouteQuery = React.useMemo(() => serializeSessionPaneUrlState(paneUrlState ?? {}), [paneUrlState]);
     const sessionLastMobileSurfaceBySessionId = React.useMemo(() => (
         routeSessionId && sessionLastMobileSurface
             ? { [routeSessionId]: sessionLastMobileSurface }
@@ -247,6 +246,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             surface,
             terminalTabAvailable: matchingRegistration?.terminalTabAvailable ?? sessionTerminalTabAvailable,
             explicitRootSurfaceHint: explicitMobileSurfaceHint,
+            paneUrlState,
         });
         if (matchingRegistration) {
             matchingRegistration.switchSurface(surface);
@@ -265,6 +265,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         explicitMobileSurfaceHint,
         pathname,
         paneRouteQuery,
+        paneUrlState,
         persistSessionSurface,
         routeServerId,
         router,
@@ -306,6 +307,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             surface: next.surface,
             terminalTabAvailable: registration.terminalTabAvailable,
             explicitRootSurfaceHint: explicitMobileSurfaceHint,
+            paneUrlState,
         })) {
             return;
         }
@@ -318,6 +320,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         explicitMobileSurfaceHint,
         pathname,
         paneRouteQuery,
+        paneUrlState,
         routeServerId,
         routeSessionId,
         router,
