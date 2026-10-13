@@ -111,7 +111,7 @@ export function createWidgetLayoutFragmentArtifactPortV1(transport: WidgetDefini
         async duplicate(artifactId, newArtifactId, name, signal) {
             const current = await get(artifactId, signal);
             if (!current) throw new WidgetLayoutFragmentErrorV1('widget_fragment_not_found');
-            return create({ ...current, id: newArtifactId, ...(name !== undefined ? { name } : {}) }, signal);
+            return create({ ...current, id: newArtifactId, name: name ?? `${current.name} copy` }, signal);
         },
         async delete(artifactId, signal) {
             for (;;) {

@@ -26,9 +26,11 @@ describe('widget layout fragment semantic Actions', () => {
         expect(await executor.execute('widgets.fragment.list', { account }, context)).toMatchObject({ ok: true,
             result: { fragments: [{ artifactId: 'saved', childCount: 1, group: draft.group }] } });
         const copy = await executor.execute('widgets.fragment.duplicate', { account, artifactId: 'saved', newArtifactId: 'copy' }, context);
-        expect(copy).toMatchObject({ ok: true, result: { fragment: { id: 'copy', group: draft.group } } });
+        expect(copy).toMatchObject({ ok: true, result: { fragment: { id: 'copy', name: 'Checks copy', group: draft.group } } });
+        expect(await executor.execute('widgets.fragment.duplicate', { account, artifactId: 'saved', newArtifactId: 'named-copy', name: 'My checks' }, context))
+            .toMatchObject({ ok: true, result: { fragment: { id: 'named-copy', name: 'My checks' } } });
         await executor.execute('widgets.fragment.update', { account, artifactId: 'saved', patch: { name: 'Changed' } }, context);
-        expect((await port.get('copy'))?.name).toBe('Checks');
+        expect((await port.get('copy'))?.name).toBe('Checks copy');
         expect(await executor.execute('widgets.fragment.delete', { account, artifactId: 'saved' }, context))
             .toEqual({ ok: true, result: { artifactId: 'saved', status: 'deleted' } });
         expect((await port.get('copy'))?.group.children[0]!.instance.definition).toEqual({ kind: 'artifact', artifactId: 'independent-definition' });
