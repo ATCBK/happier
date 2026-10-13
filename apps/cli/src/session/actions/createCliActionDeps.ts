@@ -5721,9 +5721,10 @@ export function createCliActionDeps(params: Readonly<{
       }, input, context));
     },
     projectsList: async (args, context) => {
-      const serverId = args.serverId ?? context?.serverId ?? params.serverIdentityId ?? projectHomeId;
-      const refused = await projectAccountAdmission(serverId, context);
+      const requestedServerId = args.serverId ?? context?.serverId ?? projectHomeId;
+      const refused = await projectAccountAdmission(requestedServerId, context);
       if (refused) return refused;
+      const serverId = args.serverId ?? params.serverIdentityId ?? requestedServerId;
       return runWithServerHttpBaseUrl(todoHomeBaseUrl, async () => {
         const authority = { ...projectRowsAuthority(context, 'projects.list', context?.signal), serverId };
         const snapshot = await readProjectAccountRows(authority);
@@ -5740,7 +5741,7 @@ export function createCliActionDeps(params: Readonly<{
           : { token: authority.credentials.token }), serverHttpBaseUrl: todoHomeBaseUrl, signal: context?.signal }); }
         catch { context?.signal?.throwIfAborted(); machines = null; }
         await assertProjectRequesterCurrent(context);
-        const changed = await projectAccountAdmission(serverId, context);
+        const changed = await projectAccountAdmission(requestedServerId, context);
         if (changed) return changed;
         const items = projected.items.map(({ ref, ...item }) => {
           const machine = machines?.find(candidate => candidate.id === ref.machineId);

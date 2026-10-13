@@ -150,6 +150,34 @@ function accountBoundary(options?: Readonly<{
 }
 
 describe('projects.list through the real CLI Account composition', () => {
+  it('projects an implicit same-Home profile context through the canonical Home identity', async () => {
+    accountBoundary();
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'same-home-account' })).toString('base64url')}.signature`;
+    const owner = createActionExecutor(createCliActionDeps({
+      token,
+      credentials: { token, encryption: null },
+      sessionId: 'same-home-session',
+      mode: 'plain',
+      ctx: null,
+      serverId: 'profile-a',
+      serverIdentityId: 'home-a',
+      serverHttpBaseUrl: 'https://home-a.test',
+    }));
+
+    expect(await owner.execute('projects.list', {}, {
+      surface: 'mcp',
+      serverId: 'profile-a',
+      bypassApprovals: true,
+    })).toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          { projectKey: { serverId: 'home-a', id: 'visible' } },
+        ],
+      },
+    });
+  });
+
   it('ranks requester rows from requester memory and Machine visibility without borrowing the custodian token', async () => {
     const memoryCipher = createAuthoringMemoryRowCipher({ accountMode: 'plain', material: null });
     const memoryRows = [['first', 10], ['visible', 40]].map(([projectKey, value]) => {
