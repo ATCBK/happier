@@ -361,6 +361,7 @@ export function createHappierMcpServer(
       ...(client.getCurrentWorkspaceWrites ? { getCurrentWorkspaceWrites: () => client.getCurrentWorkspaceWrites!() } : {}),
       ...(client.prepareWorkspaceWritesPolicy ? { prepareWorkspaceWritesPolicy: (workspaceWrites, context) => client.prepareWorkspaceWritesPolicy!(workspaceWrites, context) } : {}),
       ...(client.enqueueRegisteredSessionStateFieldMutation ? {
+        stageWorkStateMutation: async (mutation) => { await client.enqueueRegisteredSessionStateFieldMutation!(mutation); },
         stageSessionStateMutation: async (mutation) => { await client.enqueueRegisteredSessionStateFieldMutation!(mutation); },
       } : {}),
       getCurrentSessionWorkDepth: () => client.getWorkDepth?.(),
