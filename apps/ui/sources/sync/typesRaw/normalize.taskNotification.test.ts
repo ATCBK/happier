@@ -61,7 +61,7 @@ describe('typesRaw.normalizeRawMessage (task-notification)', () => {
 
   it.each([false, true])('does not settle an unrelated main tool from an explicitly scoped child result with the same ID (permission=%s)', (hasPermission) => {
     const state = createReducer();
-    if (hasPermission) reducer(state, [], { requests: {}, completedRequests: { 'shared-main-child': { tool: 'Bash', arguments: {}, status: 'approved', createdAt: 0, completedAt: 0 } } });
+    if (hasPermission) reducer(state, [], { requests: {}, completedRequests: { 'shared-main-child': { tool: 'Bash', arguments: {}, status: 'approved', createdAt: 0, completedAt: 0 } } }, { mainHistoryStartLoaded: true });
     const rows = [
       { type: 'assistant', uuid: 'foreground-shared', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'shared-main-child', name: 'Bash', input: {} }] } },
       { type: 'assistant', uuid: 'child-shared', isSidechain: true, sidechainId: 'parent-scope', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'shared-main-child', name: 'Agent', input: {} }] } },
@@ -80,7 +80,7 @@ describe('typesRaw.normalizeRawMessage (task-notification)', () => {
     const state = createReducer();
     reducer(state, [], { requests: {}, completedRequests: { 'mirrored-tool': {
       tool: 'Bash', arguments: {}, status: 'approved', createdAt: 1, completedAt: 2,
-    } } });
+    } } }, { mainHistoryStartLoaded: true });
     const rows = [
       { type: 'assistant', uuid: 'mirror-child', isSidechain: true, sidechainId: 'mirror-parent', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'mirrored-tool', name: 'Bash', input: {} }] } },
       { type: 'user', uuid: 'mirror-result', isSidechain: true, sidechainId: 'mirror-parent', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'mirrored-tool', content: 'Mirrored outcome' }] } },
