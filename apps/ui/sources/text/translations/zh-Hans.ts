@@ -2561,6 +2561,7 @@ export const zhHans: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "正在刷新用量…",
       loading: "加载中…",
       error: ({ message }: { message: string }) => `错误：${message}`,
       lastUpdated: ({ time }: { time: string }) => `最后更新：${time}`,
