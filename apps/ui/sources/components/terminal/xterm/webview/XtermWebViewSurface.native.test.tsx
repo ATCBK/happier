@@ -44,12 +44,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock({
         theme: {
             dark: true,
-            colors: {
-                surface: '#000',
-                text: '#fff',
-                surfaceSelected: '#222',
-                divider: '#333',
-            },
         },
     });
 });
