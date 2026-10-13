@@ -213,6 +213,72 @@ describe('createCoalescedWorkflowActivityPublisher', () => {
     scheduler.dispose();
   });
 
+  it('keeps terminal observations queued during a failed in-flight write behind its retry deadline', async () => {
+    let rejectFirstWrite!: (error: unknown) => void;
+    const firstWrite = new Promise<void>((_resolve, reject) => { rejectFirstWrite = reject; });
+    const records: SessionWorkflowRunSnapshotV1[] = [];
+    const snapshots = new Map([['a', runSnapshot('a')]]);
+    const publisher = createWorkflowActivityPublisher({
+      backendId: 'claude',
+      commitRecord: async (snapshot) => {
+        records.push(snapshot);
+        if (records.length === 1) await firstWrite;
+      },
+      writeHeadlines: () => {},
+    });
+    const scheduler = createCoalescedWorkflowActivityPublisher({ publisher, getSnapshots: () => snapshots });
+    scheduler.notify({ changedRunIds: ['a'], startedRunIds: ['a'], terminalRunIds: [], statusChangedRunIds: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    snapshots.set('a', runSnapshot('a', 'complete'));
+    scheduler.notify({ changedRunIds: ['a'], startedRunIds: [], terminalRunIds: ['a'], statusChangedRunIds: [] });
+    const flush = scheduler.flush();
+    rejectFirstWrite(createHttpStatusError(500, 'Unavailable'));
+    await flush;
+    expect(records).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(records.map((record) => record.status)).toEqual(['active', 'complete']);
+    scheduler.dispose();
+  });
+
+  it('does not retry permanent durable write refusals', async () => {
+    const commitRecord = vi.fn(async () => { throw createHttpStatusError(400, 'Invalid parameters'); });
+    const publisher = createWorkflowActivityPublisher({ backendId: 'claude', commitRecord, writeHeadlines: () => {} });
+    const scheduler = createCoalescedWorkflowActivityPublisher({
+      publisher, getSnapshots: () => new Map([['a', runSnapshot('a')]]),
+    });
+    scheduler.notify({ changedRunIds: ['a'], startedRunIds: ['a'], terminalRunIds: [], statusChangedRunIds: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(commitRecord).toHaveBeenCalledTimes(1);
+    scheduler.dispose();
+  });
+
+  it('retries after the elapsed backoff when the system wall clock moves backwards', async () => {
+    vi.setSystemTime(100000);
+    let available = false;
+    const records: SessionWorkflowRunSnapshotV1[] = [];
+    const publisher = createWorkflowActivityPublisher({
+      backendId: 'claude',
+      commitRecord: async (snapshot) => {
+        records.push(snapshot);
+        if (!available) throw createHttpStatusError(500, 'Unavailable');
+      },
+      writeHeadlines: () => {},
+    });
+    const scheduler = createCoalescedWorkflowActivityPublisher({
+      publisher, getSnapshots: () => new Map([['a', runSnapshot('a')]]),
+    });
+    scheduler.notify({ changedRunIds: ['a'], startedRunIds: ['a'], terminalRunIds: [], statusChangedRunIds: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(records).toHaveLength(1);
+    vi.setSystemTime(1000);
+    available = true;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(records).toHaveLength(2);
+    scheduler.dispose();
+  });
+
   it('flush waits for an in-flight write and drains new terminal observations arriving during it', async () => {
     let releaseFirstWrite!: () => void;
     const firstWrite = new Promise<void>((resolve) => { releaseFirstWrite = resolve; });

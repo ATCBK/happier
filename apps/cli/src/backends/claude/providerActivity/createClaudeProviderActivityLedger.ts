@@ -95,8 +95,8 @@ function readTaskId(value: unknown): string | null {
 }
 
 /**
- * Reads only the typed Claude SDK task lifecycle contract. Transcript prose,
- * tool results, hook snapshots and status aliases are deliberately inert.
+ * Reads typed Claude SDK lifecycle events and canonical native task envelopes.
+ * Ordinary transcript prose and unmarked notification text carry no lifecycle authority.
  */
 export function normalizeClaudeProviderTaskEvent(value: unknown, contextualSessionId?: string): ClaudeProviderTaskEventFacts {
     const row = record(value);

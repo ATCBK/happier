@@ -106,6 +106,19 @@ A successful SendMessage `resumedAgentId` proves an asynchronous invocation,
 including when the original child ran in the foreground; it updates the same
 native background classification used by authenticated start hooks.
 
+In development source, a native failed SendMessage response that explicitly
+reports a user-stopped child which cannot resume supplies cancelled task evidence.
+The shared task-envelope reader handles this response for transcript and authenticated
+hook delivery, and the existing activity ledger retires only that child. Ordinary
+delivery failures and copied response text do not establish cancellation; the failed
+SendMessage tool result remains part of the conversation.
+
+Development-source workflow activity publication retries failed records with the
+existing session-mutation backoff. Fresh progress, terminal observations and flushes
+preserve each failed record's retry delay; healthy records can still publish, and
+the delayed retry reads the latest snapshot. Permanent request refusals remain
+observable failures rather than automatic retry loops.
+
 Historical replay reconstructs workflow history without asserting current
 activity. When a provider observer is lost, unresolved task identities remain
 available for exact task operations, but their previous membership no longer
