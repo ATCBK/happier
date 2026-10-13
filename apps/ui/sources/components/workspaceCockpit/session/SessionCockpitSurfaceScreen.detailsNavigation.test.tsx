@@ -139,6 +139,7 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
     const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
     const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { SessionCockpitShell } = await import('./SessionCockpitShell');
     const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
     const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
     const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
@@ -177,7 +178,11 @@ it('opens the real phone Git walkthrough through workspace navigation and return
     });
     await measure();
     await flushHookEffects({ cycles: 20 });
-    expect(screen.findHostByTestId('session-rightpanel-git-walkthrough')).not.toBeNull();
+    expect(screen.tree.findAllByType(SessionCockpitShell).map(node => node.props.surface)).toEqual(['git']);
+    await vi.waitFor(async () => {
+        await measure();
+        expect(screen.findHostByTestId('session-rightpanel-git-walkthrough')).not.toBeNull();
+    });
     await screen.pressByTestIdAsync('session-rightpanel-git-walkthrough');
     await flushHookEffects({ cycles: 20 });
     await measure();
@@ -296,7 +301,7 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     }
     // Hosted Details uses its destination selection; its retained pane remains
     // available when the workspace switches back to the Session destination.
-    expect(pane.scopeState?.details.isOpen).toBe(Boolean(instanceKey));
+    expect(pane.scopeState?.details.isOpen).toBe(false);
     expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     await screen.unmount();
 });
