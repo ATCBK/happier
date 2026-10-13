@@ -44,7 +44,7 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 describe('createScopedSnapshotLoader', () => {
-    it.each(['refresh', 'invalidate', 'wake', 'early-wake', 'observer-gap', 'retired'] as const)(
+    it.each(['refresh', 'invalidate', 'wake', 'early-wake', 'early-wake-fast-cleanup', 'observer-gap', 'retired'] as const)(
         'only repeats MCP history maintenance for a changed demand (%s)', async demand => {
             const target = { key: 'mcp:home-account', serverId: 'home' };
             let accountCurrent = true;
@@ -60,7 +60,7 @@ describe('createScopedSnapshotLoader', () => {
                     read: ({ onReady, hasPendingCleanup }) => loadMcpServerCatalogV1({ mode: 'plain', material: null,
                         readRow: async () => ({ status: 'deleted', revision }), hasPendingCleanup,
                         onReadyBeforeCleanup: async snapshot => {
-                            if (demand === 'early-wake' && !earlyWakeSent) {
+                            if (demand.startsWith('early-wake') && !earlyWakeSent) {
                                 earlyWakeSent = true;
                                 revision = 5;
                                 publishHomeAccountChange(target.serverId);
@@ -94,7 +94,7 @@ describe('createScopedSnapshotLoader', () => {
                                         }] } };
                                         if (path === '/v2/account/settings/history/502') {
                                             detailRequests.push(path);
-                                            await heldDetail;
+                                            if (demand !== 'early-wake-fast-cleanup') await heldDetail;
                                             return { status: 503, data: { error: 'unavailable' } };
                                         }
                                         throw new Error(`Unexpected Home request: ${path}`);
@@ -115,8 +115,8 @@ describe('createScopedSnapshotLoader', () => {
             let release = loader.observe(target);
             try {
                 await loader.refresh(target);
-                await vi.waitFor(() => expect(detailRequests).toHaveLength(1));
-                expect(publication).toMatchObject({ status: 'ready', revision: demand === 'early-wake' ? 5 : 4, authority: 'active' });
+                if (demand !== 'early-wake-fast-cleanup') await vi.waitFor(() => expect(detailRequests).toHaveLength(1));
+                expect(publication).toMatchObject({ status: 'ready', revision: demand.startsWith('early-wake') ? 5 : 4, authority: 'active' });
                 if (demand === 'refresh') await loader.refresh(target);
                 else if (demand === 'wake') {
                     revision = 5;
@@ -127,7 +127,7 @@ describe('createScopedSnapshotLoader', () => {
                     revision = 5;
                     release = loader.observe(target);
                     await loader.refresh(target);
-                } else if (demand !== 'early-wake') {
+                } else if (!demand.startsWith('early-wake')) {
                     revision = 5;
                     await loader.invalidate(target);
                     if (demand === 'retired') accountCurrent = false;

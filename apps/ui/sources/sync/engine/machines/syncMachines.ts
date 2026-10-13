@@ -105,7 +105,9 @@ export async function fetchMachineRows(params: Readonly<{
         params.request
         ?? ((path: string, init: RequestInit) =>
             serverFetch(path, init, { includeAuth: false }));
-    const response = await request('/v1/machines', {
+    // Sync also supplies retained Session/recent-path replacement identity. The
+    // visible Machine selectors still exclude revoked rows from discovery.
+    const response = await request('/v1/machines?includeRevoked=true', {
         headers: {
             'Authorization': `Bearer ${params.credentials.token}`,
             'Content-Type': 'application/json',

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { FetchedMachineRow, MachineDataKeyCacheEntry } from './syncMachines';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { Encryption } from '@/sync/encryption/encryption';
 import { buildMachineDisplayRenderableFromMachine, type MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { createStore } from 'zustand/vanilla';
@@ -12,6 +12,7 @@ import type { StorageState } from '@/sync/store/types';
 import { createDeferred } from '@/dev/testkit';
 import { encodeBase64 } from '@/encryption/base64';
 import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
+import { resolveCanonicalMachineId } from '@happier-dev/protocol';
 
 function createMachineStore() {
     type State = MachinesDomain & Pick<StorageState, 'sessions' | 'sessionListRowsByServerId'
@@ -105,6 +106,14 @@ async function loadFetchAndApplyMachines() {
 }
 
 describe('fetchAndApplyMachines request override', () => {
+    it('retains revoked predecessor identity for Session replacement resolution', async () => {
+        const { fetchMachineRows } = await import('./syncMachines');
+        const old = { ...createPlainMachineRowFixture({ id: 'old', accountId: 'account-1' }), active: false, revokedAt: 1, replacedByMachineId: 'current' };
+        const current = createPlainMachineRowFixture({ id: 'current', accountId: 'account-1' });
+        const rows = await fetchMachineRows({ credentials: legacyCredentials, request: async path =>
+            jsonResponse(new URL(path, 'https://home.test').searchParams.get('includeRevoked') === 'true' ? [old, current] : [current]) });
+        expect(resolveCanonicalMachineId('old', rows)?.machineId).toBe('current');
+    });
     it('publishes Machine display shells before a background key open settles', async () => {
         const fetchAndApplyMachines = await loadFetchAndApplyMachines();
         const encryption = await Encryption.create(new Uint8Array(32).fill(17));

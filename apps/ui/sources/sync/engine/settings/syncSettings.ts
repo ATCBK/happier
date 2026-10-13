@@ -189,7 +189,8 @@ export type SyncSettingsParams<TOneShotMutationValue = never> = {
      * pure field-level intents may opt into the bounded CAS rebase below.
      */
     oneShotServerSettingsMutation?: Readonly<{
-        expectedSettingsVersion: number;
+        /** A rebasing intent may arrive before the local version has hydrated. */
+        expectedSettingsVersion: number | null;
         expectedProfileTransferRevision?: number | 'absent';
         /** Replay a deterministic field-level intent against the latest CAS winner. */
         rebaseOnConflict?: boolean;
@@ -379,7 +380,9 @@ export async function syncSettings<TOneShotMutationValue = never>(
             throw new Error('One-shot Account Settings mutation requires pending settings to be flushed first');
         }
         const expected = params.oneShotServerSettingsMutation.expectedSettingsVersion;
-        if (!Number.isInteger(expected) || expected < 0) {
+        if (expected === null
+            ? params.oneShotServerSettingsMutation.rebaseOnConflict !== true
+            : !Number.isInteger(expected) || expected < 0) {
             throw new Error('One-shot Account Settings mutation requires a valid expected version');
         }
         if (params.oneShotServerSettingsMutation.rebaseOnConflict === true

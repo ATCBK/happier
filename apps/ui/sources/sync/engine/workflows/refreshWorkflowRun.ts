@@ -13,7 +13,7 @@ export function publishOpenedWorkflowRunDetail(detail: WorkflowRunGetResultV1): 
 }
 
 // Only pending reads are shared; the Account's existing Run/fact maps own all resolved content.
-const pendingProvenance = new WeakMap<ActiveServerAccountScopeLifetime, Map<string, Promise<void>>>();
+const pendingSummaries = new WeakMap<ActiveServerAccountScopeLifetime, Map<string, Promise<void>>>();
 
 function publishInvocationProvenance(run: WorkflowRunListResultV1['runs'][number], facts: WorkflowRunListResultV1['invocationProvenance']): void {
     for (const fact of facts ?? []) {
@@ -24,14 +24,16 @@ function publishInvocationProvenance(run: WorkflowRunListResultV1['runs'][number
     }
 }
 
-export function refreshWorkflowTranscriptProvenance(
-    references: readonly Readonly<{ runId: string; invocationRecordIds: readonly string[] }>[],
+/** Batched lean Run names/facts; transcript callers may also request exact invocation provenance. */
+export function refreshWorkflowRunSummaries(
+    references: readonly Readonly<{ runId: string; invocationRecordIds?: readonly string[] }>[],
 ): Promise<void> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime || references.length === 0) return Promise.resolve();
-    const key = JSON.stringify(references);
-    let pending = pendingProvenance.get(lifetime);
-    if (!pending) { pending = new Map(); pendingProvenance.set(lifetime, pending); }
+    const normalized = references.map(ref => ({ ...ref, invocationRecordIds: ref.invocationRecordIds ?? [] }));
+    const key = JSON.stringify(normalized);
+    let pending = pendingSummaries.get(lifetime);
+    if (!pending) { pending = new Map(); pendingSummaries.set(lifetime, pending); }
     const known = pending.get(key);
     if (known) return known;
     const abort = new AbortController();
@@ -39,8 +41,8 @@ export function refreshWorkflowTranscriptProvenance(
     const read = (async () => {
         let cursor: string | undefined;
         do {
-            const page = await listWorkflowRuns({ filter: { runIds: references.map(ref => ref.runId),
-                invocationProvenance: references.filter(ref => ref.invocationRecordIds.length > 0) },
+            const page = await listWorkflowRuns({ filter: { runIds: normalized.map(ref => ref.runId),
+                invocationProvenance: normalized.filter(ref => ref.invocationRecordIds.length > 0) },
                 ...(cursor ? { cursor } : {}), signal: abort.signal });
             if (!lifetime.isCurrent()) return;
             const state = storage.getState();

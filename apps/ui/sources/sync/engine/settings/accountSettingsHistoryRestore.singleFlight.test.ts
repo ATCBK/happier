@@ -96,7 +96,7 @@ describe('Account Settings history maintenance requests', () => {
         } finally {
             release.resolve();
             contexts.forEach(context => context.dispose());
-            home.dispose();
+            await home.dispose();
         }
     });
 });

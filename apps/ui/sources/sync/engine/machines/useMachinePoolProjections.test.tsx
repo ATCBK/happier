@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -6,7 +6,8 @@ import { createDeferred, renderHook } from '@/dev/testkit';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getStorage, storage } from '@/sync/domains/state/storage';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -107,6 +108,30 @@ describe('useMachinePoolProjections', () => {
 
         await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({ status: 'error', ready: false }));
         await act(async () => { await Promise.resolve(); });
+        expect(report.mock.calls.filter(([message]) => String(message).startsWith('[fireAndForget] machinePools.'))).toEqual([]);
+        await hook.unmount();
+    });
+
+    it('revalidates a Pool read begun before the active Account mounts', async () => {
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previouslyAvailable = isAppliedActiveServerRuntimeAvailable();
+        onTestFinished(() => publishAppliedActiveServerSnapshot(previousApplied, previouslyAvailable));
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ profileScope: null });
+        retireActiveServerAccountScopeLifetime();
+        const pending = createDeferred<Response>();
+        boundary.poolFetchOverride = () => pending.promise;
+        const scopes: MachinePoolProjectionScope[] = [{ serverId: boundary.serverId, machines: [] }];
+        const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const hook = await renderHook(() => useMachinePoolProjections(scopes));
+        await vi.waitFor(() => expect(boundary.requests.length).toBeGreaterThan(0));
+        await act(async () => {
+            storage.getState().activateProfileScope({ serverId: boundary.serverId, accountId: 'account-a' });
+            boundary.poolFetchOverride = null;
+            pending.resolve(Response.json({ pools: [pool] }));
+        });
+        await vi.waitFor(() => expect(hook.getCurrent()[0]).toMatchObject({ pools: [pool], status: 'idle', ready: true }));
+        expect(boundary.requests.length).toBeGreaterThan(1);
         expect(report.mock.calls.filter(([message]) => String(message).startsWith('[fireAndForget] machinePools.'))).toEqual([]);
         await hook.unmount();
     });

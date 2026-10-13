@@ -1,6 +1,8 @@
 import * as React from 'react';
 
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 import {
     invalidateMachinePoolProjection,
@@ -33,6 +35,8 @@ export function useMachinePoolProjectionSync(
         needsHydration: boolean;
     }>[],
 ): void {
+    const accountLifetime = useActiveServerAccountScopeLifetime();
+    const previousAccountLifetime = React.useRef(accountLifetime);
     const demandsKey = React.useMemo(() => JSON.stringify(
         [...new Map(demandsRaw
             .map((demand) => [
@@ -57,6 +61,8 @@ export function useMachinePoolProjectionSync(
     }, [serverIdsKey]);
 
     React.useEffect(() => {
+        const accountChanged = previousAccountLifetime.current !== accountLifetime;
+        previousAccountLifetime.current = accountLifetime;
         for (const [serverId, [machineRevisionKey, transportEnabled, needsHydration]] of demands) {
             if (!transportEnabled) {
                 // Retain the observed Machine lifecycle revision while transport is disabled.
@@ -67,13 +73,17 @@ export function useMachinePoolProjectionSync(
             const previousRevision = machineRevisionByServerId.get(serverId);
             const revisionChanged = previousRevision !== undefined && previousRevision !== machineRevisionKey;
             machineRevisionByServerId.set(serverId, machineRevisionKey);
-            if (revisionChanged) {
+            // Startup can begin a read before the active Account mounts. Its custody refusal
+            // leaves no answer; renew that demand through the same trailing-read owner.
+            const accountChangedForHome = accountChanged && accountLifetime?.isCurrent() === true
+                && areServerProfileIdentifiersEquivalent(serverId, accountLifetime.scope.serverId);
+            if (revisionChanged || accountChangedForHome) {
                 fireAndForget(invalidateMachinePoolProjection(serverId), { tag: 'machinePools.projectionRefresh' });
             } else if (needsHydration) {
                 fireAndForget(refreshMachinePoolProjection(serverId), { tag: 'machinePools.projectionHydration' });
             }
         }
-    }, [demands]);
+    }, [accountLifetime, demands]);
 }
 
 export function resetMachinePoolSyncRuntimeForTests(): void {

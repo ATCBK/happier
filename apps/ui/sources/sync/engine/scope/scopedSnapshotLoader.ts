@@ -122,7 +122,12 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                         const hasPendingMaintenance = () => {
                             const incumbent = incumbentMaintenance;
                             if (incumbent?.result.isMaintenanceCurrent() !== true
-                                || maintenance.get(target.key) !== incumbent) return false;
+                                || maintenance.get(target.key) !== incumbent) {
+                                // This foreground read now owns its own cleanup. It also
+                                // satisfies any demand queued on the retired incumbent.
+                                if (incumbent) incumbent.reloadAfterMaintenance = false;
+                                return false;
+                            }
                             return true;
                         };
                         const result = await Promise.resolve().then(async () => await params.load(observed.get(target.key)?.target ?? target, {
@@ -155,9 +160,14 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                             // A wake can precede early publication and registration here.
                             const entry = { result, reloadAfterMaintenance: reloadAfterInFlight.has(target.key) };
                             maintenance.set(target.key, entry);
-                            void result.maintenance.catch(() => {}).finally(() => {
+                            void result.maintenance.catch(() => {}).finally(async () => {
                                 if (maintenance.get(target.key) !== entry) return;
                                 maintenance.delete(target.key);
+                                // Let an already-running foreground read decide whether it
+                                // joined this cleanup or performed the demanded pass itself.
+                                // Feeding cleanup completion back into its in-flight wake
+                                // flag would make each new cleanup queue another reread.
+                                await inFlight.get(target.key)?.catch(() => {});
                                 if (entry.reloadAfterMaintenance && result.isMaintenanceCurrent()) requestReload(target);
                             });
                         }
