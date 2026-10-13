@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useDestinationParams, useDestinationNavigation, useDestinationRouter, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationParams, useDestinationRouter, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -23,7 +23,6 @@ import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServe
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
-import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { SessionFullscreenPaneSafeAreaView } from '@/components/sessions/panes/SessionFullscreenPaneSafeAreaView';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
@@ -38,7 +37,6 @@ function createDetailsRouteParamsSignature(params: SessionDetailsRouteParamsShap
 
 export function SessionDetailsDestinationBody() {
     const router = useDestinationRouter();
-    const navigation = useDestinationNavigation();
     const isFocused = useDestinationFocus();
     const visible = useDestinationVisibility();
     const instanceKey = useDestinationInstanceKey();
@@ -105,8 +103,10 @@ export function SessionDetailsDestinationBody() {
         fallbackHref: routeScope.buildHref(sessionId),
     }), [params.sourceSurface, routeScope, sessionId]);
     const returnToSession = React.useCallback(() => {
-        safeRouterBack({ router, navigation, fallbackHref: fallbackDetailsHref });
-    }, [fallbackDetailsHref, navigation, router]);
+        // Responsive pane presentation replaces the Session route with Details;
+        // its previous history entry need not be this Session.
+        router.replace(fallbackDetailsHref);
+    }, [fallbackDetailsHref, router]);
     const openDestinationTab = React.useCallback((tab: DetailsTab) => {
         const selection = buildActiveDetailsRouteParams([tab], tab.key);
         const query = new URLSearchParams();

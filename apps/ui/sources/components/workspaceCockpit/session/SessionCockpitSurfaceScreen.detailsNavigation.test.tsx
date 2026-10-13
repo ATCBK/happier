@@ -6,15 +6,20 @@ import {
     createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries,
 } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
-const route = vi.hoisted(() => ({ params: {} as Record<string, string>, replace: vi.fn() }));
+const route = vi.hoisted(() => ({ params: {} as Record<string, string>, replace: vi.fn(), back: vi.fn(), href: '/session/s1/details' }));
 const Focus = React.createContext(true);
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installSessionFilesViewBoundaries();
 vi.doMock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
     pathname: () => '/session/s1/details', params: () => route.params,
-    router: { replace: (href: unknown) => route.replace(href) },
+    router: {
+        replace: (href: unknown) => { route.href = String(href); route.replace(href); },
+        canGoBack: () => true,
+        back: () => { route.href = '/'; route.back(); },
+    },
 }).module);
 vi.doMock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
     { platformOS: 'ios' }, { useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
@@ -104,5 +109,95 @@ it.each([true, false])('leaves phone Details through the real comparison Back wi
     expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))?.details).toBeUndefined();
     expect(pane.scopeState?.details.isOpen).toBe(false);
     expect(pane.scopeState?.details.tabs.map(item => item.key)).toEqual([tab.key]);
+    await screen.unmount();
+});
+
+it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s phone Details route to its qualified Session when history leads Home', async (experience) => {
+    const snapshot = fileViewSnapshot({ rootPath: '/tmp/repo' });
+    fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>
+        request.method === 'scm.status.snapshot' ? { success: true, snapshot } : undefined,
+        request: async url => new URL(String(url)).pathname === '/v1/kv/bulk'
+            ? Response.json({ values: [] }) : Response.json({}, { status: 404 }),
+    });
+    fixture.setSnapshot(snapshot);
+    fixture.storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: experience === 'classic' ? 'classic' : 'cockpit' });
+    // Admit a hydrated, fresh workspace in the real store; preceding route
+    // cases share this Home but must not lend this provider an old layout.
+    fixture.storage.setState({ isDataReady: true, localSettings: {
+        ...fixture.storage.getState().localSettings, workspaceLayoutV1: {},
+    } });
+    const { createSessionScmReviewDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+    const { buildActiveDetailsRouteParams, parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+    const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
+    const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+    const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
+    const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+    const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+    const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+    const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+    const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const tab = createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+    route.params = { ...buildActiveDetailsRouteParams([tab], tab.key), id: 's1', serverId: fixture.home.id };
+    route.href = '/session/s1/details';
+    let instanceKey: string | null = null;
+    let workspace!: WorkspaceNavigationContextValue;
+    let pane!: ReturnType<typeof useAppPaneScope>;
+    function Probe() { pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey)); return null; }
+    const body = <><Probe /><SessionDetailsDestinationBody /></>;
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+        externalSessions: false, inbox: false, workflows: false, friends: false,
+    } });
+    const selectedWorkspaceTab = () => workspace.state.tabs[workspace.state.groups[workspace.state.focusedGroupId].activeTabId];
+    const detailsHref = `/session/s1/details?${new URLSearchParams(route.params)}`;
+    const screen = await fixture.render(<MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
+        {experience === 'hosted' ? <WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            workspace = navigation;
+            const selected = selectedWorkspaceTab();
+            instanceKey = selected.id;
+            const href = hrefForDestinationRef(catalog, selected.target);
+            if (!href) throw new Error('The production workspace target must have a route');
+            return <DestinationInstanceHost tabId={selected.id} ref={selected.target} pathname={new URL(href, 'https://happier.test').pathname}
+                focused visible phone navigation={navigation.navigationForTab(selected.id)}>
+                <Probe />{selected.target.kind === 'sessionDetails' ? <SessionDetailsDestinationBody /> : <SessionDestinationBody />}
+            </DestinationInstanceHost>;
+        }}</WorkspaceProvider> : body}<MobileBottomChromeHost />
+    </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider>);
+    const originalInstanceKey = instanceKey;
+    if (instanceKey) await act(async () => pane.openDetailsTab(tab, { intent: 'pinned' }));
+    await flushHookEffects({ cycles: 20 });
+    const measure = async () => act(async () => {
+        for (const host of screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')) {
+            invokeTestInstanceHandler(host, 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 844 } } });
+        }
+    });
+    await measure();
+    await flushHookEffects({ cycles: 20 });
+    expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+    expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
+    route.replace.mockClear();
+    route.back.mockClear();
+    await screen.pressByTestIdAsync('scm-comparison-phone-back');
+    await flushHookEffects({ cycles: 20 });
+    const url = new URL(route.href, 'https://happier.test');
+    expect(url.pathname).toBe('/session/s1');
+    expect(url.searchParams.get('serverId')).toBe(fixture.home.id);
+    expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))?.details).toBeUndefined();
+    if (experience === 'hosted') {
+        expect(selectedWorkspaceTab()).toMatchObject({ id: originalInstanceKey, target: { kind: 'session', params: { id: 's1', serverId: fixture.home.id } } });
+        expect(screen.tree.findAllByType(SessionDetailsDestinationBody)).toHaveLength(0);
+        expect(screen.tree.findAllByType(SessionDestinationBody)).toHaveLength(1);
+        await act(async () => { expect(workspace.openHref(detailsHref, { tabId: originalInstanceKey! })).toBe(true); });
+        await flushHookEffects({ cycles: 20 });
+        await measure();
+        await flushHookEffects({ cycles: 20 });
+        expect(selectedWorkspaceTab()).toMatchObject({ id: originalInstanceKey, target: { kind: 'sessionDetails' } });
+        expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+    }
+    // Hosted Details uses its destination selection; its retained pane remains
+    // available when the workspace switches back to the Session destination.
+    expect(pane.scopeState?.details.isOpen).toBe(Boolean(instanceKey));
+    expect(pane.scopeState?.details.tabs[0]?.resource).toMatchObject({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     await screen.unmount();
 });
