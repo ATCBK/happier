@@ -2667,6 +2667,7 @@ export class ApiMachineClient {
         credentials: StoredCredentials;
         context: RpcActionExecutorContext;
     }>): Promise<OpenProjectResultV1> {
+        logger.warnLocalFile('[Project root diagnostic] entered');
         const request = OpenProjectInputV1Schema.parse(input.input);
         const context = input.context;
         const authorization = context.externalActionExecutionAuthorization;
@@ -2686,16 +2687,24 @@ export class ApiMachineClient {
             || !isExternalActionAuthorizationBoundToEnvelope(authorization.binding,
                 { actionId: 'projects.open', machineId: this.machine.id, envelope })
             || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent()) throw unavailable();
-        const homeId = await this.readWorkspaceSyncHomeIdentity({ effectful: true, ...(context.signal ? { signal: context.signal } : {}) });
+        logger.warnLocalFile('[Project root diagnostic] admission verified');
+        const homeId = await this.readWorkspaceSyncHomeIdentity({ effectful: true, ...(context.signal ? { signal: context.signal } : {}) }).catch(error => {
+            logger.warnLocalFile('[Project root diagnostic] Home failure', { message: error instanceof Error ? error.message.split('\n')[0] : 'unknown' });
+            throw error;
+        });
         if (homeId !== request.serverId || this.socket !== socket || !socket.connected
             || configuration.activeServerId !== this.machineRuntimeServerId
             || readInstallationIdentityIfExistsSync()?.installationId !== installation.installationId) throw unavailable();
+        logger.warnLocalFile('[Project root diagnostic] Home verified');
         return OpenProjectResultV1Schema.parse(await callExactMachineRpc({ credentials: input.credentials,
             machineId: this.machine.id, serverUrl: this.machineRuntimeServerHttpBaseUrl,
             method: RPC_METHODS.PROJECTS_OPEN, request, requestId: context.actionRequestId,
             projectOpenInstalledSocket: socket, timeoutMs: null,
             externalAction: { context, effectActionId: 'projects.open', installationId: installation.installationId,
-                privateKey: installation.privateKey }, ...(context.signal ? { signal: context.signal } : {}) }));
+                privateKey: installation.privateKey }, ...(context.signal ? { signal: context.signal } : {}) }).catch(error => {
+            logger.warnLocalFile('[Project root diagnostic] transport failure', { message: error instanceof Error ? error.message.split('\n')[0] : 'unknown' });
+            throw error;
+        }));
     }
 
     /** The installed physical target requests only the active SOURCE operation's finite seed. */
