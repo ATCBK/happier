@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { AgentInputControlId } from './agentInputControlTypes';
+import { AGENT_INPUT_CONTROL_REGISTRY } from './agentInputControlRegistry';
 import { resolveAgentInputControlLines } from './resolveAgentInputControlLines';
 
 type ControlNodesById = Partial<Record<AgentInputControlId, ReadonlyArray<React.ReactNode>>>;
@@ -18,7 +19,10 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
     barControlIds?: readonly AgentInputControlId[];
 }>): Readonly<{
     chips: readonly React.ReactNode[];
+    /** Location rail controls that lead the folder and resume controls (the machine). */
     secondaryLeadingControls: readonly React.ReactNode[];
+    /** Location rail controls that follow them (checkout, session-list folder and tags, automation). */
+    secondaryTrailingControls: readonly React.ReactNode[];
     hasPermissionControl: boolean;
 }> {
     const controlNodesById: ControlNodesById = {
@@ -39,9 +43,15 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
     const resolveControlNodes = (ids: readonly AgentInputControlId[]) =>
         ids.flatMap((controlId) => controlNodesById[controlId] ?? []);
 
-    const secondaryLeadingControls = resolveControlNodes(
-        controlLines.secondary.filter((controlId) => controlId !== 'path' && controlId !== 'resume'),
-    );
+    // The registry order is the location rail's order: the folder and resume controls sit where the
+    // registry puts them and the rail's own row renders them there, so what the registry lists before
+    // the folder leads them and what it lists after resume trails them.
+    const folderIndex = AGENT_INPUT_CONTROL_REGISTRY.findIndex((control) => control.id === 'path');
+    const secondaryPlacement = (controlId: AgentInputControlId) =>
+        AGENT_INPUT_CONTROL_REGISTRY.findIndex((control) => control.id === controlId) < folderIndex ? 'leading' : 'trailing';
+    const rowControlIds = controlLines.secondary.filter((controlId) => controlId !== 'path' && controlId !== 'resume');
+    const secondaryLeadingControls = resolveControlNodes(rowControlIds.filter((controlId) => secondaryPlacement(controlId) === 'leading'));
+    const secondaryTrailingControls = resolveControlNodes(rowControlIds.filter((controlId) => secondaryPlacement(controlId) === 'trailing'));
 
     const chips = params.layout === 'collapsed'
         ? resolveControlNodes(params.barControlIds ?? controlLines.collapsed).filter(Boolean)
@@ -53,6 +63,7 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
     return {
         chips,
         secondaryLeadingControls,
+        secondaryTrailingControls,
         hasPermissionControl: (params.layout === 'collapsed'
             ? params.barControlIds ?? controlLines.collapsed
             : [...controlLines.primary, ...controlLines.secondary]).includes('permission')

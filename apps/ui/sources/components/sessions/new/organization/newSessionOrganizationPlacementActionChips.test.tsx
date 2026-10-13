@@ -39,6 +39,48 @@ describe('createNewSessionOrganizationPlacementActionChips', () => {
         expect(onTagCreate).toHaveBeenCalledWith('New');
     });
 
+    it('puts the folder on the location rail and tags on the setup rail', () => {
+        const chips = createNewSessionOrganizationPlacementActionChips({
+            enabled: true,
+            folderId: null,
+            tagIds: [],
+            folderTargets: [{ folderId: 'folder-a', title: 'Project', depth: 0 }],
+            tags: [],
+            iconColor: '#fff',
+            onFolderSelect: () => {},
+            onTagToggle: () => {},
+        });
+        expect(chips.map((chip) => chip.controlId)).toEqual(['organization', 'tags']);
+    });
+
+    it('omits the folder control while there is no folder to move to, and keeps tags', () => {
+        const chips = createNewSessionOrganizationPlacementActionChips({
+            enabled: true,
+            folderId: null,
+            tagIds: [],
+            folderTargets: [],
+            tags: [],
+            iconColor: '#fff',
+            onFolderSelect: () => {},
+            onTagToggle: () => {},
+        });
+        expect(chips.map((chip) => chip.key)).toEqual(['organization-tags']);
+    });
+
+    it('keeps a chosen folder reachable so it can be cleared', () => {
+        const chips = createNewSessionOrganizationPlacementActionChips({
+            enabled: true,
+            folderId: 'folder-a',
+            tagIds: [],
+            folderTargets: [],
+            tags: [],
+            iconColor: '#fff',
+            onFolderSelect: () => {},
+            onTagToggle: () => {},
+        });
+        expect(chips.map((chip) => chip.key)).toEqual(['organization-folder', 'organization-tags']);
+    });
+
     it('omits both controls when Session folders are unavailable', () => {
         expect(createNewSessionOrganizationPlacementActionChips({
             enabled: false,

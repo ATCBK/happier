@@ -3084,6 +3084,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         readOnlyEngineNodes,
         extraChipNodes: renderedExtraChipNodes,
         secondaryLeadingControls: secondaryLeadingControlsForWrap,
+        secondaryTrailingControls: secondaryTrailingControlsForWrap,
         extraChipAnchorRefsByKey,
     } = useRenderedAgentInputControlRows({
         readOnly,
@@ -3160,7 +3161,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // beneath its setup rail at every width (0.2's rails).
     const showSecondaryControlsRow = !isConversation && shouldShowSecondaryControlRow(
         effectiveActionBarLayout,
-        secondaryLeadingControlsForWrap.length > 0 || hasPath || hasResume,
+        secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0 || hasPath || hasResume,
     );
 
     const handlePermissionSelect = React.useCallback((mode: PermissionMode) => {
@@ -3665,6 +3666,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     }}
                                                     fillAvailableWidth={false}
                                                     leadingControls={secondaryLeadingControlsForWrap}
+                                                    trailingControls={secondaryTrailingControlsForWrap}
                                                     showChipLabels={showChipLabels}
                                 iconColor={theme.colors.composer.chipTint}
                                                     folderChipState={folderChipState}
@@ -3694,6 +3696,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     actionChipText: styles.actionChipText,
                                                 }}
                                                 leadingControls={secondaryLeadingControlsForWrap}
+                                                trailingControls={secondaryTrailingControlsForWrap}
                                                 showChipLabels={showChipLabels}
                             iconColor={theme.colors.composer.chipTint}
                                                 folderChipState={folderChipState}
@@ -3870,6 +3873,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                         }}
                                                         fillAvailableWidth={false}
                                                         leadingControls={secondaryLeadingControlsForWrap}
+                                                        trailingControls={secondaryTrailingControlsForWrap}
                                                         showChipLabels={showChipLabels}
                                                         iconColor={theme.colors.button.secondary.tint}
                                                         folderChipState={folderChipState}
@@ -3899,6 +3903,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                         actionChipText: styles.actionChipText,
                                                     }}
                                                     leadingControls={secondaryLeadingControlsForWrap}
+                                                    trailingControls={secondaryTrailingControlsForWrap}
                                                     showChipLabels={showChipLabels}
                                                     iconColor={theme.colors.button.secondary.tint}
                                                     folderChipState={folderChipState}

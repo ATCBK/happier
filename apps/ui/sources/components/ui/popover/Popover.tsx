@@ -1347,14 +1347,20 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                     return boundaryRect.x;
                 }
                 const desiredLeftRaw = (() => {
+                    const anchorRight = anchorRectState.x + anchorRectState.width;
+                    // A popover hangs from its requested edge while that edge leaves it its full width; an
+                    // anchor near the other window edge hangs it from that edge instead, so it stays attached
+                    // to its trigger rather than sliding away from it to fit.
+                    const startFits = anchorRectState.x + desiredWidth <= boundaryRect.x + boundaryRect.width;
+                    const endFits = anchorRight - desiredWidth >= boundaryRect.x;
                     switch (anchorAlignOnPortal) {
                         case 'end':
-                            return anchorRectState.x + anchorRectState.width - desiredWidth;
+                            return endFits || !startFits ? anchorRight - desiredWidth : anchorRectState.x;
                         case 'center':
                             return anchorRectState.x + (anchorRectState.width - desiredWidth) / 2;
                         case 'start':
                         default:
-                            return anchorRectState.x;
+                            return startFits || !endFits ? anchorRectState.x : anchorRight - desiredWidth;
                     }
                 })();
                 return desiredLeftRaw;

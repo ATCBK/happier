@@ -21,9 +21,12 @@ import {
 
 type PlacementChip = Readonly<{
     key: string;
+    /** The folder is where the session lives (location rail); tags describe it (setup rail). */
+    controlId: 'organization' | 'tags';
     title: string;
     label: string;
     icon: 'folder' | 'tag';
+    maxWidthCap: number;
     rootStep: SelectionListStep;
     selectedOptionId: string | null;
 }>;
@@ -31,6 +34,7 @@ type PlacementChip = Readonly<{
 function createPlacementChip(params: PlacementChip): AgentInputExtraActionChip {
     return {
         key: params.key,
+        controlId: params.controlId,
         collapsedOptionsPopover: {
             presentation: 'list',
             title: params.title,
@@ -40,7 +44,7 @@ function createPlacementChip(params: PlacementChip): AgentInputExtraActionChip {
             selectedOptionId: params.selectedOptionId,
             onSelect: () => {},
             maxHeightCap: 420,
-            maxWidthCap: 520,
+            maxWidthCap: params.maxWidthCap,
         },
         render: (ctx) => (
             <Pressable
@@ -92,20 +96,28 @@ export function createNewSessionOrganizationPlacementActionChips(params: Readonl
         onToggle: params.onTagToggle,
         ...(params.onTagCreate ? { onCreate: params.onTagCreate } : {}),
     });
+    // With no folder to move to the picker would offer only the root it is already in; a chosen
+    // folder stays reachable so it can be cleared.
+    const hasFolderChoice = params.folderId !== null || params.folderTargets.length > 0;
     return [
-        createPlacementChip({
+        ...(hasFolderChoice ? [createPlacementChip({
             key: 'organization-folder',
+            controlId: 'organization',
             title: t('sessionsList.moveToFolder'),
             label: folderLabel,
             icon: 'folder',
+            maxWidthCap: 520,
             rootStep: folderRoot,
             selectedOptionId: params.folderId ?? SESSION_FOLDER_SELECTION_ROOT_ID,
-        }),
+        })] : []),
         createPlacementChip({
             key: 'organization-tags',
+            controlId: 'tags',
             title: t('sessionTags.editTagsLabel'),
             label: t('sessionTags.editTagsLabel'),
+            // Tag names are short: the list stays compact under its chip instead of spanning the composer.
             icon: 'tag',
+            maxWidthCap: 360,
             rootStep: tagContent.selectionListStep,
             selectedOptionId: null,
         }),

@@ -19,6 +19,8 @@ export type PathAndResumeRowStyles = {
 export type PathAndResumeRowProps = {
     styles: PathAndResumeRowStyles;
     leadingControls?: ReadonlyArray<React.ReactNode>;
+    /** Location controls that follow the folder and resume controls. */
+    trailingControls?: ReadonlyArray<React.ReactNode>;
     fillAvailableWidth?: boolean;
     showChipLabels: boolean;
     iconColor: string;
@@ -35,9 +37,10 @@ export type PathAndResumeRowProps = {
 
 export function PathAndResumeRow(props: PathAndResumeRowProps) {
     const leadingControls = props.leadingControls?.filter(Boolean) ?? [];
+    const trailingControls = props.trailingControls?.filter(Boolean) ?? [];
     const hasPath = Boolean(props.onPathClick);
     const hasResume = Boolean(props.onResumeClick);
-    if (leadingControls.length === 0 && !hasPath && !hasResume) return null;
+    if (leadingControls.length === 0 && trailingControls.length === 0 && !hasPath && !hasResume) return null;
     const widthFillStyle = props.fillAvailableWidth === false ? null : { flex: 1, minWidth: 0 };
 
     return (
@@ -79,6 +82,7 @@ export function PathAndResumeRow(props: PathAndResumeRowProps) {
                         textStyle={props.styles.actionChipText}
                     />
                 ) : null}
+                {trailingControls}
             </View>
         </View>
     );

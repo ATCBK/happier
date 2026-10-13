@@ -32,8 +32,8 @@ function ref(): React.RefObject<View | null> {
   return { current: null } as React.RefObject<View | null>;
 }
 
-describe('AgentInputOverlayLayer engine popover placement (lab MP1/MP3)', () => {
-  it('attaches the engine popover to the composer at its width instead of covering the input from the chip', async () => {
+describe('AgentInputOverlayLayer picker placement (owner 2026-10-12: attached to its chip)', () => {
+  it('hangs the engine popover from its own chip, not from the composer edge', async () => {
     const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
     const composer = ref();
     const chip = ref();
@@ -51,11 +51,12 @@ describe('AgentInputOverlayLayer engine popover placement (lab MP1/MP3)', () => 
       />,
     );
 
-    expect(captured.popover?.anchorRef).toBe(composer);
-    expect(captured.popover?.portal?.matchAnchorWidth).toBe(true);
+    expect(captured.popover?.anchorRef).toBe(chip);
+    expect(captured.popover?.anchorRef).not.toBe(composer);
+    expect(captured.popover?.portal?.matchAnchorWidth).not.toBe(true);
   });
 
-  it('opens the machine list on the composer edge at its own width, never over the draft (lab m-pick)', async () => {
+  it('hangs the machine list from its own chip at its own width', async () => {
     const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
     const composer = ref();
     const chip = ref();
@@ -71,7 +72,8 @@ describe('AgentInputOverlayLayer engine popover placement (lab MP1/MP3)', () => 
       />,
     );
 
-    expect(captured.popover?.anchorRef).toBe(composer);
+    expect(captured.popover?.anchorRef).toBe(chip);
+    expect(captured.popover?.anchorRef).not.toBe(composer);
     expect(captured.popover?.portal?.matchAnchorWidth).not.toBe(true);
   });
 });

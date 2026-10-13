@@ -41,7 +41,7 @@ export function buildCollapsedExtraControlActions(params: Readonly<{
                 || chip.collapsedOptionsPopover!.isEnabled?.() === false;
             const disabled = isDisabled();
             actions = {
-                id: chip.controlId,
+                id: chip.key,
                 label: chip.collapsedOptionsPopover.label ?? chip.collapsedOptionsPopover.title,
                 ...(chip.collapsedOptionsPopover.accessibilityLabel === undefined
                     ? {}
@@ -61,7 +61,7 @@ export function buildCollapsedExtraControlActions(params: Readonly<{
                 || chip.collapsedContentPopover!.isEnabled?.() === false;
             const disabled = isDisabled();
             actions = {
-                id: chip.controlId,
+                id: chip.key,
                 label: chip.collapsedContentPopover.label ?? chip.collapsedContentPopover.title,
                 ...(chip.collapsedContentPopover.accessibilityLabel === undefined
                     ? {}

@@ -57,6 +57,25 @@ describe('buildCollapsedExtraControlActions', () => {
         }));
     });
 
+    it('gives each chip of a shared control its own menu item', () => {
+        const optionsChip = (key: string) => ({
+            key,
+            controlId: 'organization',
+            collapsedOptionsPopover: { presentation: 'list', title: key, rootStep: { id: key, title: key, sections: [] }, selectedOptionId: null, onSelect: () => {} },
+            render: () => null,
+        }) as unknown as AgentInputExtraActionChip;
+
+        const actions = buildCollapsedExtraControlActions({
+            chips: [optionsChip('organization-folder'), optionsChip('organization-tags')],
+            tint: 'currentColor',
+            dismiss: vi.fn(),
+            blurInput: vi.fn(),
+            openCollapsedOptionsPopover: vi.fn(),
+        });
+
+        expect(actions.organization?.map((action) => action.id)).toEqual(['organization-folder', 'organization-tags']);
+    });
+
     it('keeps a disabled content-popover control disabled after responsive collapse', () => {
         const disabledContentChip = {
             key: 'disabled-content',

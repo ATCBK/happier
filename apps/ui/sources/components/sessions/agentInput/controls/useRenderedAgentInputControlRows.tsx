@@ -92,6 +92,7 @@ export function useRenderedAgentInputControlRows(params: Readonly<{
     readOnlyEngineNodes: ReadonlyArray<React.ReactNode>;
     extraChipNodes: ReadonlyArray<React.ReactNode>;
     secondaryLeadingControls: ReadonlyArray<React.ReactNode>;
+    secondaryTrailingControls: ReadonlyArray<React.ReactNode>;
     extraChipAnchorRefsByKey: Readonly<Record<string, React.RefObject<View | null>>>;
 }> {
     return React.useMemo(() => {
@@ -200,6 +201,7 @@ export function useRenderedAgentInputControlRows(params: Readonly<{
                 ...Object.values(extraControlNodesById.extraControlNodesById).flat(),
             ],
             secondaryLeadingControls: renderedControls.secondaryLeadingControls,
+            secondaryTrailingControls: renderedControls.secondaryTrailingControls,
             extraChipAnchorRefsByKey: extraControlNodesById.extraChipAnchorRefsByKey as Readonly<Record<string, React.RefObject<View | null>>>,
         };
     }, [

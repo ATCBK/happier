@@ -15,6 +15,19 @@ describe('resolveRenderedAgentInputControls', () => {
         expect(controls.chips.map((chip) => (chip as React.ReactElement).key)).toEqual(['workflow', 'inputs', 'roles', 'unregistered']);
         expect(controls.secondaryLeadingControls.map((chip) => (chip as React.ReactElement).key)).toEqual(['machine']);
     });
+    it('splits the location rail around the folder and resume controls: machine first, then workspace and automation chips', () => {
+        const node = (key: string) => <React.Fragment key={key}>{key}</React.Fragment>;
+        const controls = resolveRenderedAgentInputControls({
+            layout: 'scroll',
+            coreControlNodesById: { machine: [node('machine')], path: [node('path')], resume: [node('resume')] },
+            extraControlNodesById: { automation: [node('automate'), node('triggers')], organization: [node('folder')], checkout: [node('checkout')] },
+            extraChips: [],
+        });
+        const keys = (nodes: readonly React.ReactNode[]) => nodes.map((chip) => (chip as React.ReactElement).key);
+        expect(keys(controls.secondaryLeadingControls)).toEqual(['machine']);
+        expect(keys(controls.secondaryTrailingControls)).toEqual(['checkout', 'folder', 'automate', 'triggers']);
+    });
+
     it('renders admitted plugin controls at the one plugin insertion point and keeps them in collapsed overflow', () => {
         const pluginControl = <React.Fragment key="plugin-control">Plugin control</React.Fragment>;
         const coreControl = <React.Fragment key="engine-control">Engine control</React.Fragment>;

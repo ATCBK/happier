@@ -36,6 +36,7 @@ export function createNewSessionTriggersActionChip(props: InitialTriggersProps):
         : formatTriggerSetSummary(props.initialTriggers.map((entry) => entry.trigger));
     return {
         key: CHIP_KEY,
+        controlId: 'automation',
         stabilityKey: JSON.stringify([props.initialTriggers, props.machineId, props.serverId]),
         collapsedAction: ({ openCollapsedPopover, tint }) => ({
             id: CHIP_KEY, label,

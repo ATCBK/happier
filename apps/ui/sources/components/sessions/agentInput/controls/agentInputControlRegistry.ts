@@ -3,7 +3,8 @@ import type { AgentInputControlDescriptor, AgentInputHostControlId } from './age
 /**
  * Rail order (owner, 2026-10-12): rail 1 reads as setup — the small attachment controls (paperclip, @),
  * then engine/model, permission, mode, the route it runs through, launch profile/environment, then the
- * rest. Rail 2 is where it runs — machine, folder, resume — then the workspace root and automation.
+ * rest (sharing, tags, ...). Rail 2 is where it runs — machine, folder, resume — then the Git checkout,
+ * the session-list folder (`organization`), and automation.
  */
 export const AGENT_INPUT_CONTROL_REGISTRY = [
     { id: 'attachments', line: 'primary' },
@@ -25,6 +26,7 @@ export const AGENT_INPUT_CONTROL_REGISTRY = [
     { id: 'server', line: 'primary' },
     { id: 'mcp', line: 'primary' },
     { id: 'sessionAccess', line: 'primary' },
+    { id: 'tags', line: 'primary' },
     { id: 'recipient', line: 'primary' },
     { id: 'delivery', line: 'primary' },
     { id: 'reviewComments', line: 'primary' },
@@ -37,6 +39,7 @@ export const AGENT_INPUT_CONTROL_REGISTRY = [
     { id: 'path', line: 'secondary' },
     { id: 'resume', line: 'secondary' },
     { id: 'checkout', line: 'secondary' },
+    { id: 'organization', line: 'secondary' },
     { id: 'automation', line: 'secondary' },
 ] as const satisfies ReadonlyArray<AgentInputControlDescriptor>;
 

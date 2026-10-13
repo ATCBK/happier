@@ -7,12 +7,12 @@ describe('resolveAgentInputControlLines', () => {
         const lines = resolveAgentInputControlLines({
             layout: 'scroll',
             controlIds: ['workflow', 'mcp', 'checkout', 'automation', 'env', 'profile', 'connectedServices', 'mode',
-                'permission', 'engine', 'files', 'attachments', 'resume', 'path', 'machine'],
+                'permission', 'engine', 'files', 'attachments', 'resume', 'path', 'machine', 'organization', 'tags', 'sessionAccess'],
         });
 
         expect(lines.primary).toEqual(['attachments', 'files', 'engine', 'permission', 'mode', 'connectedServices',
-            'profile', 'env', 'workflow', 'mcp']);
-        expect(lines.secondary).toEqual(['machine', 'path', 'resume', 'checkout', 'automation']);
+            'profile', 'env', 'workflow', 'mcp', 'sessionAccess', 'tags']);
+        expect(lines.secondary).toEqual(['machine', 'path', 'resume', 'checkout', 'organization', 'automation']);
     });
 
     it('preserves Session access independently from recipient routing in the composer and overflow', () => {
@@ -81,7 +81,7 @@ describe('resolveAgentInputControlLines', () => {
             controlIds: ['engine', 'linkedFiles', 'machine', 'path'],
         });
 
-        expect(lines.primary).toEqual(['engine', 'linkedFiles']);
+        expect(lines.primary).toEqual(['linkedFiles', 'engine']);
         expect(lines.secondary).toEqual(['machine', 'path']);
     });
 
