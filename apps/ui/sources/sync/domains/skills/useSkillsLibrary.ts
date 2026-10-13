@@ -4,6 +4,7 @@ import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skil
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useArtifacts } from '@/sync/domains/state/storage';
+import { useMachineRecordValues } from '@/sync/store/hooks';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
@@ -73,6 +74,7 @@ export function useSkillsLibrary(): SkillsLibrary {
   const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
   const { binding, ready } = useMountedActionExecution(scope?.serverId ?? null);
   const artifacts = useArtifacts();
+  const inventoryForWiringCheck = useMachineRecordValues();
   const rules = usePromptLibraryCatalogValue('skill-rules');
   const usage = usePromptLibraryCatalogValue('skill-usage');
   // What the list depends on: each skill bundle's revision and the rules row's revision.
@@ -114,7 +116,7 @@ export function useSkillsLibrary(): SkillsLibrary {
   // skills.list refreshes unavailable rules through this same catalog owner.
   // Starting it on failure would reopen loading and cancel its own invocation.
   const canRead =
-    Boolean(scopeKey) && ready && rules.status === 'ready';
+    Boolean(scopeKey) && ready && rules.status === 'ready' && inventoryForWiringCheck.length > 0;
   const readKey = JSON.stringify([scopeKey, binding?.revision, sourceKey, attempt]);
 
   React.useEffect(() => {
