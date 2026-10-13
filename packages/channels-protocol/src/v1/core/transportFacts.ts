@@ -5,6 +5,7 @@ import {
     defineProtocolNumber,
     defineProtocolObject,
     defineProtocolUnion,
+    defineProtocolUtf8String,
 } from '@happier-dev/plugin-sdk/protocol';
 
 import {
@@ -12,8 +13,9 @@ import {
     ConversationProviderDiagnosticV1ProtocolSchema,
     ConversationProviderHistoryUnavailableV1Fields,
 } from '../diagnostics.js';
-import { CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1 } from '../bounds.js';
+import { CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1, MAX_CONVERSATION_ACTOR_PRINCIPAL_ID_UTF8_BYTES } from '../bounds.js';
 import { ConversationConnectionIdV1ProtocolSchema } from '../identity.js';
+import { ConversationResolvedEndpointV1ProtocolSchema } from '../provider/resolution.js';
 
 const conversationProviderHistoryGapTransportFactV1 = defineProtocolObject({
     ...ConversationProviderHistoryUnavailableV1Fields,
@@ -57,6 +59,11 @@ export const ConversationTransportFactReportInputV1ProtocolSchema = defineProtoc
         minimum: 1,
         maximum: Number.MAX_SAFE_INTEGER,
     }),
+    // An unverified candidate scopes diagnostics only; it grants no admission.
+    senderEligibility: defineProtocolObject({
+        endpoint: ConversationResolvedEndpointV1ProtocolSchema,
+        principalId: defineProtocolUtf8String({ minLength: 1, maxUtf8Bytes: MAX_CONVERSATION_ACTOR_PRINCIPAL_ID_UTF8_BYTES }),
+    }, { policy: 'closed' }).optional(),
     fact: defineProtocolUnion([
         conversationProviderHistoryGapTransportFactV1,
         conversationApplicationAdmissionLostTransportFactV1,
@@ -84,6 +91,7 @@ export const ConversationTransportFactReportResultV1ProtocolSchema = defineProto
         defineProtocolLiteral('rejoined'),
         defineProtocolLiteral('deleteFinalizing'),
         defineProtocolLiteral('staleAuthority'),
+        defineProtocolLiteral('notEligible'),
     ]),
 }, { policy: 'closed' });
 

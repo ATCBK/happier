@@ -258,6 +258,7 @@ export type {
 export {
     ConversationAllowedPrincipalIdsV1JsonSchema,
     conversationThreadRouterAllowedPrincipalIdsV1,
+    isChannelSessionSpawnRecipeAuthorableV1,
     ConversationAllowedPrincipalIdsV1Schema,
     ConversationBindingTargetV1JsonSchema,
     ConversationBindingTargetV1Schema,

@@ -6,12 +6,14 @@ import {
     defineProtocolNumber,
     defineProtocolObject,
     defineProtocolUnion,
+    defineProtocolUtf8String,
 } from '@happier-dev/plugin-sdk/protocol';
 
 import {
     MAX_CONVERSATION_RECEIVE_BATCH_ENTRIES,
     MAX_CONVERSATION_RECEIVE_WAIT_MS,
     MAX_CONVERSATION_RETRY_AFTER_MS,
+    MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
 } from '../bounds.js';
 import { ConversationIngressObservedEntryV1ProtocolSchema } from '../core/ingress.js';
 import { ConversationResolvedEndpointV1ProtocolSchema } from './resolution.js';
@@ -31,6 +33,11 @@ export const ConversationPollInputV1ProtocolSchema = defineProtocolObject({
     ...ConversationProviderConnectionInputV1Fields,
     bindings: defineProtocolArray(defineProtocolObject({
         endpoint: ConversationResolvedEndpointV1ProtocolSchema,
+        /** Replays preserve the endpoint context frozen by their first census. */
+        excludedMessageIds: defineProtocolArray(defineProtocolUtf8String({
+            minLength: 1,
+            maxUtf8Bytes: MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
+        })).optional(),
         scopedTriggerKind: defineProtocolUnion([defineProtocolLiteral('prComment'), defineProtocolLiteral('ciFailed')]).optional(),
     }, { policy: 'closed' })).optional(),
     checkpoint: ConversationCheckpointV1ProtocolSchema.nullable(),

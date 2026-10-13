@@ -167,6 +167,14 @@ export function conversationThreadRouterAllowedPrincipalIdsV1(target: Conversati
 }
 /** The bounded JSON recipe that Channels validates through the Session owner at dispatch time. */
 export type ChannelSessionSpawnRecipeV1 = ConversationJsonObjectV1;
+
+/**
+ * Refuses host-only birth facts in author recipes. The Session owner validates
+ * the remaining opaque spawn fields at dispatch; stored fields are not stripped.
+ */
+export function isChannelSessionSpawnRecipeAuthorableV1(recipe: ChannelSessionSpawnRecipeV1): boolean {
+    return !Object.prototype.hasOwnProperty.call(recipe, 'attestedContext');
+}
 export const ConversationBindingTargetV1JsonSchema: PluginJsonSchema = ConversationBindingTargetV1Schema.jsonSchema;
 
 const conversationBindingV1CommonFields = {

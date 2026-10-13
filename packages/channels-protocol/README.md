@@ -191,6 +191,9 @@ In 0.3 development source, `outboundTextLimit` is optional. Declare it only
 when the provider has a real native text ceiling; omission means no native
 text ceiling, not a guessed default. Preparation and retained connection facts
 preserve that distinction. The finite ceiling in the example above remains valid.
+Email omits this field. GitHub declares `{ maximum: 65536, unit:
+'unicodeCodePoints' }` for its native comment limit. Both use the same setup
+schema; absence does not authorize a caller to invent a default ceiling.
 
 The `setup` Action's input is contributor-defined; all other role inputs and
 all role results use the final Channels role contract. Setup returns either
@@ -228,6 +231,10 @@ Session policy. The core matches a new thread through its endpoint's `parentId`,
 then creates an ordinary child binding for the Session and its verified
 originating sender, using the Session owner's persisted birth identity even on
 rejoin. Children inherit the router's common input and delivery policy at birth.
+Author recipes must not contain the host-only `attestedContext` field. `/new`
+rotates a single-sender routed child with the current verified sender and command
+message identity only when the existing Session confirms attested birth facts.
+Started conversations and multi-participant audiences remain unattested.
 Unmatched routes produce a content-free `routeNotMatched`
 record. Disabling the router stops child admission, projection and new outward
 effects through the shared live parent-policy reader; it does not undo provider
@@ -368,6 +375,24 @@ addressing evidence, and timestamp facts; Channels applies allowlists,
 addressing, freshness, command, target, and permission policy. Providers do
 not infer addressing from text and do not supply `pluginId`, Account,
 binding, Session, or permission authority.
+
+Development-source sender-specific readiness reports may supply
+`senderEligibility: { endpoint, principalId }` beside a `providerReadiness`
+transport fact. The principal is an unverified diagnostic candidate. The core
+checks the current enabled binding audience and router-parent policy before
+recording attention, returning `notEligible` without a readiness write for
+unconfigured senders. This field never grants message admission and is not
+retained in the connection's readiness record.
+
+Development-source poll `bindings` also includes retained ordinary thread
+endpoints, alongside the existing linked PR and scoped-trigger context. A
+thread entry may carry `excludedMessageIds`: occurrences first observed before
+that endpoint was held. Providers exclude those messages from known-thread
+shaping so replay keeps the accepted content. The core derives these IDs from
+the same ingress census, including compacted censuses, and the Session owner's
+inbound birth identity retained in the existing child binding. The birth fact
+also preserves first-message shaping if the first census write fails after
+child creation. No separate thread or shaping store exists.
 
 In current 0.3 development source, setup may return
 `recommendedMaximumObservationAgeMs`. Preparation preserves it and the setup

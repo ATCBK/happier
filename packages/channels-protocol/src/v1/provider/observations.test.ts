@@ -25,6 +25,14 @@ describe('Channels V1 provider observations', () => {
         } as const;
 
         expect(ConversationPollInputV1Schema.parse(input)).toEqual(input);
+        const replayInput = { ...input, bindings: [{
+            endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: 'mailbox-1' },
+            excludedMessageIds: ['first-message'],
+        }] };
+        expect(ConversationPollInputV1Schema.parse(replayInput)).toEqual(replayInput);
+        expect(ConversationPollInputV1Schema.safeParse({ ...replayInput, bindings: [{
+            ...replayInput.bindings[0], excludedMessageIds: [''],
+        }] }).success).toBe(false);
         expect(ConversationPollResultV1Schema.parse(result)).toEqual(result);
         expect(ConversationPollInputV1Schema.safeParse({
             ...input,

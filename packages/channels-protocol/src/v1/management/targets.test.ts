@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createProtocolStoredReadSchema } from '@happier-dev/plugin-sdk/protocol';
 
 import * as targets from './targets.js';
 import {
@@ -33,6 +34,23 @@ function hasFinalizingDeleteDisabledBranch(schema: unknown): boolean {
 }
 
 describe('Channels V1 binding targets', () => {
+    it('preserves opaque retained recipe data while refusing host attestation at author admission', () => {
+        const target = {
+            kind: 'session', sessionId: 'session-1', policy: {
+                deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' },
+                newSession: { kind: 'enabled', recipe: { model: 'claude', futureOption: { value: true },
+                    attestedContext: { externalPrincipalId: 'forged', sourceMessageId: '<forged>' } } },
+            },
+        } as const;
+        const stored = createProtocolStoredReadSchema(ConversationBindingTargetV1Schema).parse({ ...target, futureField: true });
+        if (stored.kind !== 'session' || stored.policy.newSession.kind !== 'enabled') throw new Error('Expected retained recipe');
+        expect(stored.policy.newSession.recipe).toEqual(target.policy.newSession.recipe);
+        expect(targets.isChannelSessionSpawnRecipeAuthorableV1(stored.policy.newSession.recipe)).toBe(false);
+        expect(targets.isChannelSessionSpawnRecipeAuthorableV1({ model: 'claude', futureOption: { value: true } })).toBe(true);
+        for (const attestedContext of [null, 'forged', {}]) {
+            expect(targets.isChannelSessionSpawnRecipeAuthorableV1({ attestedContext })).toBe(false);
+        }
+    });
     it('accepts ordered thread routes and rejects duplicate group records and unknown routing fields', () => {
         const policy = { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } as const;
         const target = {
