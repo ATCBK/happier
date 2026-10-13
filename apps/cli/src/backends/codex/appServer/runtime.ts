@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { canPublishSessionResumeIdentity } from '@/session/metadata/sessionIdentityPublication';
+import { join } from 'node:path';
 import type { PermissionResult } from '@/agent/permissions/permissionResult';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
@@ -106,6 +106,7 @@ import {
 } from './sessionControlsMetadata';
 import { isCodexAppServerFastServiceTier } from './speedEligibility';
 import { createCodexSyntheticSubagentTracker } from '../collaboration/createCodexSyntheticSubagentTracker';
+import { resolveCodexSubagentOccurrenceId } from '@/backends/codex/collaboration/buildCodexSyntheticSubagentToolMessages';
 import {
     captureCompletedTurnSeqRange,
     publishRollbackRangeMetadata,
@@ -160,7 +161,9 @@ import {
 import type { CodexChatGptTokensRefreshBridgeResponse } from '../connectedServices/refreshCodexChatGptTokensForBridge';
 import type { CodexConnectedServiceAppliedIdentity } from '../connectedServices/runtimeAppliedIdentity';
 import { applyCodexConnectedServiceAuthGeneration } from '../connectedServices/applyCodexConnectedServiceAuthGeneration';
-import { writeCodexAuthStoreFile } from '../connectedServices/writeCodexAuthStoreFile';
+import { applyCodexAppServerChatGptAuthTokens } from '../connectedServices/authApplication/liveAppServerApply';
+import { isCodexAuthStoreProjectionCurrent } from '../connectedServices/writeCodexAuthStoreFile';
+import { resolveConnectedServiceSelectionHomeDir } from '@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir';
 import type {
     CodexConnectedServiceRefreshSelection,
     CodexConnectedServiceRuntimeIdentitySeed,
@@ -986,6 +989,13 @@ function isCodexTurnInterruptedStatus(status: string | null): boolean {
         || status === 'aborted';
 }
 
+function readCodexTerminalOutcome(method: string, value: unknown): 'completed' | 'failed' | 'interrupted' {
+    if (method !== 'turn/completed') return 'interrupted';
+    const status = readCodexTurnStatus(value);
+    if (status === 'failed') return 'failed';
+    return isCodexTurnInterruptedStatus(status) ? 'interrupted' : 'completed';
+}
+
 function readCodexAppServerErrorPayload(value: unknown): CodexAppServerErrorPayload | null {
     const error = readCodexProviderErrorRecord(value, { allowRoot: false });
     if (!error) return null;
@@ -1251,6 +1261,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         classification: CodexConnectedServiceRuntimeFailureClassification;
     }>) => Promise<CodexUsageLimitGroupRecoveryOutcome> | CodexUsageLimitGroupRecoveryOutcome;
     initialConnectedServiceRuntimeIdentity?: CodexConnectedServiceRuntimeIdentitySeed | null;
+    initializeChatGptAuthTokens?: boolean;
     onChatGptAuthTokensRefresh?: (params: unknown) => Promise<CodexChatGptTokensRefreshBridgeResponse>;
     onConnectedServiceAuthGenerationApplied?: (params: Readonly<{
         selection: CodexConnectedServiceRefreshSelection;
@@ -1410,6 +1421,32 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const activeProviderTurnItemIds = new Set<string>();
     let latestConnectedServiceRuntimeIdentity: CodexConnectedServiceRuntimeAppliedIdentity | null =
         params.initialConnectedServiceRuntimeIdentity ?? null;
+    // A disposed process has no live proof. Retain its applied selection only as
+    // the seed for the next process, whose external tokens must be applied again.
+    let nextClientConnectedServiceIdentity = latestConnectedServiceRuntimeIdentity;
+    const recordAppliedChatGptTokens = (
+        tokens: CodexChatGptTokensRefreshBridgeResponse,
+        seed: CodexConnectedServiceRuntimeAppliedIdentity,
+        source: CodexConnectedServiceRuntimeAppliedIdentitySource,
+    ): void => {
+        const accountId = tokens.chatgptAccountId?.trim() || seed.activeAccountId;
+        const selection = tokens.selection;
+        latestConnectedServiceRuntimeIdentity = {
+            serviceId: 'openai-codex',
+            activeAccountId: accountId,
+            accountLabel: accountId === seed.activeAccountId ? seed.accountLabel : null,
+            profileId: selection?.kind === 'group' ? selection.activeProfileId
+                : selection?.kind === 'profile' ? selection.profileId : seed.profileId,
+            ...(selection?.kind === 'group' ? { groupId: selection.groupId, generation: selection.generation }
+                : !selection ? {
+                    ...(seed.groupId ? { groupId: seed.groupId } : {}),
+                    ...(seed.generation === undefined ? {} : { generation: seed.generation }),
+                } : {}),
+            credentialFingerprint: computeConnectedServiceAccessTokenFingerprint(tokens.accessToken),
+            credentialRevision: tokens.credentialRevision ?? seed.credentialRevision ?? null,
+            source,
+        };
+    };
     let unavailableConnectedServiceAuthGroup: Readonly<{
         groupId: string;
         unavailableReason: 'group_missing' | 'active_profile_missing';
@@ -1498,12 +1535,19 @@ export function createCodexAppServerRuntime(params: Readonly<{
     );
 
     const readRateLimitResetCreditsRaw = async (): Promise<unknown | null> => {
-        const tokens = readCodexEnvironmentAuthTokens(runtimeEnv);
-        const accessToken = tokens.accessToken ?? tokens.idToken;
+        // Connected runtime selection can change without moving this process's home.
+        // Reuse the daemon's current-token owner for connected selections;
+        // native sessions retain their native-home credential reader.
+        const currentTokens = typeof params.onChatGptAuthTokensRefresh === 'function'
+            && (latestConnectedServiceRuntimeIdentity || nextClientConnectedServiceIdentity
+                || resolveOpenAiCodexDaemonRefreshSelection(runtimeEnv, params.session))
+            ? await params.onChatGptAuthTokensRefresh({}) : null;
+        const tokens = currentTokens ? null : readCodexEnvironmentAuthTokens(runtimeEnv);
+        const accessToken = currentTokens?.accessToken ?? tokens?.accessToken ?? tokens?.idToken;
         if (!accessToken) return null;
         const result = await fetchCodexRateLimitResetCredits({
             accessToken,
-            accountId: tokens.accountId,
+            accountId: currentTokens?.chatgptAccountId ?? tokens?.accountId,
         });
         return result.ok ? result.response : null;
     };
@@ -2099,11 +2143,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return null;
     };
 
-    const publishThreadId = (isExistingResume = false): void => {
-        if (!canPublishSessionResumeIdentity({
-            isExistingResume,
-            hasResumeEvidence: nativeReadyThreadId !== null && nativeReadyThreadId === threadId,
-        })) return;
+    const publishThreadId = (): void => {
         void publishCodexSessionIdMetadata({
             session: params.session,
             getCodexThreadId: () => threadId,
@@ -2139,7 +2179,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         const nextThreadId = trimSessionId(requestedThreadId);
         if (!nextThreadId) return;
         threadId = nextThreadId;
-        publishThreadId(true);
+        publishThreadId();
     };
 
     const publishSessionControls = async (
@@ -2557,18 +2597,19 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return next;
     };
 
-    const ensureSyntheticSubagentThread = async (threadId: string): Promise<string> => {
-        if (syntheticSubagentThreadIds.has(threadId)) return threadId;
+    const ensureSyntheticSubagentThread = async (threadId: string, providerTurnId: string): Promise<string> => {
+        const occurrenceId = resolveCodexSubagentOccurrenceId({ threadId, providerTurnId });
+        if (syntheticSubagentTracker.hasStarted(threadId, providerTurnId)) return occurrenceId;
         await flushItemTranscriptBoundary(null);
-        await syntheticSubagentTracker.ensureStarted({ threadId });
+        await syntheticSubagentTracker.ensureStarted({ threadId, providerTurnId });
         syntheticSubagentThreadIds.add(threadId);
-        return threadId;
+        return occurrenceId;
     };
 
-    const finalizeSyntheticSubagentThread = async (threadId: string, status: 'completed' | 'interrupted'): Promise<void> => {
-        await ensureSyntheticSubagentThread(threadId);
-        await flushItemTranscriptBoundary(threadId);
-        await syntheticSubagentTracker.finalize({ threadId, status });
+    const finalizeSyntheticSubagentThread = async (threadId: string, providerTurnId: string, status: 'completed' | 'failed' | 'interrupted', error?: string | null): Promise<void> => {
+        const occurrenceId = await ensureSyntheticSubagentThread(threadId, providerTurnId);
+        await flushItemTranscriptBoundary(occurrenceId);
+        await syntheticSubagentTracker.finalize({ threadId, providerTurnId, status, ...(error ? { error } : {}) });
     };
 
     const markActiveTurnMeaningfulContextWindowRecoveryActivity = (): void => {
@@ -3710,10 +3751,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
             });
         }
         markActiveTurnNonSteerable();
-        const terminalStatus = method === 'turn/completed'
-            ? readCodexTurnStatus(notificationParams)
-            : null;
-        if (method === 'turn/completed' && terminalStatus === 'failed') {
+        const terminalOutcome = readCodexTerminalOutcome(method, notificationParams);
+        if (terminalOutcome === 'failed') {
             const failure = createCodexAppServerTurnFailure(
                 notificationParams,
                 activeTurn?.connectedServiceRuntimeIdentityAtStart ?? null,
@@ -3739,7 +3778,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             );
             return;
         }
-        if (method !== 'turn/completed' || isCodexTurnInterruptedStatus(terminalStatus)) {
+        if (terminalOutcome === 'interrupted') {
             await surfacePrimarySessionRuntimeIssue({
                 provider: 'codex',
                 cause: 'cancelled',
@@ -3859,6 +3898,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
         if (!threadId && activityThreadId) {
             threadId = activityThreadId;
+            publishThreadId();
         }
 
         if (hasProviderTurnAlreadyTerminated(activityParams, startedTurnId)) {
@@ -3870,7 +3910,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         nativeReadyThreadId = activeThreadId;
-        publishThreadId();
 
         pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
         activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
@@ -3994,9 +4033,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
         const notificationThreadId = readThreadId(notificationParams);
         if (notificationThreadId && notificationThreadId !== activeTurn.threadId) {
+            if (!notificationTurnId) return null;
+            const occurrenceId = await ensureSyntheticSubagentThread(notificationThreadId, notificationTurnId);
             return {
-                sidechainId: notificationThreadId,
-                streamScopeId: notificationThreadId,
+                sidechainId: occurrenceId,
+                streamScopeId: occurrenceId,
             };
         }
         if (notificationTurnId && activeTurn.turnId && notificationTurnId !== activeTurn.turnId) {
@@ -4059,9 +4100,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             }
                             return;
                         }
-                        if (context.sidechainId) {
-                            await ensureSyntheticSubagentThread(context.sidechainId);
-                        } else if (!notificationMatchesPendingTurn(notificationParams)) {
+                        if (!context.sidechainId && !notificationMatchesPendingTurn(notificationParams)) {
                             return;
                         }
                         if (!context.sidechainId && method === 'item/started') {
@@ -4103,7 +4142,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     ...(params.processEnv ? { processEnv: params.processEnv } : {}),
                     ...(params.configOverrides ? { configOverrides: params.configOverrides } : {}),
                 }))
-                .then((client) => {
+                .then(async (client) => {
                     const attachedClientGeneration = clientLifecycleGeneration;
                     client.onExit((failure) => {
                         if (attachedClientGeneration !== clientLifecycleGeneration) return;
@@ -4128,6 +4167,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 const notificationTurnId = readProviderEventTurnId(notificationParams, {
                                     allowTopLevelId: true,
                                 });
+                                const notificationThreadId = readThreadId(notificationParams);
+                                if (notificationThreadId && syntheticSubagentThreadIds.has(notificationThreadId)) {
+                                    if (notificationTurnId) await ensureSyntheticSubagentThread(notificationThreadId, notificationTurnId);
+                                    return;
+                                }
                                 const activeTurn = await adoptNativeTurnFromProviderActivity(notificationParams, {
                                     turnId: notificationTurnId,
                                 });
@@ -4309,21 +4353,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 throw new Error('connected_service_chatgpt_refresh_unavailable');
                             }
                             const refreshed = await params.onChatGptAuthTokensRefresh(requestParams);
-                            if (
-                                latestConnectedServiceRuntimeIdentity
-                                && (
-                                    !refreshed.chatgptAccountId
-                                    || refreshed.chatgptAccountId === latestConnectedServiceRuntimeIdentity.activeAccountId
-                                )
-                            ) {
-                                latestConnectedServiceRuntimeIdentity = {
-                                    ...latestConnectedServiceRuntimeIdentity,
-                                    credentialFingerprint: computeConnectedServiceAccessTokenFingerprint(refreshed.accessToken),
-                                    credentialRevision: refreshed.credentialRevision
-                                        ?? latestConnectedServiceRuntimeIdentity.credentialRevision
-                                        ?? null,
-                                    source: 'token_refresh',
-                                };
+                            if (latestConnectedServiceRuntimeIdentity) {
+                                recordAppliedChatGptTokens(refreshed, latestConnectedServiceRuntimeIdentity, 'token_refresh');
                             }
                             return refreshed;
                         })();
@@ -4355,9 +4386,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                         || Boolean(canonicalParentThreadId && terminalThreadId !== canonicalParentThreadId)
                                     )
                                 ) {
+                                    if (!terminalTurnId) return;
+                                    const errorPayload = readCodexAppServerErrorPayload(notificationParams);
                                     await finalizeSyntheticSubagentThread(
                                         terminalThreadId,
-                                        method === 'turn/completed' ? 'completed' : 'interrupted',
+                                        terminalTurnId,
+                                        readCodexTerminalOutcome(method, notificationParams),
+                                        errorPayload ? formatCodexAppServerErrorPayloadMessage(errorPayload) : null,
                                     );
                                     return;
                                 }
@@ -4419,6 +4454,29 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     };
                     registerTerminalHandler('turn/completed');
                     registerTerminalHandler('turn/interrupted');
+                    const startupIdentity = latestConnectedServiceRuntimeIdentity ?? nextClientConnectedServiceIdentity;
+                    if (params.initializeChatGptAuthTokens === true && startupIdentity !== null) {
+                        try {
+                            if (typeof params.onChatGptAuthTokensRefresh !== 'function') {
+                                throw new Error('connected_service_chatgpt_refresh_unavailable');
+                            }
+                            // External tokens are process-local in Codex. Reuse the daemon's
+                            // current-token/refresh owner before native thread admission; do not
+                            // infer that a durable auth.json projection initialized this process.
+                            const tokens = await params.onChatGptAuthTokensRefresh({});
+                            const accountId = typeof tokens.chatgptAccountId === 'string' ? tokens.chatgptAccountId.trim() : '';
+                            if (!accountId) throw new Error('connected_service_chatgpt_account_identity_unavailable');
+                            await applyCodexAppServerChatGptAuthTokens({
+                                client,
+                                accessToken: tokens.accessToken,
+                                chatgptAccountId: accountId,
+                            });
+                            recordAppliedChatGptTokens(tokens, startupIdentity, 'applied_credential');
+                        } catch (error) {
+                            await client.dispose().catch(() => undefined);
+                            throw error;
+                        }
+                    }
                     if (retainedThreadId) {
                         return resumeThread(client, retainedThreadId, {
                             preserveRequestedThreadId: true,
@@ -5126,6 +5184,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             currentReasoningEffort = null;
             currentServiceTier = null;
             permissionSupport = 'unknown';
+            nextClientConnectedServiceIdentity = latestConnectedServiceRuntimeIdentity ?? nextClientConnectedServiceIdentity;
             latestConnectedServiceRuntimeIdentity = null;
             await disposeClient();
             turnInFlight = false;
@@ -5551,10 +5610,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 forcedWorkspaceId: request.forcedWorkspaceId ?? null,
                 forcedLoginMethod: request.forcedLoginMethod ?? null,
                 persistAuthStore: async () => {
-                    await writeCodexAuthStoreFile({
-                        codexHome: resolveConfiguredCodexHome(runtimeEnv),
-                        record: request.candidate,
-                    });
+                    const codexHome = params.activeServerDir
+                        ? join(resolveConnectedServiceSelectionHomeDir({
+                            activeServerDir: params.activeServerDir,
+                            serviceId: 'openai-codex',
+                            agentId: 'codex',
+                            fallbackProfileId: request.candidate.profileId,
+                            selection: request.selection,
+                        }), 'codex-home')
+                        : resolveConfiguredCodexHome(runtimeEnv);
+                    // The daemon owns managed account and pool credential publication.
+                    // A late process apply must not overwrite a newer publication.
+                    if (!await isCodexAuthStoreProjectionCurrent({ codexHome, record: request.candidate })) {
+                        throw new Error('connected_service_auth_projection_not_current');
+                    }
                 },
                 refreshSelection: request.selection ?? undefined,
                 updateRefreshSelection: request.selection
