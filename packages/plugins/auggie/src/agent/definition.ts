@@ -3,6 +3,7 @@ const AUGGIE_AGENT_ID = 'auggie';
 // IMPORTANT: this must stay JSON-serializable (data-only).
 export const AGENT_DEFINITION = Object.freeze({
   id: AUGGIE_AGENT_ID,
+  acpRegistryIds: ['auggie'] as const,
   core: {
     id: AUGGIE_AGENT_ID,
     cliSubcommand: 'auggie',
