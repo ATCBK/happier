@@ -55,9 +55,10 @@ import {
   enqueueExecutionRunMarkerWrite,
   writeExecutionRunActivityMarker,
 } from '@/agent/executionRuns/runtime/executionRunManager/activityMarkers';
-import { deriveExecutionRunRuntimeActivityContribution } from '@/agent/executionRuns/runtime/executionRunRuntimeActivity';
+import { deriveExecutionRunRuntimeActivityContribution, readExecutionRunTurnInFlight } from '@/agent/executionRuns/runtime/executionRunRuntimeActivity';
 import { readExecutionRunErrorCode } from '@/agent/executionRuns/runtime/executionRunErrors';
 import { logger } from '@/ui/logger';
+import type { ResumedExecutionRunBackend } from './resumeBackendController';
 
 function readBoundedExternalSendAckTimeoutMs(): number {
   const raw = process.env.HAPPIER_EXECUTION_RUN_BOUNDED_SEND_ACK_TIMEOUT_MS;
@@ -136,7 +137,26 @@ export class ExecutionRunManager {
   private readonly voiceAgentManager: VoiceAgentManager;
   private readonly onPublicStateUpdated: ((run: ExecutionRunPublicState) => void) | null;
 
+  private deriveRuntimeActivityContribution() {
+    return deriveExecutionRunRuntimeActivityContribution(
+      this.runs,
+      this.controllers,
+      (voiceAgentId) => this.voiceAgentManager.isTurnInFlight(voiceAgentId),
+    );
+  }
+
   private emitPublicStateUpdated(runId: string): void {
+    // Work and public-state observers consume the same controller transition. A projection failure
+    // must remain observable without blocking completion, cancellation, or a subsequent turn.
+    void this.runtimeActivityContributionHandle?.report(
+      this.deriveRuntimeActivityContribution(),
+      'execution-run-state-updated',
+    ).catch((error: unknown) => {
+      logger.infoFile('[EXECUTION RUN] Failed to publish work runtime activity', {
+        runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const callback = this.onPublicStateUpdated;
     if (!callback) return;
     const run = (() => {
@@ -185,7 +205,7 @@ export class ExecutionRunManager {
     return enqueueExecutionRunMarkerWrite({ markerWriteChains: this.markerWriteChains, runId, write });
   }
 
-  private async writeActivityMarker(runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>): Promise<void> {
+  private async writeActivityMarker(runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>): Promise<void> {
     await writeExecutionRunActivityMarker({
       runId,
       nowMs,
@@ -201,7 +221,7 @@ export class ExecutionRunManager {
     if (!normalizedRunId) return;
     if (this.runtimeActivityContributionHandle) {
       await this.runtimeActivityContributionHandle.report(
-        deriveExecutionRunRuntimeActivityContribution(this.runs),
+        this.deriveRuntimeActivityContribution(),
         'execution-run-admitted',
       );
       return;
@@ -217,7 +237,7 @@ export class ExecutionRunManager {
     if (!normalizedRunId) return Promise.resolve();
     if (this.runtimeActivityContributionHandle) {
       return this.runtimeActivityContributionHandle.report(
-        deriveExecutionRunRuntimeActivityContribution(this.runs),
+        this.deriveRuntimeActivityContribution(),
         reason,
       );
     }
@@ -227,7 +247,7 @@ export class ExecutionRunManager {
   private async rollbackRunRuntimeActivityAfterFailedAdmission(reason: string): Promise<void> {
     if (!this.runtimeActivityContributionHandle) return;
     await this.runtimeActivityContributionHandle.report(
-      deriveExecutionRunRuntimeActivityContribution(this.runs),
+      this.deriveRuntimeActivityContribution(),
       reason,
     );
   }
@@ -353,6 +373,14 @@ export class ExecutionRunManager {
       }>) => await resolveCliVoicePromptStackBlocks({ settings, profileId }));
 
     this.voiceAgentManager = new VoiceAgentManager({
+      onActivityChanged: (voiceAgentId) => {
+        for (const [runId, controller] of this.controllers) {
+          if (controller.kind === 'voice_agent' && controller.voiceAgentId === voiceAgentId) {
+            this.emitPublicStateUpdated(runId);
+            break;
+          }
+        }
+      },
       createBackend: ({ agentId, modelId, permissionPolicy, start, connectedServicesEnv }) => {
         try {
           return this.createBackend({ backendId: agentId, backendTarget: { kind: 'builtInAgent', agentId }, modelId, permissionMode: permissionPolicy, ...(start ? { start } : {}), ...(connectedServicesEnv ? { connectedServicesEnv } : {}) });
@@ -447,6 +475,7 @@ export class ExecutionRunManager {
     const ctrl = this.controllers.get(runId) ?? null;
     const availableActionIds = getExecutionRunAvailableActionIds(run, ctrl);
     const requestedConfiguration = requestedConfigurationForRun(run);
+    const turnInFlight = readExecutionRunTurnInFlight(ctrl ?? undefined, (id) => this.voiceAgentManager.isTurnInFlight(id));
     return ExecutionRunPublicStateSchema.parse({
       runId: run.runId,
       callId: run.callId,
@@ -461,7 +490,7 @@ export class ExecutionRunManager {
       runClass: run.runClass,
       ioMode: run.ioMode,
       status: run.status,
-      ...(ctrl?.kind === 'backend' ? { turnInFlight: ctrl.turnInFlight } : {}),
+      ...(turnInFlight !== undefined ? { turnInFlight } : {}),
       ...(availableActionIds.length > 0 ? { availableActionIds } : {}),
       ...(run.voiceAgentConfig?.transcript ? { transcript: run.voiceAgentConfig.transcript } : {}),
       startedAtMs: run.startedAtMs,
@@ -474,32 +503,8 @@ export class ExecutionRunManager {
   listPublic(): readonly ExecutionRunPublicState[] {
     const out: ExecutionRunPublicState[] = [];
     for (const run of this.runs.values()) {
-      const ctrl = this.controllers.get(run.runId) ?? null;
-      const availableActionIds = getExecutionRunAvailableActionIds(run, ctrl);
-      const requestedConfiguration = requestedConfigurationForRun(run);
-      const parsed = ExecutionRunPublicStateSchema.parse({
-        runId: run.runId,
-        callId: run.callId,
-        sidechainId: run.sidechainId,
-        intent: run.intent,
-        backendTarget: run.backendTarget,
-        ...(run.display ? { display: run.display } : {}),
-        ...(run.launch?.launchOrigin ? { launchOrigin: run.launch.launchOrigin } : {}),
-        ...(requestedConfiguration ? { requestedConfiguration } : {}),
-        permissionMode: run.permissionMode,
-        retentionPolicy: run.retentionPolicy,
-        runClass: run.runClass,
-        ioMode: run.ioMode,
-        status: run.status,
-        ...(ctrl?.kind === 'backend' ? { turnInFlight: ctrl.turnInFlight } : {}),
-        ...(availableActionIds.length > 0 ? { availableActionIds } : {}),
-        ...(run.voiceAgentConfig?.transcript ? { transcript: run.voiceAgentConfig.transcript } : {}),
-        startedAtMs: run.startedAtMs,
-        ...(run.resumeHandle ? { resumeHandle: run.resumeHandle } : {}),
-        ...(typeof run.finishedAtMs === 'number' ? { finishedAtMs: run.finishedAtMs } : {}),
-        ...(run.error ? { error: run.error } : {}),
-      });
-      out.push(parsed);
+      const state = this.getPublic(run.runId);
+      if (state) out.push(state);
     }
     return out;
   }
@@ -650,7 +655,7 @@ export class ExecutionRunManager {
    * fail-closed) and construct the backend with the run's runId isolation, model, and config
    * overrides. This is the single owner that keeps resume symmetric with start.
    */
-  private buildResumeBackendFactory(run: ExecutionRunState): () => Promise<AgentBackend> {
+  private buildResumeBackendFactory(run: ExecutionRunState): () => Promise<ResumedExecutionRunBackend> {
     return async () => {
       const resumeOptions = await resolveExecutionRunResumeBackendOptions({
         run,
@@ -658,7 +663,7 @@ export class ExecutionRunManager {
         ...(this.prepareConnectedServices ? { prepareConnectedServices: this.prepareConnectedServices } : {}),
       });
       try {
-        return this.createBackend({
+        const backend = this.createBackend({
           runId: run.runId,
           backendId: run.backendId,
           backendTarget: run.backendTarget,
@@ -674,6 +679,9 @@ export class ExecutionRunManager {
             ? { connectedServicesCleanup: resumeOptions.connectedServicesCleanup }
             : {}),
         });
+        return { backend, ...(resumeOptions.connectedServicesRegistration
+          ? { connectedServicesRegistration: resumeOptions.connectedServicesRegistration }
+          : {}) };
       } catch (error) {
         // Re-materialization and backend construction form one acquisition boundary. Cleanup is a
         // shared idempotent promise, so this awaits an already-started factory cleanup when present.
