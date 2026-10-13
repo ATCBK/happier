@@ -7,7 +7,7 @@ import {
 } from '../plugins/contributionIdentity.js';
 import { StoredJsonContentEnvelopeSchema } from '../storage/storedJsonContentEnvelope.js';
 import { SealedProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
-import { SealedProviderAccountUsageRecoveryCreditDetailsV1Schema } from './accountUsage.js';
+import { SealedProviderAccountUsageRecoveryCreditDetailsV1Schema } from './providerAccountUsagePrimitives.js';
 import {
   ConnectedServiceAuthGroupIdSchema,
   ConnectedServiceAuthGroupMemberStateV1Schema,

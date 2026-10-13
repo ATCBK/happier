@@ -23,6 +23,8 @@ export {
 
 const encoder = new TextEncoder();
 
+export const SealedProviderAccountUsageRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({ ciphertext: z.string().min(1) }).strict());
+
 export const ProviderAccountUsageRecordIdSchema = lazyZodSchema(() => z.string().regex(/^paug_v1_[A-Za-z0-9_-]{8,}$/));
 export type ProviderAccountUsageRecordId = z.infer<typeof ProviderAccountUsageRecordIdSchema>;
 

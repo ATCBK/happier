@@ -31,6 +31,7 @@ import {
     ProviderAccountUsageRecordKeyV1Schema,
     ProviderAccountUsageSnapshotV1Schema,
     ProviderAccountUsageSourceV1Schema,
+    SealedProviderAccountUsageRecoveryCreditDetailsV1Schema,
     buildProviderAccountUsageRecordId,
     type ProviderAccountUsageConfidenceV1,
     type ProviderAccountUsageSnapshotV1,
@@ -42,8 +43,6 @@ import {
 } from './accountSubscription.js';
 
 export * from './providerAccountUsagePrimitives.js';
-
-export const SealedProviderAccountUsageRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({ ciphertext: z.string().min(1) }).strict());
 
 export const SealedProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,
