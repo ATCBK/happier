@@ -13,6 +13,7 @@ import type { ImmutablePluginGenerationRecord } from '@/plugins/store/registry/g
 import {
     MAX_PLUGIN_RESOURCE_BYTES,
     createStablePluginResourcesOwner,
+    createStableRetainedPluginResourcesOwner,
 } from './resources';
 
 const roots: string[] = [];
@@ -62,6 +63,24 @@ function registry(resources: readonly ResolvedResourceContribution[]): Pick<Reso
 }
 
 describe('stable plugin resources owner', () => {
+    it('admits retained packaged Resources with dot-prefixed declaration paths', async () => {
+        const resource = await fixture('acme.retained-paths', 'prompt');
+        const owner = await createStableRetainedPluginResourcesOwner({
+            sourceIdentity: 'retained-paths',
+            pluginId: resource.contribution.pluginId!,
+            rootPath: resource.rootPath,
+            declarations: [
+                { id: 'prefixed', kind: 'prompt', contentType: 'text/plain', path: `./${resource.relativePath}` },
+            ],
+        });
+        const service = owner.bind({
+            pluginId: resource.contribution.pluginId!,
+            signal: new AbortController().signal,
+            isOccurrenceCurrent: () => true,
+        });
+        expect(Buffer.from((await service.read('prefixed')).bytes)).toEqual(resource.bytes);
+    });
+
     it('normalizes the initial archive candidate resource set when that fixture declares no resources', async () => {
         const builtIns = resolveBuiltInContributions();
         // The public-handoff archive fixture contributes an Agent but no
