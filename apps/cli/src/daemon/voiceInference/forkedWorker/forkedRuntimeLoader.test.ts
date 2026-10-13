@@ -1,5 +1,13 @@
 import type { ModelPackManifest } from '@happier-dev/protocol';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { getFirstPartyComponentCatalogEntry, resolveFirstPartyVersionInstallPath } from '@happier-dev/cli-common/firstPartyRuntime';
+import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installables';
+import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 
 import { createForkedVoiceInferenceRuntimeHandle } from './forkedRuntimeLoader';
 import type { VoiceInferenceWorkerChannel } from './forkedRuntimeClient';
@@ -8,6 +16,13 @@ import { createVoiceInferenceWorkerRunner } from './workerRunner';
 import type { VoiceInferenceRuntime } from '../voiceInferenceRuntimeTypes';
 import type { TerminationEvent } from '@/subprocess/supervision/types';
 
+// Intercept only the immutable native ESM access leaf; actual component
+// selection, installation-path resolution and the filesystem stay real.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const native = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...native, access: vi.fn(native.access) };
+});
+
 const manifest: ModelPackManifest = {
   packId: 'pack-1',
   kind: 'tts_sherpa',
@@ -15,6 +30,39 @@ const manifest: ModelPackManifest = {
   version: '2026-04-17',
   files: [],
 };
+
+const homes: string[] = [];
+const handles: ReturnType<typeof createForkedVoiceInferenceRuntimeHandle>[] = [];
+let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE']);
+let optionalRuntimeEntrypoint: string;
+
+beforeEach(async () => {
+  const { access } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(fsPromises.access).mockImplementation(access);
+  const home = await fsPromises.mkdtemp(join(tmpdir(), 'happier-forked-loader-'));
+  homes.push(home);
+  envScope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE: undefined });
+  reloadConfiguration();
+  const source = BUILT_IN_INSTALLABLES_REGISTRY.descriptorsByKey[INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME]?.descriptor.source;
+  if (source?.kind !== 'first_party_runtime') throw new Error('fixture requires the actual first-party Voice component');
+  const entry = getFirstPartyComponentCatalogEntry(source.componentId).nodeEntrypointRelativePath;
+  if (!entry) throw new Error('fixture requires the actual declared Node entrypoint');
+  optionalRuntimeEntrypoint = join(resolveFirstPartyVersionInstallPath({
+    componentId: source.componentId, versionId: configuration.currentCliVersion,
+    channel: configuration.publicReleaseRing, processEnv: { ...process.env, HAPPIER_HOME_DIR: home },
+  }), entry);
+  await fsPromises.mkdir(dirname(optionalRuntimeEntrypoint), { recursive: true });
+  await fsPromises.writeFile(optionalRuntimeEntrypoint, 'export {};\n', 'utf8');
+});
+
+afterEach(async () => {
+  await Promise.all(handles.splice(0).map((handle) => handle.dispose()));
+  vi.restoreAllMocks();
+  envScope.restore();
+  envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE']);
+  reloadConfiguration();
+  await Promise.all(homes.splice(0).map((home) => fsPromises.rm(home, { recursive: true, force: true })));
+});
 
 /**
  * Wire a real in-memory runner (the actual child-side dispatch loop, NOT a mock) to a
@@ -53,17 +101,22 @@ function createInMemoryWorkerChannel(runtime: VoiceInferenceRuntime): VoiceInfer
 describe('forked voice inference runtime loader', () => {
   it('prepares the managed runtime once before exposing or spawning the forked engine', async () => {
     const observations: string[] = [];
+    const { access: nativeAccess } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fsPromises.access).mockImplementation(async (...args) => {
+      if (String(args[0]) === optionalRuntimeEntrypoint) observations.push('prepared');
+      await nativeAccess(...args);
+    });
     const runtime: VoiceInferenceRuntime = {
       synthesizeTts: async () => ({ bytes: Buffer.from('x'), output: { codec: 'wav', mimeType: 'audio/wav' }, name: 'x.wav' }),
       transcribeAudio: async () => ({ text: '', language: null }),
     };
     const handle = createForkedVoiceInferenceRuntimeHandle({
-      prepareRuntime: async () => { observations.push('prepared'); },
       channelFactory: async () => {
         observations.push('spawned');
         return createInMemoryWorkerChannel(runtime);
       },
     });
+    handles.push(handle);
 
     const first = await handle.runtimeLoader();
     const second = await handle.runtimeLoader();
@@ -105,13 +158,13 @@ describe('forked voice inference runtime loader', () => {
       },
     };
     const handle = createForkedVoiceInferenceRuntimeHandle({
-      prepareRuntime: async () => {},
       channelFactory: async () => channel,
       onWorkerProcess: () => {
         markObserverEntered();
         throw new Error('observer failed');
       },
     });
+    handles.push(handle);
 
     const engine = await handle.runtimeLoader();
     if (!engine) throw new Error('expected runtime');
@@ -145,10 +198,10 @@ describe('forked voice inference runtime loader', () => {
       transcribeAudio: async () => ({ text: '', language: null }),
     };
     const handle = createForkedVoiceInferenceRuntimeHandle({
-      prepareRuntime: async () => {},
       channelFactory: async () => createInMemoryWorkerChannel(runtime),
       onWorkerProcess: (observation) => observations.push(observation),
     });
+    handles.push(handle);
 
     const engine = await handle.runtimeLoader();
     await engine?.synthesizeTts({
@@ -173,10 +226,10 @@ describe('forked voice inference runtime loader', () => {
     };
 
     const handle = createForkedVoiceInferenceRuntimeHandle({
-      prepareRuntime: async () => {},
       channelFactory: async () => createInMemoryWorkerChannel(runtime),
       onSnapshot: (snapshot) => snapshots.push(`${snapshot.packId}:${snapshot.runtimeState}`),
     });
+    handles.push(handle);
 
     const engine = await handle.runtimeLoader();
     expect(engine).not.toBeNull();
@@ -206,9 +259,9 @@ describe('forked voice inference runtime loader', () => {
       transcribeAudio: async () => ({ text: '', language: null }),
     };
     const handle = createForkedVoiceInferenceRuntimeHandle({
-      prepareRuntime: async () => {},
       channelFactory: async () => createInMemoryWorkerChannel(runtime),
     });
+    handles.push(handle);
     const a = await handle.runtimeLoader();
     const b = await handle.runtimeLoader();
     expect(a).toBe(b);

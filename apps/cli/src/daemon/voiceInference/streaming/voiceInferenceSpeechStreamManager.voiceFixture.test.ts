@@ -1,14 +1,46 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT } from '@happier-dev/protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT, DaemonVoiceInferenceSttStreamFinishResponseSchema, ModelPackManifestSchema } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
+import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../voiceInferenceWorker';
+import type { VoiceInferenceRuntime, VoiceInferenceStreamingTranscriptionSession } from '../voiceInferenceRuntimeTypes';
 
-import type { VoiceInferenceWorkerStreamingTranscriptionSession } from '../voiceInferenceWorker.execution';
 import { createVoiceInferenceSpeechStreamManager } from './voiceInferenceSpeechStreamManager';
 
+const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
 const tempDirs: string[] = [];
+const managers: ReturnType<typeof createVoiceInferenceSpeechStreamManager>[] = [];
+let worker: VoiceInferenceWorkerHandle;
+let nativeRuntime: VoiceInferenceRuntime;
+let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+
+beforeEach(async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-voice-fixture-home-'));
+  tempDirs.push(home);
+  process.env.HAPPIER_HOME_DIR = home;
+  reloadConfiguration();
+  const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
+  const bytes = Buffer.from('native recognition model boundary fixture');
+  await mkdir(packDir, { recursive: true });
+  const manifest = ModelPackManifestSchema.parse({
+    packId, kind: 'stt_sherpa', model: 'zipformer', version: 'fixture-v1',
+    files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx',
+      sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.byteLength }],
+  });
+  await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest));
+  await writeFile(join(packDir, 'model.onnx'), bytes);
+  nativeRuntime = {
+    synthesizeTts: async () => { throw new Error('unused native synthesis'); },
+    transcribeAudio: async () => { throw new Error('batch_path_must_not_run'); },
+  };
+  worker = await startVoiceInferenceWorker({ runtimeLoader: async () => nativeRuntime });
+});
 
 type LoadedVoiceFixture = Readonly<{
   metadata: Readonly<{
@@ -52,6 +84,12 @@ async function loadVoiceFixtureTestkit(): Promise<VoiceFixtureTestkit> {
 }
 
 afterEach(async () => {
+  await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+  await worker.stop();
+  vi.restoreAllMocks();
+  envScope.restore();
+  envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+  reloadConfiguration();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -77,27 +115,25 @@ function deferred<T>() {
 
 describe('voice inference stream canonical fixture consumer', () => {
   it('rejects and cleans a runtime session created after manager disposal starts', async () => {
-    const runtimeSession = deferred<VoiceInferenceWorkerStreamingTranscriptionSession>();
+    const runtimeSession = deferred<VoiceInferenceStreamingTranscriptionSession>();
     const resourceState: string[] = [];
+    const createStreamingTranscriptionSession = vi.fn(async () => await runtimeSession.promise);
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession };
     const manager = createVoiceInferenceSpeechStreamManager({
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => await runtimeSession.promise),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const starting = manager.start({
       requestId: 'fixture-dispose-during-start',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: null,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(createStreamingTranscriptionSession).toHaveBeenCalledOnce());
     const disposing = manager.dispose();
     runtimeSession.resolve({
-      modelPackId: 'fixture-streaming-model',
       appendPcm16: async () => ({ events: [] }),
       finish: async () => ({ text: '', language: null, events: [] }),
       cancel: async () => { resourceState.push('cancelled'); },
@@ -123,11 +159,10 @@ describe('voice inference stream canonical fixture consumer', () => {
         seq: finalSeq,
         text: fixture.metadata.sourceText ?? '',
         language: fixture.metadata.language,
-        modelPackId: 'fixture-streaming-model',
+        modelPackId: packId,
       }],
     }));
     const createStreamingTranscriptionSession = vi.fn(async () => ({
-      modelPackId: 'fixture-streaming-model',
       appendPcm16: async ({ seq, pcm16Bytes }: Readonly<{ seq: number; pcm16Bytes: Uint8Array }>) => {
         observedSequences.push(seq);
         observedChunks.push(new Uint8Array(pcm16Bytes));
@@ -145,18 +180,16 @@ describe('voice inference stream canonical fixture consumer', () => {
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     }));
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession,
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'fixture-stream-order',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -179,6 +212,7 @@ describe('voice inference stream canonical fixture consumer', () => {
       generation: started.generation,
       finalSeq: chunks.length - 1,
     });
+    DaemonVoiceInferenceSttStreamFinishResponseSchema.parse(completed);
 
     expect(observedSequences).toEqual(chunks.map((_chunk, seq) => seq));
     expect(eventSequences).toEqual(observedSequences);
@@ -188,7 +222,7 @@ describe('voice inference stream canonical fixture consumer', () => {
     expect(completed).toMatchObject({
       ok: true,
       ackSeq: chunks.length - 1,
-      modelPackId: 'fixture-streaming-model',
+      modelPackId: packId,
     });
     if (!completed.ok) throw new Error(`stream finish failed: ${completed.errorCode}`);
     expect(matchesVoiceFixtureTranscript(fixture.metadata, completed.finalText)).toBe(true);
@@ -197,10 +231,10 @@ describe('voice inference stream canonical fixture consumer', () => {
       seq: chunks.length - 1,
       text: fixture.metadata.sourceText,
       language: fixture.metadata.language,
-      modelPackId: 'fixture-streaming-model',
+      modelPackId: packId,
     }]);
     expect(createStreamingTranscriptionSession).toHaveBeenCalledWith(expect.objectContaining({
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
     }));
@@ -213,23 +247,18 @@ describe('voice inference stream canonical fixture consumer', () => {
     const pendingAppend = deferred<Readonly<{ events: readonly [] }>>();
     const finish = vi.fn(async () => ({ text: 'late final', language: 'en-US', events: [] }));
     const cancel = vi.fn(async () => {});
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => ({
+      appendPcm16: vi.fn(async () => await pendingAppend.promise),
+      finish, cancel, close: vi.fn(async () => {}),
+    })) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => ({
-          modelPackId: 'fixture-streaming-model',
-          appendPcm16: vi.fn(async () => await pendingAppend.promise),
-          finish,
-          cancel,
-          close: vi.fn(async () => {}),
-        })),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'fixture-stream-cancel',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -248,7 +277,7 @@ describe('voice inference stream canonical fixture consumer', () => {
     });
     pendingAppend.resolve({ events: [] });
 
-    await expect(append).resolves.toMatchObject({ ok: false, errorCode: 'invalid_stream_state' });
+    await expect(append).resolves.toMatchObject({ ok: false, errorCode: 'cancelled' });
     await expect(cancellation).resolves.toMatchObject({ ok: true });
     await expect(manager.finish({
       streamId: started.streamId,
@@ -264,33 +293,27 @@ describe('voice inference stream canonical fixture consumer', () => {
     const fixture = await readVoiceFixturePcm16('long-utterance-16k');
     const runtimeCancel = vi.fn(async () => {});
     const runtimeClose = vi.fn(async () => {});
-    const cancelStt = vi.fn(async () => {});
+    const cancelStt = vi.spyOn(worker, 'cancelStt');
     const appendStarted = deferred<void>();
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => ({
+      appendPcm16: vi.fn<VoiceInferenceStreamingTranscriptionSession['appendPcm16']>(async ({ signal }) => {
+        appendStarted.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'cancelled' })), { once: true });
+        });
+        return { events: [] };
+      }),
+      finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
+      cancel: runtimeCancel, close: runtimeClose,
+    })) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt,
-        createStreamingTranscriptionSession: vi.fn(async () => ({
-          modelPackId: 'fixture-streaming-model',
-          appendPcm16: vi.fn(async ({ signal }) => {
-            appendStarted.resolve();
-            await new Promise<void>((_resolve, reject) => {
-              signal?.addEventListener('abort', () => {
-                reject(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
-              }, { once: true });
-            });
-            return { events: [] };
-          }),
-          finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
-          cancel: runtimeCancel,
-          close: runtimeClose,
-        })),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'fixture-stream-abort-rejection',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -321,37 +344,31 @@ describe('voice inference stream canonical fixture consumer', () => {
     const fixture = await readVoiceFixturePcm16('long-utterance-16k');
     const runtimeCancel = vi.fn(async () => {});
     const runtimeClose = vi.fn(async () => {});
-    const cancelStt = vi.fn(async () => {});
+    const cancelStt = vi.spyOn(worker, 'cancelStt');
     const appendStarted = deferred<void>();
     let workerSessionSignal: AbortSignal | null = null;
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn<NonNullable<VoiceInferenceRuntime['createStreamingTranscriptionSession']>>(async ({ signal }) => {
+      workerSessionSignal = signal ?? null;
+      return {
+        appendPcm16: vi.fn(async () => {
+          appendStarted.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            workerSessionSignal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'cancelled' })), { once: true });
+          });
+          return { events: [] };
+        }),
+        finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
+        cancel: runtimeCancel, close: runtimeClose,
+      };
+    }) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt,
-        createStreamingTranscriptionSession: vi.fn(async ({ signal }) => {
-          workerSessionSignal = signal ?? null;
-          return {
-            modelPackId: 'fixture-streaming-model',
-            appendPcm16: vi.fn(async () => {
-              appendStarted.resolve();
-              await new Promise<void>((_resolve, reject) => {
-                workerSessionSignal?.addEventListener('abort', () => {
-                  reject(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
-                }, { once: true });
-              });
-              return { events: [] };
-            }),
-            finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
-            cancel: runtimeCancel,
-            close: runtimeClose,
-          };
-        }),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'fixture-stream-worker-session-signal',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -386,26 +403,22 @@ describe('voice inference stream canonical fixture consumer', () => {
     const finishStarted = deferred<void>();
     const runtimeCancel = vi.fn(async () => {});
     const runtimeClose = vi.fn(async () => {});
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => ({
+      appendPcm16: vi.fn(async () => ({ events: [] })),
+      finish: vi.fn(async () => {
+        finishStarted.resolve();
+        return await lateFinish.promise;
+      }),
+      cancel: runtimeCancel, close: runtimeClose,
+    })) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('batch_path_must_not_run'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => ({
-          modelPackId: 'fixture-streaming-model',
-          appendPcm16: vi.fn(async () => ({ events: [] })),
-          finish: vi.fn(async () => {
-            finishStarted.resolve();
-            return await lateFinish.promise;
-          }),
-          cancel: runtimeCancel,
-          close: runtimeClose,
-        })),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'fixture-stream-late-finish',
-      packId: 'fixture-streaming-model',
+      packId: packId,
       language: fixture.metadata.language,
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -430,7 +443,7 @@ describe('voice inference stream canonical fixture consumer', () => {
     })).resolves.toMatchObject({ ok: true });
     lateFinish.resolve({ text: 'late success', language: 'en-US', events: [] });
 
-    await expect(finish).resolves.toMatchObject({ ok: false, errorCode: 'invalid_stream_state' });
+    await expect(finish).resolves.toMatchObject({ ok: false, errorCode: 'cancelled' });
     expect(runtimeCancel).toHaveBeenCalledOnce();
     expect(runtimeClose).toHaveBeenCalledOnce();
   });

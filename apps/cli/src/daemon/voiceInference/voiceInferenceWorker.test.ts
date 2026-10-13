@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 import {
     getModelPackCatalogEntry,
@@ -51,6 +51,7 @@ describe('voiceInferenceWorker', () => {
     let envScope = createEnvKeyScope(envKeys);
     const tempDirs: string[] = [];
     const servers: Server[] = [];
+    const originalExecPath = Object.getOwnPropertyDescriptor(process, 'execPath')!;
 
     async function createHomeDir(): Promise<string> {
         const homeDir = await mkdtemp(join(tmpdir(), 'happier-voice-inference-worker-'));
@@ -128,8 +129,8 @@ describe('voiceInferenceWorker', () => {
         vi.useRealTimers();
         envScope.restore();
         envScope = createEnvKeyScope(envKeys);
+        Object.defineProperty(process, 'execPath', originalExecPath);
         vi.resetModules();
-        vi.doUnmock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath');
         while (servers.length > 0) {
             const server = servers.pop();
             if (!server) {
@@ -2450,17 +2451,35 @@ describe('voiceInferenceWorker', () => {
             ].join('\n'),
             'utf8',
         );
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
-        vi.doMock('@/packagedRuntime/installables/optionalRuntimes', () => ({
-            ensureOptionalRuntime: async () => join(runtimeRoot, 'node_modules', 'sherpa-onnx-node', 'sherpa-onnx.js'),
-        }));
+        // Set the physical executable boundary; the real asset and installable
+        // owners discover the temporary facade and the preinstalled native entry.
+        const { resolveCliRuntimeAssetPath } = await import('@/packagedRuntime/assets/resolveCliRuntimeAssetPath');
+        const processTreeOwner = resolveCliRuntimeAssetPath('scripts', 'process_tree.cjs');
+        await mkdir(join(runtimeRoot, 'scripts'), { recursive: true });
+        await copyFile(processTreeOwner, join(runtimeRoot, 'scripts', 'process_tree.cjs'));
+        Object.defineProperty(process, 'execPath', { ...originalExecPath, value: join(runtimeRoot, 'happier-fixture') });
+        process.env.HAPPIER_HOME_DIR = homeDir;
+        const { configuration, reloadConfiguration } = await import('@/configuration');
+        reloadConfiguration();
+        const { getFirstPartyComponentCatalogEntry, resolveFirstPartyVersionInstallPath } = await import('@happier-dev/cli-common/firstPartyRuntime');
+        const { BUILT_IN_INSTALLABLES_REGISTRY } = await import('@happier-dev/protocol/installables');
+        const { INSTALLABLE_KEYS } = await import('@happier-dev/protocol/installables/codexAcp');
+        const source = BUILT_IN_INSTALLABLES_REGISTRY.descriptorsByKey[INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME]?.descriptor.source;
+        if (source?.kind !== 'first_party_runtime') throw new Error('Voice worker fixture requires its canonical runtime component');
+        const entry = getFirstPartyComponentCatalogEntry(source.componentId).nodeEntrypointRelativePath;
+        if (!entry) throw new Error('Voice worker fixture requires its declared Node entrypoint');
+        const runtimeEntrypoint = join(resolveFirstPartyVersionInstallPath({
+            componentId: source.componentId,
+            versionId: configuration.currentCliVersion,
+            channel: configuration.publicReleaseRing,
+            processEnv: { ...process.env, HAPPIER_HOME_DIR: homeDir },
+        }), entry);
+        await mkdir(dirname(runtimeEntrypoint), { recursive: true });
+        await writeFile(runtimeEntrypoint, 'export {};\n', 'utf8');
 
         const { startVoiceInferenceWorker } = await importWorkerModuleForHome(homeDir);
-        // This case proves the IN-PROCESS runtime-facade module seam: the facade is written to
-        // disk and reached through a `vi.doMock`ed asset resolver, which a forked child could
-        // never observe. In-process is an explicit escape now that `forked` is the default.
+        // This case proves the in-process runtime facade. The child-process
+        // lifecycle has its own keeper; this test exercises actual file loading.
         const worker = await startVoiceInferenceWorker({ isolationMode: 'in_process' });
 
         await worker.installModel({ packId });

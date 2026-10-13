@@ -1,11 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getFirstPartyComponentCatalogEntry, resolveFirstPartyVersionInstallPath } from '@happier-dev/cli-common/firstPartyRuntime';
+import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installables';
+import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
 
 import type { VoiceInferenceRuntimeTranscribeInput } from './voiceInferenceRuntimeTypes';
 
@@ -31,18 +35,23 @@ function createMonoPcm16WavBuffer(sampleCount = 4, sampleRate = 16_000): Buffer 
     return buffer;
 }
 
-const optionalRuntimeBoundary = vi.hoisted(() => ({
-    ensureOptionalRuntime: vi.fn(async () => '/managed/voice-runtime/node_modules/sherpa-onnx-node/sherpa-onnx.js'),
-}));
-
-vi.mock('@/packagedRuntime/installables/optionalRuntimes', () => ({
-    ensureOptionalRuntime: optionalRuntimeBoundary.ensureOptionalRuntime,
-}));
-
 describe('loadDefaultVoiceInferenceRuntime', () => {
-    const envKeys = ['HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE'] as const;
+    const envKeys = ['HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE', 'HAPPIER_HOME_DIR'] as const;
     let envScope = createEnvKeyScope(envKeys);
     const tempDirs: string[] = [];
+    const originalExecPath = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+    let optionalRuntimeEntrypoint = '';
+
+    // The executable's physical location is the OS boundary. Asset and installable
+    // decisions remain with their real owners, using only files in the test home.
+    async function pointExecutableAt(runtimeRoot: string): Promise<void> {
+        // The native runtime loader also imports the shipped process supervisor.
+        // Preserve that real support owner beneath the temporary install root.
+        const processTreeOwner = resolveCliRuntimeAssetPath('scripts', 'process_tree.cjs');
+        await mkdir(join(runtimeRoot, 'scripts'), { recursive: true });
+        await copyFile(processTreeOwner, join(runtimeRoot, 'scripts', 'process_tree.cjs'));
+        Object.defineProperty(process, 'execPath', { ...originalExecPath, value: join(runtimeRoot, 'happier-fixture') });
+    }
 
     async function createTempDir(): Promise<string> {
         const dir = await mkdtemp(join(tmpdir(), 'happier-load-default-voice-runtime-'));
@@ -73,8 +82,29 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
 
     async function importLoaderModule() {
         vi.resetModules();
+        const { reloadConfiguration } = await import('@/configuration');
+        reloadConfiguration();
         return await import('./loadDefaultVoiceInferenceRuntime');
     }
+
+    beforeEach(async () => {
+        const happyHomeDir = await createTempDir();
+        envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir, HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE: undefined });
+        const { configuration, reloadConfiguration } = await import('@/configuration');
+        reloadConfiguration();
+        const source = BUILT_IN_INSTALLABLES_REGISTRY.descriptorsByKey[INSTALLABLE_KEYS.LOCAL_VOICE_RUNTIME]?.descriptor.source;
+        if (source?.kind !== 'first_party_runtime') throw new Error('Voice runtime fixture requires the canonical first-party component');
+        const entry = getFirstPartyComponentCatalogEntry(source.componentId).nodeEntrypointRelativePath;
+        if (!entry) throw new Error('Voice runtime fixture requires its declared Node entrypoint');
+        optionalRuntimeEntrypoint = join(resolveFirstPartyVersionInstallPath({
+            componentId: source.componentId,
+            versionId: configuration.currentCliVersion,
+            channel: configuration.publicReleaseRing,
+            processEnv: { ...process.env, HAPPIER_HOME_DIR: happyHomeDir },
+        }), entry);
+        await mkdir(dirname(optionalRuntimeEntrypoint), { recursive: true });
+        await writeFile(optionalRuntimeEntrypoint, 'export {};\n', 'utf8');
+    });
 
     async function createInputFixture(rootDir: string): Promise<VoiceInferenceRuntimeTranscribeInput> {
         const filePath = join(rootDir, 'input.wav');
@@ -104,10 +134,11 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
     afterEach(async () => {
         envScope.restore();
         envScope = createEnvKeyScope(envKeys);
-        optionalRuntimeBoundary.ensureOptionalRuntime.mockClear();
+        Object.defineProperty(process, 'execPath', originalExecPath);
         delete (globalThis as { __voiceInferenceSherpaSpecifier?: string }).__voiceInferenceSherpaSpecifier;
         vi.resetModules();
-        vi.doUnmock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath');
+        const { reloadConfiguration } = await import('@/configuration');
+        reloadConfiguration();
         await Promise.all(tempDirs.splice(0).map(async (dir) => await rm(dir, { recursive: true, force: true }).catch(() => undefined)));
     });
 
@@ -120,9 +151,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
         await createRuntimeModule({ filePath: packagedModulePath, transcribeText: 'packaged-runtime' });
         await createRuntimeModule({ filePath: overrideModulePath, transcribeText: 'env-override-runtime' });
         process.env.HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE = pathToFileURL(overrideModulePath).href;
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -132,7 +161,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             text: 'env-override-runtime',
             language: 'en',
         });
-        expect(optionalRuntimeBoundary.ensureOptionalRuntime).not.toHaveBeenCalled();
+        expect((globalThis as { __voiceInferenceSherpaSpecifier?: string }).__voiceInferenceSherpaSpecifier).toBeUndefined();
     });
 
     it('falls back to the env override module when the packaged runtime asset is absent', async () => {
@@ -142,9 +171,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
 
         await createRuntimeModule({ filePath: overrideModulePath, transcribeText: 'env-override-runtime' });
         process.env.HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE = pathToFileURL(overrideModulePath).href;
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -164,9 +191,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
         process.env.HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE = pathToFileURL(
             join(runtimeRoot, 'missing', 'voiceInferenceOverride.mjs'),
         ).href;
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -200,9 +225,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             ].join('\n'),
             'utf8',
         );
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -252,9 +275,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             ].join('\n'),
             'utf8',
         );
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -337,9 +358,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             'utf8',
         );
         process.env.HAPPIER_VOICE_INFERENCE_RUNTIME_MODULE = pathToFileURL(overrideModulePath).href;
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
@@ -364,9 +383,7 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             ].join('\n'),
             'utf8',
         );
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
 
@@ -382,18 +399,15 @@ describe('loadDefaultVoiceInferenceRuntime', () => {
             filePath: packagedModulePath,
             transcribeText: 'packaged-runtime',
         });
-        vi.doMock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
-            resolveCliRuntimeAssetPath: (...segments: string[]) => join(runtimeRoot, ...segments),
-        }));
+        await pointExecutableAt(runtimeRoot);
 
         const { loadDefaultVoiceInferenceRuntime } = await importLoaderModule();
         const runtime = await loadDefaultVoiceInferenceRuntime();
         const input = await createInputFixture(runtimeRoot);
 
         await expect(runtime?.transcribeAudio(input)).resolves.toMatchObject({ text: 'packaged-runtime' });
-        expect(optionalRuntimeBoundary.ensureOptionalRuntime).toHaveBeenCalledWith('local-voice-runtime');
         expect((globalThis as { __voiceInferenceSherpaSpecifier?: string }).__voiceInferenceSherpaSpecifier).toBe(
-            pathToFileURL('/managed/voice-runtime/node_modules/sherpa-onnx-node/sherpa-onnx.js').href,
+            pathToFileURL(optionalRuntimeEntrypoint).href,
         );
     });
 

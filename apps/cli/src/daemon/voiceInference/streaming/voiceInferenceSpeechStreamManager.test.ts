@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,18 +15,23 @@ import {
   encodeBase64,
   encodePeerApplicationEncryptedFrameV1,
   sealEncryptedDataKeyEnvelopeV1,
-  type DaemonVoiceInferenceNormalizationDecision,
   type DaemonVoiceInferenceSttStreamEvent,
+  ModelPackManifestSchema,
+  VoiceSpeechDiagnosticsSettingsV1Schema,
+  DaemonVoiceInferenceSttStreamChunkResponseSchema,
+  DaemonVoiceInferenceSttStreamFinishResponseSchema,
 } from '@happier-dev/protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
+import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../voiceInferenceWorker';
+import type { VoiceInferenceRuntime, VoiceInferenceRuntimeTranscribeInput, VoiceInferenceStreamingTranscriptionSession as RuntimeStreamSession } from '../voiceInferenceRuntimeTypes';
 
 import { createVoiceInferenceSpeechStreamManager } from './voiceInferenceSpeechStreamManager';
-import type { VoiceInferenceWorkerStreamingTranscriptionSession } from '../voiceInferenceWorker.execution';
-import type { VoiceDiagnosticsController } from '../../voiceDiagnostics/controller';
+import { createVoiceDiagnosticsController } from '../../voiceDiagnostics/controller';
 import { createDiagnosticsControllerWithRemovalFailure } from '../../voiceDiagnostics/controller.testkit';
 import { openAes256GcmBytes, sealAes256GcmBytes } from '@happier-dev/transfers/node';
-
-type RuntimeStreamSession = VoiceInferenceWorkerStreamingTranscriptionSession;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -34,16 +40,43 @@ function deferred<T>() {
 }
 
 describe('createVoiceInferenceSpeechStreamManager', () => {
+  const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
+  const tempDirs: string[] = [];
+  const managers: ReturnType<typeof createVoiceInferenceSpeechStreamManager>[] = [];
+  let worker: VoiceInferenceWorkerHandle;
+  let nativeRuntime: VoiceInferenceRuntime;
+  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+
+  beforeEach(async () => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-stt-stream-home-'));
+    tempDirs.push(home);
+    process.env.HAPPIER_HOME_DIR = home;
+    reloadConfiguration();
+    const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
+    const bytes = Buffer.from('native recognition model boundary fixture');
+    await mkdir(packDir, { recursive: true });
+    const manifest = ModelPackManifestSchema.parse({
+      packId, kind: 'stt_sherpa', model: 'zipformer', version: 'fixture-v1',
+      files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx',
+        sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.byteLength }],
+    });
+    await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest));
+    await writeFile(join(packDir, 'model.onnx'), bytes);
+    nativeRuntime = {
+      synthesizeTts: async () => { throw new Error('unused native synthesis'); },
+      transcribeAudio: async () => { throw new Error('unused native recognition'); },
+    };
+    worker = await startVoiceInferenceWorker({ runtimeLoader: async () => nativeRuntime, perModelConcurrency: 2 });
+  });
+
   it('rejects Agent realtime and wrong-attempt carrier authority before creating an STT session', async () => {
     const createStreamingTranscriptionSession = vi.fn();
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession,
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const baseBinding = {
       v: 1 as const,
       suite: 'aes-256-gcm' as const,
@@ -59,7 +92,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     };
     await expect(manager.start({
       requestId: 'attempt-1',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -70,7 +103,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     })).resolves.toMatchObject({ ok: false, error: 'voice_inference_invalid_stream_state' });
     await expect(manager.start({
       requestId: 'attempt-2',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -84,7 +117,6 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
   it('admits only one live STT stream for a signed application attempt', async () => {
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16: vi.fn(async () => ({ events: [] })),
       finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
       cancel: vi.fn(async () => {}),
@@ -92,17 +124,15 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     };
     const pendingRuntimeStart = deferred<RuntimeStreamSession>();
     const createStreamingTranscriptionSession = vi.fn(() => pendingRuntimeStart.promise);
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession,
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const request = {
       requestId: 'attempt-with-duplicate-start',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime' as const,
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -129,18 +159,22 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     await manager.dispose();
   });
 
-  const tempDirs: string[] = [];
-
   afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+    await worker.stop();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    envScope.restore();
+    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    reloadConfiguration();
     await Promise.all(tempDirs.splice(0).map(async (dir) => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }));
   });
 
   async function createTempStreamRoot(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'happier-stt-stream-manager-'));
+    // The upload bridge's real worker accepts only its canonical private temp tree.
+    const dir = await mkdtemp(join(resolveVoiceInferencePaths().tempDir, 'happier-stt-stream-manager-'));
     tempDirs.push(dir);
     return dir;
   }
@@ -155,7 +189,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     });
     const finish = vi.fn<RuntimeStreamSession['finish']>(async (input) => {
       const events: DaemonVoiceInferenceSttStreamEvent[] = [
-        { type: 'final', seq: input.finalSeq, text: 'hello world', language: 'en', modelPackId: 'stt-pack-1' },
+        { type: 'final', seq: input.finalSeq, text: 'hello world', language: 'en', modelPackId: packId },
       ];
       return {
         text: 'hello world',
@@ -164,7 +198,6 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       };
     });
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16,
       finish,
       cancel: vi.fn(async () => {}),
@@ -173,18 +206,16 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     const transcribeAudio = vi.fn(async () => {
       throw new Error('runtime_stream_must_not_batch_transcribe');
     });
+    nativeRuntime = { ...nativeRuntime, transcribeAudio, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio,
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'runtime-request-1',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -219,8 +250,8 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       ackSeq: 0,
       finalText: 'hello world',
       language: 'en',
-      modelPackId: 'stt-pack-1',
-      events: [{ type: 'final', seq: 0, text: 'hello world', language: 'en', modelPackId: 'stt-pack-1' }],
+      modelPackId: packId,
+      events: [{ type: 'final', seq: 0, text: 'hello world', language: 'en', modelPackId: packId }],
     });
 
     expect(runtimeSession.appendPcm16).toHaveBeenCalledOnce();
@@ -233,23 +264,20 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     const appends = [deferred<Readonly<{ events: readonly DaemonVoiceInferenceSttStreamEvent[] }>>(), deferred<Readonly<{ events: readonly DaemonVoiceInferenceSttStreamEvent[] }>>()];
     const appendPcm16 = vi.fn<RuntimeStreamSession['appendPcm16']>(({ seq }) => appends[seq]!.promise);
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16,
       finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'runtime-pipeline',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -280,20 +308,17 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
   it('installs a START-bound relay key and authenticates encrypted PCM before backend invocation', async () => {
     const appendPcm16 = vi.fn<RuntimeStreamSession['appendPcm16']>(async () => ({ events: [] }));
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16,
       finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const binding = {
       v: 1 as const,
       suite: 'aes-256-gcm' as const,
@@ -310,7 +335,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     };
     const started = await manager.start({
       requestId: 'runtime-encrypted-relay',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -408,7 +433,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       carrierSequence: 1,
       payloadBytes: sealFrame('data', 1, new Uint8Array([0, 0, 1, 0])),
     });
-    expect(JSON.parse(new TextDecoder().decode(openResponse('data', 1, dataResponse)))).toMatchObject({ ok: true, ackSeq: 0 });
+    expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(JSON.parse(new TextDecoder().decode(openResponse('data', 1, dataResponse))))).toMatchObject({ ok: true, ackSeq: 0 });
     expect(appendPcm16).toHaveBeenCalledOnce();
 
     const finishResponse = await manager.appendPeerApplicationFrame({
@@ -419,7 +444,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       carrierSequence: 2,
       payloadBytes: sealFrame('finish', 2, new TextEncoder().encode(JSON.stringify({ finalSeq: 0 }))),
     });
-    expect(JSON.parse(new TextDecoder().decode(openResponse('finish', 2, finishResponse)))).toMatchObject({
+    expect(DaemonVoiceInferenceSttStreamFinishResponseSchema.parse(JSON.parse(new TextDecoder().decode(openResponse('finish', 2, finishResponse))))).toMatchObject({
       ok: true,
       ackSeq: 0,
       finalText: '',
@@ -429,39 +454,29 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
   it('captures a completed runtime PCM stream only when request-scoped diagnostics consent is present', async () => {
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16: vi.fn(async () => ({ events: [] })),
       finish: vi.fn(async () => ({ text: 'captured', language: 'en', events: [] })),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
-    const capture = vi.fn<VoiceDiagnosticsController['capture']>(async () => null);
-    const capturedWav = (() => {
-      let resolve: (bytes: Buffer) => void = () => {};
-      const promise = new Promise<Buffer>((nextResolve) => {
-        resolve = nextResolve;
-      });
-      return { promise, resolve };
-    })();
-    const captureFile = vi.fn<VoiceDiagnosticsController['captureFile']>(async (input) => {
-      capturedWav.resolve(await readFile(input.filePath));
-      return null;
-    });
-    const voiceDiagnostics = { capture, captureFile };
+    const voiceDiagnostics = createVoiceDiagnosticsController({ happyHomeDir: configuration.happyHomeDir });
+    await voiceDiagnostics.configure(VoiceSpeechDiagnosticsSettingsV1Schema.parse({
+      enabled: true, consentVersion: 1, captureSttInput: true,
+    }));
+    const capture = vi.spyOn(voiceDiagnostics, 'capture');
+    const captureFile = vi.spyOn(voiceDiagnostics, 'captureFile');
     const streamRoot = await createTempStreamRoot();
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot,
       voiceDiagnostics,
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'runtime-diagnostic-request',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -478,7 +493,11 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
     await vi.waitFor(() => expect(captureFile).toHaveBeenCalledOnce());
     expect(capture).not.toHaveBeenCalled();
-    const capturedWavBytes = await capturedWav.promise;
+    const status = await voiceDiagnostics.status();
+    expect(status).toMatchObject({ artifacts: [expect.objectContaining({ direction: 'stt_input' })], health: { captureFailure: false } });
+    const artifact = await voiceDiagnostics.resolveArtifactForExport(status.artifacts[0]!.id);
+    expect(artifact).not.toBeNull();
+    const capturedWavBytes = await readFile(artifact!.audioPath);
     const captured = captureFile.mock.calls[0]?.[0];
     expect(captured).toMatchObject({
       direction: 'stt_input',
@@ -499,25 +518,22 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       happyHomeDir: diagnosticsHome,
     });
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16: vi.fn(async () => ({ events: [] })),
       finish: vi.fn(async () => ({ text: 'still usable', language: 'en', events: [] })),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
       voiceDiagnostics: controller,
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'runtime-diagnostic-retention-failure',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -558,28 +574,28 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
   it('does not retain streaming STT audio after cancellation', async () => {
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16: vi.fn(async () => ({ events: [] })),
       finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
-    const capture = vi.fn<VoiceDiagnosticsController['capture']>(async () => null);
-    const captureFile = vi.fn<VoiceDiagnosticsController['captureFile']>(async () => null);
-    const voiceDiagnostics = { capture, captureFile };
+    const voiceDiagnostics = createVoiceDiagnosticsController({ happyHomeDir: configuration.happyHomeDir });
+    await voiceDiagnostics.configure(VoiceSpeechDiagnosticsSettingsV1Schema.parse({
+      enabled: true, consentVersion: 1, captureSttInput: true,
+    }));
+    const capture = vi.spyOn(voiceDiagnostics, 'capture');
+    const captureFile = vi.spyOn(voiceDiagnostics, 'captureFile');
     const streamRoot = await createTempStreamRoot();
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot,
       voiceDiagnostics,
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
     const started = await manager.start({
       requestId: 'runtime-diagnostic-cancel',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -596,43 +612,34 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
     expect(capture).not.toHaveBeenCalled();
     expect(captureFile).not.toHaveBeenCalled();
+    expect((await voiceDiagnostics.status()).artifacts).toEqual([]);
     expect(await readdir(streamRoot)).toEqual([]);
   });
 
   it('preserves the upload bridge compatibility path for non-runtime streaming starts', async () => {
-    let observedInput: null | Readonly<{
-      filePath: string;
-      requestId: string;
-      uploadId: string;
-      inputMimeType: string;
-      packId: string | null;
-      language: string | null;
-      normalization: DaemonVoiceInferenceNormalizationDecision;
-    }> = null;
-    const transcribeAudio = vi.fn(async (input: NonNullable<typeof observedInput>) => {
+    let observedInput: VoiceInferenceRuntimeTranscribeInput | null = null;
+    const workerTranscribe = vi.spyOn(worker, 'transcribeAudio');
+    const transcribeAudio = vi.fn<VoiceInferenceRuntime['transcribeAudio']>(async (input) => {
       observedInput = input;
       const wav = await readFile(input.filePath);
       expect(wav.subarray(0, 4).toString('ascii')).toBe('RIFF');
       expect(wav.subarray(8, 12).toString('ascii')).toBe('WAVE');
       expect([...wav.subarray(44)]).toEqual([0, 0, 1, 0]);
       return {
-        requestId: input.requestId,
         text: 'compatibility transcript',
         language: input.language,
-        modelPackId: input.packId,
       };
     });
+    nativeRuntime = { ...nativeRuntime, transcribeAudio };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio,
-        cancelStt: vi.fn(async () => {}),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'compat-request-1',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'upload_bridge',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -655,13 +662,12 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       ackSeq: 0,
       finalText: 'compatibility transcript',
       language: 'en',
-      modelPackId: 'stt-pack-1',
+      modelPackId: packId,
     });
     expect(observedInput).toMatchObject({
       requestId: 'compat-request-1',
-      uploadId: started.streamId,
       inputMimeType: 'audio/wav',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       normalization: {
         inputTransport: 'upload_transfer',
@@ -669,6 +675,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
         systemFfmpegAllowed: false,
       },
     });
+    expect(workerTranscribe).toHaveBeenCalledWith(expect.objectContaining({ uploadId: started.streamId }));
   });
 
   it('does not select the upload bridge when streaming mode is omitted', async () => {
@@ -678,18 +685,16 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     const createStreamingTranscriptionSession = vi.fn(async () => {
       throw new Error('runtime_requires_explicit_start');
     });
+    nativeRuntime = { ...nativeRuntime, transcribeAudio, createStreamingTranscriptionSession };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio,
-        cancelStt: vi.fn(async () => {}),
-        createStreamingTranscriptionSession,
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     await expect(manager.start({
       requestId: 'missing-mode-request-1',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
     })).resolves.toMatchObject({
@@ -702,7 +707,6 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
 
   it('returns a typed error and closes the stream when the runtime append fails', async () => {
     const runtimeSession: RuntimeStreamSession = {
-      modelPackId: 'stt-pack-1',
       appendPcm16: vi.fn(async () => {
         throw Object.assign(new Error('runtime append timed out'), { code: 'runtime_timeout' });
       }),
@@ -710,21 +714,17 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     };
-    const cancelStt = vi.fn(async () => {});
+    const cancelStt = vi.spyOn(worker, 'cancelStt');
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: {
-        transcribeAudio: vi.fn(async () => {
-          throw new Error('unused');
-        }),
-        cancelStt,
-        createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
-      },
+      voiceInferenceWorker: worker,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'runtime-request-crash',
-      packId: 'stt-pack-1',
+      packId: packId,
       language: 'en',
       streamingMode: 'runtime',
       format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,

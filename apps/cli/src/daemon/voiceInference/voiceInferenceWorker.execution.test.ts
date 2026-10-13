@@ -1,27 +1,25 @@
-import { readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ModelPackManifest } from '@happier-dev/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { ModelPackManifestSchema } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
-import { createInferenceDiagnostics } from '@/daemon/inference/inferenceDiagnostics';
-
-import { createVoiceInferenceWorkerExecution } from './voiceInferenceWorker.execution';
+import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from './voiceInferenceWorker';
 import { resolveVoiceInferencePaths } from './voiceInferencePaths';
 import type {
   VoiceInferenceRuntime,
   VoiceInferenceRuntimeSynthesizeResult,
   VoiceInferenceStreamingTranscriptionSession,
 } from './voiceInferenceRuntimeTypes';
-import type { VoiceInferenceWorkerLifecycleContext } from './voiceInferenceWorker.lifecycle';
-
-const manifest: ModelPackManifest = {
-  packId: 'pack-1',
-  kind: 'stt_sherpa',
-  model: 'zipformer',
-  version: '2026-07-13',
-  files: [],
-};
+const sttPackId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
+const ttsPackId = 'kokoro-82m-v1.0-onnx-q8-wasm';
+const workers: VoiceInferenceWorkerHandle[] = [];
+const homes: string[] = [];
+let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,17 +27,10 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createExecution(runtime: VoiceInferenceRuntime) {
-  let diagnostics = createInferenceDiagnostics({ runtimeState: 'ready' });
-  const lifecycle: VoiceInferenceWorkerLifecycleContext = {
-    isStopped: () => false,
-    getDiagnostics: () => diagnostics,
-    setDiagnostics: (next) => { diagnostics = next; },
-    runExclusive: async (_packId, work) => await work(),
-    runLifecycleExclusive: async (_packId, work) => await work(),
-    warmRuntimeForPack: async () => ({ runtime, packDir: '/tmp/pack-1', manifest }),
-  };
-  return createVoiceInferenceWorkerExecution({ lifecycle });
+async function createExecution(runtime: VoiceInferenceRuntime) {
+  const worker = await startVoiceInferenceWorker({ runtimeLoader: async () => runtime });
+  workers.push(worker);
+  return worker;
 }
 
 function createWavHeader(): Buffer {
@@ -54,6 +45,34 @@ async function removeTempArtifacts(prefix: string): Promise<void> {
     .map(async (path) => await rm(join(tempDir, path), { force: true })));
 }
 
+beforeEach(async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-worker-execution-'));
+  homes.push(home);
+  process.env.HAPPIER_HOME_DIR = home;
+  reloadConfiguration();
+  const bytes = Buffer.from('native inference model boundary fixture');
+  for (const [packId, kind, model] of [[sttPackId, 'stt_sherpa', 'zipformer'], [ttsPackId, 'tts_sherpa', 'kokoro']] as const) {
+    const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
+    await mkdir(packDir, { recursive: true });
+    const manifest = ModelPackManifestSchema.parse({
+      packId, kind, model, version: 'fixture-v1',
+      files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx',
+        sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.byteLength }],
+    });
+    await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest));
+    await writeFile(join(packDir, 'model.onnx'), bytes);
+  }
+});
+
+afterEach(async () => {
+  await Promise.all(workers.splice(0).map((worker) => worker.stop()));
+  vi.restoreAllMocks();
+  envScope.restore();
+  envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+  reloadConfiguration();
+  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+});
+
 describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
   it('keeps a healthy runtime ready when a direct TTS result exceeds the IPC output ceiling', async () => {
     const runtime: VoiceInferenceRuntime = {
@@ -62,27 +81,18 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       }),
       transcribeAudio: vi.fn(async () => ({ text: 'unused', language: null })),
     };
-    let diagnostics = createInferenceDiagnostics({ runtimeState: 'ready' });
-    const lifecycle: VoiceInferenceWorkerLifecycleContext = {
-      isStopped: () => false,
-      getDiagnostics: () => diagnostics,
-      setDiagnostics: (next) => { diagnostics = next; },
-      runExclusive: async (_packId, work) => await work(),
-      runLifecycleExclusive: async (_packId, work) => await work(),
-      warmRuntimeForPack: async () => ({ runtime, packDir: '/tmp/pack-1', manifest }),
-    };
-    const execution = createVoiceInferenceWorkerExecution({ lifecycle });
+    const execution = await createExecution(runtime);
 
     await expect(execution.synthesizeTts({
       requestId: 'too-large-output',
       text: 'hello',
-      packId: 'pack-1',
+      packId: ttsPackId,
       voiceId: null,
       speed: null,
       output: { codec: 'wav', mimeType: 'audio/wav' },
     })).rejects.toMatchObject({ code: 'output_too_large' });
 
-    expect(diagnostics.runtimeState).toBe('ready');
+    await expect(execution.getStatus()).resolves.toMatchObject({ serviceState: 'ready' });
   });
 
   it('settles an already-aborted creation when its lease rejects before running work', async () => {
@@ -91,28 +101,14 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
       createStreamingTranscriptionSession: vi.fn(async () => { throw new Error('must not run'); }),
     };
-    let diagnostics = createInferenceDiagnostics({ runtimeState: 'ready' });
-    const lifecycle: VoiceInferenceWorkerLifecycleContext = {
-      isStopped: () => false,
-      getDiagnostics: () => diagnostics,
-      setDiagnostics: (next) => { diagnostics = next; },
-      runExclusive: async (_packId, work, options) => {
-        if (options?.signal?.aborted) {
-          throw Object.assign(new Error('inference_cancelled'), { code: 'cancelled' });
-        }
-        return await work();
-      },
-      runLifecycleExclusive: async (_packId, work) => await work(),
-      warmRuntimeForPack: async () => ({ runtime, packDir: '/tmp/pack-1', manifest }),
-    };
-    const execution = createVoiceInferenceWorkerExecution({ lifecycle });
+    const execution = await createExecution(runtime);
     const lifetime = new AbortController();
     lifetime.abort();
 
     const outcome = await Promise.race([
       execution.createStreamingTranscriptionSession({
         requestId: 'pre-aborted-stream-session',
-        packId: 'pack-1',
+        packId: sttPackId,
         language: null,
         format: {
           sampleRateHz: 16_000,
@@ -143,20 +139,11 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
       createStreamingTranscriptionSession: vi.fn(async () => await lateSession.promise),
     };
-    let diagnostics = createInferenceDiagnostics({ runtimeState: 'ready' });
-    const lifecycle: VoiceInferenceWorkerLifecycleContext = {
-      isStopped: () => false,
-      getDiagnostics: () => diagnostics,
-      setDiagnostics: (next) => { diagnostics = next; },
-      runExclusive: async (_packId, work) => await work(),
-      runLifecycleExclusive: async (_packId, work) => await work(),
-      warmRuntimeForPack: async () => ({ runtime, packDir: '/tmp/pack-1', manifest }),
-    };
-    const execution = createVoiceInferenceWorkerExecution({ lifecycle });
+    const execution = await createExecution(runtime);
     const lifetime = new AbortController();
     const creating = execution.createStreamingTranscriptionSession({
       requestId: 'late-stream-session',
-      packId: 'pack-1',
+      packId: sttPackId,
       language: null,
       format: {
         sampleRateHz: 16_000,
@@ -187,13 +174,13 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       synthesizeTts: vi.fn(async () => await lateSynthesis.promise),
       transcribeAudio: vi.fn(async () => ({ text: 'unused', language: null })),
     };
-    const execution = createExecution(runtime);
+    const execution = await createExecution(runtime);
     const lifetime = new AbortController();
     const requestId = 'late-tts-result';
     const pending = execution.synthesizeTts({
       requestId,
       text: 'hello',
-      packId: 'pack-1',
+      packId: ttsPackId,
       voiceId: null,
       speed: null,
       output: { codec: 'wav', mimeType: 'audio/wav' },
@@ -235,13 +222,13 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       synthesizeTts: vi.fn(async () => synthesized),
       transcribeAudio: vi.fn(async () => ({ text: 'unused', language: null })),
     };
-    const execution = createExecution(runtime);
+    const execution = await createExecution(runtime);
 
     try {
       await expect(execution.synthesizeTts({
         requestId,
         text: 'hello',
-        packId: 'pack-1',
+        packId: ttsPackId,
         voiceId: null,
         speed: null,
         output: { codec: 'wav', mimeType: 'audio/wav' },
@@ -260,7 +247,7 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       synthesizeTts: vi.fn(async () => { throw new Error('unused'); }),
       transcribeAudio: vi.fn(async () => await lateTranscription.promise),
     };
-    const execution = createExecution(runtime);
+    const execution = await createExecution(runtime);
     const { tempDir } = resolveVoiceInferencePaths();
     const fileName = 'late-stt-result.wav';
     const filePath = join(tempDir, fileName);
@@ -271,7 +258,7 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       uploadId: 'upload-late-stt-result',
       filePath,
       inputMimeType: 'audio/wav',
-      packId: 'pack-1',
+      packId: sttPackId,
       language: null,
       normalization: {
         inputTransport: 'upload_transfer',
@@ -309,11 +296,11 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
       createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
     };
-    const execution = createExecution(runtime);
+    const execution = await createExecution(runtime);
     const lifetime = new AbortController();
     const session = await execution.createStreamingTranscriptionSession({
       requestId: 'late-stream-append',
-      packId: 'pack-1',
+      packId: sttPackId,
       language: null,
       format: {
         sampleRateHz: 16_000,
@@ -350,11 +337,11 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
       transcribeAudio: vi.fn(async () => { throw new Error('unused'); }),
       createStreamingTranscriptionSession: vi.fn(async () => runtimeSession),
     };
-    const execution = createExecution(runtime);
+    const execution = await createExecution(runtime);
     const lifetime = new AbortController();
     const session = await execution.createStreamingTranscriptionSession({
       requestId: 'late-stream-finish',
-      packId: 'pack-1',
+      packId: sttPackId,
       language: null,
       format: {
         sampleRateHz: 16_000,

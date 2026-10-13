@@ -1,8 +1,15 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DaemonVoiceInferenceTtsStreamNextResponseSchema, ModelPackManifestSchema } from '@happier-dev/protocol';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { resolveVoiceInferencePaths } from '../../voiceInferencePaths';
+import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../../voiceInferenceWorker';
+import type { VoiceInferenceRuntime } from '../../voiceInferenceRuntimeTypes';
 
 import { createVoiceInferenceTtsSegmentManager } from './voiceInferenceTtsSegmentManager';
 
@@ -24,9 +31,43 @@ function deferred<T>(): Deferred<T> {
 
 describe('createVoiceInferenceTtsSegmentManager', () => {
   const tempDirs: string[] = [];
+  const managers: ReturnType<typeof createVoiceInferenceTtsSegmentManager>[] = [];
+  let worker: VoiceInferenceWorkerHandle;
+  let nativeRuntime: VoiceInferenceRuntime;
+  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+
+  beforeEach(async () => {
+    process.env.HAPPIER_HOME_DIR = await createTempDir();
+    reloadConfiguration();
+    const bytes = Buffer.from('native synthesis model boundary fixture');
+    for (const packId of ['kokoro-82m-v1.0-onnx-q8-wasm']) {
+      const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
+      await mkdir(packDir, { recursive: true });
+      const manifest = ModelPackManifestSchema.parse({
+        packId, kind: 'tts_sherpa', model: 'kokoro', version: 'fixture-v1',
+        files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx',
+          sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.byteLength }],
+      });
+      await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest));
+      await writeFile(join(packDir, 'model.onnx'), bytes);
+    }
+    nativeRuntime = {
+      synthesizeTts: async (input) => ({ bytes: Buffer.from('audio'), output: input.output, name: 'segment.wav' }),
+      transcribeAudio: async () => { throw new Error('unused native recognition'); },
+    };
+    // The native inference API is the boundary; admission, concurrency,
+    // cancellation and staged output files belong to the actual worker.
+    worker = await startVoiceInferenceWorker({ runtimeLoader: async () => nativeRuntime, perModelConcurrency: 2 });
+  });
 
   afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+    await worker.stop();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    envScope.restore();
+    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    reloadConfiguration();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -38,30 +79,31 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
 
   it('emits the first ready segment before later text is synthesized and keeps prefetch bounded', async () => {
     const root = await createTempDir();
-    const synths: Array<Deferred<Readonly<{ filePath: string }>> & Readonly<{ text: string; requestId: string }>> = [];
+    const synths: Array<Deferred<Uint8Array> & Readonly<{ text: string; requestId: string }>> = [];
     let active = 0;
     let maxActive = 0;
-    const synthesizeTts = vi.fn((input: any) => {
+    const synthesizeTts = vi.fn<VoiceInferenceRuntime['synthesizeTts']>((input) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      const d = deferred<Readonly<{ filePath: string }>>();
+      const d = deferred<Uint8Array>();
+      input.signal?.addEventListener('abort', () => d.reject(Object.assign(new Error('native synthesis cancelled'), { code: 'cancelled' })), { once: true });
       synths.push(Object.assign(d, { text: input.text, requestId: input.requestId }));
       return d.promise.then(async (result) => {
         active -= 1;
         return {
-          requestId: input.requestId,
           output: input.output,
-          filePath: result.filePath,
-          sizeBytes: (await readFile(result.filePath)).byteLength,
+          bytes: result,
           name: `${input.requestId}.wav`,
         };
       });
     });
+    nativeRuntime = { ...nativeRuntime, synthesizeTts };
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: { synthesizeTts, cancelTts: vi.fn(async () => {}) },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 2,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-1',
@@ -73,12 +115,10 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
     });
     expect(started).toMatchObject({ ok: true, segmentCount: 3 });
     if (!started.ok) throw new Error('start failed');
-    expect(synths.map((synth) => synth.text)).toEqual(['First sentence.', 'Second sentence.']);
+    await vi.waitFor(() => expect(synths.map((synth) => synth.text)).toEqual(['First sentence.', 'Second sentence.']));
 
     const firstNext = manager.next({ streamId: started.streamId, generation: started.generation });
-    const firstPath = join(root, 'first.wav');
-    await writeFile(firstPath, Buffer.from('first-audio'));
-    synths[0]?.resolve({ filePath: firstPath });
+    synths[0]?.resolve(Buffer.from('first-audio'));
 
     await expect(firstNext).resolves.toMatchObject({
       ok: true,
@@ -90,6 +130,7 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
         isLastSegment: false,
       },
     });
+    DaemonVoiceInferenceTtsStreamNextResponseSchema.parse(await firstNext);
     await vi.waitFor(() => expect(synthesizeTts).toHaveBeenCalledTimes(3));
     expect(maxActive).toBeLessThanOrEqual(2);
 
@@ -108,22 +149,19 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
 
   it('cleans up active and ready segments on cancel and rejects stale completions', async () => {
     const root = await createTempDir();
-    const pending = deferred<Readonly<{ filePath: string }>>();
-    const cancelTts = vi.fn(async () => {});
+    const pending = deferred<Uint8Array>();
+    const cancelTts = vi.spyOn(worker, 'cancelTts');
+    const workerSynthesize = vi.spyOn(worker, 'synthesizeTts');
+    const nativeSynthesize = vi.fn<VoiceInferenceRuntime['synthesizeTts']>((input) => pending.promise.then((bytes) => ({
+      output: input.output, bytes, name: 'segment.wav',
+    })));
+    nativeRuntime = { ...nativeRuntime, synthesizeTts: nativeSynthesize };
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn((input: any) => pending.promise.then(async (result) => ({
-          requestId: input.requestId,
-          output: input.output,
-          filePath: result.filePath,
-          sizeBytes: 5,
-          name: 'segment.wav',
-        }))),
-        cancelTts,
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-cancel',
@@ -134,6 +172,8 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
       output: { codec: 'wav', mimeType: 'audio/wav' },
     });
     if (!started.ok) throw new Error('start failed');
+    // Let the genuine native call start before exercising a late SDK completion.
+    await vi.waitFor(() => expect(nativeSynthesize).toHaveBeenCalledOnce());
     await expect(manager.cancel({
       streamId: started.streamId,
       generation: started.generation,
@@ -141,10 +181,9 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
     })).resolves.toMatchObject({ ok: true });
 
     expect(cancelTts).toHaveBeenCalledWith(expect.stringContaining('tts-stream-cancel'));
-    const stalePath = join(root, 'stale.wav');
-    await writeFile(stalePath, Buffer.from('stale'));
-    pending.resolve({ filePath: stalePath });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    pending.resolve(Buffer.from('stale'));
+    await expect(workerSynthesize.mock.results[0]?.value).rejects.toMatchObject({ code: 'cancelled' });
+    await vi.waitFor(async () => expect(await readdir(resolveVoiceInferencePaths().tempDir)).toEqual([]));
     await expect(manager.next({ streamId: started.streamId, generation: started.generation })).resolves.toMatchObject({
       ok: false,
       errorCode: 'stream_not_found',
@@ -154,23 +193,13 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
   it('times out delivered segments that are never playback-acked', async () => {
     vi.useFakeTimers();
     const root = await createTempDir();
-    const audioPath = join(root, 'segment.wav');
-    await writeFile(audioPath, Buffer.from('audio'));
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn(async (input: any) => ({
-          requestId: input.requestId,
-          output: input.output,
-          filePath: audioPath,
-          sizeBytes: 5,
-          name: 'segment.wav',
-        })),
-        cancelTts: vi.fn(async () => {}),
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
       ackTimeoutMs: 100,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-timeout',
@@ -196,32 +225,22 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
   it('retires a stream whose client never asks for its prefetched segments', async () => {
     vi.useFakeTimers();
     const root = await createTempDir();
-    const audioPath = join(root, 'segment.wav');
-    await writeFile(audioPath, Buffer.from('audio'));
     const pending = deferred<void>();
-    const cancelTts = vi.fn(async () => {});
+    const cancelTts = vi.spyOn(worker, 'cancelTts');
     let synthesizedCount = 0;
+    nativeRuntime = { ...nativeRuntime, synthesizeTts: async (input) => {
+      synthesizedCount += 1;
+      // The second native request remains active until cancellation/late completion.
+      if (synthesizedCount > 1) await pending.promise;
+      return { output: input.output, bytes: Buffer.from('audio'), name: 'segment.wav' };
+    } };
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn(async (input: any) => {
-          synthesizedCount += 1;
-          // The second prefetched segment never finishes: an abandoned start must
-          // cancel it instead of leaving the worker running for the daemon lifetime.
-          if (synthesizedCount > 1) await pending.promise;
-          return {
-            requestId: input.requestId,
-            output: input.output,
-            filePath: audioPath,
-            sizeBytes: 5,
-            name: 'segment.wav',
-          };
-        }),
-        cancelTts,
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 2,
       ackTimeoutMs: 100,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-abandoned',
@@ -232,6 +251,7 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
       output: { codec: 'wav', mimeType: 'audio/wav' },
     });
     if (!started.ok) throw new Error('start failed');
+    await vi.waitFor(() => expect(synthesizedCount).toBe(2));
 
     // The client disappears immediately after start: it never calls next, so no
     // per-segment ack deadline is ever created.
@@ -248,28 +268,15 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
   it('keeps a client-driven stream alive well past the abandonment deadline', async () => {
     vi.useFakeTimers();
     const root = await createTempDir();
-    const cancelTts = vi.fn(async () => {});
+    const cancelTts = vi.spyOn(worker, 'cancelTts');
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        // The manager consumes and deletes each synthesized file, so every
-        // segment needs its own.
-        synthesizeTts: vi.fn(async (input: any) => {
-          const filePath = join(root, `${input.requestId}.wav`);
-          await writeFile(filePath, Buffer.from('audio'));
-          return {
-            requestId: input.requestId,
-            output: input.output,
-            filePath,
-            sizeBytes: 5,
-            name: 'segment.wav',
-          };
-        }),
-        cancelTts,
-      },
+      // The real worker stages a distinct file for every native result.
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
       ackTimeoutMs: 100,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-long-playback',
@@ -305,22 +312,12 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
 
   it('rejects an acknowledgement before the matching segment is delivered', async () => {
     const root = await createTempDir();
-    const audioPath = join(root, 'segment.wav');
-    await writeFile(audioPath, Buffer.from('audio'));
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn(async (input: any) => ({
-          requestId: input.requestId,
-          output: input.output,
-          filePath: audioPath,
-          sizeBytes: 5,
-          name: 'segment.wav',
-        })),
-        cancelTts: vi.fn(async () => {}),
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-ack-before-delivery',
@@ -350,22 +347,12 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
 
   it('does not emit done before the delivered segment is playback-acked', async () => {
     const root = await createTempDir();
-    const audioPath = join(root, 'segment.wav');
-    await writeFile(audioPath, Buffer.from('audio'));
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn(async (input: any) => ({
-          requestId: input.requestId,
-          output: input.output,
-          filePath: audioPath,
-          sizeBytes: 5,
-          name: 'segment.wav',
-        })),
-        cancelTts: vi.fn(async () => {}),
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-ack-before-done',
@@ -400,15 +387,11 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
   it('uses the canonical public normalizer for runtime-family synthesis failures', async () => {
     const root = await createTempDir();
     const manager = createVoiceInferenceTtsSegmentManager({
-      voiceInferenceWorker: {
-        synthesizeTts: vi.fn(async () => {
-          throw Object.assign(new Error('private runtime detail'), { code: 'unsupported_runtime_family' });
-        }),
-        cancelTts: vi.fn(async () => {}),
-      },
+      voiceInferenceWorker: worker,
       streamRoot: root,
       prefetchDepth: 1,
     });
+    managers.push(manager);
 
     const started = await manager.start({
       requestId: 'tts-stream-runtime-family',

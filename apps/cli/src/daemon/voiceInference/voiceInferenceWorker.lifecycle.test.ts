@@ -1,12 +1,30 @@
+import { createHash } from 'node:crypto';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { getModelPackCatalogEntry, type ModelPackManifest } from '@happier-dev/protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createInferenceInstallBookkeeping } from '@/daemon/inference/inferenceInstallBookkeeping';
+import { materializeZipformerVoiceModelPackPluginFixture } from '@/plugins/testkit/voiceModelPackPackage';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import type { PinnedHttpStreamTransport } from '@/network/pinnedHttp';
+import { createNodeModelPackInstallerHost } from './nodeModelPackInstallerHost';
+import {
+  createDaemonPublicVoiceModelPackRuntime,
+  resolveDefaultDaemonVoiceModelPackHostCapabilities,
+} from './publicModelPacks/runtime';
+import { installVoiceModelPackPluginArchiveFixture } from './publicModelPacks/pluginArchiveFixture';
 import { hashVoiceModelPackManifest } from './voiceModelPackInstaller';
+import * as lifecycleModule from './voiceInferenceWorker.lifecycle';
 
 const ZIPFORMER_PACK_ID = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
 const KOKORO_PACK_ID = 'kokoro-82m-v1.0-onnx-q8-wasm';
@@ -84,9 +102,12 @@ function createZipformerCatalogManifest(): Readonly<{
 }
 
 describe('createVoiceInferenceWorkerLifecycle', () => {
-  const envKeys = ['HAPPIER_HOME_DIR'] as const;
+  const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_MODEL_PACK_MANIFESTS'] as const;
   let envScope = createEnvKeyScope(envKeys);
   const tempDirs: string[] = [];
+  const disposeRuntimes: Array<() => Promise<void>> = [];
+  const closeAssetServers: Array<() => Promise<void>> = [];
+  const retainedRuntimeHomes = new Set<string>();
 
   async function createHomeDir(): Promise<string> {
     const homeDir = await mkdtemp(join(tmpdir(), 'happier-voice-inference-lifecycle-'));
@@ -96,31 +117,191 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
 
   async function importLifecycleModuleForHome(homeDir: string) {
     process.env.HAPPIER_HOME_DIR = homeDir;
-    const configurationModule = await import('@/configuration');
-    configurationModule.reloadConfiguration();
-    return await import('./voiceInferenceWorker.lifecycle');
+    reloadConfiguration();
+    return lifecycleModule;
+  }
+
+  async function serveModelPackManifest(
+    manifest: ModelPackManifest,
+    onAssetRequest?: (request: IncomingMessage, response: ServerResponse) => void,
+  ) {
+    const assets = new Map<string, Uint8Array>();
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      if (request.url === '/manifest.json') {
+        response.end(JSON.stringify(manifest));
+      } else if (onAssetRequest) {
+        onAssetRequest(request, response);
+      } else {
+        const bytes = assets.get(request.url ?? '');
+        response.writeHead(bytes ? 200 : 404);
+        response.end(bytes);
+      }
+    });
+    closeAssetServers.push(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('fixture_server_failed_to_bind');
+    const origin = `http://127.0.0.1:${address.port}`;
+    for (const file of manifest.files) {
+      const bytes = new TextEncoder().encode(`fixture:${file.path}`);
+      file.sha256 = createHash('sha256').update(bytes).digest('hex');
+      file.sizeBytes = bytes.byteLength;
+      const path = `/${file.path.split('/').map(encodeURIComponent).join('/')}`;
+      file.url = `${origin}${path}`;
+      assets.set(path, bytes);
+    }
+    process.env.HAPPIER_MODEL_PACK_MANIFESTS = JSON.stringify({ [manifest.packId]: `${origin}/manifest.json` });
+    return { assets, requests };
+  }
+
+  function createAssetTransport(assets: ReadonlyMap<string, Uint8Array>): PinnedHttpStreamTransport {
+    // Download transport and DNS are system boundaries; verification, promotion and disk are real.
+    const pinnedTransport: PinnedHttpStreamTransport = async ({ url }) => {
+      const bytes = assets.get(url);
+      if (!bytes) throw new Error(`fixture_asset_missing:${url}`);
+      let delivered = false;
+      return {
+        status: 200,
+        headers: { 'content-length': String(bytes.byteLength) },
+        contentLength: bytes.byteLength,
+        read: async () => {
+          if (delivered) return null;
+          delivered = true;
+          return bytes;
+        },
+        cancel: () => undefined,
+      };
+    };
+    return pinnedTransport;
+  }
+
+  function createAssetInstallerHost(
+    input: Parameters<typeof createNodeModelPackInstallerHost>[0],
+    assets: ReadonlyMap<string, Uint8Array>,
+  ) {
+    return createNodeModelPackInstallerHost({
+      ...input,
+      resolveAddresses: async () => ['93.184.216.34'],
+      pinnedTransport: createAssetTransport(assets),
+    });
+  }
+
+  async function createInstalledPublicPack(homeDir: string, localId: string) {
+    // The real controller owns one file-lifetime publication; keep its source roots until shutdown.
+    retainedRuntimeHomes.add(homeDir);
+    const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
+    const packageRoot = join(homeDir, 'archive-source', 'package');
+    await materializeZipformerVoiceModelPackPluginFixture(packageRoot);
+    const pluginJsonPath = join(packageRoot, '.happier-plugin', 'plugin.json');
+    const plugin = PluginManifestV2Schema.parse(JSON.parse(await readFile(pluginJsonPath, 'utf8')));
+    const contribution = plugin.contributes?.voiceModelPacks?.[0];
+    if (!contribution) throw new Error('expected model-pack fixture contribution');
+    const catalogEntry = getModelPackCatalogEntry(KOKORO_PACK_ID);
+    if (!catalogEntry || catalogEntry.runtimeFamily !== 'sherpa_kokoro_offline') {
+      throw new Error('expected canonical Kokoro catalog entry');
+    }
+    const host = resolveDefaultDaemonVoiceModelPackHostCapabilities(process.platform, process.arch);
+    if (!host) throw new Error('model-pack fixture requires a supported daemon host');
+    plugin.id = 'acme.voice';
+    contribution.id = localId;
+    const manifest = createKokoroCatalogManifest();
+    const assets = new Map<string, Uint8Array>();
+    for (const file of manifest.files) {
+      const bytes = new TextEncoder().encode(`fixture:${file.path}`);
+      file.sha256 = createHash('sha256').update(bytes).digest('hex');
+      file.sizeBytes = bytes.byteLength;
+      assets.set(file.url, bytes);
+    }
+    contribution.manifest = {
+      ...contribution.manifest,
+      kind: manifest.kind,
+      model: manifest.model,
+      files: manifest.files,
+      supportArtifacts: [...(catalogEntry.supportArtifacts ?? [])],
+      runtime: {
+        ...contribution.manifest.runtime,
+        family: catalogEntry.runtimeFamily,
+        artifacts: catalogEntry.runtimeArtifacts,
+        abiVersion: 1,
+        platforms: [host.platform],
+        architectures: [host.architecture],
+      },
+      voices: [
+        { id: 'calm', title: 'Calm', sid: 4 },
+        { id: 'bright', title: 'Bright', subtitle: 'English', sid: 7 },
+      ],
+      defaultVoiceId: 'bright',
+    };
+    await writeFile(pluginJsonPath, JSON.stringify(PluginManifestV2Schema.parse(plugin)), 'utf8');
+    await installVoiceModelPackPluginArchiveFixture({
+      happyHomeDir: homeDir,
+      archiveSourceRoot: join(homeDir, 'archive-source'),
+      packageRoot,
+      archiveFileName: 'voice-model-pack.tgz',
+      interactionId: 'lifecycle-model-pack-install',
+    });
+    const reload = async () => {
+      const contributes = createResolvedContributionRegistry(await resolvePluginContributes({ happyHomeDir: homeDir }));
+      const admitted = await createAdmittedPluginRuntimeFixture({
+        happyHomeDir: homeDir,
+        controller: pluginReloadController,
+        runtimeOptions: { pluginIds: [plugin.id], contributes },
+      });
+      await admitted.lease.release();
+      disposeRuntimes.push(admitted.dispose);
+    };
+    await reload();
+    const publicModelPacks = createDaemonPublicVoiceModelPackRuntime({
+      accountId: 'account-lifecycle',
+      machineId: 'machine-lifecycle',
+      happyHomeDir: homeDir,
+      paths: resolveVoiceInferencePaths(),
+      host,
+      createInstallerHost: (input) => createAssetInstallerHost(input, assets),
+    });
+    const key = `${plugin.id}/${localId}`;
+    await publicModelPacks.install({ key, signal: new AbortController().signal });
+    return { publicModelPacks, key, reload };
   }
 
   afterEach(async () => {
-    envScope.restore();
-    envScope = createEnvKeyScope(envKeys);
-    await Promise.all(tempDirs.splice(0).map(async (dir) => await rm(dir, { recursive: true, force: true }).catch(() => undefined)));
+    try {
+      await Promise.all(closeAssetServers.splice(0).map((close) => close()));
+    } finally {
+      envScope.restore();
+      envScope = createEnvKeyScope(envKeys);
+      await Promise.all(tempDirs.splice(0).filter((dir) => !retainedRuntimeHomes.has(dir))
+        .map(async (dir) => await rm(dir, { recursive: true, force: true }).catch(() => undefined)));
+    }
+  });
+
+  afterAll(async () => {
+    try {
+      for (const dispose of disposeRuntimes.splice(0).reverse()) await dispose();
+    } finally {
+      await Promise.all([...retainedRuntimeHomes].map((dir) => rm(dir, { recursive: true, force: true })));
+      retainedRuntimeHomes.clear();
+    }
   });
 
   it('rejects unsupported runtime families before manifest download or install mutation', async () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
-    const fetchManifest = vi.fn();
-    const installModelPack = vi.fn();
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: { fetchManifest, installModelPack },
-    });
+    const { requests } = await serveModelPackManifest(createZipformerCatalogManifest().manifest);
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     await expect(lifecycle.installModel({
       packId: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8',
     })).rejects.toMatchObject({ code: 'unsupported_runtime_family' });
-    expect(fetchManifest).not.toHaveBeenCalled();
-    expect(installModelPack).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
     await expect(lifecycle.listModels()).resolves.toEqual([]);
     await lifecycle.stop();
   });
@@ -129,85 +310,61 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
     const manifest = createKokoroCatalogManifest();
-    const fetchManifest = vi.fn(async () => manifest);
-    const installModelPack = vi.fn(async (input: Readonly<{
-      packsRootDir: string;
-      manifest: ModelPackManifest;
-    }>) => {
-      const packDir = join(input.packsRootDir, input.manifest.packId);
-      await mkdir(packDir, { recursive: true });
-      await writeFile(join(packDir, 'pack.json'), JSON.stringify(input.manifest), 'utf8');
-      return input.manifest;
-    });
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: { fetchManifest, installModelPack },
-    });
-
-    await expect(lifecycle.getModelsStatus([
-      'kokoro-82m-v1.0-onnx-q8-wasm',
-    ])).resolves.toEqual([
-      expect.objectContaining({
+    const { assets, requests } = await serveModelPackManifest(manifest);
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
+    try {
+      await expect(lifecycle.getModelsStatus([
+        'kokoro-82m-v1.0-onnx-q8-wasm',
+      ])).resolves.toEqual([
+        expect.objectContaining({
+          runtimeFamily: 'sherpa_kokoro_offline',
+          runtimeSupported: true,
+          installState: 'not_installed',
+        }),
+      ]);
+      await expect(lifecycle.installModel({
+        packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
+      })).resolves.toMatchObject({
+        packId: KOKORO_PACK_ID,
         runtimeFamily: 'sherpa_kokoro_offline',
         runtimeSupported: true,
-        installState: 'not_installed',
-      }),
-    ]);
-    await expect(lifecycle.installModel({
-      packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
-    })).resolves.toMatchObject({
-      packId: KOKORO_PACK_ID,
-      runtimeFamily: 'sherpa_kokoro_offline',
-      runtimeSupported: true,
-      installState: 'installed',
-    });
-    expect(fetchManifest).toHaveBeenCalledOnce();
-    expect(installModelPack).toHaveBeenCalledOnce();
-    expect(installModelPack).toHaveBeenCalledWith(expect.objectContaining({
-      manifest,
-    }));
-    await lifecycle.stop();
+        installState: 'installed',
+      });
+      const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
+      const packDir = join(resolveVoiceInferencePaths().packsRootDir, manifest.packId);
+      const installedManifest: unknown = JSON.parse(await readFile(join(packDir, 'pack.json'), 'utf8'));
+      expect(installedManifest).toEqual(manifest);
+      expect(requests.filter((path) => path === '/manifest.json')).toHaveLength(1);
+      for (const file of manifest.files) {
+        const path = new URL(file.url).pathname;
+        expect(requests.filter((requestedPath) => requestedPath === path)).toHaveLength(1);
+        await expect(readFile(join(packDir, file.path))).resolves.toEqual(Buffer.from(assets.get(path)!));
+      }
+    } finally {
+      await lifecycle.stop();
+    }
   });
 
   it('cancels an in-flight model install when the caller aborts and never reports it installed', async () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
     const manifest = createKokoroCatalogManifest();
-    const fetchManifest = vi.fn(async () => manifest);
     const caller = new AbortController();
-    let observedSignal: AbortSignal | null = null;
-    const installModelPack = vi.fn(async (input: Readonly<{
-      packsRootDir: string;
-      manifest: ModelPackManifest;
-      signal?: AbortSignal | null;
-    }>) => {
-      observedSignal = input.signal ?? null;
-      // A real install is a long download; the caller gives up midway.
+    const cancelledDownload = deferred<void>();
+    await serveModelPackManifest(manifest, (_request, response) => {
+      response.once('close', () => cancelledDownload.resolve());
+      // Hold the real HTTP download open while its requesting caller gives up.
       caller.abort(new Error('caller_cancelled'));
-      await new Promise<void>((resolve, reject) => {
-        if (input.signal?.aborted) {
-          reject(input.signal.reason);
-          return;
-        }
-        input.signal?.addEventListener('abort', () => reject(input.signal?.reason), { once: true });
-        setTimeout(resolve, 5_000);
-      });
-      // Only reached if cancellation never arrived: this is the late publish.
-      const packDir = join(input.packsRootDir, input.manifest.packId);
-      await mkdir(packDir, { recursive: true });
-      await writeFile(join(packDir, 'pack.json'), JSON.stringify(input.manifest), 'utf8');
-      return input.manifest;
     });
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: { fetchManifest, installModelPack },
-    });
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     await expect(lifecycle.installModel({
       packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
       signal: caller.signal,
     })).rejects.toBeDefined();
 
-    expect(observedSignal).not.toBeNull();
-    expect((observedSignal as unknown as AbortSignal).aborted).toBe(true);
+    await cancelledDownload.promise;
+    expect(caller.signal.aborted).toBe(true);
     await expect(lifecycle.getModelsStatus(['kokoro-82m-v1.0-onnx-q8-wasm'])).resolves.toEqual([
       expect.objectContaining({ installState: expect.not.stringMatching(/^installed$/) }),
     ]);
@@ -230,20 +387,10 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
         sizeBytes: 4,
       }],
     };
-    const fetchManifest = vi.fn(async () => manifest);
-    const installModelPack = vi.fn(async (input: Readonly<{
-      packsRootDir: string;
-      manifest: ModelPackManifest;
-    }>) => {
-      const packDir = join(input.packsRootDir, input.manifest.packId);
-      await mkdir(packDir, { recursive: true });
-      await writeFile(join(packDir, 'pack.json'), JSON.stringify(input.manifest), 'utf8');
-      return input.manifest;
-    });
+    const { requests } = await serveModelPackManifest(manifest);
     const warmModel = vi.fn(async () => undefined);
     const lifecycle = createVoiceInferenceWorkerLifecycle({
       enforceCatalogRuntimeManifest: false,
-      installerOps: { fetchManifest, installModelPack },
       runtimeLoader: async () => ({
         warmModel,
         synthesizeTts: async () => {
@@ -275,8 +422,7 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     });
     await lifecycle.warmModelPack(KOKORO_PACK_ID);
 
-    expect(fetchManifest).toHaveBeenCalledOnce();
-    expect(installModelPack).toHaveBeenCalledOnce();
+    expect(requests).toEqual(['/manifest.json', '/model.onnx']);
     expect(warmModel).toHaveBeenCalledWith(expect.objectContaining({
       packId: KOKORO_PACK_ID,
       packDir: join(resolveVoiceInferencePaths().packsRootDir, KOKORO_PACK_ID),
@@ -359,10 +505,8 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
   it('projects runtime-family support for every requested catalog pack without downloading manifests', async () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
-    const fetchManifest = vi.fn();
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: { fetchManifest },
-    });
+    const { requests } = await serveModelPackManifest(createZipformerCatalogManifest().manifest);
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     await expect(lifecycle.getModelsStatus([
       'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
@@ -379,7 +523,7 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
         installState: 'not_installed',
       }),
     ]);
-    expect(fetchManifest).not.toHaveBeenCalled();
+    expect(requests).toEqual([]);
     await lifecycle.stop();
   });
 
@@ -405,19 +549,14 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
           ...baseline.manifest,
           kind: 'tts_sherpa',
         };
-    const installModelPack = vi.fn();
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: {
-        fetchManifest: vi.fn(async () => manifest),
-        installModelPack,
-      },
-    });
+    const { requests } = await serveModelPackManifest(manifest);
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     await expect(lifecycle.installModel({ packId: ZIPFORMER_PACK_ID })).rejects.toMatchObject({
       code: 'internal_error',
       message: 'voice_inference_model_pack_manifest_incompatible',
     });
-    expect(installModelPack).not.toHaveBeenCalled();
+    expect(requests).toEqual(['/manifest.json']);
     await expect(lifecycle.listModels()).resolves.toEqual([]);
     await lifecycle.stop();
   });
@@ -426,13 +565,8 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
     const { manifest } = createZipformerCatalogManifest();
-    const installModelPack = vi.fn();
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: {
-        fetchManifest: vi.fn(async () => manifest),
-        installModelPack,
-      },
-    });
+    const { requests } = await serveModelPackManifest(manifest);
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     await expect(lifecycle.installModel({ packId: ZIPFORMER_PACK_ID })).resolves.toMatchObject({
       packId: ZIPFORMER_PACK_ID,
@@ -440,7 +574,10 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
       runtimeFamily: 'sherpa_zipformer_streaming',
       runtimeSupported: true,
     });
-    expect(installModelPack).toHaveBeenCalledOnce();
+    expect(requests.filter((path) => path !== '/manifest.json')).toHaveLength(manifest.files.length);
+    const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
+    const installed: unknown = JSON.parse(await readFile(join(resolveVoiceInferencePaths().packsRootDir, manifest.packId, 'pack.json'), 'utf8'));
+    expect(installed).toEqual(manifest);
     await lifecycle.stop();
   });
 
@@ -487,21 +624,21 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     // Preserve the canonical manifest but omit every declared model byte. The
     // startup verifier must reject this predecessor-owned partial install.
     await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest), 'utf8');
-    await writeFile(paths.installsStateFilePath, JSON.stringify({
-      modelsById: {
-        [manifest.packId]: {
-          modelId: manifest.packId,
-          state: 'installing',
-          version: manifest.version,
-          manifestHash: hashVoiceModelPackManifest(manifest),
-          kind: manifest.kind,
-          model: manifest.model,
-          updatedAtMs: 1,
-          progress: { phase: 'installing', progress: 0.9 },
-          lastError: null,
-        },
+    const predecessor = createInferenceInstallBookkeeping({ stateFilePath: paths.installsStateFilePath, now: () => 1 });
+    let interruptedCheckpoint = '';
+    await predecessor.install({
+      modelId: manifest.packId,
+      version: manifest.version,
+      manifestHash: hashVoiceModelPackManifest(manifest),
+      kind: manifest.kind,
+      model: manifest.model,
+      performInstall: async (reportProgress) => {
+        await reportProgress({ phase: 'installing', progress: 0.9 });
+        interruptedCheckpoint = await readFile(paths.installsStateFilePath, 'utf8');
       },
-    }), 'utf8');
+    });
+    // Restore the actual writer's interrupted checkpoint, as a stopped predecessor would leave it.
+    await writeFile(paths.installsStateFilePath, interruptedCheckpoint, 'utf8');
 
     const lifecycle = createVoiceInferenceWorkerLifecycle();
     await expect(lifecycle.getModelsStatus([manifest.packId])).resolves.toEqual([
@@ -910,69 +1047,22 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
   it('retires a warmed public runtime when its owning plugin generation reloads', async () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
-    const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
-    const key = 'acme.voice/english-small';
-    const directoryKey = 'plugin-acme-voice-english-small';
-    const manifest: ModelPackManifest = {
-      packId: directoryKey,
-      kind: 'tts_sherpa',
-      model: 'kokoro',
-      version: '1',
-      files: [],
-    };
-    const packDir = join(resolveVoiceInferencePaths().packsRootDir, directoryKey);
-    await mkdir(packDir, { recursive: true });
-    await writeFile(join(packDir, 'pack.json'), JSON.stringify(manifest), 'utf8');
+    const { publicModelPacks, key, reload } = await createInstalledPublicPack(homeDir, 'english-small');
     let invalidate: ((changedPluginIds: readonly string[]) => void) | null = null;
     const releaseModel = vi.fn(async () => {});
-    const publicEntry = {
-      key,
-      identity: { pluginId: 'acme.voice', packId: 'english-small' },
-      directoryKey,
-      descriptor: {
-        loadable: true,
-        status: 'available',
-        contribution: {
-          manifest: {
-            kind: 'tts_sherpa',
-            model: 'kokoro',
-            version: '1',
-            files: [],
-            voices: [
-              { id: 'calm', title: 'Calm', sid: 4 },
-              { id: 'bright', title: 'Bright', subtitle: 'English', sid: 7 },
-            ],
-            defaultVoiceId: 'bright',
-            runtime: { family: 'sherpa_kokoro_offline', abiVersion: 1 },
-            license: {
-              id: 'fixture-license',
-              title: 'Fixture license',
-              url: 'https://example.invalid/license',
-              requiresAcceptance: false,
-            },
-          },
-        },
-      },
-      installedMetadata: null,
-      installedManifest: manifest,
-      runtimeDescriptor: { family: 'sherpa_kokoro_offline', abiVersion: 1 },
-      supportArtifacts: [],
-    } as const;
-    const listPublicEntries = vi.fn(async () => [publicEntry] as any);
-    const resolvePublicEntry = vi.fn(async (candidate: string) => candidate === key ? publicEntry as any : null);
+    const listPublicEntries = vi.fn(() => publicModelPacks.list());
+    const resolvePublicEntry = vi.fn((candidate: string) => publicModelPacks.resolve(candidate));
+    const subscribeInvalidations = publicModelPacks.subscribeInvalidations!;
     const lifecycle = createVoiceInferenceWorkerLifecycle({
       publicModelPacks: {
-        ready: async () => {},
+        ...publicModelPacks,
         list: listPublicEntries,
         resolve: resolvePublicEntry,
-        install: async () => { throw new Error('not exercised'); },
-        acceptLicense: async () => { throw new Error('not exercised'); },
-        remove: async () => {},
-        recordLoaded: async () => {},
-        subscribeChanges: () => () => {},
+        // Observe the real subscription while retaining explicit control over reload timing.
         subscribeInvalidations: (listener) => {
           invalidate = listener;
-          return () => { invalidate = null; };
+          const unsubscribe = subscribeInvalidations(listener);
+          return () => { invalidate = null; unsubscribe(); };
         },
       },
       runtimeLoader: async () => ({
@@ -1000,7 +1090,7 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     expect(resolvePublicEntry).not.toHaveBeenCalled();
 
     expect(invalidate).not.toBeNull();
-    (invalidate as unknown as (changedPluginIds: readonly string[]) => void)(['acme.voice']);
+    await reload();
     await vi.waitFor(() => expect(releaseModel).toHaveBeenCalledTimes(1));
     await expect(lifecycle.getModelsStatus([key])).resolves.toEqual([
       expect.objectContaining({ runtimeState: 'cold' }),
@@ -1015,43 +1105,18 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
   it('rejects a public descriptor that resolves after its plugin was invalidated', async () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
-    const key = 'acme.voice/deferred';
-    const manifest: ModelPackManifest = {
-      packId: 'plugin-acme-voice-deferred',
-      kind: 'tts_sherpa',
-      model: 'kokoro',
-      version: '1',
-      files: [],
-    };
-    const publicEntry = {
-      key,
-      identity: { pluginId: 'acme.voice', packId: 'deferred' },
-      directoryKey: manifest.packId,
-      descriptor: {
-        loadable: true,
-        status: 'available',
-        contribution: {
-          manifest: {
-            kind: manifest.kind,
-            model: manifest.model,
-            version: manifest.version,
-            files: [],
-            runtime: { family: 'sherpa_kokoro_offline', abiVersion: 1 },
-            license: {
-              id: 'fixture-license', title: 'Fixture license',
-              url: 'https://example.invalid/license', requiresAcceptance: false,
-            },
-          },
-        },
-      },
-      installedMetadata: null,
-      installedManifest: manifest,
-      runtimeDescriptor: { family: 'sherpa_kokoro_offline', abiVersion: 1 },
-      supportArtifacts: [],
-    } as const;
-    const deferredResolve = deferred<typeof publicEntry>();
-    const resolve = vi.fn(async () => await deferredResolve.promise as any);
+    const { publicModelPacks, key, reload } = await createInstalledPublicPack(homeDir, 'deferred');
+    const deferredResolve = deferred<void>();
+    const resolutionEntered = deferred<void>();
+    const originalResolve = publicModelPacks.resolve;
+    const resolve = vi.fn(async (candidate: string) => {
+      const entry = await originalResolve(candidate);
+      resolutionEntered.resolve();
+      await deferredResolve.promise;
+      return entry;
+    });
     let invalidate: ((changedPluginIds: readonly string[]) => void) | null = null;
+    const subscribeInvalidations = publicModelPacks.subscribeInvalidations!;
     const warmModel = vi.fn(async () => {});
     const runtimeLoader = vi.fn(async () => ({
       warmModel,
@@ -1061,27 +1126,23 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     }));
     const lifecycle = createVoiceInferenceWorkerLifecycle({
       publicModelPacks: {
-        ready: async () => {},
-        list: async () => [publicEntry] as any,
+        ...publicModelPacks,
         resolve,
-        install: async () => { throw new Error('not exercised'); },
-        acceptLicense: async () => { throw new Error('not exercised'); },
-        remove: async () => {},
-        recordLoaded: async () => {},
-        subscribeChanges: () => () => {},
         subscribeInvalidations: (listener) => {
           invalidate = listener;
-          return () => { invalidate = null; };
+          const unsubscribe = subscribeInvalidations(listener);
+          return () => { invalidate = null; unsubscribe(); };
         },
       },
       runtimeLoader,
     });
 
     const warming = lifecycle.warmModelPack(key);
+    await resolutionEntered.promise;
     await vi.waitFor(() => expect(resolve).toHaveBeenCalledWith(key));
     expect(invalidate).not.toBeNull();
-    (invalidate as unknown as (changedPluginIds: readonly string[]) => void)(['acme.voice']);
-    deferredResolve.resolve(publicEntry);
+    await reload();
+    deferredResolve.resolve();
 
     await expect(warming).rejects.toMatchObject({
       code: 'runtime_unavailable',
@@ -1172,30 +1233,18 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     const homeDir = await createHomeDir();
     const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
     const { manifest } = createZipformerCatalogManifest();
-    let installSignal: AbortSignal | null = null;
-    let releaseInstallStart!: () => void;
-    const installStarted = new Promise<void>((resolve) => {
-      releaseInstallStart = resolve;
+    const installStarted = deferred<void>();
+    const downloadClosed = deferred<void>();
+    await serveModelPackManifest(manifest, (_request, response) => {
+      response.once('close', () => downloadClosed.resolve());
+      installStarted.resolve();
     });
-
-    const lifecycle = createVoiceInferenceWorkerLifecycle({
-      installerOps: {
-        fetchManifest: async ({ signal }) => {
-          expect(signal?.aborted).toBe(false);
-          return manifest;
-        },
-        installModelPack: async ({ signal }) => {
-          installSignal = signal ?? null;
-          releaseInstallStart();
-          return await new Promise<never>((_, reject) => {
-            signal?.addEventListener('abort', () => reject(new Error('install-aborted')), { once: true });
-          });
-        },
-      },
-    });
+    const lifecycle = createVoiceInferenceWorkerLifecycle();
 
     const installPromise = lifecycle.installModel({ packId: manifest.packId });
-    await installStarted;
+    // Attach rejection observation before Stop aborts the actual HTTP download.
+    const rejectedInstall = expect(installPromise).rejects.toMatchObject({ name: 'AbortError' });
+    await installStarted.promise;
 
     const stopPromise = lifecycle.stop();
     await expect(Promise.race([
@@ -1203,9 +1252,11 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
       new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50)),
     ])).resolves.toBe('stopped');
 
-    expect(installSignal).not.toBeNull();
-    expect(installSignal!.aborted).toBe(true);
-    await expect(installPromise).rejects.toThrow('install-aborted');
+    await downloadClosed.promise;
+    await rejectedInstall;
+    const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
+    await expect(readFile(join(resolveVoiceInferencePaths().packsRootDir, manifest.packId, 'pack.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
     await stopPromise;
   });
 });
