@@ -470,7 +470,14 @@ export async function applyDaemonHomeDescriptorRefresh(input: Readonly<{
     readSavedProfile: async () => null,
   });
   assertResolvedHomeTargetIdentity(resolvedTarget, observedIdentity ?? '');
-  const target = input.reconcileDescriptor ? null : input.homeTarget ?? await resolveCurrentCliHomeTarget();
+  // A daemon may start from its explicit URL before Stack materializes the
+  // stable invocation profile. Keep an already bound profile fixed, but let a
+  // captured manual target adopt that exact configured profile once it exists.
+  const target = input.reconcileDescriptor
+    ? null
+    : input.homeTarget?.profileId
+      ? input.homeTarget
+      : await resolveCurrentCliHomeTarget();
   // An env-only invocation has no saved profile to mutate. In particular,
   // its descriptor must never be assigned to the user's focused Home.
   if (!input.reconcileDescriptor && !target?.profileId) return 'ignored';
