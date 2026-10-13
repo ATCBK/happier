@@ -63,17 +63,18 @@ test('gate selection includes changed workspace consumers, including peer consum
   const selectedPackages = JSON.parse(unitLines.split('\n').find((line) => line.startsWith('packages=')).slice('packages='.length));
   assert.deepEqual(selectedPackages, ['cli', 'plugins', 'protocol', 'server', 'ui']);
   assert.match(unitLines, /^server_db_contract=true$/m);
-  const automaticJobs = include.length + 1; // preparation owns compiler/artifacts; host units also own the selected DB contract
+  const automaticJobs = include.length + 3 + 1; // selection/compiler, artifacts, Gate, and the selected DB contract
   assert.ok(automaticJobs <= 10, `the automatic v0.3 gate must use at most 10 jobs, received ${automaticJobs}`);
   assert.deepEqual(include.filter((row) => row.package !== 'ui'), [
-    { package: 'group', packages: ['cli', 'plugins', 'protocol', 'server'], part: 1, parts: 1 },
+    { package: 'cli', packages: ['cli'], part: 1, parts: 1 },
+    { package: 'group', packages: ['plugins', 'protocol', 'server'], part: 1, parts: 1 },
   ]);
   assert.deepEqual([...new Set(include.flatMap((row) => row.packages))].sort(), selectedPackages,
     'partitioning must retain every selected package suite');
   const uiParts = include.filter((row) => row.package === 'ui');
-  assert.equal(uiParts.length, 8, 'the capacity ruling assigns eight automatic UI jobs');
-  assert.deepEqual(uiParts.map((row) => row.packages), Array.from({ length: 8 }, () => ['ui']));
-  assert.deepEqual(uiParts.map((row) => row.part), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(uiParts.length, 4, 'the capacity ruling assigns four automatic UI jobs');
+  assert.deepEqual(uiParts.map((row) => row.packages), [['ui'], ['ui'], ['ui'], ['ui']]);
+  assert.deepEqual(uiParts.map((row) => row.part), [1, 2, 3, 4]);
   const { resolveVitestShardRange } = await import('../../apps/ui/scripts/runVitestShards.mjs');
   const covered = uiParts.flatMap(({ part, parts }) => {
     assert.equal(parts, uiParts.length);
