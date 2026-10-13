@@ -35,8 +35,6 @@ import {
 import {
     ExternalActionExecutionAuthorizationBindingV1Schema,
     ExternalActionExecutionAuthorizationV1Schema,
-    SignedRootActionIdSchema,
-    getActionSpec,
     formatQualifiedPluginActionId,
     parseQualifiedPluginActionId,
     type ExternalActionExecutionAuthorizationBindingV1,
@@ -591,7 +589,7 @@ class AuthModule {
             ...(accountMode ? { accountEncryptionMode: accountMode.encryptionMode } : {}),
         });
         if ('authentication' in supplied) {
-            const { isOriginalTerminalExecutionAction } = await import('./externalActionExecutionAuthorization');
+            const { isOriginalTerminalExecutionAction, hasCurrentOriginalSessionActionTargetInTx } = await import('./externalActionExecutionAuthorization');
             if (supplied.authentication.kind === 'terminal'
                 && !isOriginalTerminalExecutionAction(supplied.actionId, supplied) && !supplied.workflowActionOrigin) {
                 throw new ApiTokenOperationError('invalid_token');
@@ -599,11 +597,7 @@ class AuthModule {
             if (!await this.isSignedCredentialCurrent(db, supplied.accountId, supplied.authentication.tokenEpoch)) {
                 throw new ApiTokenOperationError('invalid_token');
             }
-            const action = SignedRootActionIdSchema.safeParse(supplied.actionId);
-            if (!supplied.handoffAdmission && action.success && getActionSpec(action.data).executionPlacement === 'session'
-                && (supplied.target.kind !== 'session' || !await hasCurrentSessionScopedMachineAccessInTx({
-                    tx: db, accountId: supplied.accountId, machineId: supplied.machineId, sessionId: supplied.target.sessionId,
-                }))) throw new ApiTokenOperationError('invalid_token');
+            if (!await hasCurrentOriginalSessionActionTargetInTx(db, supplied)) throw new ApiTokenOperationError('invalid_token');
             if (supplied.handoffAdmission) {
                 const { readCurrentExternalActionHandoffBindingInTx } = await import('./externalActionExecutionAuthorization');
                 if (!await readCurrentExternalActionHandoffBindingInTx(db, { accountId: supplied.accountId,

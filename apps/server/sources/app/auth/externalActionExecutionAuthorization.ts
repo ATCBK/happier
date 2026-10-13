@@ -51,10 +51,12 @@ import { enforceLoginEligibility } from "./enforceLoginEligibility";
 import { narrowCredentialAuthority } from './effectiveCredentialAuthority';
 import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx,
     hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
-import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowReadRequestV1Schema,
+    ProjectAccountRowListRequestV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { ProjectSourcesCreateInputV1Schema, ProjectSourcesUpdateInputV1Schema,
     ProjectSourcesDeleteInputV1Schema } from '@happier-dev/protocol/projects/sources/projectSourceV1';
-import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
+import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema, ProjectTrustReadRequestV1Schema,
+    ProjectTrustListRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1, WorkspaceExecutionConfigReadRequestV1Schema,
     WorkspaceExecutionConfigMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { isRequesterProjectExecutionActionV1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
@@ -275,6 +277,26 @@ async function isIssuedAcquireNativeFactReportInTx(reader: Tx, binding: External
     }
 }
 
+/**
+ * A Machine target is placement for opaque Session input, not Session access.
+ * The daemon resolves the decrypted selector and signs that Session target;
+ * issuance, principal currentness and resolved-effect verification share this
+ * owner and the existing exact Session/Machine access proof.
+ */
+export async function hasCurrentOriginalSessionActionTargetInTx(
+    reader: Tx,
+    binding: ExternalActionExecutionAuthorizationBindingV1,
+    target: ExternalActionTargetV1 = binding.target,
+): Promise<boolean> {
+    const action = SignedRootActionIdSchema.safeParse(binding.actionId);
+    if (!('authentication' in binding) || binding.handoffAdmission
+        || !action.success || getActionSpec(action.data).executionPlacement !== 'session') return true;
+    return target.kind === 'machine'
+        ? target.machineId === binding.machineId
+        : hasCurrentSessionScopedMachineAccessInTx({ tx: reader, accountId: binding.accountId,
+            machineId: binding.machineId, sessionId: target.sessionId });
+}
+
 async function readCurrentExternalActionPrincipal(
     binding: ExternalActionExecutionAuthorizationBindingV1,
     reader: Tx,
@@ -358,11 +380,7 @@ async function readCurrentExternalActionPrincipal(
             && !(['session.spawn_new', 'machines.environment.apply'].includes(binding.actionId) && binding.managedContinuation)
             && !(binding.actionId === 'session.spawn_new' && binding.handoffContinuation)
             && !(binding.handoffContinuation && isOriginalAccountHandoffAction(binding.actionId))) return null;
-        const action = SignedRootActionIdSchema.safeParse(binding.actionId);
-        if (!binding.handoffAdmission && action.success && getActionSpec(action.data).executionPlacement === 'session'
-            && (binding.target.kind !== 'session' || !await hasCurrentSessionScopedMachineAccessInTx({
-                tx: reader, accountId: binding.accountId, machineId: binding.machineId, sessionId: binding.target.sessionId,
-            }))) return null;
+        if (!await hasCurrentOriginalSessionActionTargetInTx(reader, binding)) return null;
         if (!await auth.isSignedCredentialCurrent(reader, binding.accountId, binding.authentication.tokenEpoch)) return null;
         const base = { accountId: binding.accountId, authentication: binding.authentication,
             ...(binding.authentication.evidence ? { authenticationEvidence: binding.authentication.evidence } : {}) };
@@ -579,7 +597,7 @@ async function verifyCommon(
         authorizedTarget: binding.target,
         resolvedTarget: target,
         selectedMachineId: binding.machineId,
-    })) return null;
+    }) || !await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return null;
     if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return null;
     if (!hasMatchingExecutionEffectFamily(binding.actionId, effectActionId.data)
         || binding.actionId !== effectActionId.data && (binding.handoffContinuation || binding.handoffPreflight
@@ -667,7 +685,8 @@ async function verifyCommon(
     if (!principal || !await hasCurrentExecutionMachineAdmission(binding)) return null;
     if (!purpose && !await hasCurrentExternalActionSessionSource(binding, proof.resolveCurrentSessionMachine)) return null;
     if (!await readCurrentExternalActionPrincipal(binding, db, purpose)
-        || !await hasCurrentExecutionMachineAdmission(binding)) return null;
+        || !await hasCurrentExecutionMachineAdmission(binding)
+        || !await hasCurrentOriginalSessionActionTargetInTx(db, binding, target)) return null;
     if (readCustody) {
         const current = await readCustody();
         if (!current || current.installationPublicKey !== custody?.installationPublicKey) return null;
@@ -734,6 +753,23 @@ function isProjectAccountMetadataHttpPurpose(verified: VerifiedExternalActionExe
     const actionId = verified.binding.actionId;
     const url = new URL(proof.path, 'http://home.invalid');
     const method = proof.method.toUpperCase();
+    // Preparation, including an unsigned proposal replayed inside its admitted
+    // decision, spends the unchanged signed root. Reads confer no mutation authority.
+    const readsExecutionConfig = actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
+        || actionId === 'localServices.launcher.start' || actionId === 'localServices.actions.restartManaged'
+        || actionId === 'approval.request.decide';
+    if (Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)
+        || actionId === 'projects.inspect' || readsExecutionConfig) {
+        if (url.search !== '' || url.hash !== '') return false;
+        if (method === 'GET' && proof.body === undefined) return readsExecutionConfig && url.pathname === '/v1/account/encryption';
+        if (method !== 'POST') return false;
+        if (url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/read`) return ProjectAccountRowReadRequestV1Schema.safeParse(proof.body).success;
+        if (url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return ProjectAccountRowListRequestV1Schema.safeParse(proof.body).success;
+        if (url.pathname === `${PROJECT_TRUST_ROUTE_V1}/read`) return ProjectTrustReadRequestV1Schema.safeParse(proof.body).success;
+        if (url.pathname === `${PROJECT_TRUST_ROUTE_V1}/list`) return ProjectTrustListRequestV1Schema.safeParse(proof.body).success;
+        return readsExecutionConfig && url.pathname === `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`
+            && WorkspaceExecutionConfigReadRequestV1Schema.safeParse(proof.body).success;
+    }
     const sourcePath = '/v1/projects/sources';
     if (actionId.startsWith('projects.sources.')) {
         if (method === 'GET' && proof.body === undefined
