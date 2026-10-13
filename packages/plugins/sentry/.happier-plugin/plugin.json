@@ -1,4 +1,8 @@
 {
+  "brand": {
+    "iconResourceId": "brand-icon",
+    "monochrome": true
+  },
   "contributes": {
     "accountCollections": [],
     "actions": [
@@ -53,26 +57,46 @@
                                     "type": "string"
                                   },
                                   "service": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "localId": {
-                                        "maxLength": 256,
-                                        "minLength": 1,
-                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                        "type": "string"
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       },
-                                      "pluginId": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                        "type": "string"
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "const": "mcp-sign-in"
+                                          },
+                                          "pluginId": {
+                                            "const": "happier"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       }
-                                    },
-                                    "required": [
-                                      "pluginId",
-                                      "localId"
-                                    ],
-                                    "type": "object"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -239,26 +263,46 @@
                                     "type": "string"
                                   },
                                   "service": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "localId": {
-                                        "maxLength": 256,
-                                        "minLength": 1,
-                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                        "type": "string"
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       },
-                                      "pluginId": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                        "type": "string"
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "const": "mcp-sign-in"
+                                          },
+                                          "pluginId": {
+                                            "const": "happier"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       }
-                                    },
-                                    "required": [
-                                      "pluginId",
-                                      "localId"
-                                    ],
-                                    "type": "object"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -421,26 +465,46 @@
                                     "type": "string"
                                   },
                                   "service": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "localId": {
-                                        "maxLength": 256,
-                                        "minLength": 1,
-                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                        "type": "string"
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       },
-                                      "pluginId": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                        "type": "string"
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "const": "mcp-sign-in"
+                                          },
+                                          "pluginId": {
+                                            "const": "happier"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       }
-                                    },
-                                    "required": [
-                                      "pluginId",
-                                      "localId"
-                                    ],
-                                    "type": "object"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -656,26 +720,46 @@
                                     "type": "string"
                                   },
                                   "service": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "localId": {
-                                        "maxLength": 256,
-                                        "minLength": 1,
-                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                        "type": "string"
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       },
-                                      "pluginId": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                        "type": "string"
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "const": "mcp-sign-in"
+                                          },
+                                          "pluginId": {
+                                            "const": "happier"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
                                       }
-                                    },
-                                    "required": [
-                                      "pluginId",
-                                      "localId"
-                                    ],
-                                    "type": "object"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -932,26 +1016,46 @@
                               "type": "string"
                             },
                             "service": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "localId": {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                  "type": "string"
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "localId": {
+                                      "maxLength": 256,
+                                      "minLength": 1,
+                                      "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "pluginId": {
+                                      "maxLength": 256,
+                                      "minLength": 3,
+                                      "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "pluginId",
+                                    "localId"
+                                  ],
+                                  "type": "object"
                                 },
-                                "pluginId": {
-                                  "maxLength": 256,
-                                  "minLength": 3,
-                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                  "type": "string"
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "localId": {
+                                      "const": "mcp-sign-in"
+                                    },
+                                    "pluginId": {
+                                      "const": "happier"
+                                    }
+                                  },
+                                  "required": [
+                                    "pluginId",
+                                    "localId"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "pluginId",
-                                "localId"
-                              ],
-                              "type": "object"
+                              ]
                             }
                           },
                           "required": [
@@ -1128,26 +1232,46 @@
                               "type": "string"
                             },
                             "service": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "localId": {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                                  "type": "string"
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "localId": {
+                                      "maxLength": 256,
+                                      "minLength": 1,
+                                      "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "pluginId": {
+                                      "maxLength": 256,
+                                      "minLength": 3,
+                                      "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "pluginId",
+                                    "localId"
+                                  ],
+                                  "type": "object"
                                 },
-                                "pluginId": {
-                                  "maxLength": 256,
-                                  "minLength": 3,
-                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                                  "type": "string"
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "localId": {
+                                      "const": "mcp-sign-in"
+                                    },
+                                    "pluginId": {
+                                      "const": "happier"
+                                    }
+                                  },
+                                  "required": [
+                                    "pluginId",
+                                    "localId"
+                                  ],
+                                  "type": "object"
                                 }
-                              },
-                              "required": [
-                                "pluginId",
-                                "localId"
-                              ],
-                              "type": "object"
+                              ]
                             }
                           },
                           "required": [
@@ -1764,6 +1888,12 @@
                                   "nativeRevision"
                                 ],
                                 "type": "object"
+                              },
+                              "scopeDisplayName": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 512
                               },
                               "scopeLabel": {
                                 "minLength": 1,
@@ -2529,6 +2659,12 @@
                                 ],
                                 "type": "object"
                               },
+                              "scopeDisplayName": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 512
+                              },
                               "scopeLabel": {
                                 "minLength": 1,
                                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -2980,26 +3116,46 @@
                           "type": "string"
                         },
                         "service": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "localId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                              "type": "string"
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             },
-                            "pluginId": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                              "type": "string"
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "const": "mcp-sign-in"
+                                },
+                                "pluginId": {
+                                  "const": "happier"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             }
-                          },
-                          "required": [
-                            "pluginId",
-                            "localId"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       },
                       "required": [
@@ -3644,26 +3800,46 @@
                           "type": "string"
                         },
                         "service": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "localId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                              "type": "string"
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             },
-                            "pluginId": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                              "type": "string"
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "const": "mcp-sign-in"
+                                },
+                                "pluginId": {
+                                  "const": "happier"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             }
-                          },
-                          "required": [
-                            "pluginId",
-                            "localId"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       },
                       "required": [
@@ -4060,26 +4236,46 @@
                           "type": "string"
                         },
                         "service": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "localId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                              "type": "string"
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             },
-                            "pluginId": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                              "type": "string"
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "const": "mcp-sign-in"
+                                },
+                                "pluginId": {
+                                  "const": "happier"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             }
-                          },
-                          "required": [
-                            "pluginId",
-                            "localId"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       },
                       "required": [
@@ -5094,26 +5290,46 @@
                           "type": "string"
                         },
                         "service": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "localId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                              "type": "string"
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             },
-                            "pluginId": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                              "type": "string"
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "const": "mcp-sign-in"
+                                },
+                                "pluginId": {
+                                  "const": "happier"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             }
-                          },
-                          "required": [
-                            "pluginId",
-                            "localId"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       },
                       "required": [
@@ -5512,26 +5728,46 @@
                           "type": "string"
                         },
                         "service": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "localId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
-                              "type": "string"
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             },
-                            "pluginId": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
-                              "type": "string"
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "const": "mcp-sign-in"
+                                },
+                                "pluginId": {
+                                  "const": "happier"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
                             }
-                          },
-                          "required": [
-                            "pluginId",
-                            "localId"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       },
                       "required": [
@@ -6278,6 +6514,12 @@
                       ],
                       "type": "object"
                     },
+                    "scopeDisplayName": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string",
+                      "x-happier-max-utf8-bytes": 512
+                    },
                     "scopeLabel": {
                       "minLength": 1,
                       "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -6834,8 +7076,16 @@
     "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
+    "registrySources": [],
     "requestInterceptors": [],
-    "resources": [],
+    "resources": [
+      {
+        "contentType": "image/png",
+        "id": "brand-icon",
+        "kind": "asset",
+        "path": "assets/brand.png"
+      }
+    ],
     "roles": [],
     "scmBackends": [],
     "scmHostingProviders": [],
