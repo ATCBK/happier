@@ -1,4 +1,5 @@
 import type { PluginDiagnosticData } from '../diagnostics.js';
+import type { SkillCatalogItemV1 } from '@happier-dev/protocol/runtime/catalog/skills';
 import type {
   AgentSessionExecutionRunRuntimeFactoryV1,
 } from './executionRun.js';
@@ -124,15 +125,6 @@ export type AgentSessionVendorPluginCatalogItem = Readonly<{
   mentionable: boolean;
 }>;
 
-export type AgentSessionSkillCatalogItem = Readonly<{
-  id: string;
-  name: string;
-  displayName: string;
-  description?: string;
-  path?: string;
-  enabled: boolean;
-}>;
-
 export type AgentSessionCatalogRequest =
   | Readonly<{ kind: 'vendorPlugins'; cursor?: string; limit?: number }>
   | Readonly<{ kind: 'skills'; cursor?: string; limit?: number }>;
@@ -147,7 +139,7 @@ export type AgentSessionCatalogResult =
   | Readonly<{
       status: 'ok';
       kind: 'skills';
-      items: readonly AgentSessionSkillCatalogItem[];
+      items: readonly SkillCatalogItemV1[];
       nextCursor?: string;
     }>
   | AgentSessionControlFailure;

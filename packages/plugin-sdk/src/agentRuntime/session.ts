@@ -304,6 +304,15 @@ export type AgentSessionRuntimeEvent =
       sequence: number;
       sessionId: string;
       emittedAtMs: number;
+      turnId: string;
+      agentTurnId?: string;
+      kind: 'skill-usage';
+      skills: Array<Readonly<{ name: string; path?: string }>>;
+    }>
+  | Readonly<{
+      sequence: number;
+      sessionId: string;
+      emittedAtMs: number;
       /** Omit for Session output that does not belong to a foreground host turn. */
       turnId?: string;
       agentTurnId?: string;
@@ -696,6 +705,11 @@ export type AgentSessionSkillDelivery = Readonly<{
   nativeDisables: readonly Readonly<{ name: string; path: string }>[];
 }>;
 
+export type AgentSessionMcpToolPolicy = Readonly<{
+  unlisted: 'allow' | 'ask' | 'deny';
+  tools: Readonly<Record<string, 'off' | 'allow' | 'ask' | 'deny'>>;
+}>;
+
 export type AgentSessionOpenRequest =
   Readonly<{
     sessionId: string;
@@ -708,6 +722,7 @@ export type AgentSessionOpenRequest =
     configuration?: AgentSessionConfigurationSnapshot;
     connectedAccounts?: readonly AgentSessionConnectedAccountSelection[];
     mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
+    mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
     skills?: AgentSessionSkillDelivery;
     providerBinding?: AgentSessionProviderBinding;
     /**
@@ -795,6 +810,7 @@ export type AgentSessionCancelResult =
 
 export type AgentSessionConfigurationUpdate = AgentSessionConfigurationSnapshot & Readonly<{
   providerBinding?: AgentSessionProviderBinding;
+  mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
 }>;
 
 export type AgentSessionConfigurationResult =

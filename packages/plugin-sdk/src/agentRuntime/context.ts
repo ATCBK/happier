@@ -624,6 +624,8 @@ export type AgentSessionSubagentObservationPublisher = Readonly<{
  */
 export type AgentSessionHostServices = Readonly<{
   features: AgentFeatureDecisionService;
+  /** Host-bound native authentication; it grants no general Session capability. */
+  auth?: SessionAuthService;
   terminalHost?: AgentTerminalHostService;
   models: AgentSessionModelsService;
   modes: AgentSessionModesService;

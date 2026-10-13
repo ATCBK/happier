@@ -42,6 +42,7 @@ export type AgentExecutionRunOpenRequest =
     stateSharing?: AgentSessionOpenRequest['stateSharing'];
     /** Exact host-resolved MCP process bindings for this Run open. */
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     /** Exact host-resolved session-private skills for this Run. */
     skills?: AgentSessionOpenRequest['skills'];
   }> & (
@@ -146,7 +147,7 @@ export type AgentExecutionRunSessionAdapterOptions = Readonly<{
    * Run event union so this adapter cannot become a second terminal producer.
    */
   observeSessionUsage?: (
-    event: Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' }>,
+    event: Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' | 'skill-usage' }>,
   ) => void;
 }>;
 
@@ -488,7 +489,7 @@ function createExecutionRunRuntimeFromConversation<Event extends AgentExecutionR
   });
   subscription = session.watch((event) => {
     if (lifecycle.isTerminal()) return;
-    if (event.kind === 'usage-observed') {
+    if (event.kind === 'usage-observed' || event.kind === 'skill-usage') {
       if (!activeTurnId || (event.turnId !== undefined && event.turnId !== activeTurnId)) {
         return;
       }
@@ -585,6 +586,7 @@ function createSessionOpenRequestFromExecutionRun(
     ...(request.providerBinding ? { providerBinding: request.providerBinding } : {}),
     ...(request.stateSharing ? { stateSharing: request.stateSharing } : {}),
     ...(request.mcpServers ? { mcpServers: request.mcpServers } : {}),
+    ...(request.mcpToolPolicy ? { mcpToolPolicy: request.mcpToolPolicy } : {}),
     ...(request.skills ? { skills: request.skills } : {}),
   };
   return request.kind === 'resume'
@@ -614,7 +616,7 @@ export async function createExecutionRunHostBackendFromSessionRuntime(
       ...(options.observeSessionUsage
         ? {
             observeEvent(event: AgentSessionRuntimeEvent) {
-              if (event.kind === 'usage-observed') options.observeSessionUsage!(event);
+              if (event.kind === 'usage-observed' || event.kind === 'skill-usage') options.observeSessionUsage!(event);
             },
           }
         : {}),

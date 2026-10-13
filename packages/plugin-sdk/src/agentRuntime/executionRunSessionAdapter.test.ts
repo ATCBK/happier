@@ -234,7 +234,7 @@ function failedEvent(turnId: string): AgentSessionRuntimeEvent {
 }
 
 describe('createExecutionRunHostBackendFromSessionRuntime', () => {
-  it('forwards the provider-owned usage observation without creating a competing Run event', async () => {
+  it.each(['usage-observed', 'skill-usage'] as const)('forwards %s without creating a competing Run event', async kind => {
     const harness = createSessionHarness();
     const observeSessionUsage = vi.fn();
     const execution = await createExecutionRunHostBackendFromSessionRuntime({
@@ -245,7 +245,7 @@ describe('createExecutionRunHostBackendFromSessionRuntime', () => {
     const runEvents: AgentExecutionRunEvent[] = [];
     execution.watch((event) => runEvents.push(event));
 
-    const usage = {
+    const usage = kind === 'usage-observed' ? {
       sequence: 2,
       sessionId: 'session-1',
       emittedAtMs: 11,
@@ -256,9 +256,12 @@ describe('createExecutionRunHostBackendFromSessionRuntime', () => {
       scope: 'turn_delta',
       modelId: 'model-a',
       tokens: { input: 8, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
+    } as const satisfies AgentSessionRuntimeEvent : {
+      sequence: 2, sessionId: 'session-1', emittedAtMs: 11, turnId: 'run-1-turn-1',
+      kind: 'skill-usage', skills: [{ name: 'happier:contract-skill' }],
     } as const satisfies AgentSessionRuntimeEvent;
     harness.publish(usage);
-    harness.publish({ ...usage, observationId: 'usage-other-turn', turnId: 'other-turn' });
+    harness.publish({ ...usage, turnId: 'other-turn' });
 
     expect(observeSessionUsage).toHaveBeenCalledOnce();
     expect(observeSessionUsage).toHaveBeenCalledWith(usage);
