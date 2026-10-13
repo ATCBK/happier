@@ -13,7 +13,9 @@ import {
     serializeSessionPaneUrlState,
 } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { SessionCockpitShell } from '@/components/workspaceCockpit/session/SessionCockpitShell';
-import { resolveSessionDetailsFallbackHref } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
+import { normalizeSessionDetailsSourceSurface, resolveSessionDetailsFallbackHref } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
+import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
+import { usePersistSessionLastMobileSurface } from '@/sync/domains/state/storage';
 import { useFullscreenDetailsRouteController } from '@/components/workspaceCockpit/useFullscreenDetailsRouteController';
 import { useFullscreenDetailsRouteParamSync } from '@/components/workspaceCockpit/useFullscreenDetailsRouteParamSync';
 import { usePersistSessionMobileSurface } from '@/components/workspaceCockpit/session/usePersistSessionMobileSurface';
@@ -55,6 +57,7 @@ function ClassicSessionDetailsSurface(props: React.ComponentProps<typeof Session
 
 export function SessionDetailsDestinationBody() {
     const router = useDestinationRouter();
+    const persistSessionSurface = usePersistSessionLastMobileSurface();
     const isFocused = useDestinationFocus();
     const visible = useDestinationVisibility();
     const instanceKey = useDestinationInstanceKey();
@@ -118,13 +121,15 @@ export function SessionDetailsDestinationBody() {
         sessionId,
         serverId: routeScope.serverId,
         sourceSurface: params.sourceSurface,
-        fallbackHref: routeScope.buildHref(sessionId),
+        fallbackHref: resolveSessionRoutePathForSurface(sessionId, 'chat', { serverId: routeScope.serverId }),
     }), [params.sourceSurface, routeScope, sessionId]);
     const returnToSession = React.useCallback(() => {
         // Responsive pane presentation replaces the Session route with Details;
         // its previous history entry need not be this Session.
+        pane.closeDetails();
+        persistSessionSurface(sessionId, normalizeSessionDetailsSourceSurface(params.sourceSurface) ?? 'chat', routeScope.serverId);
         router.replace(fallbackDetailsHref);
-    }, [fallbackDetailsHref, router]);
+    }, [fallbackDetailsHref, pane.closeDetails, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
     const openDestinationTab = React.useCallback((tab: DetailsTab) => {
         const selection = buildActiveDetailsRouteParams([tab], tab.key);
         const query = new URLSearchParams();
