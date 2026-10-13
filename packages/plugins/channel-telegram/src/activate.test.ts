@@ -110,34 +110,6 @@ describe('Telegram Channel plugin activation', () => {
     expect(PLUGIN_MANIFEST.contributes.ui?.translations).toEqual(TELEGRAM_UI_TRANSLATION_BUNDLES);
   });
 
-  it('serializes one checkpointed-pull provider contribution through arbitrary local Actions', async () => {
-    assertConversationProviderContributionV1(PLUGIN_MANIFEST);
-    const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
-    try {
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
-        id: 'telegram-provider',
-        target: { pluginId: 'happier.channels', pointId: 'providers' },
-        protocol: { id: 'happier.channels/providers', version: 1 },
-        operations: TELEGRAM_CHANNEL_PROVIDER_OPERATIONS,
-      }]);
-      expect(testkit.registrations()).toEqual([
-        ...Object.values(TELEGRAM_CHANNEL_ACTION_IDS).map((localId) => ({ family: 'actions' as const, localId })),
-        { family: 'actions' as const, localId: TELEGRAM_AUTOMATION_MESSAGE_SETUP_ACTION_ID },
-        { family: 'actions' as const, localId: TELEGRAM_AUTOMATION_MESSAGE_ADMIT_ACTION_ID },
-        { family: 'connectedAccountDescriptors', localId: 'telegram-bot' },
-      ]);
-
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
-        .not.toHaveProperty('connectionStop');
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
-        .not.toHaveProperty('deliveryReconcile');
-      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
-        .not.toHaveProperty('principalResolve');
-    } finally {
-      await testkit.dispose();
-    }
-  });
-
   it('declares remote Telegram delivery and setup remediation as writesRemote', () => {
     const action = (id: string) => PLUGIN_MANIFEST.contributes.actions?.find((candidate) => candidate.id === id);
 
@@ -160,8 +132,21 @@ describe('Telegram Channel plugin activation', () => {
   });
 
   it('registers only its supported polling-provider roles and Connected Account runtime through the manifest', async () => {
+    assertConversationProviderContributionV1(PLUGIN_MANIFEST);
     const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
+        id: 'telegram-provider',
+        target: { pluginId: 'happier.channels', pointId: 'providers' },
+        protocol: { id: 'happier.channels/providers', version: 1 },
+        operations: TELEGRAM_CHANNEL_PROVIDER_OPERATIONS,
+      }]);
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
+        .not.toHaveProperty('connectionStop');
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
+        .not.toHaveProperty('deliveryReconcile');
+      expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions?.[0]?.operations)
+        .not.toHaveProperty('principalResolve');
       expect(testkit.registrations()).toEqual([
         { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.setup },
         { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.setupRemediation },
