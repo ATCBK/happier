@@ -8,10 +8,12 @@ import { CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION, CURRENT_ACCOU
   parseAccountStoredContentCompatibilityHttpHeadersV1, parseAccountStoredContentCompatibilitySocketAuthV1,
   RPC_METHODS, sealEncryptedDataKeyEnvelopeV1, sealSessionDataKeyBundleV0, wrapApiTokenEncryptionAccessV1,
   SessionSharedMetadataV1Schema, type SessionSharedMetadataV1 } from '@happier-dev/protocol';
+import { ActionIdSchema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema, getActionSpec } from '@happier-dev/protocol/actions';
+import { SessionMessageV1Schema } from '@happier-dev/protocol';
 
 import { connect } from '../index.js';
 import type { HappierSessionController } from './types.js';
-import type { AgentState } from '@happier-dev/session-core';
+import { rawRecordSchema, type AgentState } from '@happier-dev/session-core';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
 import { createSessionContentEncryption } from './openSessionDataKey.js';
 
@@ -21,8 +23,9 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
 function row(seq: number, text: string, updatedAt = seq) {
-  return { id: `row-${seq}`, seq, localId: null, sidechainId: null, messageRole: 'user',
-    createdAt: seq, updatedAt, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text } } } };
+  const content = { t: 'plain' as const, v: rawRecordSchema.parse({ role: 'user', content: { type: 'text', text } }) };
+  return { ...SessionMessageV1Schema.parse({ id: `row-${seq}`, seq, localId: null, sidechainId: null, messageRole: 'user',
+    createdAt: seq, updatedAt, content }), content };
 }
 
 // Rendered IDs belong to session-core; pending permissions also materialize
@@ -130,8 +133,11 @@ async function fixture(encryptionMode: 'plain' | 'e2ee' = 'plain', contentCreden
       let text = '';
       for await (const bytes of request) text += String(bytes);
       // This is the network producer boundary, not a replacement for SDK parsing.
-      const body = JSON.parse(text) as { requestId?: string; input: Record<string, unknown> };
-      const actionId = decodeURIComponent(url.pathname.slice('/v1/actions/'.length));
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(text));
+      const actionId = ActionIdSchema.parse(decodeURIComponent(url.pathname.slice('/v1/actions/'.length)));
+      const input: unknown = getActionSpec(actionId).inputSchema.parse(envelope.input);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected an Action object input');
+      const body = { ...envelope, input: input as Record<string, unknown> };
       actions.push({ actionId, input: body.input });
       let result: unknown = { ok: true };
       if (actionId === 'transcript.follow') {
@@ -168,7 +174,8 @@ async function fixture(encryptionMode: 'plain' | 'e2ee' = 'plain', contentCreden
       } else if (actionId === 'session.status.get') {
         result = { session: { active } };
       }
-      response.end(JSON.stringify({ v: 1, actionId, ...(body.requestId ? { requestId: body.requestId } : {}), execution: { ok: true, result } }));
+      response.end(JSON.stringify(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId,
+        ...(body.requestId ? { requestId: body.requestId } : {}), execution: { ok: true, result } })));
     } else { response.statusCode = 404; response.end('{}'); }
   });
   const io = new Server(server, { path: '/v1/updates/' });

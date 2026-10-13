@@ -57,7 +57,7 @@ try {
   let session: HappierSession;
   try {
     session = await happier.sessions.spawn({
-      directory: process.cwd(),
+      directory: { kind: 'path', path: process.cwd() },
       agent: 'codex',
       initialMessage: 'Inspect the failing tests.',
     });
@@ -136,7 +136,7 @@ const usableAgentIds = inventory.items
 if (!usableAgentIds.includes('codex')) {
   throw new Error('The selected machine does not have an enabled Codex Agent.');
 }
-const session = await serverClient.sessions.spawn({ directory: process.cwd(), agent: 'codex' });
+const session = await serverClient.sessions.spawn({ directory: { kind: 'path', path: process.cwd() }, agent: 'codex' });
 ```
 
 The machine-bound client keeps that target fixed for its inventory lookup and
