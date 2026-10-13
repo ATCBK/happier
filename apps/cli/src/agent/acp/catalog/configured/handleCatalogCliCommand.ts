@@ -18,7 +18,6 @@ export async function handleConfiguredAcpCatalogCliCommand(context: CommandConte
     resolveExtraOptions: () => ({
       agentTarget: { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: backendId },
       runtimeDescriptorV1: { v: 1, agentId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId, agent: { definitionId: backendId } },
-      backendTarget: { kind: 'backend', backendId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId, sourceKind: 'built_in' },
     }),
   });
 }
