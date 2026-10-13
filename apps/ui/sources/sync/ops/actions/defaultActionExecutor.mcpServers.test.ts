@@ -19,6 +19,7 @@ import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { act } from 'react-test-renderer';
 
 const projectionRpc = vi.hoisted(() => vi.fn());
 // The daemon RPC is the boundary; projection admission, adaptation and the Action remain real.
@@ -139,7 +140,7 @@ describe('UI MCP per-Agent tool facts', () => {
             await second.rerender();
             expect(second.getCurrent().list).toBe(admitted);
             expect(catalogReads).toBe(1);
-            second.getCurrent().reload();
+            await act(async () => { second.getCurrent().reload(); });
             await vi.waitFor(() => expect(catalogReads).toBe(2));
             await vi.waitFor(() => expect(second.getCurrent().list).toBe(admitted));
         } finally {
@@ -148,6 +149,25 @@ describe('UI MCP per-Agent tool facts', () => {
             await first.unmount();
             await second.unmount();
         }
+    });
+
+    it('refuses a misbound server id at the real catalog consumer and recovers on the admitted id', async () => {
+        const home = await prepareToolFactsHome(true, ['acme.mcp-facts/host']);
+        getStorage().setState({ settingsScope: { serverId: home.serverIdentityId!, accountId: 'tool-owner' } });
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const tools = await renderHook(({ serverId }) => useMcpServerTools(serverId, 3, ['acme.mcp-facts/host']),
+            { initialProps: { serverId: 'another-server' } });
+        try {
+            await vi.waitFor(() => expect(tools.getCurrent()).toMatchObject({
+                status: 'unavailable', errorCode: 'mcp_server_not_found', list: null,
+            }));
+            await tools.rerender({ serverId: 'server' });
+            await vi.waitFor(() => expect(tools.getCurrent().status).toBe('ready'));
+            const consumed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse(tools.getCurrent().list);
+            expect(consumed).toMatchObject({ serverId: 'server', revision: 3, perAgent: { status: 'ready', agents: [
+                { agentId: 'acme.mcp-facts/host', off: 'blocked', approval: 'host' },
+            ] } });
+        } finally { await tools.unmount(); }
     });
 
     it('refreshes the real tools Action when an installed Agent is first published', async () => {
