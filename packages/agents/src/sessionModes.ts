@@ -50,8 +50,7 @@ export const AGENT_SESSION_MODE_DESCRIPTORS: Readonly<Record<AgentId, AgentSessi
     semantics: 'none',
     runtimeSwitch: 'none',
   },
-  // Agy modes (if any) come from negotiated ACP state, not a static descriptor.
-  agy: { source: 'none', semantics: 'none', runtimeSwitch: 'none' },
+  agy: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   fx: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   droid: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
 });
