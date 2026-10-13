@@ -5106,6 +5106,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         ): SessionRunnerRestartDisabledReason | null => resolveSessionRunnerActivityDisabledReasonFromReaders(sessionId, {
           isTurnInProgress: (id) => connectedServiceTurnDeferralQueue.isTurnInFlight(id),
         });
+        const isDaemonShuttingDown = (): boolean => shutdownInitiated || connectedServiceQuotaProducersQuiesced;
 
         const normalizeSwitchTarget = (input: Readonly<{
           serviceId?: string | null;
@@ -5166,6 +5167,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             restartRequestedPids: connectedServicesRestartRequestedPids,
             pidToTrackedSession,
             canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+            isShuttingDown: isDaemonShuttingDown,
             requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
               // K5:gated_restart raw signal is owned by planned runner restart deferral/reservation.
               await requestConnectedServiceSessionRestartSignal({
@@ -5247,10 +5249,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           deferral: { kind: 'none' },
           restartRequestedPids: connectedServicesRestartRequestedPids,
           pidToTrackedSession,
-          // Final gate after the awaited identity probe: never stop a runner once shutdown began.
-          canSignal: () => (shutdownInitiated || connectedServiceQuotaProducersQuiesced)
-            ? false
-            : resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+          canSignal: () => resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true,
+          isShuttingDown: isDaemonShuttingDown,
           requestSignal: async ({ shouldSignal, onSignalFailure, onProcessAlreadyMissing }) =>
             // K5:gated_restart version refresh uses the planned restart primitive without
             // connected-service deferral/target metadata; this call is only the signal adapter.
