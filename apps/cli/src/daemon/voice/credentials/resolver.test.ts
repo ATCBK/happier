@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  accountSettingsParse,
+  SavedSecretSchema,
   sealSavedSecretResourceStoredContentV1,
   VoiceCredentialBindingIdentityV1Schema,
   type VoiceCredentialBindingIdentityV1,
 } from '@happier-dev/protocol';
+import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 import {
   clearActiveAccountSettingsSnapshot,
@@ -43,9 +46,10 @@ function publishLegacy(params: Readonly<{
   setActiveAccountSettingsSnapshot({
     source: 'network', scopeKey: params.scopeKey, settingsVersion: 1, loadedAtMs: 1,
     settingsSecretsReadKeys: [],
-    settings: {
+    settings: accountSettingsParse({
       secrets: [
-        { id: `${params.scopeKey}-account`, name: 'Account key', kind: 'apiKey', encryptedValue: { _isSecretValue: true, value: params.accountValue } },
+        SavedSecretSchema.parse({ id: `${params.scopeKey}-account`, name: 'Account key', kind: 'apiKey',
+          encryptedValue: { _isSecretValue: true, value: params.accountValue }, createdAt: 1, updatedAt: 1 }),
       ],
       voiceSettingsV1: {
         credentialBindings: [{
@@ -55,7 +59,7 @@ function publishLegacy(params: Readonly<{
           },
         }],
       },
-    } as never,
+    }),
   });
 }
 
@@ -81,7 +85,7 @@ function publishQualified(params: Readonly<{
     settingsVersion: params.settingsVersion ?? 1,
     loadedAtMs: 1,
     settingsSecretsReadKeys: [],
-    connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: {
+    connectedPurposeCatalog: { status: 'ready', revision: 1, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({
       v: 1,
       bindings: params.credentialSource === 'connectedAccount' ? [{
         purpose: { consumer: params.contribution, purpose: 'voice.client-auth' },
@@ -89,28 +93,28 @@ function publishQualified(params: Readonly<{
           service: { pluginId: 'happier.agent.openai', localId: 'openai' }, accountId: 'openai-account',
         } },
       }] : [],
-    } } },
-    settings: {
+    }) } },
+    settings: accountSettingsParse({
       secrets: params.includeSecret === false
         ? []
         : [
-            {
+            SavedSecretSchema.parse({
               id: `${params.scopeKey}-account`,
               name: 'Account key',
               kind: 'apiKey',
               encryptedValue: { _isSecretValue: true, value: params.accountValue },
               createdAt: 1,
               updatedAt: params.secretUpdatedAt ?? 1,
-            },
+            }),
             ...(params.machineValue
-              ? [{
+              ? [SavedSecretSchema.parse({
                   id: `${params.scopeKey}-machine`,
                   name: 'Machine key',
                   kind: 'apiKey',
                   encryptedValue: { _isSecretValue: true, value: params.machineValue },
                   createdAt: 1,
                   updatedAt: params.secretUpdatedAt ?? 1,
-                }]
+                })]
               : []),
           ],
       voiceSettingsV1: {
@@ -136,10 +140,10 @@ function publishQualified(params: Readonly<{
             }
           : {}),
       },
-    } as never,
+    }),
     ...(params.savedSecretResources ? { savedSecretResources: params.savedSecretResources } : {}),
     ...(params.savedSecretCatalogState ? { savedSecretCatalogState: params.savedSecretCatalogState } : {}),
-  } as never);
+  });
 }
 
 afterEach(() => resetActiveAccountSettingsSnapshotForTests());
@@ -318,13 +322,17 @@ describe('Voice credential resolver', () => {
       savedSecretResources: [sharedResource(1, 'shared-key-v1')],
     });
     let snapshot = getActiveAccountSettingsSnapshot();
+    if (!snapshot) throw new Error('Expected published Voice Account settings');
     const resolver = createVoiceCredentialResolver({
       machineId: null,
       getSnapshot: () => snapshot,
       getLifetimeToken: () => 1,
       // This case is about the post-use revision fence, so the Home admits the
       // operation unchanged; its own refusals are the next two cases.
-      refreshForOperation: async () => snapshot as never,
+      refreshForOperation: async () => {
+        if (!snapshot) throw new Error('Voice Account settings retired');
+        return snapshot;
+      },
     });
 
     expect(resolver.status(identityFor(GOOGLE_STT_CONTRIBUTION))).toEqual({
@@ -429,6 +437,7 @@ describe('Voice credential resolver', () => {
       savedSecretResources: [sharedResource(1, 'stale-plaintext')],
     });
     const hydrated = getActiveAccountSettingsSnapshot();
+    if (!hydrated) throw new Error('Expected published Voice Account settings');
 
     // 1. The Home revoked this shared reference and its AccountChange hint was
     //    never delivered, so the hydrated row still looks ready. The operation
@@ -485,7 +494,7 @@ describe('Voice credential resolver', () => {
 
     // 3. An admitted operation runs against the material the Home returned,
     //    not the plaintext the cached snapshot still holds.
-    const rotated = hydrated && {
+    const rotated = {
       ...hydrated,
       loadedAtMs: 2,
       savedSecretResources: [sharedResource(2, 'rotated-plaintext')],
@@ -494,7 +503,7 @@ describe('Voice credential resolver', () => {
       machineId: null,
       getSnapshot: () => rotated,
       getLifetimeToken: () => 1,
-      refreshForOperation: async () => rotated as never,
+      refreshForOperation: async () => rotated,
     });
     await expect(admitted.withSecret({
       identity: identityFor(GOOGLE_STT_CONTRIBUTION),
