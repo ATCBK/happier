@@ -4,7 +4,7 @@ import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { ScmCredentialFreeRepositorySelectorV1Schema, ScmRepositoryContainedSubdirV1Schema } from '../../scm/repositoryClone.js';
 import { PrincipalRefV1Schema } from '../../teams/principal.js';
 import { PromptArtifactRefV1Schema } from '../../prompts/library/promptArtifactRefsV1.js';
-import { PromptStackEntryV1Schema, PromptStackSetEnabledIntentV1Schema } from '../../prompts/library/promptStacksV1.js';
+import { PromptStackEntryV1Schema, PromptStackEntryAuthoringV1Schema, PromptStackSetEnabledIntentV1Schema } from '../../prompts/library/promptStacksV1.js';
 import { readScmHostingRepositoryIdentity } from '../../scm/hostingRepositoryIdentity.js';
 
 export const PROJECT_SOURCES_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'projects:sources' as const;
@@ -18,6 +18,10 @@ export const SourceAttachmentV1Schema = lazyZodSchema(() => z.discriminatedUnion
   z.object({ purpose: z.literal('dashboard'), ref: PromptArtifactRefV1Schema.strict() }).strict(),
 ]));
 export type SourceAttachmentV1 = z.infer<typeof SourceAttachmentV1Schema>;
+const SourceAttachmentAuthoringV1Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
+  SourceAttachmentV1Schema.options[0].extend({ entry: PromptStackEntryAuthoringV1Schema.extend({ ref: PromptArtifactRefV1Schema.strict() }).strict() }).strict(),
+  SourceAttachmentV1Schema.options[1],
+]));
 // Source folders use clone's containment admission, with one canonical root representation.
 const ProjectSourceSubdirV1Schema = lazyZodSchema(() => z.union([
   z.string().trim().length(0), ScmRepositoryContainedSubdirV1Schema,
@@ -40,7 +44,7 @@ export const ProjectSourcesListInputV1Schema = lazyZodSchema(() => z.object({ se
 export const ProjectSourcesReadInputV1Schema = lazyZodSchema(() => z.object({ serverId: id, sourceId: id }).strict());
 export const ProjectSourcesCreateInputV1Schema = lazyZodSchema(() => ProjectSourceV1Schema.pick({ name: true, repository: true, defaultRef: true, subdir: true }).extend({ serverId: id, requestKey: id, audience: z.array(ProjectSourceGrantV1Schema).optional() }).strict());
 export const ProjectSourceAttachmentIntentV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('attach'), attachment: SourceAttachmentV1Schema }).strict(),
+  z.object({ kind: z.literal('attach'), attachment: SourceAttachmentAuthoringV1Schema }).strict(),
   z.object({ kind: z.literal('detach'), purpose: z.literal('context'), attachmentId: id }).strict(),
   z.object({ kind: z.literal('detach'), purpose: z.literal('dashboard'), ref: PromptArtifactRefV1Schema.strict() }).strict(),
   z.object({ kind: z.literal('reorder'), attachmentId: id, beforeId: id.nullable() }).strict(),

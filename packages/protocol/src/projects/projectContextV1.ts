@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { PromptStackEntryV1Schema, PromptStackSetEnabledIntentV1Schema, applyPromptStackIntentV1, type PromptStackEntryV1, type PromptStackMutationV1 } from '../prompts/library/promptStacksV1.js';
+import { PromptStackEntryAuthoringV1Schema, PromptStackSetEnabledIntentV1Schema, applyPromptStackIntentV1, type PromptStackEntryV1, type PromptStackMutationV1 } from '../prompts/library/promptStacksV1.js';
 import { ProjectAccountOrganizationKeyV1Schema, ProjectAccountOrganizationV1Schema, ProjectAccountRowExpectedRevisionV1Schema, type ProjectAccountOrganizationV1 } from './projectAccountRowsV1.js';
 import type { PromptLibraryStoredArtifact } from '../prompts/library/promptLibraryActionOperations.js';
 import { PromptArtifactRefV1Schema, type PromptArtifactRefV1 } from '../prompts/library/promptArtifactRefsV1.js';
@@ -17,9 +17,8 @@ export const ProjectContextTargetV1Schema = lazyZodSchema(() => z.object({
 
 // Admission is narrower than retained stacks: only newly attached entries must
 // use system_append. Existing placement owners retain their established data.
-const NewContextEntrySchema = lazyZodSchema(() => PromptStackEntryV1Schema.extend({
+const NewContextEntrySchema = lazyZodSchema(() => PromptStackEntryAuthoringV1Schema.extend({
   ref: PromptArtifactRefV1Schema.strict(),
-  placement: z.literal('system_append').default('system_append'),
 }).strict());
 
 export const ProjectContextIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -157,6 +156,8 @@ export async function readProjectContextAttachmentTargetV1(deps: Readonly<{
     const source = result.data.source;
     const entries = (source.attachments ?? []).flatMap(attachment => attachment.purpose === 'context' ? [attachment.entry] : []);
     return { safety: 'danger', entries: qualify(entries), attach: async entry => {
+      const authored = PromptStackEntryAuthoringV1Schema.safeParse(entry);
+      if (!authored.success) return refuse('invalid_parameters');
       await assertAssociation();
       const current = ProjectSourcesReadOutputV1Schema.safeParse(await deps.readSource({ serverId: target.serverId, sourceId: source.id }));
       if (!current.success || !current.data.ok || current.data.source.id !== source.id) return refuse('project_context_unavailable');
@@ -164,7 +165,7 @@ export async function readProjectContextAttachmentTargetV1(deps: Readonly<{
       if (current.data.source.revision !== source.revision) return false;
       const written = ProjectSourcesUpdateOutputV1Schema.safeParse(await deps.updateSource({ serverId: target.serverId,
         sourceId: source.id, expectedRevision: source.revision, patch: { attachment: { kind: 'attach',
-          attachment: { purpose: 'context', entry } } } }));
+          attachment: { purpose: 'context', entry: authored.data } } } }));
       if (!written.success) return refuse('project_context_unavailable');
       if (!written.data.ok) { if (written.data.error === 'source_conflict') return false; return refuse(written.data.error); }
       if (written.data.source.id !== source.id) return refuse('project_context_unavailable');
