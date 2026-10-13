@@ -66,12 +66,12 @@ export const InboxSection = React.memo(function InboxSection(props: Readonly<{
     );
 });
 
-const styles = StyleSheet.create(() => ({
+const styles = StyleSheet.create((theme) => ({
     following: {
-        marginTop: 6,
+        marginTop: theme.space.s6,
     },
     separated: {
-        marginTop: 14,
+        marginTop: theme.space.s16,
     },
     actionHeader: {
         minHeight: Platform.select({ ios: 44, default: 48 }),

@@ -1,6 +1,7 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { StyleSheet as NativeStyleSheet } from 'react-native';
-import { act } from 'react-test-renderer';
+import { act, type ReactTestRenderer, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
@@ -17,56 +18,37 @@ import { workflowRunRowFromAutomationRun, workflowRunRowFromSummary, type Workfl
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
+import { storage } from '@/sync/domains/state/storageStore';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { UserCard } from '@/components/ui/cards/UserCard';
+import { ApprovalInboxCard } from '@/components/inbox/cards/ApprovalInboxCard';
+import { InboxSessionAttentionGroupCard } from '@/components/inbox/sessionAttention/InboxSessionAttentionGroupCard';
+import { InboxReadySessionRow } from './InboxReadySessionRow';
+import { ActionOperationRows } from './actionOperations/ActionOperationLedger';
+import { SessionListIdentity } from '@/components/sessions/shell/SessionListIdentity';
+import { InboxSessionRowMenu } from './workGroups/InboxSessionRowMenu';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { UserProfileSchema } from '@happier-dev/protocol/social/friends';
 
 const routerPush = vi.hoisted(() => vi.fn());
-const identityState = vi.hoisted(() => ({ display: 'agentLogo' as 'agentLogo' | 'none' }));
+const initialStorageState = storage.getState();
 
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: routerPush }) }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    router: { push: routerPush },
+}).module);
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ View: 'View' });
+    return createReactNativeWebMock({ View: 'View',
+        useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
+    });
 });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-vi.mock('@/components/ui/selectionList/SelectionListSectionHeader', () => ({
-    SelectionListSectionHeader: (props: Record<string, unknown>) => React.createElement(
-        'SelectionListSectionHeader', props, props.rightAccessory as React.ReactNode,
-    ),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: (props: Record<string, unknown>) => React.createElement(
-        'ItemGroup', props, props.action as React.ReactNode, props.children as React.ReactNode,
-    ),
-}));
-vi.mock('@/components/ui/lists/SectionActionButton', () => ({ SectionActionButton: 'SectionActionButton' }));
-vi.mock('@/components/ui/surfaces/SurfaceFreshnessLine', () => ({ SurfaceFreshnessLine: 'SurfaceFreshnessLine' }));
-vi.mock('@/components/ui/empty/EmptyState', () => ({ EmptyState: 'EmptyState' }));
-vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/ui/icons/Icon')>(),
-    Icon: 'Icon',
-}));
-vi.mock('@/components/ui/feedback/ActivitySpinner', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/ui/feedback/ActivitySpinner')>(),
-    ActivitySpinner: 'ActivitySpinner',
-}));
-vi.mock('@/components/ui/cards/UserCard', () => ({ UserCard: 'UserCard' }));
-vi.mock('@/components/account/RecoveryKeyReminderBanner', () => ({ RecoveryKeyReminderBanner: 'RecoveryKeyReminderBanner' }));
-vi.mock('@/components/inbox/cards/ApprovalInboxCard', () => ({ ApprovalInboxCard: 'ApprovalInboxCard' }));
-vi.mock('@/components/inbox/sessionAttention/InboxSessionAttentionGroupCard', () => ({ InboxSessionAttentionGroupCard: 'InboxSessionAttentionGroupCard' }));
-vi.mock('@/components/sessions/shell/SessionListIdentity', () => ({
-    SessionListIdentity: 'SessionListIdentity',
-    useSessionListIdentityDisplay: () => identityState.display,
-}));
-vi.mock('@/components/sessions/shell/resolveSessionListDensityViewState', () => ({
-    SESSION_LIST_ROW_IDENTITY_METRICS: { compact: { slotSize: 30, agentLogoSize: 23 } },
-}));
-vi.mock('./workGroups/InboxSessionRowMenu', () => ({ InboxSessionRowMenu: 'InboxSessionRowMenu' }));
-vi.mock('@/utils/platform/responsive', () => ({ useIsTablet: () => true }));
-vi.mock('./InboxReadySessionRow', () => ({ InboxReadySessionRow: 'InboxReadySessionRow' }));
-vi.mock('./actionOperations/ActionOperationLedger', () => ({ ActionOperationRows: 'ActionOperationRows' }));
-vi.mock('./actionOperations/actionOperationPresentationRuntime', () => ({ openActionOperation: vi.fn() }));
 // Cold external Socket transport; Account restoration and Action owners stay real.
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -76,6 +58,9 @@ vi.mock('@/text', async () => {
 });
 
 const NOW = Date.parse('2026-09-30T12:00:00.000Z');
+function PagePresentation({ children }: React.PropsWithChildren) {
+    return <ListPresentationProvider value="page">{children}</ListPresentationProvider>;
+}
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 function storedSession(id: string, facts: Readonly<{ lead?: string; reports?: number; turn?: Session['latestTurnStatus'] }> = {}): Session {
@@ -145,7 +130,10 @@ function createModel(options: Readonly<{
         serverId: 'server-a',
         readState: 'unread',
     };
-    const approvals = needsYou ? (options.openApprovals ?? [{ id: 'approval-1', header: {} }]) : [];
+    const approvals = needsYou ? (options.openApprovals ?? [{ id: 'approval-1', header: {} }]).map(artifact => ({
+        id: artifact.id, title: 'Approval', isDecrypted: true as const, header: artifact.header,
+        headerVersion: 1, seq: 1, createdAt: NOW - 60_000, updatedAt: NOW - 60_000,
+    })) : [];
     const workGroups = buildInboxWorkGroups({
         sessionEntries: sessionEntries as never,
         workflowRuns: needsYou ? ['library-run', ...(options.moreRunIds ?? [])].map((id) => workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
@@ -164,11 +152,13 @@ function createModel(options: Readonly<{
         resolveOriginRunId: () => null,
     });
     return {
-        source: {},
+        source: { isDataReady: true, sessionsById: Object.fromEntries(sessions), sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         openApprovals: approvals,
         openUsageNotices: [],
         dismissUsageNotice: vi.fn(async () => {}),
-        friendRequests: [{ id: 'friend-1', username: 'friend' }],
+        friendRequests: [UserProfileSchema.parse({ id: 'friend-1', username: 'friend', firstName: 'Friend', lastName: null,
+            avatar: null, bio: null, status: 'pending', publicKey: null })],
         sessionPresentation: {
             sessionsNeedingAttention: sessionEntries,
             readySessions: [ready],
@@ -178,7 +168,12 @@ function createModel(options: Readonly<{
         targetBySessionAddress: new Map([[readyTarget.key, readyTarget]]),
         actionOperationEntries: needsYou ? [{
             reason: 'failed',
-            operation: { serverId: 'server-a', snapshot: { operationId: 'op-failed' } },
+            operation: { serverId: 'server-a', observation: 'available', isUnavailableProjection: false,
+                snapshot: ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'op-failed', revision: 2,
+                    actionId: 'session.spawn_new', state: 'failed', scope: { accountId: 'account-a', machineId: 'machine-1' },
+                    title: 'Create session', createdAt: NOW - 60_000, startedAt: NOW - 50_000, settledAt: NOW - 30_000, cancellation: 'unsupported',
+                    error: { errorCode: 'failed', error: 'Failed' } }),
+            },
         }] : [],
         pendingReadKeys: new Set(),
         markAllPending: false,
@@ -197,6 +192,11 @@ function createModel(options: Readonly<{
         settle: vi.fn(async () => {}),
         setReminder: vi.fn(async () => {}),
     } as unknown as InboxModel;
+}
+
+function scopedByType(tree: ReactTestRenderer, scope: ReactTestInstance, type: unknown) {
+    const candidates = new Set(tree.findAllByType(type));
+    return scope.findAll(node => candidates.has(node));
 }
 
 type Node = { props: Record<string, unknown>; findAll: (predicate: (node: Node) => boolean) => readonly Node[] };
@@ -254,14 +254,14 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         };
         const screen = await renderScreen(<InboxContent model={model} />);
         expect(screen.findByTestId(`inbox.automation_run.${run.id}`)).not.toBeNull();
-        const stale = screen.findByTestId('inbox.automation_stale');
+        const stale = screen.findAllByType(SurfaceFreshnessLine).find(node => node.props.testID === 'inbox.automation_stale');
         expect(stale?.props.asOf).toBe(NOW - 60_000);
         stale!.props.action.onPress();
         expect(retry).toHaveBeenCalledOnce();
         expect(workflowRetry).not.toHaveBeenCalled();
     });
     beforeEach(async () => {
-        identityState.display = 'agentLogo';
+        storage.setState({ settings: { ...storage.getState().settings, sessionListIdentityDisplay: 'agentLogo' } });
         routerPush.mockClear();
         connection = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-a',
             request: async (url, init) => {
@@ -286,6 +286,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         vi.useRealTimers();
         await connection?.dispose();
         connection = null;
+        storage.setState(initialStorageState, true);
     });
 
     it('updates an unchanged Automation attention row age on the shared clock and keeps its open target', async () => {
@@ -313,7 +314,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
             'inbox.group.run:library-run',
             'inbox.group.other',
         ]);
-        const groups = tree.root.findAllByType('ItemGroup' as never);
+        const groups = tree.findAllByType(ItemGroup);
         expect(groups).toHaveLength(3);
         expect(groups[2]?.props.title).toBe('inbox.work.groups.otherTitle');
         expect(groups[0]?.props.titleLeading).toBeTruthy();
@@ -322,7 +323,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
 
         // The worker's prompt keeps the canonical answer card inside its lead's section.
         const leadSection = tree.root.findByProps({ testID: 'inbox.group.lead:lead' });
-        expect(leadSection.findAllByType('InboxSessionAttentionGroupCard').map((card) => card.props.session.id)).toEqual(['worker']);
+        expect(scopedByType(tree, leadSection, InboxSessionAttentionGroupCard).map((card) => card.props.session.id)).toEqual(['worker']);
         expect(leadSection.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.facts)
             .toEqual(['inbox.work.rows.stalled', 'inbox.work.rows.stalledReason']);
 
@@ -332,9 +333,9 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
 
         // Approvals and operations belong to Other sessions, beside loose sessions.
         const other = tree.root.findByProps({ testID: 'inbox.group.other' });
-        expect(other.findAllByType('ApprovalInboxCard')).toHaveLength(1);
-        expect(other.findAllByType('ActionOperationRows')).toHaveLength(1);
-        expect(tree.root.findAllByType('InboxReadySessionRow')).toHaveLength(0);
+        expect(scopedByType(tree, other, ApprovalInboxCard)).toHaveLength(1);
+        expect(scopedByType(tree, other, ActionOperationRows)).toHaveLength(1);
+        expect(tree.findAllByType(InboxReadySessionRow)).toHaveLength(0);
     });
 
     it('opens a run group header on the workflow attention window’s exact Home', async () => {
@@ -350,7 +351,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
             identityDisplay="agentLogo"
             presentation="screen"
             navigate={routerPush}
-        />);
+        />, { wrapper: PagePresentation });
 
         screen.findByTestId(`inbox.group.${group.key}.open`)!.props.onPress();
         expect(routerPush).toHaveBeenCalledWith('/workflows/runs/library-run?serverId=home%2F1%20a');
@@ -361,7 +362,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { tree } = await renderScreen(<InboxContent model={createModel({ moreRunIds: ['second-run', 'third-run'] })} />);
 
         // Lead, the runs, Other sessions: three sheets, not five.
-        expect(tree.root.findAllByType('ItemGroup' as never)).toHaveLength(3);
+        expect(tree.findAllByType(ItemGroup)).toHaveLength(3);
         const runs = tree.root.findByProps({ testID: 'inbox.group.run:library-run' });
         for (const id of ['library-run', 'second-run', 'third-run']) {
             expect(runs.findByProps({ testID: `inbox.run.${id}.review` })).toBeTruthy();
@@ -415,7 +416,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
 
         tree.root.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.onPress();
         await tree.pressByTestIdAsync('inbox.run.library-run');
-        tree.root.findByType('ApprovalInboxCard' as never).props.onPress();
+        tree.findByType(ApprovalInboxCard).props.onPress();
 
         await vi.waitFor(() => expect(selected).toEqual([
             { kind: 'session', serverId: 'server-a', id: 'stalled-worker' },
@@ -430,11 +431,11 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { tree } = await renderScreen(<InboxContent model={createModel()} />);
 
         const other = tree.root.findByProps({ testID: 'inbox.group.other' });
-        const cards = other.findAllByType('InboxSessionAttentionGroupCard');
+        const cards = scopedByType(tree, other, InboxSessionAttentionGroupCard);
         expect(cards.map((card) => card.props.session.id)).toEqual(['stopped']);
         expect(cards[0]?.props.permissionRequests).toEqual([{ id: 'p-stopped' }]);
         // Answer controls exist once per request: nowhere else in the Inbox.
-        expect(tree.root.findAllByType('InboxSessionAttentionGroupCard')).toHaveLength(2);
+        expect(tree.findAllByType(InboxSessionAttentionGroupCard)).toHaveLength(2);
     });
 
     it('shows a snoozed session quietly in place with its time and the row menu', async () => {
@@ -443,7 +444,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
 
         const row = tree.root.findByProps({ testID: 'inbox.snoozed.snoozed' });
         expect(row.props.facts.join(' · ')).toContain('inbox.work.rows.snoozedUntil');
-        expect(row.findAllByType('InboxSessionRowMenu')).toHaveLength(1);
+        expect(scopedByType(tree, row, InboxSessionRowMenu)).toHaveLength(1);
         const other = tree.root.findByProps({ testID: 'inbox.group.other' });
         const keys = other.findAll((node) => typeof node.props.testID === 'string'
             && /^inbox\.(session|snoozed)\.[a-z-]+$/.test(String(node.props.testID)))
@@ -457,7 +458,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const model = createModel({ workflowStale: true });
         const { tree } = await renderScreen(<InboxContent model={model} />);
 
-        const line = tree.root.findByType('SurfaceFreshnessLine' as never);
+        const line = tree.findByType(SurfaceFreshnessLine);
         expect(line.props.asOf).toBe(NOW - 60_000);
         expect(line.props.action.onPress).toBe(model.workflowAttention.retry);
         expect(tree.root.findByProps({ testID: 'inbox.group.run:library-run' })).toBeTruthy();
@@ -493,11 +494,11 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
     it('keeps finished sessions and people in Updates, with mark-all as that section action', async () => {
         const { InboxContent } = await import('./InboxContent');
         const model = createModel();
-        const { tree, pressByTestId } = await renderScreen(<InboxContent model={model} view="updates" />);
+        const { tree, pressByTestId } = await renderScreen(<InboxContent model={model} view="updates" />, { wrapper: PagePresentation });
 
         expect(groupOrder(tree as never)).toEqual([]);
-        expect(tree.root.findAllByType('InboxReadySessionRow')).toHaveLength(1);
-        expect(tree.root.findAllByType('UserCard')).toHaveLength(1);
+        expect(tree.findAllByType(InboxReadySessionRow)).toHaveLength(1);
+        expect(tree.findAllByType(UserCard)).toHaveLength(1);
         pressByTestId('inbox.ready.mark_all_read');
         expect(model.markRead).toHaveBeenCalledWith(model.sessionPresentation.markAllReadTargets);
     });
@@ -507,7 +508,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { tree } = await renderScreen(<InboxContent model={createModel({ needsYou: false })} />);
 
         // Updates still hold a finished session, so this is "Nothing needs you", not "all caught up".
-        const empty = tree.root.findByType('EmptyState' as never);
+        const empty = tree.findByType(EmptyState);
         expect(empty.props.title).toBe('inbox.work.empty.title');
         expect(empty.props.layout).toBe('page');
         expect(empty.props.primaryAction).toBeUndefined();
@@ -520,7 +521,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
             <InboxContent model={createModel()} presentation="popover" onOpenInbox={onOpenInbox} />,
         );
 
-        expect(tree.root.findAllByType('ItemGroup' as never)).toHaveLength(0);
+        expect(tree.findAllByType(ItemGroup)).toHaveLength(0);
         expect(groupOrder(tree as never)).toEqual(['inbox.group.lead:lead', 'inbox.group.run:library-run']);
         tree.root.findByProps({ testID: 'inbox.popover.more_other' }).props.onPress();
         expect(onOpenInbox).toHaveBeenCalledTimes(1);
@@ -574,7 +575,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         });
         const { tree } = await renderScreen(<InboxContent model={model} />);
 
-        tree.root.findByType('ApprovalInboxCard').props.onPress();
+        tree.findByType(ApprovalInboxCard).props.onPress();
 
         expect(routerPush).toHaveBeenCalledWith('/inbox/approvals/approval-home-b?serverId=stable-home-b');
     });
@@ -604,7 +605,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         expect(NativeStyleSheet.flatten(runWord.props.style).color).toBe(workStatusWordStyle('attention').color);
         // A run that is its own work root does not repeat its name above its row; its sheet is headed by
         // the kind, like its sibling groups (DESIGN-17 R4).
-        const runGroup = tree.root.findByProps({ testID: 'inbox.group.run:library-run' }).findAllByType('ItemGroup' as never)[0];
+        const runGroup = scopedByType(tree, tree.root.findByProps({ testID: 'inbox.group.run:library-run' }), ItemGroup)[0];
         expect(runGroup?.props.title).toBe('inbox.work.groups.runsTitle');
 
         // A stalled worker: its Session word beside the row's own explanation.
@@ -618,7 +619,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { InboxContent } = await import('./InboxContent');
         const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />);
 
-        const row = tree.root.findByType('InboxReadySessionRow' as never);
+        const row = tree.findByType(InboxReadySessionRow);
         // The Session owner's word replaces the Inbox-local "Ready for review" status.
         expect(row.props.statusTone).toBe('neutral');
         expect(typeof row.props.statusWord).toBe('string');
@@ -626,12 +627,12 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
     });
 
     it('removes the leading slot when the canonical Session-list identity preference is none', async () => {
-        identityState.display = 'none';
+        storage.setState({ settings: { ...storage.getState().settings, sessionListIdentityDisplay: 'none' } });
         const { InboxContent } = await import('./InboxContent');
         const { tree } = await renderScreen(<InboxContent model={createModel()} />);
 
         const failedRow = tree.root.findByProps({ testID: 'inbox.session.failed' });
         // A failed session keeps its failure glyph; identity marks follow the preference.
-        expect(failedRow.findAllByType('SessionListIdentity')).toHaveLength(0);
+        expect(scopedByType(tree, failedRow, SessionListIdentity)).toHaveLength(0);
     });
 });

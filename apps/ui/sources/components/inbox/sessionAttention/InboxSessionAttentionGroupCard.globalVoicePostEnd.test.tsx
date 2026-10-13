@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 import {
     createSessionFixture,
@@ -11,6 +12,9 @@ import {
     standardCleanup,
 } from '@/dev/testkit';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { t } from '@/text';
 import { storage } from '@/sync/domains/state/storage';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -22,9 +26,9 @@ import { InboxSessionAttentionGroupCard } from './InboxSessionAttentionGroupCard
 const NOW_MS = 1_000_000;
 const SESSION_ID = 'global-voice-after-end';
 const REQUEST_ID = 'permission-after-end';
-const permissionRpc = vi.hoisted(() => vi.fn(async (
-    _params: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc')['sessionRpcWithServerScope']>[0],
-) => undefined));
+const permissionRpc = vi.hoisted(() => vi.fn(async (_request: Readonly<{
+    serverUrl: string | undefined; method: string; params: unknown;
+}>) => undefined));
 const routerPush = vi.hoisted(() => vi.fn());
 const initialState = storage.getState();
 let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
@@ -58,21 +62,20 @@ vi.mock('expo-router', async () => {
         },
     }).module;
 });
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key) => key });
-});
-// Keep the store, scope resolution and Action admission real; replace only socket transport.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async (importOriginal) => {
-    const { installServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return installServerScopedSessionRpcModuleMock({
-        sessionRpcWithServerScope: async <R,>(params: Parameters<typeof permissionRpc>[0]): Promise<R> => {
-            if (params.method !== RPC_METHODS.SESSION_PERMISSION_RESPOND) throw new Error('Unexpected request in Inbox fixture');
-            await permissionRpc(params);
-            // This external RPC acknowledges without a payload; R is selected by the caller.
-            return undefined as R;
-        },
-    })(importOriginal);
+// Account, crypto and Home qualification run in the real RPC wrapper. Only
+// Socket.IO's external delivery and acknowledgement are synthetic.
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    socket.connected = true;
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!payload || typeof payload !== 'object' || !('method' in payload)
+            || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Expected Socket RPC request');
+        if (!payload.method.endsWith(`:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`)) throw new Error('Unexpected request in Inbox fixture');
+        await permissionRpc({ serverUrl, method: payload.method, params: payload.params });
+        return { ok: true, result: undefined };
+    });
 });
 
 function createPendingPostEndSession(): Session {
@@ -148,12 +151,13 @@ function createActivitySource(session: Session): ActivityAttentionSource {
 describe('global Voice post-End permission custody', () => {
     beforeEach(async () => {
         vi.clearAllMocks();
+        const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
         home = await serveSessionActionHome({
             homes: [
                 { key: 'b', serverUrl: 'https://b.example.test', accountId: 'account-b', currentAccount: true },
                 { key: 'a', serverUrl: 'https://a.example.test', accountId: 'account-a', currentAccount: true },
             ],
-            route: () => undefined,
+            route: request => sessionHttp.handle(request.url) ?? undefined,
         });
         serverIdA = home.homes.a!.id;
         serverIdB = home.homes.b!.id;
@@ -173,8 +177,8 @@ describe('global Voice post-End permission custody', () => {
         routerPush.mockResolvedValue(undefined);
     });
     afterEach(standardCleanup);
-    afterEach(() => {
-        home.dispose();
+    afterEach(async () => {
+        await home.dispose();
         act(() => storage.setState(initialState));
     });
 
@@ -239,7 +243,7 @@ describe('global Voice post-End permission custody', () => {
             matches: (selector: string) => selector === ':focus-visible' && focusVisible,
         });
 
-        expect(resume().props.accessibilityLabel).toBe('session.pendingActivation.actions.resume');
+        expect(resume().props.accessibilityLabel).toBe(t('session.pendingActivation.actions.resume'));
         expect(resume().props.accessibilityState).toMatchObject({ busy: false, disabled: false });
         expect(pillRing()).toBeNull();
 
@@ -323,7 +327,7 @@ describe('global Voice post-End permission custody', () => {
             );
 
             await pressTestInstanceAsync(
-                screen.find((node) => node.props.accessibilityLabel === 'inbox.openSession'),
+                screen.find((node) => node.props.accessibilityLabel === t('inbox.openSession', { session: 'Global Voice session' })),
                 'post-End hidden Voice session open action',
             );
 
@@ -337,10 +341,9 @@ describe('global Voice post-End permission custody', () => {
             expect(screen.findByTestId('permission-footer.action-error')).toBeNull();
             expect(permissionRpc).toHaveBeenCalledTimes(1);
             expect(permissionRpc).toHaveBeenCalledWith(expect.objectContaining({
-                sessionId: SESSION_ID,
-                serverId: serverIdA,
-                method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
-                payload: {
+                serverUrl: 'https://a.example.test',
+                method: `${SESSION_ID}:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`,
+                params: {
                     id: REQUEST_ID,
                     approved,
                     decision: rpcDecision,
@@ -384,10 +387,9 @@ describe('global Voice post-End permission custody', () => {
         await screen.pressByTestIdAsync('permission-footer.allow');
 
         expect(permissionRpc).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: SESSION_ID,
-            serverId: serverIdB,
-            method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
-            payload: { id: REQUEST_ID, approved: true, decision: 'approved', answeringClientCategory: 'web' },
+            serverUrl: 'https://b.example.test',
+            method: `${SESSION_ID}:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`,
+            params: { id: REQUEST_ID, approved: true, decision: 'approved', answeringClientCategory: 'web' },
         }));
     });
 

@@ -1,14 +1,13 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
+import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 const routerPush = vi.hoisted(() => vi.fn());
-const storageFixtures = vi.hoisted(() => ({
-    session: null as Record<string, unknown> | null,
-    machine: null as Record<string, unknown> | null,
-}));
+const initialState = storage.getState();
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -22,48 +21,34 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useServerScopedMachine: (serverId: string | null, machineId: string) => (
-            serverId === 'home-a' && machineId === 'machine-1' ? storageFixtures.machine : null
-        ),
-        useSessionListRenderableWithServerScope: (serverId: string | null, sessionId: string) => (
-            serverId === 'home-a' && sessionId === 'session-1' ? storageFixtures.session : null
-        ),
-    });
-});
-vi.mock('@/hooks/teams/useSessionAudienceContext', () => ({
-    useSessionAudienceContext: () => ({ scopes: new Map(), labelsVersion: '[]', labelsBySessionKey: new Map() }),
-}));
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({ useServerProfilesGeneration: () => 1 }));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    getServerProfileById: (serverId: string) => ({ id: serverId, name: serverId === 'home-a' ? 'Home A' : 'Home B' }),
-}));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: routerPush } }).module;
 });
 
+beforeEach(() => storage.setState(initialState, true));
 afterEach(() => {
+    standardCleanup();
     routerPush.mockReset();
-    storageFixtures.session = null;
-    storageFixtures.machine = null;
+    storage.setState(initialState, true);
     actionOperationStore.reset();
 });
 
 describe('ActionOperationDetailModal', () => {
     it('shows the preferred source session title when the full session is not loaded', async () => {
-        storageFixtures.session = {
+        const session = createSessionFixture({
             id: 'session-1',
+            serverId: 'home-a',
             encryptionMode: 'plain',
-            path: '/workspace/dev',
             metadata: {
+                ...createSessionFixture().metadata!,
                 path: '/workspace/dev',
                 summary: { text: 'Stabilize CI and Nightly Releases', updatedAt: 123 },
             },
-        };
+        });
+        storage.setState({ sessionListRowsByServerId: { 'home-a': {
+            [session.id]: buildSessionListRenderableFromSession(session),
+        } } });
         actionOperationStore.mergeSnapshots({ serverId: 'home-a', snapshots: [{
             version: 1,
             operationId: 'fork-operation',
@@ -198,11 +183,15 @@ describe('ActionOperationDetailModal', () => {
     });
 
     it('does not adopt active-Home context or navigation for an unqualified legacy operation', async () => {
-        storageFixtures.session = {
+        const wrongSession = createSessionFixture({
             id: 'session-1',
+            serverId: 'home-a',
             encryptionMode: 'plain',
-            metadata: { summary: { text: 'Wrong active-Home session', updatedAt: 123 } },
-        };
+            metadata: { ...createSessionFixture().metadata!, summary: { text: 'Wrong active-Home session', updatedAt: 123 } },
+        });
+        storage.setState({ sessions: { [wrongSession.id]: wrongSession }, sessionListRowsByServerId: { 'home-a': {
+            [wrongSession.id]: buildSessionListRenderableFromSession(wrongSession),
+        } } });
         actionOperationStore.mergeSnapshots({
             serverId: null,
             snapshots: [{

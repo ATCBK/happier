@@ -1,51 +1,34 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { ActionOperationLedgerView, ActionOperationRows } from './ActionOperationLedger';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroupRowPositionProvider } from '@/components/ui/lists/ItemGroupRowPosition';
 
-const storageFixtures = vi.hoisted(() => ({
-    machines: new Map<string, Record<string, unknown>>(),
-    sessions: new Map<string, Record<string, unknown>>(),
-}));
+const initialState = storage.getState();
+let homeA = '';
+let homeB = '';
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useServerScopedMachine: (serverId: string | null, machineId: string) => (
-            storageFixtures.machines.get(JSON.stringify([serverId, machineId])) ?? null
-        ),
-        useSessionListRenderableWithServerScope: (serverId: string | null, sessionId: string) => (
-            storageFixtures.sessions.get(JSON.stringify([serverId, sessionId])) ?? null
-        ),
-    });
+beforeEach(async () => {
+    storage.setState(initialState, true);
+    homeA = (await upsertServerProfile({ serverUrl: 'https://ledger-a.example.test', name: 'Home A' })).id;
+    homeB = (await upsertServerProfile({ serverUrl: 'https://ledger-b.example.test', name: 'Home B' })).id;
 });
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({
-    useServerProfilesGeneration: () => 0,
-}));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    getServerProfileById: (serverId: string) => ({ id: serverId, name: serverId === 'home-a' ? 'Home A' : 'Home B' }),
-}));
-vi.mock('@/hooks/teams/useSessionAudienceContext', () => ({
-    useSessionAudienceContext: () => ({
-        scopes: new Map(),
-        labelsVersion: '[]',
-        labelsBySessionKey: new Map(),
-    }),
-}));
 
 afterEach(async () => {
-    storageFixtures.machines.clear();
-    storageFixtures.sessions.clear();
     await standardCleanup();
+    storage.setState(initialState, true);
+    await removeServerProfile(homeA);
+    await removeServerProfile(homeB);
 });
 
 describe('ActionOperationLedgerView', () => {
@@ -91,7 +74,7 @@ describe('ActionOperationLedgerView', () => {
         const screen = await renderScreen(
             <ActionOperationRows
                 operations={[{
-                    serverId: 'server-1',
+                    serverId: homeB,
                     snapshot: {
                         version: 1,
                         operationId: 'operation-offline',
@@ -277,23 +260,27 @@ describe('ActionOperationLedgerView', () => {
     });
 
     it('shows only the source session title for a session-scoped operation', async () => {
-        storageFixtures.machines.set(JSON.stringify(['server-1', 'machine-1']), {
+        const machine = createMachineFixture({
             id: 'machine-1',
-            metadata: { displayName: 'Wrong machine fallback' },
+            metadata: { ...createMachineFixture().metadata!, displayName: 'Wrong machine fallback' },
         });
-        storageFixtures.sessions.set(JSON.stringify(['server-1', 'session-1']), {
+        const session = createSessionFixture({
             id: 'session-1',
+            serverId: homeB,
             encryptionMode: 'plain',
             active: true,
             metadata: {
+                ...createSessionFixture().metadata!,
                 path: '/workspace/dev',
                 summary: { text: 'Stabilize CI and Nightly Releases', updatedAt: 123 },
             },
         });
+        storage.setState({ machineListByServerId: { [homeB]: [machine] },
+            sessionListRowsByServerId: { [homeB]: { [session.id]: buildSessionListRenderableFromSession(session) } } });
         const screen = await renderScreen(
             <ActionOperationLedgerView
                 operations={[{
-                    serverId: 'server-1',
+                    serverId: homeB,
                     snapshot: {
                         version: 1,
                         operationId: 'operation-session-title',
@@ -318,23 +305,29 @@ describe('ActionOperationLedgerView', () => {
     });
 
     it('keeps same-ID Sessions on two Homes distinct and prefers only the exact address', async () => {
-        storageFixtures.sessions.set(JSON.stringify(['home-a', 'shared-session']), {
+        const alpha = createSessionFixture({
             id: 'shared-session',
+            serverId: homeA,
             encryptionMode: 'plain',
             active: true,
-            metadata: { summary: { text: 'Alpha Session', updatedAt: 123 } },
+            metadata: { ...createSessionFixture().metadata!, summary: { text: 'Alpha Session', updatedAt: 123 } },
         });
-        storageFixtures.sessions.set(JSON.stringify(['home-b', 'shared-session']), {
+        const beta = createSessionFixture({
             id: 'shared-session',
+            serverId: homeB,
             encryptionMode: 'plain',
             active: true,
-            metadata: { summary: { text: 'Beta Session', updatedAt: 123 } },
+            metadata: { ...createSessionFixture().metadata!, summary: { text: 'Beta Session', updatedAt: 123 } },
         });
+        storage.setState({ sessionListRowsByServerId: {
+            [homeA]: { [alpha.id]: buildSessionListRenderableFromSession(alpha) },
+            [homeB]: { [beta.id]: buildSessionListRenderableFromSession(beta) },
+        } });
         const screen = await renderScreen(
             <ActionOperationLedgerView
                 operations={[
                     {
-                        serverId: 'home-b',
+                        serverId: homeB,
                         snapshot: {
                             version: 1,
                             operationId: 'operation-b',
@@ -351,7 +344,7 @@ describe('ActionOperationLedgerView', () => {
                         isUnavailableProjection: false,
                     },
                     {
-                        serverId: 'home-a',
+                        serverId: homeA,
                         snapshot: {
                             version: 1,
                             operationId: 'operation-a',
@@ -368,7 +361,7 @@ describe('ActionOperationLedgerView', () => {
                         isUnavailableProjection: false,
                     },
                 ]}
-                preferredSessionAddress={{ serverId: 'home-a', sessionId: 'shared-session' }}
+                preferredSessionAddress={{ serverId: homeA, sessionId: 'shared-session' }}
                 onOpenOperation={vi.fn()}
             />,
         );

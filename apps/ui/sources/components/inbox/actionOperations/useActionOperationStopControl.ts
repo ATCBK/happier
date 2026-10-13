@@ -20,11 +20,14 @@ export function useActionOperationStopControl(
     >(null);
     const [failureCode, setFailureCode] = React.useState<string | null>(null);
     const requestRef = React.useRef<AbortController | null>(null);
-    const retryUnconfirmedStop = (operation?.snapshot.state === 'accepted' || operation?.snapshot.state === 'running')
-        && operation.snapshot.observation?.kind === 'stop_unconfirmed';
-    const stopRequested = feedback === 'requested' && !retryUnconfirmedStop;
+    const live = operation?.snapshot.state === 'accepted' || operation?.snapshot.state === 'running';
+    const retryUnconfirmedStop = live
+        && operation?.snapshot.observation?.kind === 'stop_unconfirmed';
+    const stopRequested = live && feedback === 'requested' && !retryUnconfirmedStop;
     const scopeKey = JSON.stringify([operation?.serverId, operation?.snapshot.operationId]);
-    const approval = useActionApprovalContinuation({ scopeKey, serverId: operation?.serverId ?? '', onExecuted: NO_APPROVAL_REFRESH });
+    const approval = useActionApprovalContinuation({ scopeKey, serverId: operation?.serverId ?? '',
+        onExecuted: NO_APPROVAL_REFRESH, openOnRequest: true });
+    const awaitingApproval = approval.approvalId !== null && (approval.approvalStatus === undefined || approval.approvalStatus === 'open');
 
     React.useEffect(() => {
         mountedRef.current = true;
@@ -110,5 +113,6 @@ export function useActionOperationStopControl(
             });
     }, [operation, request, approval.requestApproval, stopRequested]);
 
-    return { pending, feedback, failureCode, stopRequested, retryUnconfirmedStop, requestStop, pendingApproval: approval.approvalId ? { artifactId: approval.approvalId, serverId: operation?.serverId } : null } as const;
+    return { pending: pending && !awaitingApproval, feedback, failureCode, stopRequested, retryUnconfirmedStop, requestStop,
+        pendingApproval: approval.approvalId ? { artifactId: approval.approvalId, serverId: operation?.serverId } : null } as const;
 }

@@ -6,7 +6,6 @@ import type { ActionOperationProjection } from '@/sync/domains/actionOperations/
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
-vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({ useServerScopedMachine: () => null }));
 
 describe('terminal-less Project command output', () => {
   it.each(['projectCommand', 'machineEnvironment'] as const)('shows canonical terminal-less $0 review, uncertainty and settled states', async (kind) => {

@@ -408,7 +408,7 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         width: '100%',
         flexGrow: 1,
-        paddingBottom: 14,
+        paddingBottom: theme.space.s16,
     },
     emptyContainer: {
         flexGrow: 1,

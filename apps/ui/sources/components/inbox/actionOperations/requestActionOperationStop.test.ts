@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -15,6 +15,10 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), session: vi.fn() }));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
@@ -35,6 +39,8 @@ const { ActionOperationLedgerView } = await import('./ActionOperationLedger');
 const { ActionOperationDetailControls } = await import('./ActionOperationDetailControls');
 const { projectActionOperationDetail } = await import('./actionOperationDetailPresentation');
 const { WorkItemRow } = await import('@/components/sessions/work/WorkItemRow');
+const { router } = await import('expo-router');
+const { buildApprovalHref } = await import('@/components/approvals/approvalNavigation');
 const { projectWork, resolveWorkItemContextActions } = await import('@/components/sessions/work/workProjection');
 
 function WorkRowPortal(props: React.PropsWithChildren) {
@@ -78,12 +84,19 @@ function operation(serverId: string): ActionOperationProjection {
     };
 }
 
+async function addOriginHome(options: Parameters<typeof harness.addHome>[0]) {
+    const serverId = await harness.addHome({ ...options, currentAccount: true,
+        serverIdentityId: options.serverIdentityId ?? 'srv_origin_test' });
+    await installOwnMachineApprovalReplayBoundary({ harness, serverId, accountId: 'alice', machineId: 'machine-1' });
+    return serverId;
+}
+
 describe('requestActionOperationStop', () => {
     beforeEach(async () => { await harness.reset(); actionOperationStore.reset(); rpc.machine.mockReset(); rpc.session.mockReset(); });
     afterEach(() => standardCleanup());
 
     it('routes through the operation transport Home rather than ambient focus', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'action.operations.cancel': ['ui'] } },
         } }, version: 1 } });
@@ -98,7 +111,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('returns canonical deferred approval custody without dispatching Stop', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test',
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test',
             accountId: 'alice', serverIdentityId: 'origin-identity' });
         const result = await requestActionOperationStop(operation(serverId));
         expect(result).toMatchObject({ kind: 'approval_request_created', actionId: 'action.operations.cancel' });
@@ -106,7 +119,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it.each(['unsupported', 'not_found'] as const)('keeps native %s feedback after an Ask-first Stop refusal', async kind => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const target = operation(serverId);
         const hook = await renderHook(() => useActionOperationStopControl(target));
@@ -115,8 +128,8 @@ describe('requestActionOperationStop', () => {
             await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).not.toBeNull());
             expect(rpc.machine).not.toHaveBeenCalled();
             rpc.machine.mockResolvedValue({ kind });
-            await expect(decideApprovalAsInbox(serverId, hook.getCurrent().pendingApproval!.artifactId, 'approve'))
-                .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+            const decision = await decideApprovalAsInbox(serverId, hook.getCurrent().pendingApproval!.artifactId, 'approve');
+            expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
             await waitForHomeGovernance(() => expect(hook.getCurrent().pending).toBe(false));
             expect(hook.getCurrent().feedback).toBe(kind);
             expect(hook.getCurrent().stopRequested).toBe(false);
@@ -126,7 +139,7 @@ describe('requestActionOperationStop', () => {
 
 
     it('holds the real row Stop through deferred approval without opening detail', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         let opened = false;
         const screen = await renderScreen(React.createElement(ActionOperationLedgerView, {
             operations: [operation(serverId)], onOpenOperation: () => { opened = true; },
@@ -144,16 +157,20 @@ describe('requestActionOperationStop', () => {
     });
 
     it('joins the real deferred replay and releases rejected or retired mounted interest without dispatch', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         // A mounted active-Home reader observes decision writes through the real Account-scoped Artifact store.
         await harness.requireUiApproval(serverId, 'action.operations.cancel');
         let target = operation(serverId);
         const hook = await renderHook(() => useActionOperationStopControl(target));
         act(() => hook.getCurrent().requestStop());
         await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).not.toBeNull());
-        expect(hook.getCurrent().pending).toBe(true);
+        // Waiting on the human decision is not a dispatched native Stop.
+        expect(hook.getCurrent().pending).toBe(false);
+        expect(hook.getCurrent().stopRequested).toBe(false);
         expect(rpc.machine).not.toHaveBeenCalled();
         const firstId = hook.getCurrent().pendingApproval!.artifactId;
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        expect(router.push).toHaveBeenLastCalledWith(buildApprovalHref(firstId, resolveServerProfileScopeIdForIdentifier(serverId)));
         expect(await decideApprovalAsInbox(serverId, firstId, 'reject')).toMatchObject({ ok: true });
         await waitForHomeGovernance(() => expect(hook.getCurrent().pending).toBe(false));
         expect(hook.getCurrent().feedback).toBe('failed');
@@ -170,7 +187,11 @@ describe('requestActionOperationStop', () => {
         expect(rpc.machine).toHaveBeenCalledTimes(1);
         expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine-1', method: 'actionOperation.cancel.v1' }));
         rpc.machine.mockClear();
-        target = { ...target, snapshot: { ...target.snapshot, revision: 2,
+        const activeTarget = target;
+        target = { ...target, snapshot: { ...target.snapshot, state: 'cancelled', revision: 2, settledAt: 3 } };
+        await hook.rerender();
+        expect(hook.getCurrent().stopRequested).toBe(false);
+        target = { ...activeTarget, snapshot: { ...activeTarget.snapshot, revision: 3,
             observation: { kind: 'stop_unconfirmed', code: 'terminal_stop_failed' } } };
         await hook.rerender();
         act(() => hook.getCurrent().requestStop());
@@ -191,7 +212,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('never adopts the replacement Account when retirement occurs during approval creation', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         const responseGate = createDeferred<void>();
         const answer = { respondAfter: responseGate.promise, body: undefined as unknown };
         harness.answer(serverId, 'POST /v1/artifacts', answer);
@@ -212,7 +233,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('refuses a retained prior-Account target before any new approval or cancellation effect', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         const retained = operation(serverId);
         await harness.switchAccount(serverId, 'bob');
         await expect(requestActionOperationStop(retained)).rejects.toMatchObject({ code: 'action_account_scope_changed' });
@@ -226,7 +247,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('re-enables explicit Stop only after the owner reports stop unconfirmed, without settling the operation', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'action.operations.cancel': ['ui'] } },
         } }, version: 1 } });
@@ -268,7 +289,7 @@ describe('requestActionOperationStop', () => {
     });
 
     it('requests contextual Work Stop before output exists and joins approval without opening or settling the row', async () => {
-        const serverId = await harness.addHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
         const accepted: ActionOperationProjection = {
             ...operation(serverId),
             snapshot: {

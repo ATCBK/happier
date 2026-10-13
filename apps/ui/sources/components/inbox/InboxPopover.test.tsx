@@ -1,89 +1,69 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { InboxSummaryProvider, useSharedInboxSummary } from '@/hooks/inbox/useInboxSummary';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const navigation = vi.hoisted(() => ({ order: [] as string[] }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    router: { push: route => navigation.order.push(String(route)) },
+}).module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
-const capture = vi.hoisted(() => ({
-    contentProps: null as Record<string, unknown> | null,
-}));
-const inboxModel = {
-    sessionPresentation: {
-        markAllReadTargets: [],
-        pendingRequestHydrationTargets: [],
-        sessionsNeedingAttention: [] as unknown[],
-        readySessions: [] as unknown[],
-    },
-    markAllPending: false,
-    markRead: vi.fn(),
-    openApprovals: [] as unknown[],
-    openUsageNotices: [],
-    actionOperationEntries: [],
-    friendRequests: [],
-    ...createInboxAttentionFixture(),
-    workGroups: [],
-};
-const boundaryState = vi.hoisted(() => ({ mounts: 0 }));
-
-vi.mock('@/hooks/inbox/useInboxModel', () => ({
-    InboxModelBoundary: (props: { children: React.ReactNode }) => {
-        boundaryState.mounts += 1;
-        return props.children;
-    },
-    useInboxModel: () => inboxModel,
-}));
-
-vi.mock('./InboxContent', () => ({
-    InboxContent: (props: Record<string, unknown>) => {
-        capture.contentProps = props;
-        return React.createElement('InboxContent', props);
-    },
-}));
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
-});
+const initialState = storage.getState();
+let summaryCount = 0;
+function SummaryProbe() {
+    summaryCount = useSharedInboxSummary().count;
+    return null;
+}
 
 describe('InboxPopoverContent (lab inbox-I2)', () => {
     beforeEach(() => {
-        boundaryState.mounts = 0;
-        capture.contentProps = null;
+        navigation.order = [];
+        storage.setState(initialState, true);
+        storage.setState({ isDataReady: true, profileScope: {
+            serverId: getActiveServerSnapshot().serverId, accountId: 'account-a',
+        } });
+    });
+    afterEach(() => {
+        standardCleanup();
+        storage.setState(initialState, true);
     });
 
     it('names itself, offers Open Inbox as its one header action, and closes before every navigation', async () => {
-        const order: string[] = [];
-        const close = vi.fn(() => order.push('close'));
-        const onOpenInbox = vi.fn(() => order.push('open'));
+        const notice = createUsageNoticeArtifactFixture();
+        storage.setState({ artifacts: { [notice.id]: notice } });
         const { InboxPopoverContent } = await import('./InboxPopover');
-        const screen = await renderScreen(<InboxPopoverContent close={close} onOpenInbox={onOpenInbox} />);
+        const screen = await renderScreen(<InboxPopoverContent
+            close={() => navigation.order.push('close')} onOpenInbox={() => navigation.order.push('open')} />);
 
-        expect(boundaryState.mounts).toBe(1);
-        expect(capture.contentProps?.onBeforeNavigate).toBe(close);
-        expect(capture.contentProps?.presentation).toBe('popover');
         expect(screen.getTextContent()).toContain('tabs.inbox');
         expect(screen.findByTestId('inbox.popover.mark_all_read')).toBeNull();
         expect(screen.findByTestId('inbox.popover.open')).not.toBeNull();
+        expect(screen.findByTestId('inbox.popover.count')?.props.children).toBe('1');
 
-        act(() => screen.pressByTestId('inbox.popover.open'));
-        expect(order).toEqual(['close', 'open']);
+        await screen.pressByTestIdAsync('inbox.popover.open');
+        expect(navigation.order).toEqual(['close', 'open']);
+        await screen.pressByTestIdAsync(`inbox.usage-notice.${notice.id}`);
+        expect(navigation.order).toEqual(['close', 'open', 'close', '/settings/usage']);
     });
 
-    it('shows the same count as the rail badge that opened it: what needs you plus the updates', async () => {
-        inboxModel.openApprovals = [{}];
-        inboxModel.workflowAttention = { ...inboxModel.workflowAttention, runIds: ['run-1'] };
-        inboxModel.sessionPresentation.readySessions = [{}, {}];
-        try {
-            const { InboxPopoverContent } = await import('./InboxPopover');
-            const screen = await renderScreen(<InboxPopoverContent close={() => {}} onOpenInbox={() => {}} />);
-            expect(screen.findByTestId('inbox.popover.count')?.props.children).toBe('4');
-        } finally {
-            inboxModel.openApprovals = [];
-            inboxModel.workflowAttention = { ...inboxModel.workflowAttention, runIds: [] };
-            inboxModel.sessionPresentation.readySessions = [];
-        }
+    it('shows the same real Account-notice count as the rail summary that opened it', async () => {
+        const notices = Array.from({ length: 4 }, (_, index) => createUsageNoticeArtifactFixture({ id: `notice-${index}` }));
+        storage.setState({ artifacts: Object.fromEntries(notices.map(notice => [notice.id, notice])) });
+        const { InboxPopoverContent } = await import('./InboxPopover');
+        const screen = await renderScreen(<InboxSummaryProvider><SummaryProbe />
+            <InboxPopoverContent close={() => {}} onOpenInbox={() => {}} />
+        </InboxSummaryProvider>);
+        expect(summaryCount).toBe(4);
+        expect(screen.findByTestId('inbox.popover.count')?.props.children).toBe(String(summaryCount));
+        await act(async () => storage.setState({ artifacts: {} }));
+        expect(summaryCount).toBe(0);
+        expect(screen.findByTestId('inbox.popover.count')).toBeNull();
     });
 });

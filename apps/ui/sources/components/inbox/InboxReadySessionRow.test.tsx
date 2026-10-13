@@ -1,7 +1,8 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { SessionListIdentity } from '@/components/sessions/shell/SessionListIdentity';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,15 +35,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/components/sessions/shell/SessionListIdentity', () => ({ SessionListIdentity: 'SessionListIdentity' }));
-vi.mock('@/components/sessions/shell/resolveSessionListDensityViewState', () => ({
-    SESSION_LIST_ROW_IDENTITY_METRICS: { compact: { slotSize: 30, agentLogoSize: 23 } },
-}));
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text' }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
-    ActivitySpinner: 'ActivitySpinner',
-    iconMatchedSpinnerSize: () => 'small',
-}));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
@@ -66,7 +58,7 @@ async function renderRow(overrides?: Partial<{
     const { InboxReadySessionRow } = await import('./InboxReadySessionRow');
     const tree = (await renderScreen(
         <InboxReadySessionRow
-            session={{ id: 'session-1', active: false, metadata: {} } as never}
+            session={createSessionFixture({ id: 'session-1', active: false, metadata: null })}
             identityDisplay={overrides?.identityDisplay ?? 'agentLogo'}
             connected={true}
             sessionId="session-1"
@@ -186,7 +178,7 @@ describe('InboxReadySessionRow', () => {
         const { tree } = await renderRow({ identityDisplay: 'none' });
         const [row] = findByTestId(tree, 'inbox.ready_session.server-a.session-1');
 
-        expect(tree.root.findAllByType('SessionListIdentity')).toHaveLength(0);
+        expect(tree.root.findAllByType(SessionListIdentity)).toHaveLength(0);
         expect(row.props.accessibilityRole).toBe('button');
     });
 

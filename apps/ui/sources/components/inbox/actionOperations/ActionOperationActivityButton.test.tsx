@@ -1,26 +1,13 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
-
-const activityHookState = vi.hoisted(() => ({
-    operations: [] as ActionOperationProjection[],
-    summary: { activeCount: 0, hasAttention: false },
-    useAllActionOperations: vi.fn(),
-}));
-
-vi.mock('@/sync/domains/actionOperations/useActionOperations', () => ({
-    useActionOperationActivitySummary: () => activityHookState.summary,
-    useActionOperationsHaveAttention: () => activityHookState.summary.hasAttention,
-    useAllActionOperations: () => {
-        activityHookState.useAllActionOperations();
-        return activityHookState.operations;
-    },
-}));
+import { actionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
+import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
+import { Popover } from '@/components/ui/popover';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -35,24 +22,10 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key === 'inbox.updates' ? 'Activity' : key });
 });
 
-const capturedPopoverProps: { current: Readonly<Record<string, unknown>> | null } = { current: null };
-type CapturedPopoverProps = Readonly<Record<string, unknown>> & Readonly<{
-    open: boolean;
-    children: React.ReactNode | ((renderProps: Readonly<{ maxHeight: number; maxWidth: number; placement: 'bottom' }>) => React.ReactNode);
-}>;
-vi.mock('@/components/ui/popover', () => ({
-    Popover: React.memo((props: CapturedPopoverProps) => {
-        capturedPopoverProps.current = props;
-        if (!props.open) return null;
-        const content = typeof props.children === 'function'
-            ? props.children({ maxHeight: 560, maxWidth: 396, placement: 'bottom' })
-            : props.children;
-        return <View testID="action-operation-activity-popover">{content}</View>;
-    }),
-}));
-vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
-    FloatingOverlay: React.memo((props: { children: React.ReactNode }) => <View>{props.children}</View>),
-}));
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal,
+        { maxHeight: 560, maxWidth: 396, placement: 'bottom' }),
+);
 
 function operation(overrides: Partial<ActionOperationSnapshotV1> = {}): ActionOperationProjection {
     return {
@@ -76,10 +49,11 @@ function operation(overrides: Partial<ActionOperationSnapshotV1> = {}): ActionOp
 }
 
 describe('ActionOperationActivityButtonView', () => {
+    beforeEach(() => actionOperationStore.reset());
     afterEach(() => {
-        activityHookState.operations = [];
-        activityHookState.summary = { activeCount: 0, hasAttention: false };
-        activityHookState.useAllActionOperations.mockClear();
+        standardCleanup();
+        actionOperationStore.reset();
+        vi.restoreAllMocks();
     });
 
     it('stays absent when there is no active or unseen operation', async () => {
@@ -119,16 +93,17 @@ describe('ActionOperationActivityButtonView', () => {
             });
         });
 
-        expect(screen.findByTestId('action-operation-activity-popover')).not.toBeNull();
+        expect(screen.findAllByType(Popover)).toHaveLength(1);
         expect(screen.findByTestId('inbox.action-operation.operation-1')).not.toBeNull();
-        expect(capturedPopoverProps.current?.placement).toBe('bottom');
-        expect(capturedPopoverProps.current?.anchor).toEqual({
+        const popoverProps = screen.findAllByType(Popover)[0]?.props;
+        expect(popoverProps?.placement).toBe('bottom');
+        expect(popoverProps?.anchor).toEqual({
             kind: 'rect',
             rect: { left: 262, top: 6, width: 44, height: 44 },
             coordinateSpace: 'window',
         });
-        expect(capturedPopoverProps.current?.boundaryRef).toBeNull();
-        expect(capturedPopoverProps.current?.portal).toEqual({
+        expect(popoverProps?.boundaryRef).toBeNull();
+        expect(popoverProps?.portal).toEqual({
             web: { target: 'body' },
             native: true,
             matchAnchorWidth: false,
@@ -140,7 +115,7 @@ describe('ActionOperationActivityButtonView', () => {
             screen.findByTestId('inbox.action-operation.operation-1')?.props.onPress();
         });
         expect(onOpenOperation).toHaveBeenCalledWith(projectedOperation);
-        expect(screen.findByTestId('action-operation-activity-popover')).toBeNull();
+        expect(screen.findAllByType(Popover)).toHaveLength(0);
     });
 
     it('opens the exact Home-qualified projection when operation ids collide across Homes', async () => {
@@ -182,12 +157,12 @@ describe('ActionOperationActivityButtonView', () => {
         );
 
         await screen.pressByTestIdAsync('action-operation-activity-button');
-        expect(screen.findByTestId('action-operation-activity-popover')).not.toBeNull();
+        expect(screen.findAllByType(Popover)).toHaveLength(1);
         expect(markSeen).toHaveBeenCalled();
 
         await screen.pressByTestIdAsync('action-operations-clear-recent');
         expect(clearRecent).toHaveBeenCalledOnce();
-        expect(screen.findByTestId('action-operation-activity-popover')).toBeNull();
+        expect(screen.findAllByType(Popover)).toHaveLength(0);
     });
 
     it('uses an attention dot instead of counting unavailable active projections', async () => {
@@ -229,17 +204,33 @@ describe('ActionOperationActivityButtonView', () => {
     });
 
     it('subscribes to ledger details only while the activity popover is open', async () => {
-        activityHookState.operations = [operation()];
-        activityHookState.summary = { activeCount: 1, hasAttention: true };
+        actionOperationStore.mergeSnapshots({ serverId: 'server-1', snapshots: [operation().snapshot] });
+        // Observe the real detail selector without replacing its decision or result.
+        const detailReads = vi.spyOn(actionOperationSelectors, 'selectAll');
         const { ActionOperationActivityButton } = await import('./ActionOperationActivityButton');
         const screen = await renderScreen(<ActionOperationActivityButton />);
 
         expect(screen.findByTestId('action-operation-activity-count')).not.toBeNull();
-        expect(activityHookState.useAllActionOperations).not.toHaveBeenCalled();
+        expect(detailReads).not.toHaveBeenCalled();
+
+        await act(async () => actionOperationStore.mergeSnapshots({ serverId: 'server-1', snapshots: [
+            operation({ revision: 2, progress: { kind: 'phase', phase: 'copying', label: 'Copying files' } }).snapshot,
+        ] }));
+        expect(detailReads).not.toHaveBeenCalled();
 
         await screen.pressByTestIdAsync('action-operation-activity-button');
 
-        expect(activityHookState.useAllActionOperations).toHaveBeenCalledOnce();
+        expect(detailReads).toHaveBeenCalled();
         expect(screen.findByTestId('inbox.action-operation.operation-1')).not.toBeNull();
+        expect(screen.findByTestId('inbox.action-operation.operation-1')?.props.accessibilityLabel).toContain('Copying files');
+
+        await screen.pressByTestIdAsync('action-operation-activity-button');
+        detailReads.mockClear();
+        await act(async () => actionOperationStore.mergeSnapshots({ serverId: 'server-1', snapshots: [
+            operation({ revision: 3, progress: { kind: 'phase', phase: 'finishing', label: 'Finishing copy' } }).snapshot,
+        ] }));
+        expect(detailReads).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('action-operation-activity-button');
+        expect(screen.findByTestId('inbox.action-operation.operation-1')?.props.accessibilityLabel).toContain('Finishing copy');
     });
 });

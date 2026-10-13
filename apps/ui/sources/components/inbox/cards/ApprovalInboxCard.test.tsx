@@ -1,18 +1,13 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import {
-  createMachineFixture,
-  createSessionFixture,
-  renderScreen,
-} from '@/dev/testkit';
-import type {
-  ArtifactHeader,
-  DecryptedArtifact,
-} from '@/sync/domains/artifacts/artifactTypes';
-import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { installApprovalCommonModuleMocks } from '../../approvals/approvalsTestHelpers';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const APPROVAL_ARTIFACT_HEADER: ArtifactHeader = {
   title: 'Approve answering the user',
@@ -20,192 +15,38 @@ const APPROVAL_ARTIFACT_HEADER: ArtifactHeader = {
   sessionId: 'session-1',
 };
 
-function createApprovalArtifact(): Extract<
-  DecryptedArtifact,
-  { isDecrypted: true }
-> {
-  return {
-    id: 'artifact-1',
-    title: 'Approval',
-    headerVersion: 1,
-    seq: 1,
-    createdAt: 1,
-    updatedAt: 1,
-    isDecrypted: true,
-    header: { ...APPROVAL_ARTIFACT_HEADER },
-  };
+function createApprovalArtifact(): Extract<DecryptedArtifact, { isDecrypted: true }> {
+  return { id: 'artifact-1', title: 'Approval', headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+    isDecrypted: true, header: { ...APPROVAL_ARTIFACT_HEADER } };
 }
 
-const sessionFixtures: Record<string, Session> = {
-  'session-1': createSessionFixture({
-    id: 'session-1',
-    metadata: {
-      name: 'Repo session',
-      path: '/Users/leeroy/stale-repo',
-      host: 'tester.local',
-      homeDir: '/Users/leeroy',
-      machineId: 'machine-stale',
-    },
-  }),
-};
+installApprovalCommonModuleMocks();
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
-const scopedSessionFixtures: Record<string, Session> = {
-  'server-b:session-1': createSessionFixture({
-    id: 'session-1',
-    serverId: 'server-b',
-    metadata: {
-      name: 'Secondary Home session',
-      path: '/Users/secondary/repo',
-      host: 'secondary.local',
-      homeDir: '/Users/secondary',
-      machineId: 'machine-secondary',
-    },
-  }),
-};
-
-const machineFixtures: Record<string, Machine> = {
-  'machine-target': createMachineFixture({
-    id: 'machine-target',
-    metadata: {
-      displayName: 'Rebound workstation',
-      host: 'workstation.local',
-      platform: 'darwin',
-      happyCliVersion: '0.0.0-test',
-      happyHomeDir: '/Users/leeroy/.happy-dev',
-      homeDir: '/Users/leeroy',
-    },
-  }),
-};
-
-const scopedMachineFixtures: Record<string, Machine> = {
-  'server-b:machine-secondary': createMachineFixture({
-    id: 'machine-secondary',
-    metadata: {
-      displayName: 'Secondary workstation',
-      host: 'secondary.local',
-      platform: 'darwin',
-      happyCliVersion: '0.0.0-test',
-      happyHomeDir: '/Users/secondary/.happy-dev',
-      homeDir: '/Users/secondary',
-    },
-  }),
-};
-
-const storageState = {
-  sessions: {
-    'session-1': sessionFixtures['session-1'],
-  },
-  machines: {
-    'machine-target': machineFixtures['machine-target'],
-  },
-  getProjectForSession: (sessionId: string) =>
-    sessionId === 'session-1'
-      ? {
-          key: {
-            machineId: 'machine-target',
-            rootPath: '/Volumes/target/repo',
-          },
-        }
-      : null,
-};
-
-installApprovalCommonModuleMocks({
-  reactNative: async () => {
-    const { createReactNativeWebMock } =
-      await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-      View: 'View',
-      Text: 'Text',
-      Pressable: ({
-        children,
-        ...props
-      }: {
-        children?: React.ReactNode;
-        [key: string]: unknown;
-      }) => React.createElement('Pressable', props, children),
-    });
-  },
-  unistyles: async () => {
-    const { createUnistylesMock } =
-      await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock();
-  },
-  text: async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({
-      translate: (key: string) => key,
-    });
-  },
-  storage: async () => {
-    const { createStorageModuleStub } =
-      await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-      useSession: (sessionId: string) => sessionFixtures[sessionId] ?? null,
-      useMachine: (machineId: string) => machineFixtures[machineId] ?? null,
-      useSessionListRenderableWithServerScope: (
-        serverId: string | null | undefined,
-        sessionId: string,
-      ) => scopedSessionFixtures[`${serverId ?? ''}:${sessionId}`] ?? null,
-      useServerScopedMachine: (
-        serverId: string | null | undefined,
-        machineId: string,
-      ) => scopedMachineFixtures[`${serverId ?? ''}:${machineId}`] ?? null,
-      storage: {
-        getState: () => storageState,
-      },
-    });
-  },
+const initialState = storage.getState();
+let serverIdB = '';
+beforeEach(async () => {
+  await upsertServerProfile({ serverUrl: 'https://home-b.example.test', name: 'Home B' });
+  const profile = await setServerProfileIdentityForUrl('https://home-b.example.test', 'srv_approval_home_b');
+  if (!profile) throw new Error('Expected the approval Home profile');
+  serverIdB = profile.id;
+  const primary = createSessionFixture({ id: 'session-1', metadata: {
+    ...createSessionFixture().metadata!, name: 'Repo session', path: '/Users/leeroy/stale-repo',
+    host: 'tester.local', homeDir: '/Users/leeroy', machineId: 'machine-stale',
+  } });
+  const secondary = createSessionFixture({ id: 'session-1', serverId: serverIdB, metadata: {
+    ...createSessionFixture().metadata!, name: 'Secondary Home session', path: '/Users/secondary/repo',
+    host: 'secondary.local', homeDir: '/Users/secondary', machineId: 'machine-secondary',
+  } });
+  storage.setState({ sessions: { [primary.id]: primary }, sessionListRowsByServerId: {
+    [serverIdB]: { [secondary.id]: buildSessionListRenderableFromSession(secondary) },
+  } });
 });
-
-vi.mock('@expo/vector-icons', () => ({
-  Ionicons: 'Ionicons',
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-  Text: 'Text',
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-  Item: ({
-    title,
-    subtitle,
-    ...props
-  }: {
-    title: React.ReactNode;
-    subtitle?: React.ReactNode;
-    onPress?: () => void;
-  }) =>
-    React.createElement(
-      'View',
-      { ...props, accessibilityRole: props.onPress ? 'button' : undefined },
-      React.createElement('Text', null, title),
-      subtitle ? React.createElement('Text', null, subtitle) : null,
-    ),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import('@/sync/domains/server/serverProfiles')
-  >()),
-  areServerProfileIdentifiersEquivalent: (left: string, right: string) =>
-    left === right,
-  resolveServerProfileForPortableIdentity: (identity: string) =>
-    identity === 'identity-b'
-      ? {
-          kind: 'resolved',
-          serverIdentityId: identity,
-          profile: { id: 'server-b', serverIdentityId: 'identity-b' },
-        }
-      : { kind: 'missing', serverIdentityId: identity },
-  getServerProfileById: (serverId: string) =>
-    serverId === 'server-b'
-      ? {
-          id: 'server-b',
-          name: 'Home B',
-          serverUrl: 'https://home-b.example.test',
-        }
-      : null,
-}));
+afterEach(async () => {
+  standardCleanup();
+  storage.setState(initialState, true);
+  if (serverIdB) await removeServerProfile(serverIdB);
+});
 
 describe('ApprovalInboxCard', () => {
   it('shows the qualified plugin action without interpreting it as a built-in action', async () => {
@@ -325,7 +166,7 @@ describe('ApprovalInboxCard', () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const artifact = {
       ...createApprovalArtifact(),
-      header: { ...APPROVAL_ARTIFACT_HEADER, serverId: 'server-b' },
+      header: { ...APPROVAL_ARTIFACT_HEADER, serverId: serverIdB },
     } satisfies DecryptedArtifact;
     const screen = await renderScreen(
       <ApprovalInboxCard artifact={artifact} onPress={() => {}} />,
@@ -350,7 +191,7 @@ describe('ApprovalInboxCard', () => {
         artifact={
           {
             ...createApprovalArtifact(),
-            header: { ...APPROVAL_ARTIFACT_HEADER, serverId: 'server-b' },
+            header: { ...APPROVAL_ARTIFACT_HEADER, serverId: serverIdB },
           } satisfies DecryptedArtifact
         }
         onPress={() => {}}
@@ -367,7 +208,7 @@ describe('ApprovalInboxCard', () => {
       ...createApprovalArtifact(),
       header: {
         ...APPROVAL_ARTIFACT_HEADER,
-        serverId: 'server-b',
+        serverId: serverIdB,
         sessionId: 'cmv06zc2b003itmv4tsr5fin7',
       },
     } satisfies DecryptedArtifact;
@@ -388,7 +229,7 @@ describe('ApprovalInboxCard', () => {
       ...createApprovalArtifact(),
       header: {
         ...APPROVAL_ARTIFACT_HEADER,
-        serverId: 'server-b',
+        serverId: serverIdB,
       },
     } satisfies DecryptedArtifact;
 
@@ -412,7 +253,7 @@ describe('ApprovalInboxCard', () => {
         ...APPROVAL_ARTIFACT_HEADER,
         // The asking device's own profile id for the Home, unknown on this device.
         serverId: 'creator-local-home',
-        serverIdentityId: 'identity-b',
+        serverIdentityId: 'srv_approval_home_b',
       },
     } satisfies DecryptedArtifact;
     const screen = await renderScreen(
@@ -435,7 +276,7 @@ describe('ApprovalInboxCard', () => {
         artifact={
           {
             ...createApprovalArtifact(),
-            header: { ...APPROVAL_ARTIFACT_HEADER, serverId: 'server-b' },
+            header: { ...APPROVAL_ARTIFACT_HEADER, serverId: serverIdB },
           } satisfies DecryptedArtifact
         }
         onPress={() => {}}
@@ -448,10 +289,10 @@ describe('ApprovalInboxCard', () => {
   });
 
   it('names a locked qualified Session by where it lives without exposing cached private metadata', async () => {
-    const previous = scopedSessionFixtures['server-b:session-1'];
-    scopedSessionFixtures['server-b:session-1'] = createSessionFixture({
+    const previous = storage.getState().sessionListRowsByServerId;
+    const locked = createSessionFixture({
       id: 'session-1',
-      serverId: 'server-b',
+      serverId: serverIdB,
       encryptionMode: 'e2ee',
       encryptedContentAvailability: 'encrypted_access_pending',
       metadata: {
@@ -462,6 +303,9 @@ describe('ApprovalInboxCard', () => {
         machineId: 'machine-secondary',
       },
     });
+    storage.setState({ sessionListRowsByServerId: { [serverIdB]: {
+      [locked.id]: buildSessionListRenderableFromSession(locked),
+    } } });
     try {
       const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
       const screen = await renderScreen(
@@ -469,7 +313,7 @@ describe('ApprovalInboxCard', () => {
           artifact={
             {
               ...createApprovalArtifact(),
-              header: { ...APPROVAL_ARTIFACT_HEADER, serverId: 'server-b' },
+              header: { ...APPROVAL_ARTIFACT_HEADER, serverId: serverIdB },
             } satisfies DecryptedArtifact
           }
           onPress={() => {}}
@@ -483,7 +327,7 @@ describe('ApprovalInboxCard', () => {
       // A locked session reads by where it lives.
       expect(screen.getTextContent()).toContain('detailPages.approval.sessionOnHome');
     } finally {
-      scopedSessionFixtures['server-b:session-1'] = previous;
+      storage.setState({ sessionListRowsByServerId: previous });
     }
   });
 });
