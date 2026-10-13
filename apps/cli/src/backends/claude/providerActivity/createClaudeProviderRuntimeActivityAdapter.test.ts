@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { logger } from '@/ui/logger';
 import type { SessionRuntimeActivityContribution } from '@/session/runtimeActivity/types';
+import { createSessionRuntimeActivity } from '@/session/runtimeActivity/createSessionRuntimeActivity';
 import { createClaudeProviderActivityLedger, readClaudeProviderTaskActivity } from './createClaudeProviderActivityLedger';
 import {
     createClaudeProviderRuntimeActivityAdapter,
@@ -268,25 +269,98 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(ledger.hasActiveProviderTasks()).toBe(true);
     });
 
-    it('settles a stopped provider to idle without requiring another launch', async () => {
-        const { adapter, ledger, reports, markUnknown } = harness();
-        await adapter.activateObservation('observer-installed');
-        await adapter.observeActivity({
-            activity: { type: 'started', sessionId: 's1', taskId: 'orphaned' }, evidence: 'live',
-        });
-        await adapter.handleRuntimeLoss('claude_process_exited', { providerStopped: true });
-        expect(ledger.hasActiveProviderTasks()).toBe(false);
-        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
-        expect(markUnknown).not.toHaveBeenCalled();
-        await adapter.publishCurrent('later-inventory-refresh');
-        await adapter.observeActivity({
-            activity: { type: 'started', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
-        });
-        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
-        await adapter.observeActivity({
-            activity: { type: 'terminal', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
-        });
-        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    it('preserves positive stop against delayed observer loss and task rows until a new launch begins', async () => {
+        const runtimeActivity = createSessionRuntimeActivity('supported');
+        const reports: SessionRuntimeActivityContribution[] = [];
+        await runtimeActivity.bindPublisher({ publish: async snapshot => { reports.push(snapshot); }, close: async () => {} });
+        const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+        if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
+        const ledger = createClaudeProviderActivityLedger();
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger, contributionHandle });
+        try {
+            await adapter.activateObservation('observer-installed');
+            await adapter.observeActivity({
+                activity: { type: 'started', sessionId: 's1', taskId: 'orphaned' }, evidence: 'live',
+            });
+            await adapter.handleRuntimeLoss('claude_process_exited', { providerStopped: true });
+            expect(ledger.hasActiveProviderTasks()).toBe(false);
+            expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+            const stoppedReports = [...reports];
+            await adapter.handleRuntimeLoss('delayed-session-end');
+            expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+            expect(reports).toEqual(stoppedReports);
+            await adapter.publishCurrent('later-inventory-refresh');
+            await adapter.observeActivity({
+                activity: { type: 'started', sessionId: 's1', taskId: 'delayed-old-task' }, evidence: 'live',
+            });
+            expect(ledger.hasActiveProviderTasks()).toBe(false);
+            expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+            expect(reports).toEqual(stoppedReports);
+            await adapter.publishBeforeRuntimeStart('replacement-provider-not-started');
+            await adapter.activateObservation('replacement-observer-installed');
+            await adapter.observeActivity({
+                activity: { type: 'started', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
+            });
+            expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+            // After a new launch, payloads without launch provenance cannot be dismissed as stale.
+            await adapter.handleRuntimeLoss('unattributed-session-end-after-relaunch');
+            expect(reports.at(-1)).toEqual({ state: 'unknown', activeCount: 0 });
+            await adapter.observeActivity({
+                activity: { type: 'terminal', sessionId: 's1', taskId: 'replacement' }, evidence: 'live',
+            });
+            expect(ledger.hasActiveProviderTasks()).toBe(false);
+            expect(reports.at(-1)).toEqual({ state: 'unknown', activeCount: 0 });
+        } finally { await runtimeActivity.dispose(); }
+    });
+
+    it('does not reactivate a stopped provider when observer activation publication completes late', async () => {
+        let releaseInitial!: () => void;
+        const pending = new Promise<void>(resolve => { releaseInitial = resolve; });
+        const reports: SessionRuntimeActivityContribution[] = [];
+        const runtimeActivity = createSessionRuntimeActivity('supported');
+        let holdInitial = true;
+        await runtimeActivity.bindPublisher({ publish: async snapshot => {
+            reports.push(snapshot);
+            if (holdInitial && snapshot.state === 'idle') { holdInitial = false; await pending; }
+        }, close: async () => {} });
+        const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+        if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
+        const ledger = createClaudeProviderActivityLedger();
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger, contributionHandle });
+        try {
+            const activation = adapter.activateObservation('observer-installed');
+            await vi.waitFor(() => expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 }));
+            const stopped = adapter.handleRuntimeLoss('provider-exited-during-activation', { providerStopped: true });
+            releaseInitial();
+            await Promise.all([activation, stopped]);
+            await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId: 'late-installation-row' }, evidence: 'live' });
+            await adapter.handleRuntimeLoss('late-observer-loss');
+            expect(ledger.hasActiveProviderTasks()).toBe(false);
+            expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        } finally { releaseInitial(); await runtimeActivity.dispose(); }
+    });
+
+    it('reoffers confirmed idle after a stopped-provider publication rejects without weakening the stop fact', async () => {
+        const runtimeActivity = createSessionRuntimeActivity('supported');
+        const published: SessionRuntimeActivityContribution[] = [];
+        let rejectNextIdle = false;
+        await runtimeActivity.bindPublisher({ publish: async snapshot => {
+            if (rejectNextIdle && snapshot.state === 'idle') { rejectNextIdle = false; throw new Error('stop publication rejected'); }
+            published.push(snapshot);
+        }, close: async () => {} });
+        const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+        if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
+        const ledger = createClaudeProviderActivityLedger();
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ providerActivityLedger: ledger, contributionHandle });
+        try {
+            await adapter.activateObservation('observer-installed');
+            await adapter.observeActivity({ activity: { type: 'started', sessionId: 's1', taskId: 'orphaned' }, evidence: 'live' });
+            rejectNextIdle = true;
+            await expect(adapter.handleRuntimeLoss('provider-exited', { providerStopped: true })).rejects.toThrow('stop publication rejected');
+            expect(ledger.hasActiveProviderTasks()).toBe(false);
+            await adapter.handleRuntimeLoss('delayed-session-end');
+            expect(published.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        } finally { await runtimeActivity.dispose(); }
     });
 
     it('keeps provider tasks when only observation is lost and the provider may still run them', async () => {

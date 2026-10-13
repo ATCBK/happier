@@ -17,7 +17,7 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
     isCurrentRuntime?: () => boolean;
 }>) {
     const isCurrentRuntime = (): boolean => params.isCurrentRuntime?.() !== false;
-    let observationState: 'inactive' | 'activating' | 'active' | 'failed' = 'inactive';
+    let observationState: 'inactive' | 'activating' | 'active' | 'failed' | 'stopped' = 'inactive';
     let observationComplete = true;
     let lastPublishedProjection: ClaudeProviderRuntimeActivityProjection | null = null;
     let publicationTail: Promise<void> = Promise.resolve();
@@ -63,6 +63,10 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
     return {
         async publishBeforeRuntimeStart(reasonCode: string): Promise<void> {
             if (!isCurrentRuntime()) return;
+            if (observationState === 'stopped') {
+                observationState = 'inactive';
+                observationComplete = true;
+            }
             if (observationState === 'active' && !observationComplete) {
                 // The previous owned provider has stopped. Its lost observer cannot establish
                 // liveness for a new launch; only a zero-task inventory establishes prelaunch idle.
@@ -80,11 +84,11 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             observationState = 'activating';
             try {
                 await enqueueProjection(currentProjection(), reasonCode);
-                if (!isCurrentRuntime()) return;
+                if (!isCurrentRuntime() || observationState !== 'activating') return;
                 observationState = 'active';
                 await enqueueProjection(currentProjection(), `${reasonCode}-current`);
             } catch (error) {
-                observationState = 'failed';
+                if (observationState === 'activating' || observationState === 'active') observationState = 'failed';
                 throw error;
             }
         },
@@ -92,7 +96,7 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             activity: ClaudeProviderTaskActivity;
             evidence: ClaudeTaskEvidence;
         }>): Promise<void> {
-            if (!isCurrentRuntime() || input.evidence !== 'live') return;
+            if (!isCurrentRuntime() || input.evidence !== 'live' || observationState === 'stopped') return;
             const didChange = params.providerActivityLedger.apply(input.activity);
             if (observationState !== 'active') return;
             if (!didChange && !params.providerActivityLedger.hasActiveProviderTasks()) return;
@@ -104,7 +108,7 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             );
         },
         async publishCurrent(reasonCode: string): Promise<void> {
-            if (!isCurrentRuntime() || observationState !== 'active') return;
+            if (!isCurrentRuntime() || (observationState !== 'active' && observationState !== 'stopped')) return;
             await enqueueProjection(currentProjection(), reasonCode);
         },
         async handleRuntimeLoss(
@@ -112,7 +116,15 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             options?: Readonly<{ providerStopped?: boolean }>,
         ): Promise<void> {
             if (!isCurrentRuntime()) return;
+            if (observationState === 'stopped') {
+                // Delayed observer loss cannot weaken physical exit proof; a rejected idle
+                // publication can still use the existing serialized publication path to retry.
+                await enqueueProjection(currentProjection(), reasonCode);
+                return;
+            }
+            const observationOffered = observationState === 'active' || observationState === 'activating';
             observationComplete = options?.providerStopped === true;
+            if (observationComplete) observationState = 'stopped';
             if (!observationComplete) params.providerActivityLedger.noteObservationLost();
             // A stopped provider process orphans its background tasks: no terminal event for them
             // can arrive, and kept in the ledger the next turn-end publish would project them as
@@ -127,7 +139,7 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
                     abandoned,
                 });
             }
-            if (observationState !== 'active') return;
+            if (!observationOffered) return;
             await enqueueProjection(currentProjection(), reasonCode);
         },
     };

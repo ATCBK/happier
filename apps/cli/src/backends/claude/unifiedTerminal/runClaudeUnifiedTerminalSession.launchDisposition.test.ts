@@ -28,6 +28,7 @@ import { createClaudeProviderRuntimeActivityAdapter } from '../providerActivity/
 import type { SessionHookData } from '../utils/startHookServer';
 import { createDeferred } from '@/testkit/async/deferred';
 import { resolveClaudeRemoteLaunchErrorDisposition } from '../claudeRemoteLauncher';
+import { createSessionRuntimeActivity } from '@/session/runtimeActivity/createSessionRuntimeActivity';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -153,17 +154,22 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-  it('retires provider tasks after the owned provider exits inside a borrowed terminal', async () => {
+  it('observes fresh tasks after a stopped provider is relaunched inside a borrowed terminal, then retires them on exit', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-claude-provider-task-exit-'));
     const prepared = await prepareOwnedTerminalSpawn({ command: process.execPath,
       args: ['-e', 'setInterval(() => {}, 1000)'], cwd: directory, env: { PATH: process.env.PATH ?? '' } });
     const ledger = createClaudeProviderActivityLedger();
     ledger.apply({ type: 'started', sessionId: 'claude-resume-id', taskId: 'background-child' });
+    const sessionRuntimeActivity = createSessionRuntimeActivity('supported');
+    await sessionRuntimeActivity.bindPublisher({ publish: async () => {}, close: async () => {} });
+    const contributionHandle = sessionRuntimeActivity.agentRuntimeContributionHandle;
+    if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
     const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({
       providerActivityLedger: ledger,
-      contributionHandle: { report: async () => {}, markUnknown: async () => {}, dispose: async () => {} },
+      contributionHandle,
     });
     await runtimeActivityAdapter.activateObservation('test-provider-observer');
+    await runtimeActivityAdapter.handleRuntimeLoss('previous-owned-provider-exited', { providerStopped: true });
     const abortController = new AbortController();
     let ownedProcess: Awaited<ReturnType<typeof launchOwnedTerminalProcess>> | undefined;
     let storedAttachment: TerminalAttachmentInfo | null = null;
@@ -186,6 +192,10 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
               return await physicalTermination;
             },
           });
+          await runtimeActivityAdapter.observeActivity({ activity: {
+            type: 'started', sessionId: 'claude-resume-id', taskId: 'fresh-background-child',
+          }, evidence: 'live' });
+          expect(ledger.getActiveProviderTaskCount()).toBe(1);
           return ownedProcess;
         },
         persistTerminalHostAttachmentInfo: async ({ sessionId, attachmentId, handle, terminal }) => {
@@ -197,12 +207,15 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
         onTerminalHostReady: async ({ stopTerminalHostForExplicitStop }) => {
           let stopSettled = false;
           const stopped = stopTerminalHostForExplicitStop().then(() => { stopSettled = true; });
-          await requested;
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          expect(stopSettled).toBe(false);
-          expect(ledger.getActiveProviderTaskCount()).toBe(1);
-          allowExit();
-          await stopped;
+          try {
+            await requested;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(stopSettled).toBe(false);
+            expect(ledger.getActiveProviderTaskCount()).toBe(1);
+          } finally {
+            allowExit();
+            await stopped;
+          }
           expect(ledger.getActiveProviderTaskCount()).toBe(0);
           abortController.abort();
         },
@@ -213,6 +226,7 @@ describe('runClaudeUnifiedTerminalSession launch disposition', () => {
       await physicalTermination;
       await ownedProcess?.terminate();
       await ownedProcess?.whenExited;
+      await sessionRuntimeActivity.dispose();
       await prepared.cleanupUnreadArtifacts?.();
       await rm(directory, { recursive: true, force: true });
     }

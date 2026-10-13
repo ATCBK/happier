@@ -139,6 +139,11 @@ ledger; unresolved task identities remain unknown. Native children may keep stre
 pipes open after launcher death, so unverified exit reporting does not wait for
 those pipes to close.
 
+Positive provider-stop evidence remains authoritative through delayed observation
+loss and task records. The existing prelaunch boundary opens observation for the
+next provider attempt; installing an observer alone does not undo a stop. After
+that boundary, hooks without launch provenance can still make observation unknown.
+
 An external terminal host's pane death or clean exit status does not supply the
 private native-exit proof. Its lost observation retains task identities as unknown;
 an expected prompt-input exit remains a normal session end, while unexpected host

@@ -977,6 +977,10 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       });
     }
   };
+  const notifyProviderLaunchStarting = async (): Promise<void> => {
+    await opts.runtimeActivityAdapter?.publishBeforeRuntimeStart('claude-unified-provider-not-started');
+    await opts.onProviderLaunchStarting?.();
+  };
   const acceptedPromptTranscriptDiscovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
     acceptedPromptWindowMs: configuration.claudeUnifiedTerminalAcceptedPromptEchoWindowMs,
     onControlCommandConsumed: opts.onTranscriptMessageSuppressed,
@@ -1335,7 +1339,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       const launchSpawn = await ensureSpawn();
       ensureHookSubscription();
       explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-      await opts.onProviderLaunchStarting?.();
+      await notifyProviderLaunchStarting();
       handle = currentTerminalHost.handle.attachmentId
         ? currentTerminalHost.handle
         : { ...currentTerminalHost.handle, attachmentId: createTerminalAttachmentId() };
@@ -1374,7 +1378,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         const fallbackSpawn = await ensureSpawn();
         ensureHookSubscription();
         explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-        await opts.onProviderLaunchStarting?.();
+        await notifyProviderLaunchStarting();
         spawnArtifactsHandedOff = true;
         handle = await hostResolution.adapter.createOrAttachHost({
           sessionName: hostResolution.adapter.kind === 'herdr' ? sessionName : fallbackSessionName,
@@ -1405,7 +1409,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           isolatedEnv: true,
         } as const;
         explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-        await opts.onProviderLaunchStarting?.();
+        await notifyProviderLaunchStarting();
         spawnArtifactsHandedOff = true;
         handle = await hostResolution.adapter.createOrAttachHost(createOptions);
       }
