@@ -75,7 +75,7 @@ function createOwnedSessionAccessRow(sessionId = "sess_1") {
     };
 }
 
-const machineFindFirstMock = vi.hoisted(() => vi.fn(async (_args?: unknown): Promise<{ revokedAt: Date | null; replacedByMachineId: string | null; installationId?: string; installationPublicKey?: Uint8Array; kind?: string }> => ({
+const machineFindFirstMock = vi.hoisted(() => vi.fn(async (_args?: unknown): Promise<{ revokedAt: Date | null; replacedByMachineId: string | null; installationId?: string; installationPublicKey?: Uint8Array; kind?: string } | null> => ({
     revokedAt: null,
     replacedByMachineId: null,
 })));
@@ -423,7 +423,9 @@ describe("registerSocketRpcHandlers", () => {
         machineFindFirstMock.mockImplementation(async args => {
             const where = args && typeof args === 'object' && 'where' in args ? args.where : undefined;
             const machineId = where && typeof where === 'object' && 'id' in where ? where.id : undefined;
-            return { ...await originalMachineRead(args), accountGrants: machineId === routing.sourceMachineId && grantLevel
+            const machine = await originalMachineRead(args);
+            if (!machine) return null;
+            return { ...machine, accountGrants: machineId === routing.sourceMachineId && grantLevel
                 ? [{ accountId: 'requester', accessLevel: grantLevel, account: { id: 'requester', status: 'active',
                     firstName: null, lastName: null, username: null, avatar: null } }] : [] };
         });
@@ -578,7 +580,9 @@ describe("registerSocketRpcHandlers", () => {
         machineFindFirstMock.mockImplementation(async args => {
             const where = args && typeof args === 'object' && 'where' in args ? args.where : undefined;
             const machineId = where && typeof where === 'object' && 'id' in where ? where.id : undefined;
-            return { ...await originalMachineRead(args), accountGrants: machineId === routing.sourceMachineId
+            const machine = await originalMachineRead(args);
+            if (!machine) return null;
+            return { ...machine, accountGrants: machineId === routing.sourceMachineId
                 ? [{ accountId: 'requester', accessLevel: 'view', account: { id: 'requester', status: 'active',
                     firstName: null, lastName: null, username: null, avatar: null } }] : [] };
         });

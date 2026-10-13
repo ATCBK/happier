@@ -1,4 +1,5 @@
 import type { Fastify } from "@/app/api/types";
+import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { readLocalServicePreviewAdmission } from '@/app/local/services/preview/admission';
 import { readAvailableMachineIrohEndpointAuthority } from '@/app/machines/machineStateGuards';
@@ -47,7 +48,7 @@ import type { PeerTcpTunnelRelayTransportFactory } from "@/app/machines/peer/med
 import type { PeerMediationObservabilityEmitter } from "@/app/api/socket/peer/mediation/observability/events";
 import {
     localServicePublicTokenCookiePath,
-    scopedLocalServicePublicTokenCookie,
+    LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
 } from "@/app/local/services/public/accessToken";
 
 export type LocalServiceRouteRuntimes = Readonly<{
@@ -315,10 +316,10 @@ function registerLocalServicePublicExchangeRoute(
             return;
         }
         typedReply
-            .header?.("Set-Cookie", scopedLocalServicePublicTokenCookie({
+            .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
+                name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
                 path: localServicePublicTokenCookiePath(result.exposureId),
                 rawToken: result.rawToken,
-                secure: true,
             }))
             .send?.(LocalServicePublicPreviewExchangeResponseV1Schema.parse({
                 protocolVersion: 1,

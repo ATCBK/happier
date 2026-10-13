@@ -32,6 +32,7 @@ import {
 } from "@/app/local/services/preview/httpAdapter";
 import { writeLocalServicePreviewDownstream } from "@/app/local/services/preview/downstream";
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
+import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import {
     readLocalServicePublicClientKey,
     resolveLocalServicePublicAccessIdentity,
@@ -53,7 +54,7 @@ import {
     localServicePublicTokenCookiePath,
     readLocalServicePublicQueryToken,
     readLocalServicePublicTokenCookie,
-    scopedLocalServicePublicTokenCookie,
+    LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
 } from "@/app/local/services/public/accessToken";
 
 export type RegisterLocalServicePublicRoutesOptions = Readonly<{
@@ -368,10 +369,10 @@ function redirectPublicTokenExchange(
     applyPublicResponsePrivacyHeaders(reply);
     reply
         .code?.(303)
-        .header?.("Set-Cookie", scopedLocalServicePublicTokenCookie({
+        .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
+            name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
             path: localServicePublicTokenCookiePath(input.exposureId),
             rawToken: input.rawToken,
-            secure: true,
         }))
         .header?.("Location", publicRedirectLocation(input))
         .send?.();

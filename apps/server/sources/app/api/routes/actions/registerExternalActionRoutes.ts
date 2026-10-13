@@ -234,8 +234,13 @@ function readExternalActionRequestPrincipal(
         && (!pluginInvocation || origin?.envelope?.target?.kind !== 'machine')) return null;
     const publicAction = readExternalActionSessionProposalSurface(origin) !== undefined
         ? SignedRootActionIdSchema.safeParse(actionId) : PublicActionIdSchema.safeParse(actionId);
+    // The authenticator has already verified the signature and current epoch.
+    // Legacy paired credentials may propose only through the installed Session
+    // proof below; they never acquire original headless execution authority.
+    const credentialProvenanceAvailable = request.authTokenLegacy === false
+        || request.authTokenLegacy === true && readExternalActionSessionProposalSurface(origin) !== undefined;
     if (request.authTokenKind === 'terminal' && (request.authAuthority === 'account_automation' || request.authAuthority === 'present_user')
-        && request.authTokenLegacy === false && request.authTokenEpoch !== undefined && publicAction.success
+        && credentialProvenanceAvailable && request.authTokenEpoch !== undefined && publicAction.success
         && isOriginalTerminalExecutionAction(actionId, origin)
         && resolveCredentialActionAdmissionV1({ spec: getActionSpec(publicAction.data), authority: 'account_automation', grant: null,
             surface: readExternalActionSessionProposalSurface(origin) }).ok) {
@@ -251,12 +256,12 @@ function readExternalActionRequestPrincipal(
     const signedRootAction = SignedRootActionIdSchema.safeParse(actionId);
     if (request.authTokenKind === 'account'
         && (request.authAuthority === 'present_user' || request.authAuthority === 'account_automation')
-        && request.authTokenLegacy === false && request.authTokenEpoch !== undefined
+        && credentialProvenanceAvailable && request.authTokenEpoch !== undefined
         && signedRootAction.success
         && isOriginalAccountExecutionAction(actionId, origin)
-        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(signedRootAction.data), authority: request.authAuthority, grant: null,
+        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(signedRootAction.data), authority: request.authTokenLegacy === true ? 'account_automation' : request.authAuthority, grant: null,
             surface: readExternalActionSessionProposalSurface(origin) }).ok) {
-        return { accountId: request.userId, authority: request.authAuthority, authentication: {
+        return { accountId: request.userId, authority: request.authTokenLegacy === true ? 'account_automation' : request.authAuthority, authentication: {
             kind: 'account', tokenEpoch: request.authTokenEpoch,
             ...(request.authTokenAuthenticationEvidence ? { evidence: [...request.authTokenAuthenticationEvidence] } : {}),
         } };

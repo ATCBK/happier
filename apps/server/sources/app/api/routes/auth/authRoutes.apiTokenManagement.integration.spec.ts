@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type InjectOptions } from "fastify";
 import { randomUUID } from "node:crypto";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
@@ -8,6 +8,10 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-
 import {
     API_TOKEN_FULL_GRANT_V1,
     ApiTokenGrantV1Schema,
+    StoredApiTokenGrantV1Schema,
+    AccountApiTokensCreateActionOutputV1Schema,
+    AccountApiTokenSelfV1Schema,
+    SessionMessagesPageV1Schema,
     evaluateApiTokenGrantV1,
     isModelRefGrantedV1,
     isPermissionModeGrantedV1,
@@ -31,12 +35,15 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 
 import { registerAccountApiTokenManagementRoutes } from "./registerAccountApiTokenManagementRoutes";
 import { registerSessionCreateOrLoadRoute } from "../session/registerSessionCreateOrLoadRoute";
+import { registerSessionMessageRoutes } from "../session/registerSessionMessageRoutes";
+import { createSessionMessage } from "@/app/session/sessionWriteService";
+import type { Fastify as AppFastify } from "@/app/api/types";
 
 function createTestApp() {
     const app = Fastify({ logger: false });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
-    const typed = app.withTypeProvider<ZodTypeProvider>() as any;
+    const typed = app.withTypeProvider<ZodTypeProvider>() as unknown as AppFastify;
     enableAuthentication(typed);
     registerAccountApiTokenManagementRoutes(typed);
     registerSessionCreateOrLoadRoute(typed);
@@ -63,6 +70,7 @@ describe("authRoutes (API-token management) (integration)", () => {
 
     afterEach(async () => {
         harness.resetEnv();
+        await db.sessionMessage.deleteMany();
         await db.session.deleteMany();
         await db.machine.deleteMany();
         await db.account.deleteMany();
@@ -70,6 +78,62 @@ describe("authRoutes (API-token management) (integration)", () => {
 
     afterAll(async () => {
         if (harness) await harness.close();
+    });
+
+    it("issues a session-scoped credential through HTTP and admits only its stored grant at transcript ingress", async () => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' });
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const sessions = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } })));
+        const session = sessions[0]!;
+        const appended = await createSessionMessage({ inputAdmission: 'authenticatedAccount', actorUserId: account.id,
+            authentication: { env: process.env, authority: 'present_user', authenticationEvidence: [] },
+            sessionId: session.id, localId: 'scoped-http-row', messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Only this chat' } } } });
+        if (!appended.ok) throw new Error(`Append failed: ${appended.error}`);
+        const grant = ApiTokenGrantV1Schema.parse({ ...API_TOKEN_FULL_GRANT_V1,
+            actions: { families: [], ids: ['session.transcript.get'] },
+            targets: { sessions: [session.id], machines: [] }, approve: false });
+        const signed = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const app = createTestApp();
+        registerSessionMessageRoutes(app);
+        const endpoint = await app.listen({ host: '127.0.0.1', port: 0 });
+        try {
+            const created = await fetch(`${endpoint}${ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1}`, {
+                method: 'POST', headers: { ...bearer(signed), 'content-type': 'application/json' },
+                body: JSON.stringify({ tokenId: randomUUID(), label: 'Scoped HTTP', grant }),
+            });
+            expect(created.status).toBe(200);
+            const issued = AccountApiTokensCreateActionOutputV1Schema.parse(await created.json());
+            const stored = await db.accountApiToken.findUniqueOrThrow({ where: { id: issued.apiToken.tokenId } });
+            expect(StoredApiTokenGrantV1Schema.parse(stored.accessGrant)).toEqual(grant);
+            const self = await fetch(`${endpoint}/v1/auth/api-tokens/self`, { headers: bearer(issued.token) });
+            expect(self.status).toBe(200);
+            expect(AccountApiTokenSelfV1Schema.parse(await self.json())).toMatchObject({
+                credentialId: issued.apiToken.tokenId, accountId: account.id, grant,
+            });
+            const allowed = await fetch(`${endpoint}/v1/sessions/${session.id}/messages?afterSeq=0`, { headers: bearer(issued.token) });
+            expect(allowed.status).toBe(200);
+            expect(SessionMessagesPageV1Schema.parse(await allowed.json()).messages).toMatchObject([
+                { id: appended.message.id, seq: appended.message.seq, content: { t: 'plain', v: {
+                    role: 'user', content: { type: 'text', text: 'Only this chat' },
+                } } },
+            ]);
+            const denied = await fetch(`${endpoint}/v1/sessions/${sessions[1]!.id}/messages?afterSeq=0`, { headers: bearer(issued.token) });
+            expect(denied.status).toBe(403);
+            expect(await denied.json()).toEqual({ error: 'credential_scope_denied' });
+            // Same target, different Action: a read-only token cannot append input.
+            const send = await fetch(`${endpoint}/v2/sessions/${session.id}/messages`, {
+                method: 'POST', headers: { ...bearer(issued.token), 'content-type': 'application/json' },
+                body: JSON.stringify({ localId: 'refused-input', content: { t: 'plain', v: {
+                    role: 'user', content: { type: 'text', text: 'Forbidden input' },
+                } } }),
+            });
+            expect(send.status).toBe(403);
+            expect(await send.json()).toEqual({ error: 'credential_scope_denied' });
+            expect(await db.sessionMessage.count({ where: { sessionId: session.id } })).toBe(1);
+        } finally { await app.close(); }
     });
 
     it("refuses forged session creation authorization before creating a Session", async () => {
@@ -108,7 +172,7 @@ describe("authRoutes (API-token management) (integration)", () => {
             expect(created.json().apiToken.grant).toEqual(grant);
             const parent = created.json().token;
             const childPayload = { tokenId: randomUUID(), label: 'Child', expiresAt, grant };
-            const mint = (credential: string, payload: unknown = childPayload) => app.inject({ method: 'POST',
+            const mint = (credential: string, payload: InjectOptions['payload'] = childPayload) => app.inject({ method: 'POST',
                 url: '/v1/auth/api-tokens/children/create', headers: bearer(credential), payload });
             const wider = await mint(parent, { ...childPayload, grant: { ...grant, targets: null } });
             expect(wider.statusCode, wider.body).toBe(400);
@@ -127,7 +191,7 @@ describe("authRoutes (API-token management) (integration)", () => {
             const list = await app.inject({ method: 'POST', url: ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1,
                 headers: bearer(signed), payload: {} });
             expect(list.json().tokens).toEqual([expect.objectContaining({ tokenId, grant, activeChildCount: 1 })]);
-            const edit = (payload: unknown) => app.inject({ method: 'POST', url: '/v1/auth/api-tokens/update',
+            const edit = (payload: InjectOptions['payload']) => app.inject({ method: 'POST', url: '/v1/auth/api-tokens/update',
                 headers: bearer(signed), payload });
             expect((await edit({ tokenId, label: 'Renamed' })).statusCode).toBe(200);
             expect((await auth.verifyPat(childCredential)).ok).toBe(true);

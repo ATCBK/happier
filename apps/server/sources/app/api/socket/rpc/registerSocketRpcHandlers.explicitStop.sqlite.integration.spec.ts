@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Server, Socket } from "socket.io";
 
-import { RPC_METHODS } from "@happier-dev/protocol/rpc";
+import { RPC_ERROR_CODES, RPC_METHODS } from "@happier-dev/protocol/rpc";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
+import { SessionForkRpcResultSchema } from "@happier-dev/protocol/sessions/fork";
 
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
 import { db } from "@/storage/db";
@@ -26,6 +27,43 @@ describe("explicit machine stop RPC on SQLite", () => {
     });
     beforeEach(() => harness.resetEnv());
     afterAll(async () => await harness.close());
+
+    it.each([RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE,
+        RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY, RPC_METHODS.SESSION_AGENT_TRANSITION])(
+        "registers and relays Machine-owned lifecycle %s only with source Session authority", async rpcMethod => {
+            const owner = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
+            const machineId = `machine-${randomUUID()}`;
+            await db.machine.create({ data: { id: machineId, accountId: owner.id, metadata: "{}" } });
+            const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}" } });
+            const other = await db.account.create({ data: { publicKey: `pk-${randomUUID()}` } });
+            const foreignSession = await db.session.create({ data: { accountId: other.id, tag: randomUUID(), metadata: "{}" } });
+            const method = `${machineId}:${rpcMethod}`;
+            const result = SessionForkRpcResultSchema.parse({ ok: true, childSessionId: "child-created" });
+            const targetEffect = vi.fn(async () => result);
+            const join = vi.fn(async (_room: string) => {});
+            const daemon = Object.assign(createFakeSocket({ id: "lifecycle-daemon", data: { clientType: "machine-scoped", machineId },
+                timeout: () => ({ emitWithAck: targetEffect }) }), { join });
+            // Socket.IO is the network boundary; registration, relay admission and SQLite access stay real.
+            const io = { in: () => ({ timeout: () => ({ fetchSockets: async () => [daemon] }), fetchSockets: async () => [daemon] }) } as unknown as Server;
+            registerSocketRpcHandlers({ userId: owner.id, socket: daemon as unknown as Socket, io });
+            await triggerSocketHandler(daemon, SOCKET_RPC_EVENTS.REGISTER, { method });
+            expect(daemon.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method });
+            expect(join).toHaveBeenCalled();
+
+            const caller = createFakeSocket({ data: { clientType: "user-scoped", authAuthority: "present_user", authTokenAuthenticationEvidence: [] } });
+            registerSocketRpcHandlers({ userId: owner.id, socket: caller as unknown as Socket, io });
+            const callback = vi.fn();
+            for (const authorization of [undefined, { kind: "session.write", sessionId: foreignSession.id }]) {
+                await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, params: "opaque-lifecycle-request", authorization }, callback);
+                expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN }));
+            }
+            expect(targetEffect).not.toHaveBeenCalled();
+            await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method, params: "opaque-lifecycle-request",
+                authorization: { kind: "session.write", sessionId: session.id } }, callback);
+            expect(callback).toHaveBeenLastCalledWith({ ok: true, result });
+            expect(targetEffect).toHaveBeenCalledOnce();
+        },
+    );
 
     it("marks the exact session inactive only after the daemon proves it stopped", async () => {
         const owner = await db.account.create({

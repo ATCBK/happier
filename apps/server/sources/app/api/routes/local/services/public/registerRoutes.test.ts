@@ -17,13 +17,17 @@ import type { RegisterLocalServicePublicRoutesOptions } from "./registerRoutes";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 
 const dbAccountFindUniqueMock = vi.hoisted(() => vi.fn());
-vi.mock("@/storage/db", () => ({
-    db: {
+vi.mock("@/storage/db", async () => {
+    const { createDbTransactionMock } = await import('@/app/api/testkit/dbMocks');
+    const state = {
         account: {
             findUnique: (...args: unknown[]) => dbAccountFindUniqueMock(...args),
         },
-    },
-}));
+    };
+    // Credential revocation reads run in a real inTx; only Prisma is replaced.
+    const transactions = createDbTransactionMock(() => state);
+    return { db: transactions.wrapDb(state) };
+});
 
 type PublicRoutesModule = typeof import("./registerRoutes");
 

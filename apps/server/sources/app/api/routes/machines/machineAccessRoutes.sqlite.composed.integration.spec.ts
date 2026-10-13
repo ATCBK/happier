@@ -48,7 +48,7 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         'x-happier-account-stored-content-protocol': '4',
     });
     async function fixture() {
-        const owner = await db.account.create({ data: { publicKey: `owner-${randomUUID()}`, encryptionMode: 'plain', firstName: 'Alice' } });
+        const owner = await db.account.create({ data: { publicKey: `owner-${randomUUID()}`, encryptionMode: 'plain', name: 'Alice', firstName: 'Alice' } });
         const recipient = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'e2ee' } });
         const other = await db.account.create({ data: { publicKey: `other-${randomUUID()}`, encryptionMode: 'plain' } });
         const machine = await db.machine.create({ data: {
@@ -62,13 +62,23 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
     }
 
     it('omits revoked owned Machines from listing but preserves offline discovery and exact owner reads', async () => {
-        const { owner, machine } = await fixture();
+        const { owner, recipient, machine } = await fixture();
         const offline = await db.machine.create({ data: { ...machine, id: `machine-${randomUUID()}` } });
         await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date(), active: false } });
+        await db.machineAccountGrant.create({ data: { machineId: machine.id, accountId: recipient.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
         await withAuthenticatedTestApp(machinesRoutes, async app => {
             const list = await app.inject({ method: 'GET', url: '/v1/machines', headers: headers(owner.id) });
             expect(list.statusCode, list.body).toBe(200);
             expect(list.json().map((row: { id: string }) => row.id)).toEqual([offline.id]);
+            const retained = await app.inject({ method: 'GET', url: '/v1/machines?includeRevoked=true', headers: headers(owner.id) });
+            expect(retained.statusCode, retained.body).toBe(200);
+            expect(retained.json().map((row: { id: string }) => row.id).sort()).toEqual([machine.id, offline.id].sort());
+            const excluded = await app.inject({ method: 'GET', url: '/v1/machines?includeRevoked=false', headers: headers(owner.id) });
+            expect(excluded.json().map((row: { id: string }) => row.id)).toEqual([offline.id]);
+            const foreign = await app.inject({ method: 'GET', url: '/v1/machines?includeRevoked=true', headers: headers(recipient.id) });
+            expect(foreign.statusCode, foreign.body).toBe(200);
+            expect(foreign.json()).toEqual([]);
             const historical = await app.inject({ method: 'GET', url: `/v1/machines/${machine.id}`, headers: headers(owner.id) });
             expect(historical.statusCode, historical.body).toBe(200);
             expect(historical.json()).toMatchObject({ machine: { id: machine.id, active: false, revokedAt: expect.any(Number) } });

@@ -4,13 +4,14 @@ import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { enableErrorHandlers } from "../utils/enableErrorHandlers";
 import { enableSchemaValidation } from "../utils/enableSchemaValidation";
+import { enableAuthentication } from "../utils/enableAuthentication";
 import {
     isRestrictedAuthTokenDeniedForRoute,
     PRESENT_USER_REQUIRED_ERROR,
 } from "../utils/apiTokenRouteAdmission";
 
 export function createAuthenticatedTestApp(
-    options: Readonly<{ bodyLimit?: number }> = {},
+    options: Readonly<{ bodyLimit?: number; authentication?: 'fixture' | 'real' }> = {},
 ) {
     // Fastify's own 1 MiB default would answer 413 for a route that relies on
     // the application transport limit, so a body-limit test must be able to
@@ -20,6 +21,11 @@ export function createAuthenticatedTestApp(
     const typed = app.withTypeProvider<ZodTypeProvider>() as any;
     // Route validation failures use the same public error contract as startApi.
     enableErrorHandlers(typed);
+
+    if (options.authentication === 'real') {
+        enableAuthentication(typed);
+        return typed;
+    }
 
     typed.decorate("authenticate", async (request: any, reply: any) => {
         const userId = request.headers["x-test-user-id"];

@@ -1,29 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { InTxOptions, Tx } from "@/storage/inTx";
-
-const transactionEntry = vi.hoisted(() => ({
-    beforeNext: null as (() => Promise<void>) | null,
-    intercepted: false,
-}));
-
-vi.mock("@/storage/inTx", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("@/storage/inTx")>();
-    return {
-        ...actual,
-        inTx: async <T>(
-            fn: (tx: Tx) => Promise<T>,
-            options?: InTxOptions,
-        ) => {
-            const beforeNext = transactionEntry.beforeNext;
-            if (beforeNext) {
-                transactionEntry.beforeNext = null;
-                transactionEntry.intercepted = true;
-                await beforeNext();
-            }
-            return actual.inTx(fn, options);
-        },
-    };
-});
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -32,31 +7,37 @@ import { registerSessionArchiveRoutes } from "../session/registerSessionArchiveR
 import { registerPublicShareOwnerRoutes } from "./registerPublicShareOwnerRoutes";
 import { discardPendingMessage } from "@/app/session/pending/pendingMessageService";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
+import { observeSqliteRequests } from "@/testkit/observeSqliteRequests";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
 describe("Session mutations current transaction authority", () => {
     let harness: LightSqliteHarness;
+    let stopObservation: (() => void) | undefined;
+    let intercepted = false;
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: "happier-session-mutation-access-", initAuth: false });
     }, 120_000);
     afterAll(async () => { if (harness) await harness.close(); });
     afterEach(async () => {
-        expect(transactionEntry.beforeNext).toBeNull();
-        expect(transactionEntry.intercepted).toBe(true);
-        transactionEntry.intercepted = false;
+        stopObservation?.();
+        stopObservation = undefined;
+        expect(intercepted).toBe(true);
+        intercepted = false;
         await db.accountChange.deleteMany();
         await db.session.deleteMany();
         await db.account.deleteMany();
     });
 
-    // Intercept the canonical transaction entry while leaving inTx, its retry
-    // behavior, the transaction client, authorization, and mutation logic real.
-    // Patching `db.$transaction` is not owner-faithful: inTx owns that lower
-    // boundary and may retry it without exposing the operation entry point.
+    // Revoke after the real admission query captured its row, before the mutation
+    // rechecks authority. Only SQLite IO is observed; inTx and its retry path stay real.
     function beforeTransaction(run: () => Promise<void>) {
-        expect(transactionEntry.beforeNext).toBeNull();
-        transactionEntry.beforeNext = run;
+        expect(stopObservation).toBeUndefined();
+        stopObservation = observeSqliteRequests({ after: async request => {
+            if (intercepted || request.model !== "Session" || request.action !== "findUnique") return;
+            intercepted = true;
+            await run();
+        } });
     }
 
     async function fixture() {

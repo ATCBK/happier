@@ -13,13 +13,137 @@ import { signAccountContentKeyBindingV1, attachAccountEncryptionMigrateProofSign
     buildAccountStoredContentCompatibilityHttpHeadersV1, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
     type AccountEncryptionMigrateUnsignedRequest } from '@happier-dev/protocol';
 import { sealPromptLibraryContentV1, openPromptLibraryContentV1, buildPromptLibraryPhysicalKeyV1,
+    PromptLibraryRowsListResponseV1Schema, PROMPT_LIBRARY_ACCOUNT_ROW_PREFIX_V1,
     type AccountEncryptionMigratePromptLibraryDirectiveV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { deriveAccountEncryptionMigrationKeyFingerprints } from '@/app/encryption/accountEncryptionTransition';
+import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { createSavedSecretResourceInTx, deleteSavedSecretResourceInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
+import { inTx } from '@/storage/inTx';
+import { migratePromptLibraryForAccountModeInTx, matchPromptLibraryAccountMigrationPostStateInTx } from '@/app/account/prompts/promptLibraryEncryptionMigration';
 
 describe('Account prompt-library reserved rows (SQLite)', () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-prompt-library-' }); }, 120_000);
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-prompt-library-', initEncrypt: true }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(['plain', 'e2ee'] as const)('keeps known prompt context readable beside unknown stored keys (%s)', async mode => {
+        const account = await db.account.create({ data: { encryptionMode: mode,
+            ...(mode === 'e2ee' ? createSignedAccountContentBinding() : {}) } });
+        const material = mode === 'plain' ? null : { type: 'legacy' as const, secret: new Uint8Array(32).fill(37) };
+        const record = emptyPromptLibraryRecordV1('coding');
+        const content = sealPromptLibraryContentV1({ mode, material, record });
+        const unknownKey = `${PROMPT_LIBRARY_ACCOUNT_ROW_PREFIX_V1}future-skill-usage`;
+        const unknownValue = new TextEncoder().encode(JSON.stringify(content));
+        await db.userKVStore.createMany({ data: [
+            { accountId: account.id, key: buildPromptLibraryPhysicalKeyV1('coding'), version: 3,
+                value: new TextEncoder().encode(JSON.stringify(content)) },
+            { accountId: account.id, key: unknownKey, version: 4, value: unknownValue },
+            { accountId: account.id, key: `${unknownKey}-opaque`, version: 5, value: new Uint8Array([255]) },
+            { accountId: account.id, key: `${unknownKey}-deleted`, version: 6, value: null },
+        ] });
+        const app = createAuthenticatedTestApp() as Fastify;
+        accountRoutes(app);
+        try {
+            const response = await app.inject({ method: 'GET', url: '/v1/account/entity-rows/prompt-library',
+                headers: { 'x-test-user-id': account.id } });
+            expect(response.statusCode).toBe(200);
+            const wire = PromptLibraryRowsListResponseV1Schema.parse(response.json());
+            expect(wire).toEqual({ status: 'listed', rows: [{ key: 'coding', revision: 3, content }] });
+            const catalog = await loadPromptLibraryCatalogV1({ mode, material, readRows: async () => wire });
+            expect(catalog).toMatchObject({ status: 'ready', rows: [{ record, revision: 3 }] });
+            expect(await db.userKVStore.findUnique({ where: { accountId_key: { accountId: account.id, key: unknownKey } } }))
+                .toMatchObject({ version: 4, value: unknownValue });
+            expect((await app.inject({ method: 'GET', url: `/v1/account/entity-rows/prompt-library/future-skill-usage`,
+                headers: { 'x-test-user-id': account.id } })).statusCode).toBe(400);
+            // Display omission is not a complete conversion census. Unknown bytes
+            // must still prevent an Account-mode transition or claimed post-state.
+            expect(await inTx(tx => migratePromptLibraryForAccountModeInTx(tx, { accountId: account.id,
+                toMode: mode === 'plain' ? 'e2ee' : 'plain' }))).toEqual({ status: 'invalid_content' });
+            expect(await inTx(tx => matchPromptLibraryAccountMigrationPostStateInTx(tx, { accountId: account.id,
+                toMode: mode }))).toEqual({ status: 'mismatch' });
+        } finally { await app.close(); }
+    });
+
+    it.each(['corrupt', 'mismatched-key', 'wrong-mode'] as const)('still refuses a known prompt row with %s content', async scenario => {
+        const mode = scenario === 'mismatched-key' ? 'plain' : 'e2ee';
+        const account = await db.account.create({ data: { encryptionMode: mode,
+            ...(mode === 'e2ee' ? createSignedAccountContentBinding() : {}) } });
+        const content = { t: 'plain', v: emptyPromptLibraryRecordV1(scenario === 'mismatched-key' ? 'voice' : 'coding') };
+        await db.userKVStore.create({ data: { accountId: account.id, key: buildPromptLibraryPhysicalKeyV1('coding'),
+            version: 1, value: scenario === 'corrupt' ? new Uint8Array([255]) : new TextEncoder().encode(JSON.stringify(content)) } });
+        const app = createAuthenticatedTestApp() as Fastify;
+        accountRoutes(app);
+        try {
+            const response = await app.inject({ method: 'GET', url: '/v1/account/entity-rows/prompt-library',
+                headers: { 'x-test-user-id': account.id } });
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toEqual({ status: scenario === 'wrong-mode' ? 'account-mode-mismatch' : 'invalid-stored-content' });
+        } finally { await app.close(); }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('refuses a registry token referencing a missing resource before publishing the row (%s)', async mode => {
+        const account = await db.account.create({ data: { encryptionMode: mode, settingsVersion: 0,
+            ...(mode === 'e2ee' ? createSignedAccountContentBinding() : {}) } });
+        const app = createAuthenticatedTestApp() as Fastify;
+        accountRoutes(app);
+        const url = '/v1/account/entity-rows/prompt-library/registry-sources';
+        const headers = { 'x-test-user-id': account.id };
+        const resourceId = 'missing-registry-token';
+        const ref = formatSharedSavedSecretRefV1(resourceId);
+        const content = sealPromptLibraryContentV1({ mode, material: mode === 'plain' ? null : {
+            type: 'legacy', secret: new Uint8Array(32).fill(29) }, record: {
+            key: 'registry-sources', value: { v: 2, disabledSourceIds: [], sources: [{ id: 'private', title: 'Private', enabled: true,
+                format: 'git', kinds: ['skill'], url: 'https://example.test/private.git', addedAt: 0,
+                token: { secretRef: ref } }] },
+        } });
+        try {
+            const response = await app.inject({ method: 'POST', url, headers,
+                payload: { expectedRevision: 'absent', sourceSettingsVersion: 0, content,
+                    referencedSavedSecretIds: [ref], savedSecretRevisions: [{ resourceId, expectedRevision: 1 }] } });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toEqual({ status: 'invalid-reference' });
+            expect((await app.inject({ method: 'GET', url, headers })).json()).toEqual({ status: 'absent' });
+            expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+        } finally { await app.close(); }
+    });
+
+    it('admits current registry token custody but refuses stale, unentitled and deleted resources through the row route', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const other = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const resourceId = 'registry-row-token';
+        const ref = formatSharedSavedSecretRefV1(resourceId);
+        expect(await inTx(tx => createSavedSecretResourceInTx(tx, { accountId: owner.id, resourceId,
+            displayName: 'Token', kind: 'token', encryptionMode: 'plain', storedContent: {
+                t: 'plain', v: { v: 1, name: 'Token', kind: 'token', value: 'fixture-private' } } }))).toMatchObject({ ok: true });
+        const content = sealPromptLibraryContentV1({ mode: 'plain', material: null, record: { key: 'registry-sources', value: {
+            v: 2, disabledSourceIds: [], sources: [{ id: 'private', title: 'Private', format: 'git', kinds: ['skill'],
+                url: 'https://example.test/private.git', addedAt: 0, enabled: false, token: { secretRef: ref } }] } } });
+        const app = createAuthenticatedTestApp() as Fastify;
+        accountRoutes(app);
+        const url = '/v1/account/entity-rows/prompt-library/registry-sources';
+        const headers = { 'x-test-user-id': owner.id };
+        const mutation = { expectedRevision: 'absent', sourceSettingsVersion: 0, content,
+            referencedSavedSecretIds: [ref], savedSecretRevisions: [{ resourceId, expectedRevision: 1 }] };
+        try {
+            expect((await app.inject({ method: 'POST', url, headers, payload: { ...mutation,
+                savedSecretRevisions: [{ resourceId, expectedRevision: 2 }] } })).json()).toEqual({ status: 'invalid-reference' });
+            expect((await app.inject({ method: 'POST', url, headers: { 'x-test-user-id': other.id }, payload: mutation })).json())
+                .toEqual({ status: 'invalid-reference' });
+            expect((await app.inject({ method: 'POST', url, headers, payload: mutation })).json()).toMatchObject({ status: 'updated', revision: 0 });
+            expect((await app.inject({ method: 'POST', url, headers, payload: { expectedRevision: 0, content: null } })).json())
+                .toMatchObject({ status: 'updated', revision: 1 });
+            expect(await inTx(tx => deleteSavedSecretResourceInTx(tx, { accountId: owner.id, resourceId, expectedRevision: 1,
+                expectedSettingsVersion: 0, referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] },
+                    catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent',
+                        connectedPurposes: 'absent', registrySources: 1 } } }))).toMatchObject({ ok: true });
+            const { sourceSettingsVersion: _source, ...rebind } = mutation;
+            expect((await app.inject({ method: 'POST', url, headers, payload: { ...rebind, expectedRevision: 1 } })).json())
+                .toEqual({ status: 'invalid-reference' });
+            expect((await app.inject({ method: 'GET', url, headers })).json()).toEqual({ status: 'deleted', revision: 1 });
+            expect(await db.savedSecretResource.findUnique({ where: { id: resourceId } })).toBeNull();
+        } finally { await app.close(); }
+    });
 
     it('publishes admitted catalogs with isolated CAS, without Settings writes or a generic KV bypass', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 7 } });

@@ -863,6 +863,9 @@ export function machinesRoutes(app: Fastify) {
     // Machines API
     app.get('/v1/machines', {
         preHandler: app.authenticate,
+        schema: {
+            querystring: z.object({ includeRevoked: z.enum(['true', 'false']).optional() }),
+        },
         config: {
             allowApiToken: true,
             // Scoped SDK callers need the same content-free target bootstrap;
@@ -872,16 +875,19 @@ export function machinesRoutes(app: Fastify) {
         },
     }, async (request, reply) => {
         const userId = request.userId;
+        // Retained Session replacement identity needs predecessor rows; ordinary
+        // discovery must not return them merely because the caller owns them.
+        const includeRevokedOwned = request.query.includeRevoked === 'true';
 
         // Ordinary discovery stays persistent-only. Restricted Runner bootstrap
         // is still owner-only; persistent shared targets use current access.
         const isApiTokenCaller = request.authTokenKind === "api_token";
         const accessible = await inTx(async (tx) => {
-            const ids = await listMachineCandidatesInTx(tx, userId);
+            const ids = await listMachineCandidatesInTx(tx, userId, { includeRevokedOwned });
             const machines = await tx.machine.findMany({
                 where: {
                     id: { in: ids },
-                    revokedAt: null,
+                    ...(includeRevokedOwned ? {} : { revokedAt: null }),
                     ...(isApiTokenCaller ? {} : persistentMachineWhere),
                 },
                 orderBy: { lastActiveAt: 'desc' },

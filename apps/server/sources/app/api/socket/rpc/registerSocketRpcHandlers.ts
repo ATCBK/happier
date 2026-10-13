@@ -942,7 +942,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 return;
             }
             if (
-                (isSessionAuthorizationNamespace || sessionAuthorization?.routeToSessionOwnerDaemon === true)
+                sessionAuthorization?.routeToSessionOwnerDaemon === true
                 && readSocketClientType(params.socket) !== "session-scoped"
                 && !isMachineOwnedSessionSpawnRegistration
             ) {

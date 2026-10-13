@@ -1,19 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EphemeralUpdateSchema } from "@happier-dev/protocol/updates";
+import { eventRouter } from "@/app/events/eventRouter";
 
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { accountRoutes } from "./accountRoutes";
 
-const { emitEphemeral, buildUsageEphemeral } = vi.hoisted(() => ({
+const { emitEphemeral } = vi.hoisted(() => ({
     emitEphemeral: vi.fn(),
-    buildUsageEphemeral: vi.fn(() => ({ type: "usage" })),
-}));
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate: vi.fn(), emitEphemeral },
-    buildUpdateAccountUpdate: vi.fn(),
-    buildUsageEphemeral,
 }));
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
@@ -23,9 +18,12 @@ describe("accountRoutes v2 usage", () => {
 
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: "happier-account-usage-", initAuth: false });
+        // Spy after the real route graph initializes, preserving its payload builders.
+        vi.spyOn(eventRouter, "emitEphemeral").mockImplementation(emitEphemeral);
     }, 120_000);
 
     afterAll(async () => {
+        vi.restoreAllMocks();
         await harness.close();
     });
 
@@ -159,7 +157,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 const res = await app.inject({
                     method: "POST",
@@ -199,8 +197,16 @@ describe("accountRoutes v2 usage", () => {
                 data: { tokens: { total: 10, prompt: 5 }, cost: { total: 0.1 } },
             }),
         );
-        expect(buildUsageEphemeral).toHaveBeenCalledWith(session.id, "k1", { total: 10, prompt: 5 }, { total: 0.1 });
-        expect(emitEphemeral).toHaveBeenCalledTimes(1);
+        const deliveries = emitEphemeral.mock.calls.map(([delivery]) => ({
+            ...delivery,
+            payload: EphemeralUpdateSchema.parse(delivery.payload),
+        }));
+        expect(deliveries).toEqual([{
+            userId: account.id,
+            recipientFilter: { type: "user-scoped-only" },
+            payload: { type: "usage", id: session.id, key: "k1", tokens: { total: 10, prompt: 5 },
+                cost: { total: 0.1 }, timestamp: expect.any(Number) },
+        }]);
     });
 
     it("returns 404 when sessionId does not belong to user", async () => {
@@ -210,7 +216,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 const res = await app.inject({
                     method: "POST",
@@ -251,7 +257,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 const first = await app.inject({
                     method: "POST",
@@ -325,7 +331,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 await app.inject({
                     method: "POST",
@@ -395,7 +401,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 const ingest = await app.inject({
                     method: "POST",
@@ -440,10 +446,16 @@ describe("accountRoutes v2 usage", () => {
                     success: true,
                     eventId: expect.any(String),
                 });
-                expect(buildUsageEphemeral).toHaveBeenCalledWith(
-                    session.id,
-                    "claude:claude-sonnet-4-6",
-                    {
+                const delivery = emitEphemeral.mock.calls[0]?.[0];
+                expect(delivery).toMatchObject({
+                    userId: account.id,
+                    recipientFilter: { type: "user-scoped-only" },
+                });
+                expect(EphemeralUpdateSchema.parse(delivery?.payload)).toEqual({
+                    type: "usage",
+                    id: session.id,
+                    key: "claude:claude-sonnet-4-6",
+                    tokens: {
                         total: 15,
                         input: 10,
                         output: 5,
@@ -451,17 +463,13 @@ describe("accountRoutes v2 usage", () => {
                         cacheRead: 0,
                         cacheWrite: 0,
                     },
-                    {
+                    cost: {
                         total: 0.12,
                         reportedUsd: 0.12,
                         estimatedUsd: 0,
                         invoiceUsd: 0,
                     },
-                );
-                expect(emitEphemeral).toHaveBeenCalledWith({
-                    userId: account.id,
-                    payload: { type: "usage" },
-                    recipientFilter: { type: "user-scoped-only" },
+                    timestamp: expect.any(Number),
                 });
 
                 const query = await app.inject({
@@ -543,7 +551,7 @@ describe("accountRoutes v2 usage", () => {
         });
 
         await withAuthenticatedTestApp(
-            (app) => accountRoutes(app as any),
+            accountRoutes,
             async (app) => {
                 const events = [
                     {

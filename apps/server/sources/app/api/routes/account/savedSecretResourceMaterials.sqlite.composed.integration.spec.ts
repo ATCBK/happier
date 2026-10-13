@@ -35,6 +35,10 @@ import { registerAccountSettingsHistoryRoutes } from "./registerAccountSettingsH
 import { registerConnectedAccountConfigurationRowsRoutes } from "@/app/account/connectedAccounts/registerConfigurationRowsRoutes";
 import { readProfileReferenceGuardInTx } from '@/app/account/profiles/profileRows';
 import type { FastifyRequest } from "fastify";
+import { sealPromptLibraryContentV1, PromptLibraryRowReadResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries/registrySourcesV1';
+import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import { mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from '@/app/account/prompts/promptLibraryRows';
 
 async function importCliTestModule<T>(specifier: string): Promise<T> {
     // This composition deliberately crosses the server/CLI workspace boundary.
@@ -119,6 +123,70 @@ describe("Saved Secret material route (SQLite integration)", () => {
     });
 
     afterAll(async () => harness.close());
+
+    it.each([true, false])('promotes a personal registry token through the real Action route and refuses its deletion (explicit mapping: %s)', async explicitMapping => {
+        const personal = { id: 'registry-personal', name: 'Registry token', kind: 'token' as const,
+            encryptedValue: { _isSecretValue: true as const, value: 'private-registry-token' }, createdAt: 1, updatedAt: 1 };
+        const raw = { secrets: [personal] };
+        const owner = await db.account.create({ data: { encryptionMode: 'plain', settings: JSON.stringify({ t: 'plain', v: raw }) } });
+        const registrySources = RegistrySourcesRecordV1Schema.parse({ v: 2, disabledSourceIds: [], sources: [{
+            id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/private',
+            enabled: true, addedAt: 1, token: { secretRef: personal.id } }] });
+        const content = sealPromptLibraryContentV1({ mode: 'plain', material: null, record: { key: 'registry-sources', value: registrySources } });
+        expect(await inTx(tx => mutatePromptLibraryRowInTx(tx, { accountId: owner.id, key: 'registry-sources',
+            expectedRevision: 'absent', sourceSettingsVersion: 0, content,
+            referencedSavedSecretIds: [personal.id] }))).toMatchObject({ status: 'updated', revision: 0 });
+        const resourceId = deriveSavedSecretImportResourceIdV1({ accountId: owner.id,
+            source: { kind: 'personal-saved-secret', secretId: personal.id } });
+        const ref = formatSharedSavedSecretRefV1(resourceId);
+        const promoted = promotePersonalSavedSecretReference(raw, { secretId: personal.id, expectedUpdatedAt: 1,
+            sharedSecretRef: ref }, { profileRecords: [], registrySources });
+        const input = SharedSavedSecretPromoteInputV1Schema.parse({ resourceId, displayName: personal.name, kind: personal.kind,
+            encryptionMode: 'plain', storedContent: { t: 'plain', v: { v: 1, name: personal.name, kind: personal.kind, value: personal.encryptedValue.value } },
+            expectedSettingsVersion: 0, nextSettings: { t: 'plain', v: promoted.settings }, profileMutations: [],
+            ...(explicitMapping ? { personalSecretPromotions: [{ personalSecretId: personal.id, resourceId }] } : {}),
+            referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] },
+                catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent',
+                    connectedPurposes: 'absent', registrySources: 0 } },
+            catalogMutations: { registrySources: { expectedRevision: 0, referencedSavedSecretIds: [ref],
+                savedSecretRevisions: [{ resourceId, expectedRevision: 1 }],
+                content: sealPromptLibraryContentV1({ mode: 'plain', material: null,
+                    record: { key: 'registry-sources', value: RegistrySourcesRecordV1Schema.parse(promoted.registrySources) } }) } } });
+        const app = createAuthenticatedTestApp();
+        registerSavedSecretResourceRoutes(app);
+        await app.ready();
+        try {
+            const omitted = await app.inject({ method: 'POST', url: '/v1/account/saved-secrets/resources/promote',
+                headers: { 'x-test-user-id': owner.id }, payload: { ...input, catalogMutations: undefined } });
+            expect(omitted.statusCode).toBe(400);
+            expect(omitted.json()).toMatchObject({ error: 'references_invalid' });
+            expect(await db.savedSecretResource.count()).toBe(0);
+            const uncaptured = await app.inject({ method: 'POST', url: '/v1/account/saved-secrets/resources/promote',
+                headers: { 'x-test-user-id': owner.id }, payload: { ...input, nextSettings: null,
+                    personalSecretPromotions: undefined, referenceCensus: { scope: 'catalogs', accountMode: 'plain', catalogs: { registrySources: 0 } },
+                    catalogMutations: { registrySources: { expectedRevision: 0, content: input.catalogMutations?.registrySources?.content } } } });
+            expect(uncaptured.statusCode).toBe(400);
+            expect(uncaptured.json()).toMatchObject({ error: 'references_invalid' });
+            expect(await db.savedSecretResource.count()).toBe(0);
+            const promote = await app.inject({ method: 'POST', url: '/v1/account/saved-secrets/resources/promote',
+                headers: { 'x-test-user-id': owner.id }, payload: input });
+            expect(promote.statusCode).toBe(200);
+            expect(promote.json()).toMatchObject({ resourceId, settingsVersion: 1, catalogRevisions: { registrySources: 1 } });
+            const read = PromptLibraryRowReadResponseV1Schema.parse(await inTx(tx => readPromptLibraryRowInTx(tx,
+                { accountId: owner.id, key: 'registry-sources' })));
+            expect(read).toMatchObject({ status: 'present', revision: 1, content: { t: 'plain', v: { key: 'registry-sources',
+                value: { sources: [{ token: { secretRef: ref } }] } } } });
+            const guard = await inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: owner.id }));
+            if (guard.status !== 'present') throw new Error('Committed promotion must advance the guard');
+            const deleted = await app.inject({ method: 'POST', url: '/v1/account/saved-secrets/resources/delete',
+                headers: { 'x-test-user-id': owner.id }, payload: { resourceId, expectedRevision: 1, expectedSettingsVersion: 1,
+                    referenceCensus: { ...input.referenceCensus, catalogs: { ...input.referenceCensus.catalogs, registrySources: 1 },
+                        profiles: { referenceGuardRevision: guard.revision, rows: [] } } } });
+            expect(deleted.statusCode).toBe(409);
+            expect(deleted.json()).toMatchObject({ error: 'resource_in_use' });
+            expect(await db.savedSecretResource.count()).toBe(1);
+        } finally { await app.close(); }
+    });
 
     it("reviews retained managed bootstrap custody before deleting a Saved Secret without claiming native deletion", async () => {
         const owner = await db.account.create({ data: { encryptionMode: "plain" } });

@@ -1,6 +1,7 @@
 import fastify, { type FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import tweetnacl from 'tweetnacl';
+import * as privacyKit from 'privacy-kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeBase64, type JsonValue } from '@happier-dev/protocol';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -31,32 +32,13 @@ import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
 import { registerExternalActionRoutes } from './registerExternalActionRoutes';
 import { enableAuthentication } from '../../utils/enableAuthentication';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { installedSessionExternalActionStorage as storage } from '../../testkit/installedSessionExternalActionStorage';
 
 // Database I/O is the only substitute: installation signatures, Machine and
 // Session admission, credential policy, Home minting and currentness stay real.
-const storage = vi.hoisted(() => {
-    const state = { bound: true, publicKey: '', metadata: '', dataEncryptionKey: '', revokedAt: null as Date | null };
-    const account = { id: 'account', status: 'active', tokenEpoch: 1,
-        encryptionMode: 'plain', terminalPresentUserPolicy: 'never' };
-    const machine = () => ({ id: 'machine', accountId: account.id, kind: 'persistent',
-        installationId: 'installation', installationPublicKey: state.publicKey,
-        revokedAt: state.revokedAt, replacedByMachineId: null, active: true,
-        metadata: state.metadata, daemonState: null,
-        dataEncryptionKey: state.dataEncryptionKey, account, accountGrants: [], teamGrants: [], groupGrants: [] });
-    const reader = {
-        account: { findUnique: async () => account },
-        machine: { findUnique: async () => machine(), findFirst: async () => machine() },
-        session: { findFirst: async () => state.bound ? { id: 'session', accountId: account.id } : null },
-        accessKey: { findUnique: async () => state.bound ? { machine: machine(), session: { accountId: account.id } } : null },
-        simpleCache: { findUnique: async () => ({ value: 'srv_proposal_admission' }) },
-        homeSettings: { findUnique: async () => null },
-        homeGovernancePolicy: { findUnique: async () => null },
-    };
-    const db = { ...reader, $transaction: async <T>(run: (tx: typeof reader) => Promise<T>) => run(reader) };
-    return { db, state };
-});
 vi.mock('@/storage/db', async importOriginal => ({
-    ...await importOriginal<typeof import('@/storage/db')>(), db: storage.db,
+    ...await importOriginal<typeof import('@/storage/db')>(),
+    db: (await import('../../testkit/installedSessionExternalActionStorage')).installedSessionExternalActionStorage.db,
 }));
 
 const installation = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(29));
@@ -120,11 +102,97 @@ describe('installed Session proposal admission at the Home mint route', () => {
     });
     afterAll(() => vi.unstubAllEnvs());
     beforeEach(() => {
+        storage.account.tokenEpoch = 1;
+        storage.otherAccount.tokenEpoch = 1;
         storage.state.bound = true;
+        storage.state.publisherBound = true;
         storage.state.revokedAt = null;
-        storage.state.publicKey = encodeBase64(installation.publicKey, 'base64url');
+        storage.state.publicKey = new Uint8Array(installation.publicKey);
         storage.state.metadata = encodePlainMachineStoredContent({});
         storage.state.dataEncryptionKey = MACHINE_PLAIN_DATA_KEY_MARKER;
+    });
+
+    it.each(['account', 'terminal'] as const)('admits only real signed predecessor %s installed-Session proposals', async kind => {
+        storage.account.tokenEpoch = 0;
+        storage.otherAccount.tokenEpoch = 0;
+        // Exact ../0.2 createToken(accountId, extras?) payload and privacy-kit
+        // signer: no epoch and no provenance marker are fabricated or upgraded.
+        const generator = await privacyKit.createPersistentTokenGenerator({ service: 'handy', seed: 'proposal-admission-test-secret' });
+        const token = await generator.new({ user: 'account', ...(kind === 'terminal' ? { extras: { session: 'paired-request' } } : {}) });
+        const decoded = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')) as Record<string, unknown>;
+        expect(decoded).not.toHaveProperty('tokenEpoch');
+        expect(decoded).not.toHaveProperty('provenance');
+        expect(await auth.verifyTokenForRoute(token)).toMatchObject({ userId: 'account',
+            tokenEpoch: 0, authTokenKind: kind, legacy: true });
+        const app = createAuthenticatedTestApp({ authentication: 'real' });
+        app.decorate('resolveCurrentSessionMachine', async (input: { accountId: string; sessionId: string }) =>
+            storage.state.publisherBound && input.accountId === 'account' && input.sessionId === 'session' ? 'machine' : null);
+        const dispatch = vi.fn(async () => { throw new Error('Minting must not execute an Action'); });
+        registerExternalActionRoutes(app, { dispatch });
+        const actionId = 'teams.list';
+        const body = proposal(actionId);
+        const signed = (candidate: typeof body, accountId = 'account') => ({ ...candidate,
+            installationProof: signMachineInstallationProof({ privateKey: installation.secretKey,
+                payload: { version: 1, accountId, ...candidate.sessionActionSource, externalActionOrigin: {
+                    homeId: 'srv_proposal_admission', actionId, requestId: candidate.envelope.requestId,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(candidate.envelope), origin: candidate.sessionActionOrigin } } }) });
+        const mint = (payload: unknown, credential = token) => app.inject({ method: 'POST',
+            url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId), headers: { authorization: `Bearer ${credential}` }, payload });
+        try {
+            const accepted = await mint(body);
+            expect(accepted.statusCode, accepted.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(accepted.json());
+            if (!('authentication' in authorization.binding)) throw new Error('Expected original installed-Session authentication');
+            expect(authorization.binding.authentication).toMatchObject({ kind, tokenEpoch: 0 });
+            expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toMatchObject({ authority: 'account_automation' });
+            expect(Boolean(await verifyProposalCurrentness(authorization))).toBe(true);
+            for (const invalid of [
+                { ...body, installationProof: undefined },
+                { ...body, sessionActionSource: undefined },
+                { ...body, sessionActionOrigin: undefined },
+                { ...body, sessionActionOrigin: { ...body.sessionActionOrigin, caller: { ...body.sessionActionOrigin.caller, sessionId: 'foreign-session' } } },
+                { ...body, sessionActionSource: { ...body.sessionActionSource, machineId: 'foreign-machine' } },
+                { ...body, sessionActionSource: { ...body.sessionActionSource, installationId: 'foreign-installation' } },
+                { ...body, sessionActionOrigin: { ...body.sessionActionOrigin, sourceTurnId: 'forged' } },
+                { v: 1, machineId: body.machineId, envelope: body.envelope },
+            ]) expect((await mint(invalid)).statusCode).toBe(401);
+            // Valid installation signatures over wrong tuples still fail the
+            // real Session/access/install binding owner, not only the codec.
+            for (const invalid of [
+                { ...body, sessionActionOrigin: { ...body.sessionActionOrigin, caller: { ...body.sessionActionOrigin.caller, sessionId: 'foreign-session' } } },
+                { ...body, sessionActionSource: { ...body.sessionActionSource, machineId: 'foreign-machine' } },
+                { ...body, sessionActionSource: { ...body.sessionActionSource, installationId: 'foreign-installation' } },
+            ]) expect((await mint(signed(invalid))).statusCode).toBe(401);
+            const foreignToken = await generator.new({ user: 'other-account', ...(kind === 'terminal' ? { extras: { session: 'paired-request' } } : {}) });
+            expect((await mint(body, foreignToken)).statusCode).toBe(401);
+            expect((await mint(signed(body, 'other-account'), foreignToken)).statusCode).toBe(401);
+            const tampered = token.split('.');
+            tampered[1] = Buffer.from(JSON.stringify({ ...decoded, sub: 'other-account' })).toString('base64url');
+            expect((await mint(body, tampered.join('.'))).statusCode).toBe(401);
+            storage.state.homeId = 'srv_other_home';
+            expect((await mint(body)).statusCode).toBe(401);
+            storage.state.homeId = 'srv_proposal_admission';
+            storage.state.bound = false;
+            expect((await mint(body)).statusCode).toBe(401);
+            storage.state.bound = true;
+            storage.state.publisherBound = false;
+            expect((await mint(body)).statusCode).toBe(401);
+            storage.state.publisherBound = true;
+            storage.state.publicKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(30)).publicKey;
+            expect((await mint(body)).statusCode).toBe(401);
+            storage.state.publicKey = installation.publicKey;
+            storage.state.revokedAt = new Date();
+            expect((await mint(body)).statusCode).toBe(401);
+            expect(await verifyProposalCurrentness(authorization)).toBeNull();
+            storage.state.revokedAt = null;
+            storage.account.tokenEpoch = 1;
+            expect((await mint(body)).statusCode).toBe(401);
+            expect(await verifyProposalCurrentness(authorization)).toBeNull();
+            expect(dispatch).not.toHaveBeenCalled();
+        } finally {
+            storage.state.homeId = 'srv_proposal_admission';
+            await app.close();
+        }
     });
 
     it.each(['account', 'terminal'] as const)('admits invitation proposals with %s credentials without execution authority', async kind => {
@@ -200,6 +268,35 @@ describe('installed Session proposal admission at the Home mint route', () => {
                 signedRequestProof(authorization, request.path, request.body, 'teams.archive'))).toBeNull();
             expect(await verifyExternalActionDomainExecutionRequest(
                 signedRequestProof(authorization, request.path, request.body, 'teams.list', 'GET'))).toBeNull();
+            expect(dispatch).not.toHaveBeenCalled();
+        } finally { await app.close(); }
+    });
+
+    it.each(['account', 'terminal'] as const)('admits the installed Session Home runtime read with %s credentials', async kind => {
+        const { app, mint } = createApp(kind);
+        try {
+            const body = proposal('home.runtime.get', { force: true });
+            const response = await mint('home.runtime.get', body);
+            expect(response.statusCode).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(response.json());
+            expect(Boolean(await verifyProposalCurrentness(authorization))).toBe(true);
+            storage.state.bound = false;
+            expect((await mint('home.runtime.get', body)).statusCode).toBe(401);
+        } finally { await app.close(); }
+    });
+
+    it('keeps a public self-name creator carrier as authoring provenance without granting the profile effect', async () => {
+        const { app, mint, dispatch } = createApp('account');
+        try {
+            const input = { actionId: 'account.name.set', actionArgs: { name: 'Captain' },
+                summary: 'Set my name', createdBy: { surface: 'agent' } };
+            const response = await mint('approval.request.create', proposal('approval.request.create', input));
+            expect(response.statusCode).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(response.json());
+            expect(authorization.binding.actionId).toBe('approval.request.create');
+            expect(Boolean(await verifyProposalCurrentness(authorization))).toBe(true);
+            expect(await verifyExternalActionDomainExecutionRequest(signedRequestProof(authorization,
+                '/v1/account/profile', input.actionArgs, 'account.name.set'))).toBeNull();
             expect(dispatch).not.toHaveBeenCalled();
         } finally { await app.close(); }
     });

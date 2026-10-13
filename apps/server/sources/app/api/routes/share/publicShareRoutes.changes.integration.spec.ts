@@ -6,48 +6,26 @@ import {
     stringifySerializedJsonValue,
 } from "@happier-dev/protocol";
 import { createHash } from "node:crypto";
+import { UpdateContainerSchema } from "@happier-dev/protocol/updates";
 
 import { db } from "@/storage/db";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { publicShareRoutes } from "./publicShareRoutes";
+import { createAuthenticatedFakeSocket } from "../../testkit/socketHarness";
+import { eventRouter, type ClientConnection } from "@/app/events/eventRouter";
 
-const { emitUpdate, buildPublicShareCreatedUpdate, buildPublicShareUpdatedUpdate, buildPublicShareDeletedUpdate, randomKeyNaked, markAccountChanged } =
-    vi.hoisted(() => ({
-        emitUpdate: vi.fn(),
-        buildPublicShareCreatedUpdate: vi.fn((_ps: any, updSeq: number, updId: string) => ({
-            id: updId,
-            seq: updSeq,
-            body: { t: "public-share-created" },
-        })),
-        buildPublicShareUpdatedUpdate: vi.fn((_ps: any, updSeq: number, updId: string) => ({
-            id: updId,
-            seq: updSeq,
-            body: { t: "public-share-updated" },
-        })),
-        buildPublicShareDeletedUpdate: vi.fn((_sessionId: string, updSeq: number, updId: string) => ({
-            id: updId,
-            seq: updSeq,
-            body: { t: "public-share-deleted" },
-        })),
-        randomKeyNaked: vi.fn(() => "upd-id"),
-        markAccountChanged: vi.fn(async (_tx: any, params: any) => {
-            if (params.kind === "share") return 50;
-            if (params.kind === "session") return 51;
-            return 99;
-        }),
-    }));
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildPublicShareCreatedUpdate,
-    buildPublicShareUpdatedUpdate,
-    buildPublicShareDeletedUpdate,
-}));
-
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
+// Socket emission is the transport boundary; cursor allocation, payload building,
+// recipient admission and dispatch all run their canonical production owners.
+const socketEmit = vi.fn((_event: string, _payload: unknown) => {});
+const connections: ClientConnection[] = [];
+function receivedUpdates() {
+    return socketEmit.mock.calls.map(([event, payload]) => {
+        expect(event).toBe("update");
+        return UpdateContainerSchema.parse(payload);
+    });
+}
 
 const VALID_ENCRYPTED_DATA_KEY = encodeBase64(
     new Uint8Array(
@@ -90,12 +68,12 @@ describe("publicShareRoutes (AccountChange integration)", () => {
     });
 
     beforeEach(() => {
-        vi.resetModules();
         vi.clearAllMocks();
         harness.resetEnv();
     });
 
     afterEach(async () => {
+        for (const connection of connections.splice(0)) eventRouter.removeConnection(connection.userId, connection);
         harness.resetEnv();
         await harness.resetDbTables([
             () => db.publicShareAccessLog.deleteMany(),
@@ -134,6 +112,17 @@ describe("publicShareRoutes (AccountChange integration)", () => {
             select: { id: true },
         });
 
+        const socket = createAuthenticatedFakeSocket({ emit: socketEmit, data: {
+            userId: owner.id, clientType: "user-scoped", authTokenKind: "account",
+            authAuthority: "present_user", authTokenAuthenticationEvidence: [],
+        } });
+        const connection: ClientConnection = {
+            connectionType: "user-scoped", userId: owner.id,
+            // The canonical fake socket substitutes only the Socket.IO transport.
+            socket: socket as unknown as ClientConnection["socket"],
+        };
+        connections.push(connection);
+        eventRouter.addConnection(owner.id, connection);
         return { owner, session };
     }
 
@@ -295,6 +284,8 @@ describe("publicShareRoutes (AccountChange integration)", () => {
                     where: { sessionId: session.id },
                     data: { useCount: 2 },
                 });
+                await vi.waitFor(() => expect(receivedUpdates()).toHaveLength(1));
+                const beforeReplayChanges = await db.accountChange.findMany({ orderBy: { cursor: "asc" } });
                 vi.clearAllMocks();
 
                 const replay = await app.inject({
@@ -331,8 +322,8 @@ describe("publicShareRoutes (AccountChange integration)", () => {
                 expect(Buffer.from(afterReplay.tokenHash)).toEqual(
                     Buffer.from(beforeReplay.tokenHash),
                 );
-                expect(markAccountChanged).not.toHaveBeenCalled();
-                expect(emitUpdate).not.toHaveBeenCalled();
+                expect(await db.accountChange.findMany({ orderBy: { cursor: "asc" } })).toEqual(beforeReplayChanges);
+                expect(receivedUpdates()).toEqual([]);
 
                 const changed = await app.inject({
                     method: "POST",
@@ -363,8 +354,10 @@ describe("publicShareRoutes (AccountChange integration)", () => {
         expect(Buffer.from(afterChangedToken.tokenHash)).toEqual(
             createHash("sha256").update("genuinely-changed-token", "utf8").digest(),
         );
-        expect(markAccountChanged).toHaveBeenCalled();
-        expect(emitUpdate).toHaveBeenCalled();
+        const changes = await db.accountChange.findMany({ where: { accountId: owner.id, entityId: session.id }, orderBy: { cursor: "asc" } });
+        expect(changes.map(change => change.kind)).toEqual(["share", "session"]);
+        expect(changes.map(change => change.cursor)).toEqual([3, 4]);
+        await vi.waitFor(() => expect(receivedUpdates()).toContainEqual(expect.objectContaining({ seq: 4, body: expect.objectContaining({ t: "public-share-updated" }) })));
     });
 
     it("POST create rejects malformed E2EE encryptedDataKey envelopes", async () => {
@@ -589,8 +582,8 @@ describe("publicShareRoutes (AccountChange integration)", () => {
                     token: null,
                     useCount: 1,
                 });
-                expect(markAccountChanged).not.toHaveBeenCalled();
-                expect(emitUpdate).not.toHaveBeenCalled();
+                expect(await db.accountChange.count()).toBe(0);
+                expect(receivedUpdates()).toEqual([]);
 
                 const res = await app.inject({
                     method: "POST",
@@ -694,8 +687,8 @@ describe("publicShareRoutes (AccountChange integration)", () => {
             select: { sessionId: true, encryptedDataKey: true },
         });
         expect(stored).toBeNull();
-        expect(markAccountChanged).not.toHaveBeenCalled();
-        expect(emitUpdate).not.toHaveBeenCalled();
+        expect(await db.accountChange.count()).toBe(0);
+        expect(receivedUpdates()).toEqual([]);
     });
 
     it("POST create marks share+session and emits created update using latest cursor", async () => {
@@ -738,24 +731,13 @@ describe("publicShareRoutes (AccountChange integration)", () => {
         expect(stored?.sessionId).toBe(session.id);
         expect(stored?.encryptedDataKey).toBeInstanceOf(Uint8Array);
 
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({ accountId: owner.id, kind: "share", entityId: session.id }),
-        );
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({ accountId: owner.id, kind: "session", entityId: session.id }),
-        );
-        expect(emitUpdate).toHaveBeenCalledWith(
-            expect.objectContaining({
-                userId: owner.id,
-                payload: expect.objectContaining({
-                    seq: 51,
-                    body: expect.objectContaining({ t: "public-share-created" }),
-                }),
-                recipientFilter: { type: "all-interested-in-session", sessionId: session.id },
-            }),
-        );
+        const changes = await db.accountChange.findMany({ where: { accountId: owner.id, entityId: session.id }, orderBy: { cursor: "asc" } });
+        expect(changes.map(change => change.kind)).toEqual(["share", "session"]);
+        expect(changes.map(change => change.cursor)).toEqual([1, 2]);
+        const account = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
+        await vi.waitFor(() => expect(receivedUpdates()).toContainEqual(expect.objectContaining({
+            seq: account.seq, body: expect.objectContaining({ t: "public-share-created" }),
+        })));
     });
 
     it("POST update marks share+session and emits updated update using latest cursor", async () => {
@@ -805,15 +787,12 @@ describe("publicShareRoutes (AccountChange integration)", () => {
         expect(stored?.isConsentRequired).toBe(true);
         expect(stored?.expiresAt?.getTime()).toBe(1_800_000_000_000);
 
-        expect(emitUpdate).toHaveBeenCalledWith(
-            expect.objectContaining({
-                userId: owner.id,
-                payload: expect.objectContaining({
-                    seq: 51,
-                    body: expect.objectContaining({ t: "public-share-updated" }),
-                }),
-            }),
-        );
+        const account = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
+        expect(account.seq).toBe(2);
+        expect(await db.accountChange.count({ where: { accountId: owner.id, entityId: session.id } })).toBe(2);
+        await vi.waitFor(() => expect(receivedUpdates()).toContainEqual(expect.objectContaining({
+            seq: account.seq, body: expect.objectContaining({ t: "public-share-updated" }),
+        })));
     });
 
     it("DELETE marks share+session and emits deleted update using latest cursor", async () => {
@@ -847,15 +826,12 @@ describe("publicShareRoutes (AccountChange integration)", () => {
             select: { id: true },
         });
         expect(stored).toBeNull();
-        expect(emitUpdate).toHaveBeenCalledWith(
-            expect.objectContaining({
-                userId: owner.id,
-                payload: expect.objectContaining({
-                    seq: 51,
-                    body: expect.objectContaining({ t: "public-share-deleted" }),
-                }),
-            }),
-        );
+        const account = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
+        expect(account.seq).toBe(2);
+        expect(await db.accountChange.count({ where: { accountId: owner.id, entityId: session.id } })).toBe(2);
+        await vi.waitFor(() => expect(receivedUpdates()).toContainEqual(expect.objectContaining({
+            seq: account.seq, body: expect.objectContaining({ t: "public-share-deleted" }),
+        })));
     });
 
     it("DELETE returns 404 when no public share exists", async () => {
@@ -875,6 +851,7 @@ describe("publicShareRoutes (AccountChange integration)", () => {
             },
         );
 
-        expect(emitUpdate).not.toHaveBeenCalled();
+        expect(receivedUpdates()).toEqual([]);
+        expect(await db.accountChange.count()).toBe(0);
     });
 });

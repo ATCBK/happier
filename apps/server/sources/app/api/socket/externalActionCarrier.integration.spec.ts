@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { io as ioClient } from "socket.io-client";
 import { Server } from "socket.io";
+import nacl from 'tweetnacl';
 
 const protocolSerializerSpy = vi.hoisted(() => vi.fn());
 const protocolPrepareSpy = vi.hoisted(() => vi.fn());
@@ -34,6 +35,14 @@ import {
     prepareExternalActionResponseV2,
     measureExternalActionResponseEnvelopeUtf8BytesV1,
     prepareExternalActionResponseEnvelopeV1,
+    getActionSpec,
+    bindExternalActionExecutionAuthorizationVerifyHttpPathV1,
+    encodeExternalActionResolvedTargetV1,
+    signExternalActionMachineRequestV1,
+    EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
+    EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
+    EXTERNAL_ACTION_RESOLVED_TARGET_HEADER,
+    EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
 } from "@happier-dev/protocol/actions";
 import {
     SOCKET_RPC_EVENTS,
@@ -43,6 +52,9 @@ import {
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { auth } from '@/app/auth/auth';
+import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
+import { reconcileExternalActionTarget } from '../../../../../cli/src/daemon/externalActions/reconcileExternalActionTarget';
 
 import { createExternalActionDaemonDispatcher } from "./externalActionDispatcher";
 import { DEFAULT_SOCKET_MAX_HTTP_BUFFER_SIZE } from "../socket";
@@ -160,6 +172,115 @@ describe("external Action server-to-daemon request carrier", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it.each(['account', 'terminal'] as const)('relays opaque Machine-targeted Session input for an original %s credential and checks the resolved Session', async (kind) => {
+        const account = await db.account.create({ data: { publicKey: `qa7-${kind}`, encryptionMode: 'e2ee' } });
+        const other = await db.account.create({ data: { publicKey: `qa7-other-${kind}` } });
+        const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(42));
+        const installationId = 'qa7-installation';
+        await db.machine.create({ data: { id: machineId, accountId: account.id, installationId,
+            installationPublicKey: installation.publicKey, metadata: 'opaque', active: true,
+            operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: {
+                externalActionExecutionAuthorization: { protocolVersions: [1] },
+                sessionInputAdmission: { protocolVersions: [1, 2] },
+            } } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: `qa7-${kind}`, metadata: 'opaque' } });
+        const foreign = await db.session.create({ data: { accountId: other.id, tag: `qa7-foreign-${kind}`, metadata: 'opaque' } });
+        const unbound = await db.session.create({ data: { accountId: account.id, tag: `qa7-unbound-${kind}`, metadata: 'opaque' } });
+        await db.accessKey.create({ data: { accountId: account.id, machineId, sessionId: session.id, data: 'opaque' } });
+        const token = await auth.createToken(account.id, undefined, { kind,
+            authority: kind === 'account' ? 'present_user' : 'account_automation' });
+        const homeId = await getOrCreateServerIdentityId();
+        const app = createAuthenticatedTestApp({ authentication: 'real' });
+        const io = new Server(app.server, { path: '/v1/updates', transports: ['websocket'] });
+        let receivingSocket: import('socket.io').Socket | undefined;
+        let received = 0;
+        const ready = new Promise<void>(resolve => io.on('connection', async socket => {
+            receivingSocket = socket;
+            socket.data.clientType = 'machine-scoped'; socket.data.userId = account.id;
+            socket.data.machineId = machineId; socket.data.verifiedMachineInstallationId = installationId;
+            await socket.join(buildRpcMethodRoom({ userId: account.id, method: `${machineId}:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}` }));
+            resolve();
+        }));
+        registerExternalActionRoutes(app, { dispatch: createExternalActionDaemonDispatcher({ io }) });
+        await app.listen({ port: 0, host: '127.0.0.1' });
+        const address = app.server.address();
+        if (!address || typeof address === 'string') throw new Error('Test server address unavailable');
+        const daemon = ioClient(`http://127.0.0.1:${address.port}`, { path: '/v1/updates', transports: ['websocket'], reconnection: false, autoConnect: false });
+        const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(9) };
+        const bindingFor = (requestId: string) => ({ serverIdentityId: homeId, accountId: account.id,
+            authentication: { kind, tokenEpoch: account.tokenEpoch }, actionId: 'session.message.send', requestId,
+            target: { kind: 'machine' as const, machineId } });
+        const verificationStatuses: number[] = [];
+        // Only the remote daemon transport edge is represented here. Ingress,
+        // minting, exact installation guard, crypto and signed resolved-target
+        // admission are the real production owners.
+        daemon.on(SOCKET_RPC_EVENTS.REQUEST, async (raw: SocketRpcRequestPayload, acknowledge: (response: unknown) => void) => {
+            received += 1;
+            const request = ExternalActionDaemonDispatchRequestSchema.parse(raw.params);
+            if (request.envelope.v !== 2 || !request.envelope.requestId || !request.executionAuthorization) throw new Error('Expected protected dispatch');
+            const binding = bindingFor(request.envelope.requestId);
+            const opened = openExternalActionRequestV2({ envelope: request.envelope, binding, material });
+            const parsed = getActionSpec('session.message.send').inputSchema.parse(opened?.input);
+            const reconciled = reconcileExternalActionTarget({ actionId: 'session.message.send', rawInput: parsed,
+                target: request.envelope.target, currentMachineId: machineId });
+            if (reconciled.kind !== 'ready' || reconciled.target?.kind !== 'session') throw new Error('Session target was not reconciled');
+            const target = reconciled.target;
+            const path = bindExternalActionExecutionAuthorizationVerifyHttpPathV1(request.actionId);
+            const body = { v: 1 };
+            const authorized = request.executionAuthorization;
+            const verified = await app.inject({ method: 'POST', url: path, payload: body, headers: {
+                [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: authorized.token,
+                [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: request.actionId,
+                [EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]: encodeExternalActionResolvedTargetV1(target),
+                [EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]: signExternalActionMachineRequestV1({ authorizationToken: authorized.token,
+                    effectActionId: request.actionId, target, installationId, requestId: authorized.binding.requestId,
+                    method: 'POST', path, body, privateKey: installation.secretKey }),
+            } });
+            verificationStatuses.push(verified.statusCode);
+            const prepared = prepareExternalActionResponseV2({ binding, request: request.envelope, executedMachineId: machineId,
+                execution: verified.statusCode === 200 ? { ok: true, result: { accepted: true } }
+                    : { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' }, material,
+                randomBytes: length => new Uint8Array(length).fill(3) });
+            acknowledge({ kind: 'response', body: new TextEncoder().encode(prepared.body) });
+        });
+        const relay = async (sessionId: string, requestId: string) => {
+            const binding = bindingFor(requestId);
+            const envelope = sealExternalActionRequestV2({ binding, material, randomBytes: length => new Uint8Array(length).fill(4), input: {
+                sessionId, message: 'Reply without tools', localId: requestId, permissionModeOverride: 'read_only', wait: false,
+            } });
+            const response = await app.inject({ method: 'POST', url: '/v1/actions/session.message.send',
+                headers: { authorization: `Bearer ${token}`, 'x-happier-authority-ceiling': 'account_automation' }, payload: envelope });
+            return { response, execution: response.statusCode === 200
+                ? openExternalActionResponseV2({ envelope: response.json(), binding, material, request: envelope }) : null };
+        };
+        try {
+            const connected = waitForConnection(daemon); daemon.connect(); await connected; await ready;
+            const valid = await relay(session.id, 'qa7-valid');
+            expect(valid.response.statusCode, valid.response.body).toBe(200);
+            expect(valid.execution).toMatchObject({ ok: true, result: { accepted: true } });
+            expect(verificationStatuses).toEqual([200]);
+            const denied = await relay(foreign.id, 'qa7-foreign');
+            expect(denied.response.statusCode, denied.response.body).toBe(200);
+            expect(denied.execution).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+            expect(verificationStatuses).toEqual([200, 401]);
+            const noBinding = await relay(unbound.id, 'qa7-unbound');
+            expect(noBinding.response.statusCode).toBe(200);
+            expect(noBinding.execution).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+            expect(verificationStatuses).toEqual([200, 401, 401]);
+            // A valid room with the wrong installed daemon must never receive
+            // input. This is the composed wiring sensitivity check.
+            receivingSocket!.data.verifiedMachineInstallationId = 'wrong-installation';
+            expect((await relay(session.id, 'qa7-miswired')).response.statusCode).toBe(409);
+            expect(received).toBe(3);
+            receivingSocket!.data.verifiedMachineInstallationId = installationId;
+            await db.machine.update({ where: { id: machineId }, data: { active: false } });
+            const offline = await relay(session.id, 'qa7-offline');
+            expect(offline.response.statusCode).toBe(409);
+            expect(offline.response.json()).toMatchObject({ code: 'target_unavailable' });
+            expect(received).toBe(3);
+        } finally { daemon.disconnect(); await io.close(); await app.close(); }
     });
 
     it("keeps exact/+1 multibyte request and response boundaries usable through the real daemon socket", async () => {

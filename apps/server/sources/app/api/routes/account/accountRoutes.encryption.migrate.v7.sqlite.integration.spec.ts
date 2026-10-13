@@ -1113,7 +1113,7 @@ describe("account encryption migration .7 SQLite matrix", () => {
         const toMode = fromMode === 'plain' ? 'e2ee' as const : 'plain' as const;
         const records: ProfileRecordV1[] = Array.from({ length: 257 }, (_, index) => ({
             v: 1, id: `profile-${index}`, definition: { kind: 'artifact', artifactId: `artifact-${index}` },
-            enabled: index % 2 === 0, promptStack: [], secretBindings: {},
+            enabled: index % 2 === 0, promptStack: [], skillSeeds: [], secretBindings: {},
         }));
         const seal = (record: ProfileRecordV1, mode: 'plain' | 'e2ee') => sealProfileRecordContentV1({
             record, mode, material: mode === 'plain' ? null : SESSION_OWNER_MATERIAL,

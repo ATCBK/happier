@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDbMocks, createDbTransactionMock, installDbModuleMock, installPrismaModuleMock, matchesDbMockWhere } from "./dbMocks";
+import { createSessionTransactionModel } from "./txHarness";
 
 describe("dbMocks", () => {
     afterEach(() => {
@@ -67,22 +68,23 @@ describe("dbMocks", () => {
     });
 
     it("supplies fixture delegates to primary transactions and SQLite read snapshots", async () => {
-        const txState = { sessionShare: { update: vi.fn().mockResolvedValue({ id: "share-1" }) } };
+        const updatedAt = new Date("2026-07-01T00:00:00.000Z");
+        const txState = createSessionTransactionModel({ id: "session-1", seq: 4, updatedAt });
         const transactionMock = createDbTransactionMock(() => txState);
-        const wrappedDb = transactionMock.wrapDb({
-            sessionShare: { findFirst: vi.fn() },
-        });
+        const wrappedDb = transactionMock.wrapDb({});
 
-        const result = await wrappedDb.$transaction(async (tx) => await tx.sessionShare.update({ where: { id: "share-1" } }));
+        await expect(wrappedDb.$transaction(async (tx) => await tx.session.updateMany({
+            where: { id: "session-1", seq: 4 },
+            data: { seq: { increment: 1 }, updatedAt },
+        }))).resolves.toEqual({ count: 1 });
 
-        expect(transactionMock.transaction).toHaveBeenCalledTimes(1);
-        expect(txState.sessionShare.update).toHaveBeenCalledWith({ where: { id: "share-1" } });
-        expect(result).toEqual({ id: "share-1" });
+        expect(txState.readSession()).toEqual({ id: "session-1", seq: 5, updatedAt });
 
         await expect(transactionMock.readSnapshot(async (tx) =>
-            await tx.sessionShare.update({ where: { id: "share-1" } }),
-        )).resolves.toEqual(result);
+            await tx.session.findUnique({ where: { id: "session-1" } }),
+        )).resolves.toEqual({ id: "session-1", seq: 5, updatedAt });
         const readFailure = new Error("fixture read failed");
+        await expect(wrappedDb.$transaction(async () => { throw readFailure; })).rejects.toBe(readFailure);
         await expect(transactionMock.readSnapshot(async () => { throw readFailure; })).rejects.toBe(readFailure);
     });
 });

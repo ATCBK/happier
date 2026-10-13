@@ -189,7 +189,7 @@ describe("startSocket RPC activation", () => {
         const firstPacket = new Promise<void>((resolve) => { packetArrived = resolve; });
         server.prependOnceListener("connection", (socket) => {
             initializing = true;
-            socket.onAny((event) => {
+            socket.onAny((event: string) => {
                 if (event === SOCKET_RPC_EVENTS.REGISTER) packetArrived();
             });
         });

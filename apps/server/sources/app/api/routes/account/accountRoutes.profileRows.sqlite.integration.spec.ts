@@ -32,7 +32,7 @@ import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids'
 import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 const record = {
-    v: 1, id: 'profile-a', enabled: true, promptStack: [], secretBindings: {},
+    v: 1, id: 'profile-a', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
     definition: { kind: 'inline', profile: {
         v: 2, id: 'profile-a', name: 'Example', extraEnvironmentVariables: [],
         defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {},
@@ -145,7 +145,7 @@ describe('Account Profile rows (SQLite)', () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 3,
             settings: JSON.stringify({ t: 'plain', v: preferences }) } });
         const builtin = ProfileRecordV1Schema.parse({ v: 1, id, definition: { kind: 'legacy', profile: getBuiltInBackendProfile(id) },
-            enabled: !present, promptStack: [], secretBindings: {} });
+            enabled: !present, promptStack: [], skillSeeds: [], secretBindings: {} });
         const mutation = { id, operation: 'attach-builtin', expectedRevision: 'absent', referencedSavedSecretIds: [],
             content: { t: 'plain', v: builtin } };
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
@@ -301,7 +301,7 @@ describe('Account Profile rows (SQLite)', () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         await db.userKVStore.create({ data: { accountId: account.id, key: buildProfilePhysicalKey(record.id), version: 3, value: null } });
         expect(await mutateProfileRows({ accountId: account.id, mutations: [{ id: record.id, operation: 'import', expectedRevision: 3,
-            content: { t: 'plain', v: { v: 1, id: record.id, definition: { kind: 'artifact', artifactId: 'retained-artifact' }, enabled: true, promptStack: [], secretBindings: {} } }, referencedSavedSecretIds: [] }] })).toEqual({ status: 'conflict', revision: 3 });
+            content: { t: 'plain', v: { v: 1, id: record.id, definition: { kind: 'artifact', artifactId: 'retained-artifact' }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } }, referencedSavedSecretIds: [] }] })).toEqual({ status: 'conflict', revision: 3 });
         expect((await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: account.id, key: buildProfilePhysicalKey(record.id) } } })).value).toBeNull();
     });
 
@@ -342,6 +342,7 @@ describe('Account Profile rows (SQLite)', () => {
         const migration = migrateLegacyAiLaunchProfilesV1({ themePreference: 'dark', profiles: [sourceRecord.definition.profile] }, DEFAULT_PROVIDER_SETTINGS_V1, {
             migratedAt: 20, pendingCustomProfileIds: [], candidates: [{ kind: 'connection', sourceProfileId: sourceRecord.id,
                 connection: { v: 1, id: ProviderConnectionIdSchema.parse('pc-deepseek'), source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+                    deployment: { kind: 'external' },
                     role: 'default', displayName: 'DeepSeek', displayNameMode: 'automatic', revision: 0, createdAt: 20, updatedAt: 20 },
                 removedEnvironmentVariableNames: ['DEEPSEEK_BASE_URL'], selectedModel: { agentTargetKey: 'agent:claude', modelId: 'deepseek-reasoner' } }] },
             { lastUsedProfile: null }, { profileRecordIds: [sourceRecord.id], records: [{ record: sourceRecord, revision: 2 }] });
@@ -431,6 +432,7 @@ describe('Account Profile rows (SQLite)', () => {
         const migration = migrateLegacyAiLaunchProfilesV1(source, DEFAULT_PROVIDER_SETTINGS_V1, {
             migratedAt: 20, pendingCustomProfileIds: [], candidates: [{ kind: 'connection', sourceProfileId: legacy.id,
                 connection: { v: 1, id: ProviderConnectionIdSchema.parse('pc-inactive'), source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+                    deployment: { kind: 'external' },
                     role: 'default', displayName: 'DeepSeek', displayNameMode: 'automatic', revision: 0, createdAt: 20, updatedAt: 20 } }],
         }, { lastUsedProfile: null });
         if (!migration.ok) throw new Error('Expected genuine source conversion');

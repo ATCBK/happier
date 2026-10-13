@@ -11,6 +11,7 @@ import { registerLocalServicePreviewRoutes } from './registerRoutes';
 import { createLocalServicePreviewRuntime } from '@/app/local/services/preview/runtime';
 import { createLocalServicePublicRuntime } from '@/app/local/services/public/runtime';
 import { createLocalServicePublicRateLimitChecker } from '@/app/local/services/public/rateLimits';
+import { LocalServicePublicExposureV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import type { OpenLocalServicePreviewTunnel } from '@/app/local/services/preview/httpAdapter';
 import { createLocalServiceRouteRuntimes, registerLocalServiceRoutes } from '../registerRoutes';
 import type { SessionAccessProjectionRow } from '@/app/session/access/sessionAccess';
@@ -277,7 +278,7 @@ describe('local service preview routes', () => {
         const pending = getRouteHandler(app, 'GET', '/*')({ params: { '*': '' }, headers: { host: HOST,
             cookie: `happier_preview_token=${revoked}` } }, { ...createReplyStub(), raw });
         try {
-            expect(await Promise.race([raw.writing.then(() => 'opened'), pending.then(() => 'refused')])).toBe('opened');
+            expect(await Promise.race([raw.writing.then(() => 'opened'), Promise.resolve(pending).then(() => 'refused')])).toBe('opened');
             raw.emit('drain');
             expect(raw.output.join('')).toContain('hello');
             eventRouter.disconnectMachineAndSessionSockets({ accountId: 'viewer_1', machineId: native.machineId, sessionBindings: [] });
@@ -333,6 +334,110 @@ describe('local service preview routes', () => {
             await app.close();
             await rm(uiDir, { recursive: true, force: true });
         }
+    });
+
+    it('serves independently minted private viewers and a public link through real registration, exchange and access routes', async () => {
+        sessionFindUnique.mockResolvedValue(sharedSession);
+        const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
+            HAPPIER_MANAGED_RELAY_PURPOSE: 'personal-home', HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
+        const network = tunnelBoundary('HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nok');
+        const app = fastify({ logger: false });
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        // Authentication and the persistent Session/Machine reads are external boundaries.
+        app.decorate('authenticate', async (request: object) => {
+            Reflect.set(request, 'userId', 'user_1');
+            Reflect.set(request, 'authAuthority', 'present_user');
+        });
+        registerLocalServiceRoutes(app.withTypeProvider<ZodTypeProvider>() as unknown as Fastify, {
+            env, openTunnel: network.openTunnel,
+        });
+        try {
+            const registered = await app.inject({ method: 'POST', url: '/v1/local-services/preview', payload: preview });
+            expect(registered.statusCode).toBe(201);
+            const firstUrl = new URL(registered.json<{ accessUrl: string }>().accessUrl);
+            const acquire = async () => {
+                const response = await app.inject({ method: 'POST', url: `/v1/local-services/preview/${preview.previewId}/access`,
+                    payload: { v: 1, kind: 'server_preview' } });
+                expect(response.statusCode).toBe(200);
+                return new URL(LocalServicePreviewServerAccessV1Schema.parse(response.json()).accessUrl);
+            };
+            const secondUrl = await acquire();
+            expect(secondUrl.searchParams.get('previewToken')).not.toBe(firstUrl.searchParams.get('previewToken'));
+            const open = async (url: URL) => {
+                const response = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
+                expect(response.statusCode).toBe(303);
+                expect(response.headers.location).not.toContain('previewToken');
+                // The HTTPS preview is embedded under a different top-level site. Lax
+                // cookies are rejected there; partitioning keeps admission scoped to that viewer.
+                const attributes = String(response.headers['set-cookie']).split(';').slice(1).map((part) => part.trim());
+                expect(attributes).toEqual(expect.arrayContaining(['Path=/', 'HttpOnly', 'Secure', 'SameSite=None', 'Partitioned']));
+                expect(attributes.some((part) => part.startsWith('Domain='))).toBe(false);
+                const cookie = String(response.headers['set-cookie']).split(';')[0]!;
+                const loaded = await app.inject({ method: 'GET', url: String(response.headers.location), headers: { host: url.host, cookie } });
+                expect(loaded.statusCode).toBe(200);
+                expect(loaded.body).toBe('ok');
+                return cookie;
+            };
+            const firstCookie = await open(firstUrl);
+            const secondCookie = await open(secondUrl);
+            await acquire();
+            for (const cookie of [firstCookie, secondCookie]) {
+                const reload = await app.inject({ method: 'GET', url: '/', headers: { host: firstUrl.host, cookie } });
+                expect(reload.statusCode).toBe(200);
+                expect(reload.body).toBe('ok');
+            }
+            const replay = await app.inject({ method: 'GET', url: firstUrl.pathname + firstUrl.search, headers: { host: firstUrl.host } });
+            expect(replay.statusCode).toBe(401);
+            expect(replay.json()).toEqual({ error: 'preview_access_denied', reasonCode: 'token_mismatch' });
+            const admittedReplay = await app.inject({ method: 'GET', url: firstUrl.pathname + firstUrl.search,
+                headers: { host: firstUrl.host, cookie: firstCookie } });
+            expect(admittedReplay.statusCode).toBe(303);
+            expect(admittedReplay.headers['set-cookie']).toBeUndefined();
+            expect(admittedReplay.headers.location).not.toContain('previewToken');
+            const exposed = await app.inject({ method: 'POST', url: '/v1/local-services/public', payload: {
+                previewId: preview.previewId, machineId: preview.machineId, sessionId: preview.sessionId,
+                mode: 'secret_link', ttlMs: 60_000, confirmation: { acknowledged: true },
+            } });
+            expect(exposed.statusCode).toBe(201);
+            const exposure = LocalServicePublicExposureV1Schema.parse(exposed.json<{ exposure: unknown }>().exposure);
+            const publicUrl = new URL(exposure.publicUrl);
+            expect(publicUrl.origin).not.toBe(firstUrl.origin);
+            const exchanged = await app.inject({ method: 'GET', url: publicUrl.pathname + publicUrl.search, headers: { host: publicUrl.host } });
+            expect(exchanged.statusCode).toBe(303);
+            expect(exchanged.headers.location).not.toContain('publicToken');
+            const publicAttributes = String(exchanged.headers['set-cookie']).split(';').slice(1).map((part) => part.trim());
+            expect(publicAttributes).toEqual(expect.arrayContaining([
+                `Path=/v1/local-services/public/${exposure.exposureId}`, 'HttpOnly', 'Secure', 'SameSite=None', 'Partitioned',
+            ]));
+            expect(publicAttributes.some((part) => part.startsWith('Domain='))).toBe(false);
+            const publicHeaders = { host: publicUrl.host, cookie: String(exchanged.headers['set-cookie']).split(';')[0]! };
+            const publicLoaded = await app.inject({ method: 'GET', url: String(exchanged.headers.location), headers: publicHeaders });
+            expect(publicLoaded.statusCode).toBe(200);
+            expect(publicLoaded.body).toBe('ok');
+            const publicRevoke = await app.inject({ method: 'DELETE', url: `/v1/local-services/public/${exposure.exposureId}`, payload: {
+                previewId: preview.previewId, machineId: preview.machineId, sessionId: preview.sessionId, exposureId: exposure.exposureId,
+            } });
+            expect(publicRevoke.statusCode).toBe(200);
+            const publicRetired = await app.inject({ method: 'GET', url: String(exchanged.headers.location), headers: publicHeaders });
+            expect(publicRetired.statusCode).toBe(403);
+            expect(publicRetired.json()).toEqual({ error: 'public_preview_access_denied', reasonCode: 'revoked' });
+            const revoke = await app.inject({ method: 'DELETE', url: `/v1/local-services/preview/${preview.previewId}` });
+            expect(revoke.statusCode).toBe(200);
+            const retired = await app.inject({ method: 'GET', url: '/', headers: { host: firstUrl.host, cookie: secondCookie } });
+            expect(retired.statusCode).toBe(404);
+        } finally { await app.close(); }
     });
 
     it('refreshes expired server admission for a shared viewer without native endpoint availability', async () => {
@@ -705,7 +810,7 @@ describe('local service preview routes', () => {
             } }, socket, new Uint8Array()));
         try {
             const opening = kind === 'websocket_handshake' ? sent : raw.writing;
-            expect(await Promise.race([opening.then(() => 'opened'), pending.then(() => 'refused')])).toBe('opened');
+            expect(await Promise.race([opening.then(() => 'opened'), Promise.resolve(pending).then(() => 'refused')])).toBe('opened');
             if (kind !== 'websocket_handshake') {
                 raw.emit('drain');
                 expect(raw.output.join('')).toContain(kind === 'http' ? 'hello' : '101 Switching Protocols');

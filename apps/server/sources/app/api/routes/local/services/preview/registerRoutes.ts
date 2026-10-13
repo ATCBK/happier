@@ -32,6 +32,7 @@ import {
 } from "@/app/local/services/preview/upgradeClient";
 import { writeLocalServicePreviewDownstream } from "@/app/local/services/preview/downstream";
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
+import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import type {
     LocalServicePreviewRuntimeRegistrationInput,
     LocalServicePreviewRuntimeRegistrationResult,
@@ -213,20 +214,6 @@ function readPreviewTokenFromUrl(url: URL): string | null {
     return readString(url.searchParams.get("previewToken"));
 }
 
-function scopedPreviewTokenCookie(input: Readonly<{
-    path: string;
-    rawToken: string;
-    secure: boolean;
-}>): string {
-    return [
-        `happier_preview_token=${encodeURIComponent(input.rawToken)}`,
-        `Path=${input.path}`,
-        "HttpOnly",
-        "SameSite=Lax",
-        input.secure ? "Secure" : null,
-    ].filter((part): part is string => Boolean(part)).join("; ");
-}
-
 function normalizeHostname(value: string): string | null {
     try {
         return new URL(`http://${value.trim()}`).hostname.toLowerCase().replace(/\.$/u, "") || null;
@@ -261,7 +248,6 @@ type PreviewHttpRouteTarget = Readonly<{
     search: string;
     tokenMaterial: PreviewTokenMaterial;
     exchangeCookiePath: string;
-    exchangeCookieSecure: boolean;
     exchangeRedirectLocation: string;
 }>;
 
@@ -289,7 +275,6 @@ function resolvePreviewHttpRouteTarget(
         search,
         tokenMaterial,
         exchangeCookiePath: "/",
-        exchangeCookieSecure: true,
         exchangeRedirectLocation: `${path}${search}`,
     };
 }
@@ -303,10 +288,10 @@ function isPreviewHttpRouteError(
 function redirectPreviewTokenExchange(reply: RouteReply, target: PreviewHttpRouteTarget, rawToken: string): void {
     reply
         .code?.(303)
-        .header?.("Set-Cookie", scopedPreviewTokenCookie({
+        .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
+            name: 'happier_preview_token',
             path: target.exchangeCookiePath,
             rawToken,
-            secure: target.exchangeCookieSecure,
         }))
         .header?.("Location", target.exchangeRedirectLocation)
         .send?.();

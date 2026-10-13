@@ -3,6 +3,7 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 import { prepareExternalActionResponseEnvelopeV1 } from "@happier-dev/protocol/actions";
+import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
 
 import { auth } from "@/app/auth/auth";
 import type { Fastify as AppFastify } from "@/app/api/types";
@@ -59,7 +60,7 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
         await harness.close();
     });
 
-    it("verifies an admitted PAT exactly once and relays only its request-local principal", async () => {
+    it("relays only the request-local PAT principal and refuses it after revocation", async () => {
         const account = await db.account.create({
             data: { publicKey: "external-action-pat-provenance" },
             select: { id: true },
@@ -86,7 +87,6 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
         };
         const app = createTestApp(dispatch);
         await app.ready();
-        const verifyToken = vi.spyOn(auth, "verifyToken");
 
         try {
             const response = await app.inject({
@@ -97,8 +97,6 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
             });
 
             expect(response.statusCode).toBe(200);
-            expect(verifyToken).toHaveBeenCalledTimes(1);
-            expect(verifyToken).toHaveBeenCalledWith(pat.token);
             expect(received.request).toEqual({
                 actionId: "session.spawn_new",
                 envelope: { v: 1, requestId: "one-verify", input: {} },
@@ -107,18 +105,30 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
                     principalId: account.id,
                     credentialId: pat.tokenId,
                     authority: "account_automation",
+                    grant: API_TOKEN_FULL_GRANT_V1,
                 },
             });
             const relayed = received.request;
             if (!relayed) throw new Error("Expected the authenticated request to reach the daemon relay");
             expect(relayed.principal).not.toHaveProperty("expiresAt");
-            expect(JSON.stringify(relayed)).not.toContain(pat.token);
+            expect(JSON.stringify(relayed).includes(pat.token)).toBe(false);
+            expect(await auth.revokeApiToken({ accountId: account.id, tokenId: pat.tokenId })).toMatchObject({ revoked: true });
+            received.request = null;
+            const revokedResponse = await app.inject({
+                method: "POST",
+                url: "/v1/actions/session.spawn_new",
+                headers: { authorization: `Bearer ${pat.token}` },
+                payload: { v: 1, requestId: "after-revocation", input: {} },
+            });
+            expect(revokedResponse.statusCode).toBe(401);
+            expect(revokedResponse.json()).toEqual({ error: "invalid_token" });
+            expect(received.request).toBeNull();
         } finally {
             await app.close();
         }
     });
 
-    it("verifies an admitted PAT once when the global limiter is configured for user-or-ip keys", async () => {
+    it("keeps the Action-owned limiter and PAT principal under global user-or-ip limiting", async () => {
         const account = await db.account.create({
             data: { publicKey: "external-action-global-rate-limit" },
             select: { id: true },
@@ -128,7 +138,7 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
             tokenId: crypto.randomUUID(),
             label: "External Action global rate limiter",
         });
-        const dispatch = vi.fn(async (request) => dispatchedResponse({
+        const dispatch = vi.fn<ExternalActionDaemonDispatcher>(async (request) => dispatchedResponse({
             v: 1 as const,
             actionId: request.actionId,
             execution: { ok: true as const, result: { accepted: true } },
@@ -145,7 +155,6 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
         enableAuthentication(app);
         registerExternalActionRoutes(app, { dispatch });
         await app.ready();
-        const verifyToken = vi.spyOn(auth, "verifyToken");
 
         try {
             const response = await app.inject({
@@ -156,11 +165,16 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
             });
 
             expect(response.statusCode).toBe(200);
-            // The Action route deliberately owns its IP-keyed limiter so the
-            // global user-key strategy cannot trigger a second PAT verification.
+            // The Action route owns its limiter even under a different global strategy.
             expect(response.headers["x-ratelimit-limit"]).toBe("600");
-            expect(verifyToken).toHaveBeenCalledTimes(1);
             expect(dispatch).toHaveBeenCalledOnce();
+            expect(dispatch.mock.calls[0]?.[0].principal).toEqual({
+                accountId: account.id,
+                principalId: account.id,
+                credentialId: pat.tokenId,
+                authority: "account_automation",
+                grant: API_TOKEN_FULL_GRANT_V1,
+            });
         } finally {
             await app.close();
         }

@@ -21,7 +21,7 @@ import { createSavedSecretResourceInTx } from '@/app/account/savedSecrets/savedS
 import { hashPasswordMaterial } from '@/app/auth/password/passwordMaterialVerifier';
 
 const record = {
-    v: 1, id: 'profile-a', enabled: true, promptStack: [], secretBindings: {},
+    v: 1, id: 'profile-a', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
     definition: { kind: 'inline', profile: {
         v: 2, id: 'profile-a', name: 'Example', extraEnvironmentVariables: [],
         defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {},

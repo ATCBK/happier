@@ -1,71 +1,70 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from "@happier-dev/protocol";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, matchesDbMockWhere } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
-const verifyTokenDisposition = vi.fn(async () => ({ status: "invalid" as const }) as any);
-vi.mock("@/app/auth/auth", () => ({
-    // Mock sits at the real production seam: registerPublicShareReadRoutes
-    // resolves optional bearers through auth.verifyTokenDisposition.
-    auth: { verifyTokenDisposition },
-}));
-
-// Mirrors the production logPublicShareAccess contract (accessLogger.ts) so
-// call-argument assertions type-check instead of widening to a zero-arg mock.
-const logPublicShareAccess = vi.fn(async (
-    _publicShareId: string,
-    _userId: string | null,
-    _ipAddress?: string,
-    _userAgent?: string,
-    _writer?: unknown,
-) => {});
-vi.mock("@/app/share/accessLogger", () => ({
-    logPublicShareAccess,
-    getIpAddress: vi.fn(() => "1.2.3.4"),
-    getUserAgent: vi.fn(() => "ua"),
-}));
-
-vi.mock("@/app/account/profile/accountDisplayProfile", () => ({
-    ACCOUNT_DISPLAY_PROFILE_SELECT: {},
-    toShareUserProfile: vi.fn((a: any) => ({ id: a?.id ?? "owner" })),
-}));
-
-vi.mock("@/app/session/access/sessionAccess", () => ({
-    isSessionOwner: vi.fn(async () => true),
-}));
-
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked: vi.fn(() => "u") }));
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate: vi.fn() },
-    buildPublicShareCreatedUpdate: vi.fn(),
-    buildPublicShareUpdatedUpdate: vi.fn(),
-    buildPublicShareDeletedUpdate: vi.fn(),
-}));
-const inTx = vi.hoisted(() => vi.fn());
-vi.mock("@/storage/inTx", () => ({ afterTx: vi.fn(), inTx }));
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged: vi.fn(async () => 1) }));
+let auth: typeof import("@/app/auth/auth").auth;
 
 const dbMocks = createDbMocks({
+    account: ["create", "findUnique"],
+    machine: ["create", "findFirst"],
+    accessKey: ["create", "findUnique"],
+    ephemeralRunnerActivation: ["create", "findFirst"],
+    accountApiToken: ["create", "findUnique", "updateMany"],
     homeSettings: ["findUnique"],
     homeGovernancePolicy: ["findUnique"],
     publicSessionShare: ["findUnique"],
-    session: ["findUnique"],
+    session: ["create", "findFirst", "findUnique"],
     sessionMessage: ["findMany"],
 } as const);
 const txDbMocks = createDbMocks({
-    account: ["findUnique"],
+    account: ["findUnique", "findUniqueOrThrow"],
     publicSessionShare: ["findUnique", "update", "updateMany"],
     session: ["findUnique"],
     sessionMessage: ["findMany"],
+    publicShareAccessLog: ["create"],
 } as const);
 const dbTransaction = createDbTransactionMock(() => ({
+    homeSettings: dbMocks.db.homeSettings,
+    homeGovernancePolicy: dbMocks.db.homeGovernancePolicy,
     account: txDbMocks.db.account,
     publicSessionShare: txDbMocks.db.publicSessionShare,
     session: txDbMocks.db.session,
     sessionMessage: txDbMocks.db.sessionMessage,
+    publicShareAccessLog: txDbMocks.db.publicShareAccessLog,
+    accountApiToken: dbMocks.db.accountApiToken,
+    $queryRawUnsafe: async (_query: string, accountId: string) => [{ id: accountId }],
 }));
+
+// The storage adapter alone is substituted: issuance/verification, transaction
+// lifecycle, access logging and metadata/profile projection run their real owners.
+const accessLogCreate = txDbMocks.db.publicShareAccessLog.create;
+const ownerProfile = { name: null, firstName: null, lastName: null, username: null, avatar: null };
+
+// Retain rows written by the canonical credential producers; never fabricate a
+// verifier result. Prisma IO is the substituted boundary, using its shared matcher.
+function retainCredentialRows() {
+    for (const model of [dbMocks.db.account, dbMocks.db.machine, dbMocks.db.accessKey,
+        dbMocks.db.ephemeralRunnerActivation, dbMocks.db.session, dbMocks.db.accountApiToken]) {
+        const rows: Record<string, unknown>[] = [];
+        model.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+            const row = { id: crypto.randomUUID(), tokenEpoch: 0, status: "active",
+                revokedAt: null, replacedByMachineId: null, lastUsedAt: null,
+                parentTokenId: null, parent: null, embedConfig: null, authenticationEvidence: null,
+                Account: { status: "active" }, ...data };
+            rows.push(row);
+            return row;
+        });
+        const read = async ({ where }: { where: Record<string, unknown> }) => {
+            const predicate = "accountId_machineId_sessionId" in where ? where.accountId_machineId_sessionId : where;
+            return rows.find(row => matchesDbMockWhere(row, predicate)) ?? null;
+        };
+        if ("findFirst" in model) model.findFirst.mockImplementation(read);
+        if ("findUnique" in model && model !== dbMocks.db.session) model.findUnique.mockImplementation(read);
+    }
+}
 
 installDbModuleMock(() => ({
     db: dbTransaction.wrapDb(dbMocks.db),
@@ -108,22 +107,29 @@ function createCurrentRouteTestBuilder(
 }
 
 describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
+    beforeAll(async () => {
+        vi.stubEnv("HANDY_MASTER_SECRET", "public-share-test-secret");
+        auth = (await import("@/app/auth/auth")).auth;
+        await auth.init();
+    });
+    afterAll(() => { vi.unstubAllEnvs(); });
     beforeEach(() => {
         vi.clearAllMocks();
-        verifyTokenDisposition.mockResolvedValue({ status: "invalid" });
         dbMocks.reset();
         txDbMocks.reset();
+        retainCredentialRows();
+        vi.stubEnv("HAPPIER_DB_PROVIDER", "postgres");
+        vi.stubEnv("HAPPY_DB_PROVIDER", "postgres");
         // The public route family's real feature gate inherits deployment settings.
         dbMocks.db.homeSettings.findUnique.mockResolvedValue(null);
         dbMocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
         dbTransaction.transaction.mockClear();
-        inTx.mockReset();
-        inTx.mockImplementation(async (run: (tx: typeof txDbMocks.db) => Promise<unknown>) =>
-            await run(txDbMocks.db));
         txDbMocks.db.account.findUnique.mockResolvedValue({
+            tokenEpoch: 0, status: "active",
             encryptionMode: "e2ee",
             ...createSignedAccountContentBinding(),
         });
+        txDbMocks.db.account.findUniqueOrThrow.mockResolvedValue({ status: "active" });
         vi.stubEnv("HANDY_MASTER_SECRET", "public-share-test-secret");
     });
 
@@ -131,14 +137,10 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         "/v1/public-share/:token",
         "/v1/public-share/:token/messages",
     ] as const)("rejects a verified Runner bearer before reading public route %s", async (path) => {
-        verifyTokenDisposition.mockResolvedValue({
-            status: "verified",
-            credential: {
-                userId: "owner",
-                authTokenKind: "ephemeral_session_runner",
-                authority: "session_runtime",
-                legacy: false,
-            },
+        const { createMaterializedEphemeralRunnerFixture } = await import("@/app/ephemeralRunner/materializedRunner.testkit");
+        const runner = await createMaterializedEphemeralRunnerFixture();
+        expect(await auth.verifyTokenDisposition(runner.token, { allowLegacyHome: true })).toMatchObject({
+            status: "verified", credential: { authTokenKind: "ephemeral_session_runner", authority: "session_runtime" },
         });
         const { publicShareRoutes } = await import("./publicShareRoutes");
         const route = createCurrentRouteTestBuilder({
@@ -148,7 +150,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
                 params: { token: "tok" },
                 query: {},
                 headers: {
-                    authorization: "Bearer runner",
+                    authorization: `Bearer ${runner.token}`,
                     "x-happier-account-stored-content-protocol": String(
                         CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     ),
@@ -163,8 +165,8 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         await route.handler(route.createRequest(), reply);
 
         expect(reply.statusCode).toBe(403);
-        expect(inTx).not.toHaveBeenCalled();
-        expect(logPublicShareAccess).not.toHaveBeenCalled();
+        expect(txDbMocks.db.publicSessionShare.findUnique).not.toHaveBeenCalled();
+        expect(accessLogCreate).not.toHaveBeenCalled();
     });
 
     it("does not call app.authenticate() for /v1/public-share/:token and succeeds even with invalid bearer", async () => {
@@ -199,7 +201,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             agentStateVersion: 0,
             active: true,
             lastActiveAt: new Date(3),
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "snapshot_complete",
             acceptedThroughServerSeq: null,
             materializationPublicationId: "publication-1",
@@ -231,7 +233,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             agentStateVersion: 0,
             active: true,
             lastActiveAt: new Date(3),
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
         });
 
         const { publicShareRoutes } = await import("./publicShareRoutes");
@@ -270,7 +272,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         expect(legacyReply.statusCode).toBe(426);
         expect(legacyPayload).toBeUndefined();
         expect(txDbMocks.db.publicSessionShare.updateMany).not.toHaveBeenCalled();
-        expect(logPublicShareAccess).not.toHaveBeenCalled();
+        expect(accessLogCreate).not.toHaveBeenCalled();
 
         const reply = route.createReply();
         const send = reply.send;
@@ -284,7 +286,6 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         const payload = await route.handler(route.createRequest(), reply);
 
         expect(route.app.authenticate).not.toHaveBeenCalled();
-        expect(verifyTokenDisposition).toHaveBeenCalledTimes(2);
         expect(reply.statusCode).toBe(200);
         expect(payload).toEqual(
             expect.objectContaining({
@@ -292,13 +293,9 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
                 accessLevel: "view",
             }),
         );
-        expect(logPublicShareAccess).toHaveBeenCalledWith(
-            "ps1",
-            null,
-            undefined,
-            undefined,
-            txDbMocks.db,
-        );
+        expect(accessLogCreate).toHaveBeenCalledWith({
+            data: { publicShareId: "ps1", userId: null, ipAddress: null, userAgent: null },
+        });
     });
 
     it("refuses the released layout-zero public-share projection without consuming the share", async () => {
@@ -328,7 +325,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             agentStateVersion: 3,
             active: true,
             lastActiveAt: new Date(3),
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "snapshot_complete",
             acceptedThroughServerSeq: null,
             materializationPublicationId: "publication-1",
@@ -359,7 +356,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             code: "metadata_privacy_upgrade_required",
         });
         expect(txDbMocks.db.publicSessionShare.updateMany).not.toHaveBeenCalled();
-        expect(logPublicShareAccess).not.toHaveBeenCalled();
+        expect(accessLogCreate).not.toHaveBeenCalled();
         expect(txDbMocks.db.session.findUnique).toHaveBeenCalledWith(
             expect.objectContaining({
                 select: expect.objectContaining({
@@ -405,7 +402,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             agentStateVersion: 0,
             active: true,
             lastActiveAt: new Date(3),
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "snapshot_complete",
             acceptedThroughServerSeq: null,
             materializationPublicationId: "publication-1",
@@ -435,7 +432,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             code: "metadata_privacy_upgrade_required",
         });
         expect(txDbMocks.db.publicSessionShare.updateMany).not.toHaveBeenCalled();
-        expect(logPublicShareAccess).not.toHaveBeenCalled();
+        expect(accessLogCreate).not.toHaveBeenCalled();
     });
 
     it("does not grant, log, or increment when an unlimited share rotates after authorization", async () => {
@@ -465,7 +462,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "snapshot_complete",
             acceptedThroughServerSeq: null,
             materializationPublicationId: "publication-1",
@@ -487,7 +484,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
         });
         txDbMocks.db.publicSessionShare.update.mockResolvedValue({});
         txDbMocks.db.publicSessionShare.updateMany.mockImplementation(async (args: any) => ({
@@ -530,7 +527,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             },
             data: { useCount: { increment: 1 } },
         });
-        expect(logPublicShareAccess).not.toHaveBeenCalled();
+        expect(accessLogCreate).not.toHaveBeenCalled();
     });
 
     it("returns the same admitted public session row instead of re-reading a newer unshareable state", async () => {
@@ -559,7 +556,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "hosted",
             acceptedThroughServerSeq: null,
             materializationPublicationId: null,
@@ -579,7 +576,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(99),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "machine_only",
             acceptedThroughServerSeq: null,
             materializationPublicationId: null,
@@ -621,7 +618,6 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             agentState: null,
             agentStateVersion: 9,
         });
-        expect(inTx).toHaveBeenCalledTimes(1);
         expect(dbMocks.db.session.findUnique).not.toHaveBeenCalled();
     });
 
@@ -650,7 +646,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "admitted-owner",
-            account: { id: "admitted-owner" },
+            account: { ...ownerProfile, id: "admitted-owner" },
             currentStorageState: "hosted",
             acceptedThroughServerSeq: null,
             materializationPublicationId: null,
@@ -659,7 +655,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         });
         dbMocks.db.session.findUnique.mockResolvedValue({
             accountId: "newer-owner",
-            account: { id: "newer-owner" },
+            account: { ...ownerProfile, id: "newer-owner" },
             currentStorageState: "machine_only",
         });
 
@@ -683,7 +679,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         expect(reply.statusCode).toBe(403);
         expect(payload).toEqual(expect.objectContaining({
             requiresConsent: true,
-            owner: { id: "admitted-owner" },
+            owner: { id: "admitted-owner", firstName: null, lastName: null, username: null, avatar: null },
         }));
         expect(dbMocks.db.session.findUnique).not.toHaveBeenCalled();
     });
@@ -691,27 +687,22 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
     it.each([
         {
             label: "a signed-session bearer",
-            verified: { userId: "viewer-1", authTokenKind: "account" },
+            kind: "account",
             expectedLoggedUserId: "viewer-1",
         },
         {
             label: "an API token bearer",
-            verified: {
-                userId: "viewer-1",
-                authTokenKind: "api_token",
-                authority: "account_automation",
-                apiTokenPrincipal: {
-                    accountId: "viewer-1",
-                    principalId: "viewer-1",
-                    credentialId: "pat-1",
-                    authority: "account_automation",
-                    expiresAt: null,
-                },
-            },
+            kind: "api_token",
             expectedLoggedUserId: null,
         },
-    ])("treats the public token as the only per-viewer authority for $label", async ({ verified, expectedLoggedUserId }) => {
-        verifyTokenDisposition.mockResolvedValueOnce({ status: "verified", credential: verified });
+    ])("treats the public token as the only per-viewer authority for $label", async ({ kind, expectedLoggedUserId }) => {
+        await dbMocks.db.account.create({ data: { id: "viewer-1", encryptionMode: "plain" } });
+        const token = kind === "account"
+            ? await auth.createToken("viewer-1", undefined, { kind: "account", authority: "present_user" })
+            : (await auth.createApiToken({ accountId: "viewer-1", tokenId: crypto.randomUUID(), label: "public-viewer" })).token;
+        expect(await auth.verifyTokenDisposition(token, { allowLegacyHome: true })).toMatchObject({
+            status: "verified", credential: { userId: "viewer-1", authTokenKind: kind },
+        });
         txDbMocks.db.publicSessionShare.findUnique.mockResolvedValue({
             id: "ps1",
             keyDerivation: "legacy_token_v1",
@@ -739,7 +730,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
             currentStorageState: "snapshot_complete",
             acceptedThroughServerSeq: null,
             materializationPublicationId: "publication-1",
@@ -761,7 +752,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             active: true,
             lastActiveAt: new Date(3),
             accountId: "owner",
-            account: { id: "owner" },
+            account: { ...ownerProfile, id: "owner" },
         });
 
         const { publicShareRoutes } = await import("./publicShareRoutes");
@@ -771,7 +762,7 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
             defaultRequest: {
                 params: { token: "tok" },
                 query: {},
-                headers: { authorization: "Bearer valid" },
+                headers: { authorization: `Bearer ${token}` },
             },
             registerRoutes(app) {
                 publicShareRoutes(app as any);
@@ -789,7 +780,9 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         expect(txDbMocks.db.publicSessionShare.findUnique).toHaveBeenCalledWith(expect.objectContaining({
             select: expect.not.objectContaining({ blockedUsers: expect.anything() }),
         }));
-        expect(logPublicShareAccess.mock.calls.at(-1)?.[1]).toBe(expectedLoggedUserId);
+        expect(accessLogCreate).toHaveBeenCalledWith({
+            data: { publicShareId: "ps1", userId: expectedLoggedUserId, ipAddress: null, userAgent: null },
+        });
     });
 
     it("does not call app.authenticate() for /v1/public-share/:token/messages and succeeds even with invalid bearer", async () => {
@@ -852,7 +845,6 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
         const payload = await route.handler(route.createRequest(), reply);
 
         expect(route.app.authenticate).not.toHaveBeenCalled();
-        expect(verifyTokenDisposition).toHaveBeenCalledTimes(1);
         expect(reply.statusCode).toBe(200);
         expect(txDbMocks.db.sessionMessage.findMany).toHaveBeenCalledWith(expect.objectContaining({
             where: {
@@ -864,7 +856,6 @@ describe("publicShareRoutes optional auth (no reply-already-sent)", () => {
                 }),
             },
         }));
-        expect(inTx).toHaveBeenCalledTimes(1);
         expect(payload).toEqual({
             messages: [{ id: "m1", seq: 1, content: { t: "plain", v: "c" }, localId: "l1", createdAt: 1, updatedAt: 2 }],
             hasMore: false,

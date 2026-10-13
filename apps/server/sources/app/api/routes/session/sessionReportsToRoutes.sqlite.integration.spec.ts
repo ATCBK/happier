@@ -1,23 +1,94 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
     buildAccountStoredContentCompatibilityHttpHeadersV1,
     CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
     encodeSessionOwnerMetadataEnvelopeV1,
     SessionSharedMetadataV1Schema,
+    SessionReportsToOptionsV1Schema,
 } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
+import * as storage from '@/storage/prisma';
+import { readDatabaseTransactionConfigFromEnv } from '@/config/databaseTransactions';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
 import { sessionRoutes } from './sessionRoutes';
 import { registerPublicShareOwnerRoutes } from '../share/registerPublicShareOwnerRoutes';
+import { setSessionReportsTo } from '@/app/session/relations/sessionReportsToService';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 
 describe('authenticated reports-to resource', () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-reports-route-' }); }, 180_000);
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-reports-route-', env: {
+        HAPPIER_PUBLIC_SERVER_URL: 'https://home.example.test',
+        HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.example.test',
+        HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER: '1',
+    } }); }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('admits 1,000 candidates within the transaction budget and rechecks a newly public destination', async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const create = () => db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        const child = await create();
+        // Cross the access owner's existing conservative 999-bind SQLite
+        // boundary as well as its Session batch, without limiting the request.
+        const leads = Array.from({ length: 1_000 }, () => ({ id: randomUUID() }));
+        await db.session.createMany({ data: leads.map(lead => ({
+            id: lead.id, accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain',
+        })) });
+        expect((await setSessionReportsTo({ accountId: owner.id, sessionId: leads[1].id, leadSessionId: child.id,
+            expectedLeadSessionId: null, authentication: createPresentUserSessionAccessAuthentication({ env: {} }) })).ok).toBe(true);
+        const app = createAuthenticatedTestApp();
+        sessionRoutes(app);
+        await app.ready();
+        const readSnapshot = storage.withSqliteReadSnapshot;
+        const timeoutMs = readDatabaseTransactionConfigFromEnv({}, 'postgres').timeoutMs;
+        let phases = 0;
+        // Database latency is the system boundary. Every query still executes on
+        // real SQLite, while each round trip consumes 100ms of the production
+        // transaction budget without introducing wall-clock test flakiness.
+        const snapshot = vi.spyOn(storage, 'withSqliteReadSnapshot').mockImplementation(async (read, options) => {
+            let elapsedMs = 0;
+            const result = await readSnapshot(tx => read(new Proxy(tx, {
+                get(target, property, receiver) {
+                    const delegate: unknown = Reflect.get(target, property, receiver);
+                    if (!delegate || typeof delegate !== 'object') return delegate;
+                    return new Proxy(delegate, {
+                        get(model, operation) {
+                            const query: unknown = Reflect.get(model, operation);
+                            if (typeof query !== 'function') return query;
+                            return (...args: unknown[]) => {
+                                elapsedMs += 100;
+                                if (elapsedMs > timeoutMs) throw Object.assign(new Error('Transaction expired during candidate scan'), { code: 'P2028' });
+                                return Reflect.apply(query, model, args);
+                            };
+                        },
+                    });
+                },
+            })), options);
+            if (++phases === 1) await db.publicSessionShare.create({ data: {
+                sessionId: leads[0].id, tokenHash: Buffer.from(randomUUID()), createdByUserId: owner.id,
+            } });
+            return result;
+        });
+        try {
+            const response = await app.inject({ method: 'POST', url: `/v1/sessions/${child.id}/reports-to/options`,
+                headers: { 'x-test-user-id': owner.id }, payload: { candidateSessionIds: leads.map(lead => lead.id) } });
+            expect(response.statusCode).toBe(200);
+            expect(SessionReportsToOptionsV1Schema.parse(response.json())).toEqual({
+                sessionId: child.id, currentLeadSessionId: null,
+                candidates: leads.map((lead, index) => index === 0
+                    ? { sessionId: lead.id, allowed: false, reason: 'pairwise' }
+                    : index === 1 ? { sessionId: lead.id, allowed: false, reason: 'cycle' }
+                    : { sessionId: lead.id, allowed: true }),
+            });
+            expect(phases).toBe(2);
+            expect(await db.sessionReportsTo.count({ where: { sessionId: child.id } })).toBe(0);
+            expect(await db.sessionReportsTo.findUnique({ where: { sessionId: leads[1].id } })).toMatchObject({ leadSessionId: child.id });
+        } finally { snapshot.mockRestore(); await app.close(); }
+    });
 
     it('projects current endpoint and pairwise eligibility without writing a relation or grants', async () => {
         const [owner, actor] = await Promise.all(Array.from({ length: 2 }, () => db.account.create({
@@ -73,7 +144,7 @@ describe('authenticated reports-to resource', () => {
                 payload: { leadSessionId: lead.id, expectedLeadSessionId: null } });
             expect(attach.statusCode).toBe(200);
             const share = await app.inject({ method: 'POST', url: `/v1/sessions/${lead.id}/public-share`, headers,
-                payload: { token: randomUUID() } });
+                payload: { lookupId: randomUUID(), keyDerivation: 'fragment_v1' } });
             expect(share.statusCode).toBe(200);
             expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
             expect(await db.publicSessionShare.findUnique({ where: { sessionId: child.id } })).toBeNull();
