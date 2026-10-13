@@ -64,6 +64,7 @@ import {
 } from '../plugins/ui/composer.js';
 import {
   PluginAgentCapabilitiesV2Schema,
+  PluginAgentCatalogV2Schema,
   AgentUiProjectedDeclarationV1Schema,
   PluginResourceContextV1Schema,
   PluginDynamicResourceScopeV1Schema,
@@ -71,6 +72,7 @@ import {
   PluginWorkflowContributionV1Schema,
   PluginInputTypeContributionV1Schema,
   PluginAtmospherePictureContributionV1Schema,
+  PluginRegistrySourceContributionV1Schema,
   PluginDragSourceContributionV1Schema,
   PluginDropTargetContributionV1Schema,
 } from '../plugins/contributions/v2.js';
@@ -1132,6 +1134,7 @@ export const PluginProjectedAgentV2Schema = lazyZodSchema(() => z.object({
   settingsBackendId: PluginOptionalStringSchema,
   catalogAgentId: PluginOptionalStringSchema,
   iconAgentId: PluginOptionalStringSchema,
+  acpRegistryIds: PluginAgentCatalogV2Schema.shape.acpRegistryIds,
   connectedServiceIds: PluginProjectedAgentConnectedServiceIdsV2Schema.optional(),
   connectedAccounts: PluginProjectedAgentConnectedAccountsV2Schema.optional(),
   providerOwnedEnvironmentKeys: PluginProjectedProviderOwnedEnvironmentKeysV2Schema.default([]),
@@ -1780,6 +1783,7 @@ const PluginProjectedManagedDependencyEntryV2Schema = lazyZodSchema(() => strict
   'metadata',
 ] as const));
 const PluginProjectedMcpEntryV2Schema = lazyZodSchema(() => strictProjectedFamilyEntrySchema([
+  'localId',
   'contributionKind',
   'title',
   'description',
@@ -1787,6 +1791,7 @@ const PluginProjectedMcpEntryV2Schema = lazyZodSchema(() => strictProjectedFamil
   'transport',
   'sessionScope',
   'resultSchema',
+  'loadedInHappierSessions',
   'availability',
 ] as const));
 /**
@@ -2448,6 +2453,19 @@ export function readDaemonPluginUiTargetedSurfaceMountV1<
     : null;
 }
 
+export const PluginProjectedRegistrySourceEntryV1Schema = lazyZodSchema(() => z.object({
+  id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
+  serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
+  materializationRef: PluginMachineMaterializationExecutionOriginV1Schema.shape.materializationRef.optional(),
+  definition: PluginRegistrySourceContributionV1Schema,
+}).strict().superRefine((entry, context) => {
+  if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) context.addIssue({ code: 'custom', path: ['id'], message: 'Registry source identity must match its descriptor' });
+  const hasOrigin = entry.serverIdentityId !== undefined || entry.materializationRef !== undefined;
+  if (hasOrigin && (!entry.serverIdentityId || !entry.materializationRef || !entry.occurrenceId)) context.addIssue({ code: 'custom', message: 'Registry source origin requires both exact origin fields and its serving occurrence' });
+  if (entry.materializationRef && entry.materializationRef.pluginId !== entry.pluginId) context.addIssue({ code: 'custom', path: ['materializationRef', 'pluginId'], message: 'Registry source origin must match its pluginId' });
+}));
+export type PluginProjectedRegistrySourceEntryV1 = z.infer<typeof PluginProjectedRegistrySourceEntryV1Schema>;
+
 const PluginProjectedAtmospherePictureEntryV1Schema = lazyZodSchema(() => z.object({
   id: z.string().min(1), pluginId: PluginIdSchema, pluginVersion: z.string().min(1), occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema.optional(),
   serverIdentityId: PluginMachineMaterializationExecutionOriginV1Schema.shape.serverIdentityId.optional(),
@@ -2542,6 +2560,7 @@ export const PluginProjectedFamilyEntryV2Schema = lazyZodSchema(() => z.union([
   PluginProjectedDropTargetEntryV1Schema,
   PluginProjectedInputTypeEntryV1Schema,
   PluginProjectedAtmospherePictureEntryV1Schema,
+  PluginProjectedRegistrySourceEntryV1Schema,
   PluginProjectedDefinitionEntryV2Schema,
   PluginProjectedWorkflowEntryV1Schema,
   PluginProjectedVoiceProviderEntryV2Schema,
@@ -2586,6 +2605,7 @@ const PluginProjectedRolesFamilyV1Schema = lazyZodSchema(() => projectedFamilySc
 const PluginProjectedWorkflowsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('workflows', PluginProjectedWorkflowEntryV1Schema));
 const PluginProjectedInputTypesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('inputTypes', PluginProjectedInputTypeEntryV1Schema));
 const PluginProjectedAtmospherePicturesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('atmospherePictures', PluginProjectedAtmospherePictureEntryV1Schema));
+const PluginProjectedRegistrySourcesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('registrySources', PluginProjectedRegistrySourceEntryV1Schema));
 const PluginProjectedMachineProvisionersFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('machineProvisioners', PluginProjectedMachineProvisionerEntryV1Schema));
 const PluginProjectedDragSourcesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('dragSources', PluginProjectedDragSourceEntryV1Schema));
 const PluginProjectedDropTargetsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('dropTargets', PluginProjectedDropTargetEntryV1Schema));
@@ -2609,6 +2629,7 @@ const PluginProjectedFamiliesByIdV2Schema = lazyZodSchema(() => z.object({
   workflows: PluginProjectedWorkflowsFamilyV1Schema.optional(),
   inputTypes: PluginProjectedInputTypesFamilyV1Schema.optional(),
   atmospherePictures: PluginProjectedAtmospherePicturesFamilyV1Schema.optional(),
+  registrySources: PluginProjectedRegistrySourcesFamilyV1Schema.optional(),
   machineProvisioners: PluginProjectedMachineProvisionersFamilyV1Schema.optional(),
   dragSources: PluginProjectedDragSourcesFamilyV1Schema.optional(),
   dropTargets: PluginProjectedDropTargetsFamilyV1Schema.optional(),
@@ -2634,6 +2655,7 @@ export const PluginProjectedFamilyV2Schema = lazyZodSchema(() => z.union([
   PluginProjectedWorkflowsFamilyV1Schema,
   PluginProjectedInputTypesFamilyV1Schema,
   PluginProjectedAtmospherePicturesFamilyV1Schema,
+  PluginProjectedRegistrySourcesFamilyV1Schema,
   PluginProjectedMachineProvisionersFamilyV1Schema,
   PluginProjectedDragSourcesFamilyV1Schema,
   PluginProjectedDropTargetsFamilyV1Schema,

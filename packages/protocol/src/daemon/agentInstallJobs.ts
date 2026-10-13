@@ -49,12 +49,14 @@ export const AgentInstallJobSchema = lazyZodSchema(() => z.object({
 }).strict());
 export const DaemonAgentInstallErrorSchema = lazyZodSchema(() => z.object({
   ok: z.literal(false),
-  errorCode: z.enum(['invalid_request', 'job_not_found', 'install_unavailable', 'not_managed', 'in_use']),
+  errorCode: z.enum(['invalid_request', 'job_not_found', 'install_unavailable', 'not_managed', 'in_use', 'definition_version_changed']),
   error: z.string().min(1),
 }).strict());
 export const DaemonAgentInstallStartRequestSchema = lazyZodSchema(() => z.object({
   agentId: z.string().min(1),
   definitionId: z.string().min(1).optional(),
+  /** Private registry-install precondition; the daemon still owns the executable declaration. */
+  expectedDefinitionVersion: z.string().min(1).optional(),
   intent: AgentInstallJobIntentSchema,
   consent: AgentInstallJobConsentSchema,
   force: z.boolean().optional(),
