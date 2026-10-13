@@ -251,7 +251,6 @@ describe('ApiClient connected service auth groups v3', () => {
       activeProfileId: 'backup',
       expectedGeneration: 1,
       overrideRuntimeCooldown: true,
-      switchReason: 'usage_limit',
     });
 
     expect(group.activeProfileId).toBe('backup');
@@ -262,7 +261,6 @@ describe('ApiClient connected service auth groups v3', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer happy-token',
           accept: 'application/json; happier-connected-service-auto-quota-reset=1',
-          'x-happier-connected-service-switch-reason': 'usage_limit',
         }),
       }),
     );

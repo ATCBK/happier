@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildProviderAccountUsageRecordId,
+  buildRecoveryCreditConsumeIdempotencyKey,
   accountSettingsParse,
   buildConnectedServiceCredentialRecord,
   ConnectedServiceQuotaSnapshotV1Schema,
@@ -768,7 +769,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
       return;
     }
-    const idempotencyKey = `connected-service-quota-recovery-credit:v1:openai-codex:work:${inventory === 'concrete' ? 'credit:earlier' : `aggregate:${now}`}`;
+    const idempotencyKey = buildRecoveryCreditConsumeIdempotencyKey({
+      serviceId: 'openai-codex', profileId: 'work', sourceSnapshotFetchedAtMs: now,
+      ...(inventory === 'concrete' ? { providerCreditId: 'earlier' } : {}),
+    });
     expect(result).toMatchObject({ ok: true, receipt: { idempotencyKey, status: 'consumed' } });
     await coordinator.consumeRecoveryCreditForProfile({
       serviceId: 'openai-codex', profileId: 'work', idempotencyKey,
@@ -1041,8 +1045,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       fetchedAt += 60_000;
       expect(await coordinator.consumeAvailableRecoveryCreditForProfile(request)).toEqual(first);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      await coordinator.consumeRecoveryCreditForProfile({ ...request, idempotencyKey: 'manual-selected', providerCreditId: 'next-credit' });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(await coordinator.consumeRecoveryCreditForProfile({
+        ...request, idempotencyKey: 'manual-selected-new-observation', providerCreditId: 'next-credit',
+      })).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     }
   });
 

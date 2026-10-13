@@ -230,8 +230,8 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
   providerId: string;
   fallbackBackoffEnvKey: string;
   maxAttemptsEnvKey: string;
-  defaultFallbackBackoffMs: number;
-  defaultMaxAttempts: number;
+  defaultFallbackBackoffMs?: number;
+  defaultMaxAttempts?: number;
   defaultNativeServiceId?: ConnectedServiceId | null;
   issueProviderFilter?: string | null;
   nowMs?: () => number;
@@ -269,7 +269,7 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
       const fallbackBackoffMs = readNonNegativeIntegerFromEnv(
         processEnv,
         options.fallbackBackoffEnvKey,
-        options.defaultFallbackBackoffMs,
+        options.defaultFallbackBackoffMs ?? 600_000,
       );
       const intent = persistedIntent && persistedIntent.status !== 'cancelled'
         ? persistedIntent
@@ -282,7 +282,7 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
             maxAttempts: readNonNegativeIntegerFromEnv(
               processEnv,
               options.maxAttemptsEnvKey,
-              options.defaultMaxAttempts,
+              options.defaultMaxAttempts ?? 3,
             ),
             nowMs: now,
             resumePromptMode: params.resumePromptMode,
