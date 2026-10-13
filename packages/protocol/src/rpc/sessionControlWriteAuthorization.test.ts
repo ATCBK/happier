@@ -22,6 +22,14 @@ import {
  * "run mutation" family, or read projection may inherit write authority.
  */
 describe('Session-control RPC write classification', () => {
+  it('keeps fork and replay creation on the Machine while checking the source Session owner', () => {
+    for (const method of [RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE,
+      RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY]) {
+      expect(resolveSocketRpcSessionAuthorization(`machine-1:${method}`)).toEqual({
+        method, authority: 'sessionOwner', routeToSessionOwnerDaemon: false,
+      });
+    }
+  });
   it('keeps guard notices under Session-owner authority', () => {
     expect(resolveSocketRpcSessionAuthorization('session-1:session.guard.notice')).toEqual({
       method: 'session.guard.notice', authority: 'sessionOwner', routeToSessionOwnerDaemon: true,
@@ -44,6 +52,10 @@ describe('Session-control RPC write classification', () => {
     }
     expect(isSessionActionRpcMethodV1('report:session.roles.configuration.set')).toBe(true);
     expect(isSessionActionRpcMethodV1('report:session.notes.set')).toBe(true);
+    expect(isSessionActionRpcMethodV1('report:skills.read')).toBe(true);
+    expect(resolveSocketRpcSessionAuthorization('report:skills.read')).toMatchObject({
+      authority: 'readTranscript', actionId: 'skills.read', routeToSessionOwnerDaemon: true,
+    });
   });
   it('requires input authority for role configuration writes on the owner daemon', () => {
     expect(resolveSocketRpcSessionWriteAuthorization('session-1:session.roles.configuration.set')).toMatchObject({

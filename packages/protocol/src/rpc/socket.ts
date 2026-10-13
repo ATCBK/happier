@@ -76,10 +76,11 @@ export const SocketRpcSessionActionAuthorizationContextSchema = lazyZodSchema(()
 }).strict());
 export type SocketRpcSessionActionAuthorizationContext = Readonly<z.infer<typeof SocketRpcSessionActionAuthorizationContextSchema>>;
 
-/** Role Actions and the exact Home-admitted private workspace phases retain Session origin. */
+/** Session-routed Actions and exact Home-admitted private workspace phases retain Session origin. */
 export function isSessionActionRpcMethodV1(method: string): boolean {
   const unscoped = method.slice(method.lastIndexOf(':') + 1);
   return (unscoped.startsWith('session.') && isRoleActionIdV1(unscoped))
+    || unscoped === 'skills.read'
     || unscoped === SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET
     || unscoped === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE
     || unscoped === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT
@@ -535,6 +536,9 @@ const SOCKET_RPC_SESSION_WRITE_AUTHORIZATION: ReadonlyMap<string, SocketRpcSessi
       RPC_METHODS.SCM_DIFF_SUMMARY_ADD_OUTPUTS,
     ].map((method) => ({ method, authority: 'submitAgentInput' as const, optionalSessionScope: true as const, routeToSessionOwnerDaemon: false })),
     { method: RPC_METHODS.STOP_SESSION, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
+    { method: RPC_METHODS.SESSION_FORK, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
+    { method: RPC_METHODS.SESSION_FORK_PROVIDER_SAFE, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
+    { method: RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.SESSION_AGENT_TRANSITION, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
