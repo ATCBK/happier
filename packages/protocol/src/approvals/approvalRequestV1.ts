@@ -498,10 +498,10 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
 /**
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
- * Unsigned host-caused approvals on a present-user surface remain locally
- * replayable, as do host-CLI Account effects with durable input custody and,
+ * Unsigned host-caused Account/client approvals on a present-user surface remain
+ * locally replayable, as do host-CLI Account effects with durable input custody and,
  * by the 2026-10-12 owner ruling, signed Agent-Session proposals whose reviewed
- * effect is Account-only: the approving app runs that effect while the signed
+ * effect is Account/client-only: the approving app runs that effect while the signed
  * carrier stays immutable proposal provenance. Other signed external origins
  * retain their admitting daemon's custody.
  */
@@ -511,14 +511,26 @@ export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): bo
   const actionId = ActionIdSchema.safeParse(approval.actionId);
   const spec = actionId.success ? getActionSpec(actionId.data) : null;
   const input = spec?.inputSchema.safeParse(approval.actionArgs);
+  const clientEffect = spec && input?.success
+    && resolveActionExecutionPlacementForInput(spec, input.data) === 'client'
+    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
   const accountEffect = spec && input?.success
     && resolveActionExecutionPlacementForInput(spec, input.data) === 'account'
     && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
   const authorization = origin.externalActionExecutionAuthorization;
   if (authorization) {
-    return !(accountEffect && 'authentication' in authorization.binding
+    return !((accountEffect || clientEffect) && 'authentication' in authorization.binding
       && authorization.binding.sessionActionOrigin !== undefined);
   }
+  // Client effects belong to the approving app's mounted owner. The requesting
+  // Session's Machine is provenance, not the location of its microphone or UI.
+  // Plugin/Run custody and CLI/API transport authority still stay exact.
+  if (clientEffect && (origin.caller.kind === 'host' || origin.caller.kind === 'session')
+    && (origin.surface === 'ui' || origin.surface === 'voice' || origin.surface === 'agent' || origin.surface === 'mcp')) return false;
+  // Replaying a Machine effect in the app would issue a fresh external root
+  // and ask again. Its exact daemon consumes the recorded decision instead.
+  if (origin.surface === 'ui' && origin.caller.kind === 'host'
+    && spec && input?.success && resolveActionExecutionPlacementForInput(spec, input.data) === 'machine') return true;
   // These Account effects run through the deciding app's authenticated Home
   // adapter, so a daemon's disallowed terminal policy cannot veto human consent.
   // Plugin and other external provenance still belongs to its original executor.
@@ -528,7 +540,7 @@ export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): bo
       if (accountEffect) return false;
     }
     if (isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs)
-      && (spec.executionPlacement === 'account' || spec.id === 'account.home_continuation.invoke')
+      && spec.executionPlacement === 'account'
       && canRequestPresentUserApprovalForActionInputV1(spec, approval.actionArgs)) return false;
   }
   return SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.surface]

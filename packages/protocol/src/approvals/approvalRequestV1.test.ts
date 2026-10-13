@@ -10,16 +10,43 @@ import {
   StoredApprovalRequestSchema,
   requiresExactDaemonApprovalReplay,
 } from './approvalRequestV1.js';
+
+it('keeps client Voice replay in the approving app without transferring plugin or Machine custody', () => {
+  const actionId = 'ui.voice_global.set_muted';
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent', sessionId: 'source' }, requestedSurface: 'agent', actionId,
+    actionArgs: { expectedAttempt: 'voice-attempt:1', muted: false }, summary: 'Unmute Voice',
+    executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+      caller: { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 },
+      serverId: 'home', accountId: 'alice', machineId: 'offline-machine', actionId, requestId: 'unmute' } });
+  for (const surface of ['agent', 'mcp', 'voice'] as const) {
+    expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+      requestedSurface: surface,
+      executionOriginV1: { ...request.executionOriginV1, surface } }))).toBe(false);
+  }
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    requestedSurface: 'plugin',
+    executionOriginV1: { ...request.executionOriginV1, surface: 'plugin', caller: {
+      kind: 'plugin', pluginId: 'custom.voice', contributionLocalId: 'voice',
+      sourceCustody: { kind: 'development', registeredRootId: 'voice-root' },
+    } } }))).toBe(true);
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    actionArgs: { expectedAttempt: 'voice-attempt:1', muted: 'false' } }))).toBe(true);
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    actionId: 'session.stop', actionArgs: { sessionId: 'source' },
+    executionOriginV1: { ...request.executionOriginV1, actionId: 'session.stop' } }))).toBe(true);
+});
 import { projectApprovalExecutionFailureV2, readApprovalExecutionFailure } from './approvalExecutionFailure.js';
 import { ManagedResourceDependencyV1Schema } from '../machines/managed/managedDependencyV1.js';
 import { parseSessionBoardActionPortResultV1 } from '../sessions/board/actions.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
 import { buildApprovalExecutionOriginV1 } from '../actions/actionExecutor.js';
+import { resolveProjectActionMachineV1 } from '../actions/executor/projectActionPlacement.js';
 import { signExternalActionApprovalInputV1 } from '../actions/externalActionExecutionAuthorization.js';
 import tweetnacl from 'tweetnacl';
 
-it('replays only host-caused authenticated Home continuation requests at the deciding client', () => {
+it('replays client Home continuations at the deciding app while retaining plugin custody', () => {
   const actionId = 'account.home_continuation.invoke';
   const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
     createdBy: { surface: 'agent' }, requestedSurface: 'agent', actionId,
@@ -31,17 +58,15 @@ it('replays only host-caused authenticated Home continuation requests at the dec
       createdBy: { surface }, requestedSurface: surface,
       executionOriginV1: { ...request.executionOriginV1, surface } }))).toBe(false);
   }
-  for (const caller of [
-    { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 },
-    { kind: 'plugin', pluginId: 'custom.owner', contributionLocalId: 'step',
-      sourceCustody: { kind: 'managed', immutableGenerationId: 'generation', installSource: 'archive' } },
-  ] as const) {
-    expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
-      executionOriginV1: { ...request.executionOriginV1, caller } }))).toBe(true);
-  }
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    executionOriginV1: { ...request.executionOriginV1,
+      caller: { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 } } }))).toBe(false);
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'plugin', pluginId: 'custom.owner', contributionLocalId: 'step',
+      sourceCustody: { kind: 'managed', immutableGenerationId: 'generation', installSource: 'archive' } } } }))).toBe(true);
   expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request, actionId: 'ui.current_context.command.invoke',
     actionArgs: { commandId: 'current-ui:home' },
-    executionOriginV1: { ...request.executionOriginV1, actionId: 'ui.current_context.command.invoke' } }))).toBe(true);
+    executionOriginV1: { ...request.executionOriginV1, actionId: 'ui.current_context.command.invoke' } }))).toBe(false);
 });
 
 it('retains genuine signed Account approval origins without replacing Session automation with present-user authority', () => {
@@ -1039,6 +1064,24 @@ describe('ApprovalRequestV1Schema', () => {
 });
 
 describe('requiresExactDaemonApprovalReplay', () => {
+  it.each([
+    { actionId: 'projects.prepare', input: { workspace: { serverId: 'stable-home', machineId: 'machine-1', workspaceId: 'checkout', rootPath: '/repo' },
+      phase: 'setup', expectedEffectDigest: 'a'.repeat(64), consentScope: 'thisTime' } },
+    { actionId: 'action.operations.cancel', input: { serverId: 'stable-home', machineId: 'machine-1', operationId: 'held-script' } },
+  ] as const)('keeps unsigned UI $actionId on its exact Machine approval owner', async ({ actionId, input }) => {
+    const actionArgs = getActionSpec(actionId).inputSchema.parse(input);
+    const placement = actionId === 'projects.prepare' ? await resolveProjectActionMachineV1({ actionId, input: actionArgs,
+      context: {}, createRequestKey: () => 'request-1' }) : null;
+    if (placement && !placement.ok) throw new Error(placement.errorCode);
+    const origin = buildApprovalExecutionOriginV1({ actionId, input: actionArgs, targetSessionId: null,
+      context: { surface: 'ui', authority: 'present_user', serverId: 'creator-profile', serverIdentityId: 'stable-home',
+        runtimeAccountId: 'account-1', actionRequestId: 'request-1', ...(placement?.ok ? { executionRunTargetMachineId: placement.machineId } : {}) } });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system' }, requestedSurface: 'ui', actionId, actionArgs, summary: 'Reviewed Machine effect', executionOriginV1: origin });
+    expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+    expect(request.executionOriginV1.machineId).toBe('machine-1');
+  });
+
   function hostCliRequest(actionId: Parameters<typeof getActionSpec>[0], actionArgs: unknown) {
     return ApprovalRequestV2Schema.parse({
       v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -1105,11 +1148,12 @@ describe('requiresExactDaemonApprovalReplay', () => {
     expect(requiresExactDaemonApprovalReplay(signed)).toBe(true);
   });
 
-  it.each(['teams.invitations.create', 'teams.invitations.reissue'] as const)(
+  it.each(['teams.invitations.create', 'teams.invitations.reissue', 'ui.voice_global.set_muted'] as const)(
     'replays signed Session %s in the approving app', actionId => {
       const caller = { kind: 'session' as const, sessionId: 'source', starterDepth: 0, turnDepth: 0 };
       const target = { kind: 'machine' as const, machineId: 'source-machine' };
-      const actionArgs = getActionSpec(actionId).inputSchema.parse(actionId.endsWith('create')
+      const actionArgs = getActionSpec(actionId).inputSchema.parse(actionId === 'ui.voice_global.set_muted'
+        ? { expectedAttempt: 'voice-attempt:1', muted: false } : actionId.endsWith('create')
         ? { v: 1, teamId: 'team', role: 'member', historyAccess: 'from_membership', recipientEmail: null, requestKey: 'create-request' }
         : { v: 1, teamId: 'team', invitationId: 'invitation', recipientEmail: null, requestKey: 'reissue-request' });
       const request = ApprovalRequestV2Schema.parse({
