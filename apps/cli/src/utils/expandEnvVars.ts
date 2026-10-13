@@ -36,6 +36,8 @@ export function expandEnvironmentVariables(
     sourceEnv: NodeJS.ProcessEnv = process.env,
     options?: {
         warnOnUndefined?: boolean;
+        /** Captures values actually substituted, without inspecting unused environment entries. */
+        onResolvedValue?: (value: string) => void;
     }
 ): Record<string, string> {
     const expanded: Record<string, string> = {};
@@ -121,6 +123,7 @@ export function expandEnvironmentVariables(
             const isMissing = resolvedValue === undefined || (shouldTreatEmptyAsMissing && resolvedValue === '');
 
             if (!isMissing) {
+                options?.onResolvedValue?.(resolvedValue);
                 if (process.env.DEBUG) {
                     logger.debug('[EXPAND ENV] Expanded one referenced value from daemon environment');
                 }

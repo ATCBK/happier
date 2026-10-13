@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { logger } from '@/ui/logger';
+import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 
 import { expandEnvironmentVariables } from './expandEnvVars';
 
@@ -57,6 +58,21 @@ describe('expandEnvironmentVariables', () => {
         expect(diagnostics).not.toContain(privateEmptyName);
         expect(diagnostics).not.toContain(privateMissingName);
         expect(diagnostics).not.toContain(privateSourceValue);
+    });
+
+    it('captures only actually consumed machine-env values for the owning diagnostic lease', () => {
+        const redaction = createProviderRedactionLease({ values: [] });
+        try {
+            expect(expandEnvironmentVariables({
+                AUTH: 'Bearer ${TOKEN:-${UNUSED}}',
+                FALLBACK_AUTH: 'Bearer ${MISSING:-${FALLBACK}}',
+            }, { TOKEN: 'selected-machine-token', UNUSED: 'unused-fallback-token',
+                FALLBACK: 'selected-fallback-token', UNREFERENCED: 'unreferenced-token' }, {
+                onResolvedValue: value => redaction.add([value]),
+            })).toEqual({ AUTH: 'Bearer selected-machine-token', FALLBACK_AUTH: 'Bearer selected-fallback-token' });
+            expect(redaction.redact('selected-machine-token|selected-fallback-token|unused-fallback-token|unreferenced-token'))
+                .toBe('[REDACTED]|[REDACTED]|unused-fallback-token|unreferenced-token');
+        } finally { redaction.close(); }
     });
 
     it('should expand simple ${VAR} reference', () => {
