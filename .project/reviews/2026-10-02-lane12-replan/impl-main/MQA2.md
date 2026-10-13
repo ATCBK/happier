@@ -518,3 +518,138 @@ The full round remains **BLOCKED** by the named foreign provider prerequisite. F
 - Residual risk: the incomplete scenarios and capture matrices above remain open. The first non-idle FD sample exceeded the MFIX32 target; the warmed measurement below is the deciding idle evidence. No stack or daemon was restarted or stopped.
 
 STATUS: BLOCKED
+
+## Round 10b continuation 2
+
+### Outcome
+
+Round 10b continuation 2 reached the authenticated borrowed source UI on nl3 and verified the replacement Machine `NLDW3-5-36-33 · 58f6`. The MV11 offline banner was transient/stale: Home currently showed one online Machine and fresh folder browsing successfully reached `58f6`. Fresh Create also defaulted to `58f6` and preserved its choices, but Project Open was refused with `target_mismatch`. The full round remains **BLOCKED**: the connected Codex account had only 3% Session quota remaining and disconnected before the first requested approval, while the live CLI catalog exposed `GPT 6 Luna`, not the requested `gpt-6.1-luna`.
+
+No production fix or commit was made. The Project refusal was traced to the loaded daemon's saved stack profile lacking `homeConnectionDescriptor`/exact authority even though the authenticated server endpoint published `srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN` with its exact descriptor. The loaded daemon contained the canonical descriptor-adoption implementation, and the current-source real-composition Project Open regression passed. That leaves a loaded runtime-state/lifecycle discrepancy without evidence for a missing source change; I did not add a second identity owner, hand-edit the profile, or restart the stack.
+
+### Scenario results
+
+| Item | Observed current-source result | Verdict |
+| --- | --- | --- |
+| 1. Native approval + continuity | Created Codex Session `cmv65itzr05s5mcoqpshq4b1a` on `58f6`, selected Low reasoning and the available `GPT 6 Luna`, and queued the one-command approval prompt. The connected account reported 3% Session quota remaining; resume failed before an approval appeared. No effect occurred, so turn 2 and stop/resume were unreachable. | **BLOCKED — account Session quota; requested `gpt-6.1-luna` absent from live catalog** |
+| 2. Agent Action matrix | No working Codex turn existed, so settings/tab/script/output/operations/memory, dangerous deny/approve, live-only secret, and fresh Agent summary were not issued. No secret was entered or disclosed. | **BLOCKED by Agent prerequisite** |
+| 3. Project Terminal | The fresh native Terminal action presented a one-sentence canonical approval summary and settled Approved. Returning to Terminal reissued a pending request rather than proving a shell; the fresh `58f6` Project could not be opened. | **PARTIAL/BLOCKED — approval summary passed; terminal shell unverified** |
+| 4. Fresh Create default | Folder selection and confirmation both defaulted to `NLDW3-5-36-33 · 58f6` and labeled it Online. Opening `/home/happier/mqa2-cont2-project` preserved the choices but returned `target_mismatch`. | **PASS default / FAIL open** |
+| 5. MV6C at 390 | At 390x844 the queued/Resume status did not cover the chip rail, but no qualifying armed `Continue via...` control existed after Codex disconnected. | **PARTIAL — armed state blocked** |
+| 6. Reachability pair + MV11 | Home currently showed `58f6` online, and folder browsing successfully read its filesystem, disproving the old MV11 offline capture as current truth. The Project `target_mismatch` was an authenticated semantic refusal, not a failed transport, so it was not misclassified as reachability failure; no controlled failed-transport/heartbeat/success pair was produced. | **MV11 resolved; pair unverified** |
+| 7. Local services | An existing offline Project opened the canonical **Local services** surface and truthful offline state, distinct from Plugin Inspector. The exact online empty state on a new `58f6` Project was blocked by Project Open. | **PARTIAL — canonical surface passed; online empty state blocked** |
+
+### Evidence and validation
+
+- Server and daemon stayed running with selected==loaded (`d715fb4df513cba0` / `1ce3f605aef169ab`). The borrowed UI was healthy during QA, then its external producer disappeared during closeout; final stack health was `degraded` only for `ui_down`. One Chromium was used on nl3 and stopped with SIGINT. Authentication succeeded without printing the development key.
+- Current-source check: `./apps/stack/bin/hstack-exec --target=nl3 --cwd=apps/cli -- yarn exec vitest run --config vitest.config.ts src/rpc/handlers/projects/registerProjectOpenRpcHandlers.test.ts -t "establishes a credential-seeded profile identity before Project Open while refusing wrong targets"` passed the file, 26/26 tests, including the named real-composition case.
+- Runtime facts: the daemon profile `stack_agent-qa-l12-main__id_default` had no descriptor or authority; `/v1/features/authenticated` published the exact matching descriptor. Folder browse succeeded on the same Machine, isolating the refusal to strict Home identity admission rather than transport reachability.
+- Captures: `mqa2-r10b-cont2-mv11-home-online-1440-light.png`, `mqa2-r10b-cont2-mv6c-continue-via-390-light.png` (queued/Resume partial state), `mqa2-r10b-cont2-project-open-target-mismatch-1440-light.png`, and `mqa2-r10b-cont2-local-services-offline-1440-light.png`.
+- Adversarial check: a stale/offline Machine, malformed Project input, and general machine unreachability do not explain the evidence: the chooser targeted `58f6`, its filesystem request succeeded, and the refusal code came from exact Home target admission. Conversely, current source GREEN cannot prove when or why this running profile lost/failed to acquire its descriptor, so no causal source verdict or speculative fix is claimed.
+
+### Residual risk
+
+Native approval effect/continuity, the Agent matrix, the actual Terminal shell, armed MV6C, failed-request heartbeat persistence/recovery, and the online Local-services empty state remain unverified. Fresh Project Open remains unavailable on this loaded stack until its canonical Home descriptor lifecycle is re-established through normal runtime ownership. No stack or daemon was restarted or stopped.
+
+STATUS: BLOCKED
+
+## Round 10b continuation 3
+
+### Outcome
+
+Round 10b continuation 3 is **BLOCKED before browser startup or product interaction** by the Main-caused `agent-qa-l12-main` outage. At lane start the canonical stack inspection already reported `server_down`, `runtime_identity_pending`, and `runtime_preparing`: the borrowed Expo UI owner was running on `:19364`, but the nl3 server service was stopped and `urls.uiUrl` was null. The nl3 execution target then failed its required synchronization barrier with `happier-nl3 synchronization needs a fresh scan`. Main subsequently confirmed that its reload retry stopped the QA stack at approximately 08:47 and instructed this lane to close rather than wait for recovery.
+
+No browser was started, so there was no lane browser handle to SIGINT. No Account key or secret was read or printed, no in-app or stack mutation was issued, and no production source or visual behavior was changed.
+
+### Scenario results
+
+| Required row | Observed result | Verdict |
+| --- | --- | --- |
+| Different connected Codex profile with quota | Authentication and the Account picker were unreachable because the server was down before browser startup. | **BLOCKED — Main-caused stack outage** |
+| Native approval, exactly one effect, turn 2, stop/resume | No Session or approval was created; therefore no effect occurred and continuity was not exercised. | **BLOCKED — Main-caused stack outage** |
+| Agent Action matrix | Settings set/reset, tab, script/output, operations, memory, dangerous deny/approve, live-only secret, and fresh summary were not issued. | **BLOCKED — Main-caused stack outage** |
+| Terminal shell on an openable Project | No Project surface or terminal request was reached. The known fresh Project `target_mismatch` was not replayed or reclassified. | **BLOCKED — Main-caused stack outage** |
+| MV12 capture-only pairs | Home 1440 light blocker line, New Session 390 light, and 1440 dark post-chip rail captures were not produced because no authenticated page rendered. | **BLOCKED — Main-caused stack outage** |
+
+### Evidence and closeout
+
+- `stack info agent-qa-l12-main --json` returned runtime health `degraded` with `server_down`, local server not listening, nl3 server service `stopped`, borrowed Expo `running` on port `19364`, daemon service `running`, and daemon selected/loaded identity `1ce3f605aef169ab`. The server selected identity was `d715fb4df513cba0`, but no loaded server identity was published at the aggregate runtime boundary.
+- `dev-targets status nl3 --stack=agent-qa-l12-main --json` returned `state: unhealthy`, `recovery: rescan`, and a Mutagen alpha scan problem (`hashed size mismatch`) while the target remained connected. A routed nl3 command failed closed at the synchronization barrier; no local fallback was used.
+- The only retry was scheduled for the required 10-minute infrastructure interval. It was cancelled with SIGINT when Main reported the stack-down cause and requested closeout. It performed no stack lifecycle action.
+- No Happier functional defect could be reproduced behind the absent runtime prerequisite, so no RED/GREEN test, source fix, typecheck, build, or commit was applicable.
+- Adversarial check: the borrowed Expo process alone does not establish a runnable product when its selected Home server is stopped; conversely, the sync failure and Main's reload report do not establish a Happier product defect in any requested Agent, terminal, or MV12 surface. Those rows remain unverified rather than failed.
+
+Residual risk is the entire requested Agent/approval/continuity matrix, terminal shell, and three MV12 captures. Resume on the current stack only after Main confirms the nl3 synchronization barrier has recovered and the server, daemon, and borrowed UI are all reachable.
+
+STATUS: BLOCKED
+
+## Round 10b continuation 4
+
+### Outcome
+
+Round 10b continuation 4 is **BLOCKED by a reproducible Codex Happier-Actions availability failure**, after the independent Project, approval, continuity, Terminal, MV12, and warmed daemon-FD gates completed. The restored nl3 stack loaded server identity `6218e64047961e65` and daemon identity `f897e80afa954683`; the existing browser was the only browser used.
+
+### Scenario results
+
+| Required row | Observed result | Verdict |
+| --- | --- | --- |
+| Fresh Project Open on current Machine | Opened `/home/happier/mqa2-cont2-project` on `NLDW3-5-36-33 · 58f6`; the Project overview loaded and no `target_mismatch` occurred. | **PASS** |
+| Different connected Codex profile | Selected the second ChatGPT connected account rather than the previously exhausted profile; it reported about 58–60% capacity. GPT 6 Luna and Low reasoning were selected. | **PASS** |
+| Native approval, exactly one effect | Codex requested native approval for the exact `printf` command. One approval produced exactly one `mqa2-approved` line in the requested file, verified read-only on nl3. | **PASS** |
+| Turn 2 and stop/resume | Turn 2 returned exact `TURN2_OK`. Stop reached Disconnected; Resume returned Ready with the prior transcript intact. | **PASS** |
+| Agent Action matrix | The requested Action-only turn reported that no Happier Actions were available. A discriminating follow-up explicitly requested `action_spec_search`; Codex returned exact `ACTION_SPEC_SEARCH_UNAVAILABLE`. Settings set/reset, tab, script/output, operations, memory, dangerous deny/approve, live-only secret, and fresh summary therefore could not be exercised. | **BLOCKED — Happier Actions unavailable in live Codex session** |
+| Terminal shell | Project → Terminal → New terminal opened a `Shell` tab with a terminal input. | **PASS** |
+| MV12 capture-only pairs | Captured Home 1440 light, New Session 390 light, and post-Edit-tags rail 1440 dark at the required paths. No visual verdict or source change was made. | **PASS** |
+| Daemon idle FD/CPU | Exact lane daemon PID `4025949`. The first 60 s window immediately after `hstack-exec` synchronization was `130..2192` FDs, average `204.18`, CPU `33.800%` of one core. The deciding window after 15 s warm-up was 61 samples over 60 s: `131..1766`, average `167.08`, zero samples at/above 2,000, CPU `28.433%` of one core. | **PASS for MFIX32's warmed no-~2,000-FD-burst discriminator** |
+
+### Evidence and closeout
+
+- Session `cmv6ere4400o6mczz2du3vk2m`; provider thread `01a13457-4448-7053-b325-5dd1512721c3`. The live Codex process was launched with the first-party Happier MCP server enabled, and its `happierMcpStdioBridge` child remained alive, so the Action failure is downstream of bridge injection rather than an omitted launch config. The available evidence did not isolate a safe canonical source correction; no speculative patch, test, or commit was made.
+- Captures: `.happier/design-lab/lane12-final/live/mv12-home-composer-1440-light.png` (`1440x940`), `mv12-new-session-390-light.png` (`390x844`), and `mv12-rail-after-chip-click-1440-dark.png` (`1440x940`).
+- No stack or daemon was restarted or stopped. The Account key was piped through stdin and never printed; no account secret or live-only secret value was disclosed.
+- Adversarial check: the agent's first natural-language refusal alone could have been model error, so the exact tool-name follow-up and live process inspection were used to refute that alternative. An injected/running MCP bridge does not prove that Codex received a usable tool catalog, and the moving, heavily dirty CLI source prevents attributing the failure to a single current worktree hunk without further owner-level evidence. The warmed FD pass does not erase the immediate post-sync 2,192 peak; both windows are recorded.
+
+Residual risk: the entire Action-dependent matrix remains unverified, including dangerous deny/approve, live-only secret handling, and fresh summary. Browser-side warmed Home/Projects/Action-detail timing was not requested by continuation 4 and was not repeated.
+
+STATUS: BLOCKED
+
+## Round 10b continuation 5
+
+### Outcome
+
+Round 10b continuation 5 independently disproved continuation 4's Agent-Action availability conclusion: the fresh Codex session exposed and executed Happier Actions. The matrix is nevertheless **BLOCKED** because several required effects were unreachable from the live fixture. The first settings read reproduced a canonical same-Account authorization defect; I added an owner-level RED test, fixed the single settings declaration owner, and proved focused GREEN without changing any surface appearance. The loaded daemon was not restarted, so the source repair could not be exercised live in this round.
+
+### Runtime and scenario results
+
+- Stack `agent-qa-l12-main` remained healthy and running. Selected/loaded server identity was `6218e64047961e65`; selected/loaded daemon identity was `f897e80afa954683`. One nl3 browser was used against borrowed UI port `19364`.
+- Fresh Codex Session `cmv6hb0uo01tqmczz6p8s5oqc` ran on `NLDW3-5-36-33 · 58f6`, in Project `~/mqa2-cont2-project`, using the second connected ChatGPT Account, GPT 6.1 Sol, and Low reasoning.
+
+| Required row | Independently observed result | Verdict |
+| --- | --- | --- |
+| Action availability | Visible `action_spec_search` calls returned the live Action catalog and subsequent Action tool calls executed. | **PASS — continuation 4 blocker cleared** |
+| Settings set/reset | `settings.list` passed. `settings.get` for `appearance.atmospherePlanetDigits` returned `requester_account_material_unavailable`; no `settings.set` call or setting effect occurred, so reset was unreachable. | **FAIL — canonical defect fixed in source, loaded-runtime proof unavailable** |
+| Tab open | `workspace.tabs.list`, `workspace.tabs.open`, then `workspace.tabs.list` produced exactly one new preview Session tab, id `82b823cd-37a2-4da5-9211-417eb3c30129`, targeting the current Session. | **PASS** |
+| Script run/output open | `projects.list` returned complete coverage with `items: []`; no registered Action Project was available, so no script or output-open Action occurred. | **BLOCKED by fixture** |
+| Operations | `action.operations.list` returned `invalid_parameters` because the attempted call omitted required `serverId` and `machineId`; no operation effect occurred. | **BLOCKED — required exact inputs not supplied by the live turn** |
+| Memory | `memory.search` succeeded with `ok: true`, no hits, and no continuation. `memory.status` returned `invalid_parameters` without a required machine id; with no hit, `memory.get_window` was not reachable. | **PARTIAL** |
+| Dangerous deny/approve | No qualifying dangerous Action reached an approval prompt. Plan mode subsequently prevented the agent from issuing mutation Actions. | **BLOCKED — no effect occurred** |
+| Live-only secret | `notifications.webhooks.list` returned an empty list. No existing disposable channel was available; creating persistent infrastructure exceeded the authorized QA effect, so no secret-set call occurred. The live-only value was never entered, persisted, or disclosed. | **BLOCKED safely** |
+| Fresh approval detail sentence | No fresh qualifying approval was created in this continuation. | **BLOCKED** |
+| M15 Action-backed mode/goal | `session.mode.set` succeeded for `plan`; `session.goal.set` succeeded with objective `MQA2 parity verification`; `session.goal.get` confirmed active state. The loaded composer still showed `Set goal`, and opening it produced an empty editor. No visible mode chip/control could restore the default mode; plan-mode policy then refused Action mutations, including goal clear and mode reset. | **FAIL — Action state did not project into the composer; fixture remains in Plan with the QA goal active** |
+
+### Functional repair and validation
+
+- Canonical owner: `apps/cli/src/session/actions/settingsDeclarationAction.ts`. The enclosing executor already verifies the exact owner Session and selects the requester's Account credentials, but this owner treated every external execution authorization—including a same-Account Home authorization—as foreign material.
+- The owner now accepts current credentials only when the authorization binding's Account id matches the Account id parsed from that credential. External public credentials, missing/unparseable credentials, and foreign-Account bindings continue to fail closed. Both machine-terminal-host and ordinary Account-setting paths use the same decision helper; no parallel settings owner was added.
+- RED: `./apps/stack/bin/hstack-exec --target=nl3 --cwd=apps/cli -- yarn exec -- vitest run --config vitest.g3-composed.config.ts src/session/actions/settingsDeclarationAction.test.ts` failed the new same-Account case, expected the default `true` value but received `requester_account_material_unavailable` (1 failed, 5 passed).
+- GREEN: the same focused command passed 6/6 twice. The regression also proves a foreign current credential remains refused. The only mock is the external Account-settings HTTP boundary.
+- The public CLI typecheck was retained on its original executor handle through repeated infrastructure retry windows, but never reached compiler output while shared dependency/publication locks stayed occupied. I interrupted only this lane's waiting validation client (exit 130); it is not claimed as passed. `git diff --check` passed for the three committed paths.
+- No UI/style files changed. No stack or daemon was restarted or stopped. The Account key and all Account/live-only secrets remained undisclosed.
+
+### Adversarial closeout and residual risk
+
+- Alternative cause: visible tool payloads, not model narration, establish both the Action availability and the settings refusal. The same-Account regression fails before the owner change while the foreign-Account assertion stays closed, rejecting a blanket relaxation or a settings-value-specific explanation.
+- Neighbor/blast-radius check: both settings branches share the corrected authorization decision; Home-scoped settings retain their separate scoped owner. No duplicate catalog, parser, or consumer workaround was introduced.
+- Environment gap: selected and loaded runtime identities never changed, so the source fix is not live-certified. Script/output, operations, approval, live-only custody, and full memory-window behavior remain unverified. The stuck Plan/goal fixture and composer projection failure require owner-level follow-up; this source repair does not claim to fix them.
+
+STATUS: BLOCKED
