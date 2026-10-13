@@ -1,22 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const profileState = vi.hoisted(() => ({
-    byId: new Map<string, { id: string }>(),
-    portable: new Map<string, { id: string }>(),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    adoptHomeProfile: vi.fn(),
-    getServerProfilesGeneration: () => 0,
-    subscribeServerProfiles: () => () => {},
-    getServerProfileById: (id: string) => profileState.byId.get(id) ?? null,
-    resolveServerProfileForPortableIdentity: (identity: string) => {
-        const profile = profileState.portable.get(identity);
-        return profile
-            ? { kind: 'resolved', serverIdentityId: identity, profile }
-            : { kind: 'missing', serverIdentityId: identity };
-    },
-}));
+import { beforeEach, describe, expect, it } from 'vitest';
+import { listServerProfiles, removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { resolveTeamSignInHome, teamSignInReturnPath } from './teamSignInHome';
 
@@ -35,9 +18,8 @@ function descriptorCarrier(homeServerIdentityId: string): string {
 }
 
 describe('resolveTeamSignInHome', () => {
-    beforeEach(() => {
-        profileState.byId.clear();
-        profileState.portable.clear();
+    beforeEach(async () => {
+        for (const profile of listServerProfiles()) await removeServerProfile(profile.id);
     });
 
     it('carries the Homes acquisition states for a descriptor carrier instead of downgrading them', () => {
@@ -59,7 +41,6 @@ describe('resolveTeamSignInHome', () => {
     });
 
     it('prefers the adopted profile when the carrier names a Home this device already has', () => {
-        profileState.portable.set('srv_acme', { id: 'profile-acme' });
         const carrier = descriptorCarrier('srv_acme');
 
         const home = resolveTeamSignInHome({
@@ -85,15 +66,15 @@ describe('resolveTeamSignInHome', () => {
         })).toEqual({ kind: 'unknown_home', homeServerIdentityId: 'srv_legacy' });
     });
 
-    it('still accepts the device-local reference used by in-app navigation and OAuth return', () => {
-        profileState.byId.set('profile-acme', { id: 'profile-acme' });
+    it('still accepts the device-local reference used by in-app navigation and OAuth return', async () => {
+        const profile = await upsertServerProfile({ serverUrl: 'https://acme.example', name: 'Acme' });
 
-        const home = resolveTeamSignInHome({ serverId: 'profile-acme' });
+        const home = resolveTeamSignInHome({ serverId: profile.id });
 
         expect(home).toEqual({
             kind: 'resolved',
-            target: { kind: 'saved_profile', profileRef: 'profile-acme' },
-            savedProfileId: 'profile-acme',
+            target: { kind: 'saved_profile', profileRef: profile.id },
+            savedProfileId: profile.id,
         });
     });
 
