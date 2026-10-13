@@ -255,6 +255,12 @@ describe('runner-owned Agent session-open attestation', () => {
       cwd: '/child',
       providerSessionId: 'provider-child',
       strictNativeResumeIdentity: true,
+      skills: {
+        pluginRoot: 'C:\\happier\\skills\\session-child',
+        skillsRoot: 'C:\\happier\\skills\\session-child\\skills',
+        items: [],
+        nativeDisables: [{ name: 'native-review', path: 'C:\\native\\review\\SKILL.md' }],
+      },
       startupInstructions: {
         v: 1 as const,
         id: 'happier.bootstrap',

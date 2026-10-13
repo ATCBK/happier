@@ -39,8 +39,8 @@ import {
 
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import {
-    createNativeAgentRuntimeSessionPlan,
-} from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+    createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan,
+} from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import {
     projectEngineRuntimeContributionFromAgent,
 } from '@/agent/runtime/registry/engineRegistry/contributions';

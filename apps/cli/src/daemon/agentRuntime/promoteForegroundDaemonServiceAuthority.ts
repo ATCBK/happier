@@ -36,6 +36,7 @@ import {
 import {
   clearTrackedRunnerAgentDaemonServiceAdmission,
 } from './clearTrackedRunnerAgentDaemonServiceAdmission';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 
 function clearPromotedAuthorityIfExact(input: Readonly<{
   tracked: TrackedSession;
@@ -123,16 +124,14 @@ export async function promoteForegroundDaemonServiceAuthority(input: Readonly<{
     } catch { return false; }
   };
   if (!await isRequesterCurrent()) return false;
+  const runnerIdentity = tracked ? resolveTrackedSessionRunnerIdentity(tracked) : null;
   if (
     !tracked
     || tracked.startedBy === 'daemon'
     || tracked.happySessionId !== input.canonicalSessionId
     || runner.pid !== input.foregroundPid
-    || !processIdentityMatches({
-      pid: input.foregroundPid,
-      processStartTimeMs: tracked.processStartTimeMs,
-      processCommandHash: tracked.processCommandHash,
-    }, runner)
+    || !runnerIdentity
+    || !processIdentityMatches(runnerIdentity, runner)
   ) {
     return false;
   }
@@ -337,8 +336,10 @@ export async function promoteForegroundDaemonServiceAuthority(input: Readonly<{
     return false;
   }
 
-  tracked.processStartTimeMs = runner.processStartTimeMs;
-  tracked.processCommandHash = runner.processCommandHash;
+  if (tracked.pid === runner.pid) {
+    tracked.processStartTimeMs = runner.processStartTimeMs;
+    tracked.processCommandHash = runner.processCommandHash;
+  }
   tracked.agentRuntimeDaemonServiceAuthorityFilePath =
     input.authorityFilePath;
   tracked.agentRuntimeDaemonServiceCapabilityHash =
