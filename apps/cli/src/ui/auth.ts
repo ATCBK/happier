@@ -25,15 +25,16 @@ import { buildServerUrlReachabilityHintLines } from '@/server/reachability/serve
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import {
     createTerminalPairingAuthentication,
-    applyTerminalAuthRequestExpiry,
-    formatTerminalPairingExpiryNotice,
     openTerminalProvisioningResponse,
     readTerminalPairingRequirement,
     type TerminalPairingAuthentication,
     type TerminalPairingRequirement,
 } from '@/auth/terminalProvisioningResponse';
 
-import { postTerminalAuthRequestCompatible, type PostTerminalAuthRequestCompatibleResponse } from '@/auth/terminalAuthRequest';
+export type PostTerminalAuthRequestCompatibleResponse =
+    | { state: 'requested' }
+    | { state: 'authorized' }
+    | { state: 'authorized'; token: string; response: string };
 
 function isAuthorizedWithTokenAndResponse(
     value: PostTerminalAuthRequestCompatibleResponse,
@@ -232,7 +233,7 @@ export async function doAuth(): Promise<Credentials | null> {
     const claimSecretB64Url = Buffer.from(claimSecret).toString('base64url');
     const claimSecretHash = createHash('sha256').update(Buffer.from(claimSecret)).digest('base64url');
     const pairingRequirement = readTerminalPairingRequirement();
-    let pairing = createTerminalPairingAuthentication({
+    const pairing = createTerminalPairingAuthentication({
         nowMs: Date.now(),
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
     });
@@ -244,13 +245,11 @@ export async function doAuth(): Promise<Credentials | null> {
             console.log(`[AUTH DEBUG] Sending auth request to: ${configuration.apiServerUrl}/v1/auth/request`);
             console.log(`[AUTH DEBUG] Public key: ${publicKey.substring(0, 20)}...`);
         }
-        const response = await postTerminalAuthRequestCompatible({
-            serverUrl: configuration.apiServerUrl,
+        await postTerminalAuthRequestCompatible({
             publicKey,
             supportsV2: true,
             claimSecretHash,
         });
-        pairing = applyTerminalAuthRequestExpiry(pairing, response);
         if (debugEnabled) {
             console.log(`[AUTH DEBUG] Auth request sent successfully`);
         }
@@ -265,8 +264,6 @@ export async function doAuth(): Promise<Credentials | null> {
         ]));
         return null;
     }
-
-    console.log(chalk.gray(formatTerminalPairingExpiryNotice(pairing)));
 
     // Handle authentication based on selected method
     if (authMethod === 'mobile') {
@@ -357,6 +354,33 @@ async function doBothAuth(params: Readonly<{
     }
 
     return await waitForAuthentication(params);
+}
+
+async function postTerminalAuthRequestCompatible(params: Readonly<{
+    publicKey: string;
+    supportsV2?: boolean;
+    claimSecretHash?: string;
+    timeoutMs?: number;
+}>): Promise<PostTerminalAuthRequestCompatibleResponse> {
+    try {
+        const res = await axios.post<PostTerminalAuthRequestCompatibleResponse>(`${configuration.apiServerUrl}/v1/auth/request`, {
+            publicKey: params.publicKey,
+            ...(typeof params.supportsV2 === 'boolean' ? { supportsV2: params.supportsV2 } : {}),
+            ...(typeof params.claimSecretHash === 'string' ? { claimSecretHash: params.claimSecretHash } : {}),
+        }, params.timeoutMs ? { timeout: params.timeoutMs } : undefined);
+        return res.data;
+    } catch (error: any) {
+        const code = error?.response?.status;
+        if (code === 400 || code === 422) {
+            // Some legacy servers validate request bodies strictly and reject unknown keys.
+            // Retry with the minimal legacy payload.
+            const res = await axios.post<PostTerminalAuthRequestCompatibleResponse>(`${configuration.apiServerUrl}/v1/auth/request`, {
+                publicKey: params.publicKey,
+            }, params.timeoutMs ? { timeout: params.timeoutMs } : undefined);
+            return res.data;
+        }
+        throw error;
+    }
 }
 
 /**
@@ -574,7 +598,6 @@ async function waitForAuthentication(
                     PostTerminalAuthRequestCompatibleResponse
                 > => {
                     const data = await postTerminalAuthRequestCompatible({
-                        serverUrl: configuration.apiServerUrl,
                         publicKey,
                         supportsV2: true,
                         timeoutMs: remainingRequestTimeoutMs(),

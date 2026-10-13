@@ -170,10 +170,12 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
         });
       }
       if (remoteCommand.includes('auth status --json')) {
-        return {
-          ...jsonResult({ v: 1, ok: false, kind: 'auth_status', error: { code: 'not_authenticated' } }),
-          status: 1,
-        };
+        return jsonResult({
+          ok: true,
+          data: {
+            authenticated: false,
+          },
+        });
       }
       if (remoteCommand.includes('server set')) {
         return jsonResult({
