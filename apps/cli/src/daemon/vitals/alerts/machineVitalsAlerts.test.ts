@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MachineVitalsAlertTransitionV1 } from '@happier-dev/protocol/machines/vitals/evaluateMachineVitalsAlertsV1';
+import { MachineVitalsAlertEpisodeV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 import { createMachineResourcesPolicyRuntime } from '../../resources/machineResourcesPolicy';
 import { createMachineVitalsSampler } from '../createMachineVitalsSampler';
 import { createMinuteHistoryStore } from '../history/minuteHistoryStore';
@@ -41,6 +42,7 @@ describe('machine vitals alert lifecycle', () => {
     const deliveries: MachineVitalsAlertTransitionV1[] = [];
     // Notification delivery is an outward boundary; verify its durable precondition.
     const notify = async (transition: MachineVitalsAlertTransitionV1) => {
+      expect(MachineVitalsAlertEpisodeV1Schema.parse(transition.episode)).toEqual(transition.episode);
       expect(history.alerts()).toContainEqual(transition.episode);
       deliveries.push(transition);
     };
@@ -51,6 +53,8 @@ describe('machine vitals alert lifecycle', () => {
     await alerts.stop();
     await sampler.stop();
     expect(deliveries.map(value => value.episode.state)).toEqual(['fired']);
+    // A continuously active episode must outlive display history, including daemon downtime.
+    vi.setSystemTime(initialTime + 8 * 86_400_000);
     history = await createMinuteHistoryStore({ directory });
     sampler = createMachineVitalsSampler({ readers: reader, historyStore: history, monotonicMs: () => Date.now() - initialTime });
     alerts = createMachineVitalsAlerts({ sampler, historyStore: history, policy, notify });
@@ -74,7 +78,7 @@ describe('machine vitals alert lifecycle', () => {
     await sampler.stop();
     expect(deliveries).toHaveLength(2);
     expect(sampler.latest()?.intervalMs).toBe(60_000);
-    expect(history.alerts().map(value => value.state)).toEqual(['fired', 'recovered']);
+    expect(history.alerts().map(value => value.state)).toEqual(['recovered']);
     policy.stop();
   });
 });

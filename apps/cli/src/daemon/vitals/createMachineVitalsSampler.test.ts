@@ -9,6 +9,8 @@ import { createMinuteHistoryStore } from './history/minuteHistoryStore';
 import { createLinuxMachineVitalsReader } from './readers/linux';
 import { createLinuxVitalsFixture } from './readers/linux.testkit';
 import type { MachineVitalsReader } from './readers/types';
+import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
+import { MachineVitalsMinuteRecordV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 
 interface CounterFixture {
     busy: number;
@@ -243,6 +245,10 @@ describe('createMachineVitalsSampler', () => {
             await vi.advanceTimersByTimeAsync(60_000);
             await sampler.start();
             expect(sampler.minutes(initialTime)[0]).toMatchObject({ cpu: 30, mem: 61_440_000, rx: 2000, tx: 4000 });
+            expect(MachineVitalsSampleV1Schema.parse(sampler.latest())).toEqual(sampler.latest());
+            const serialized = await readFile(join(historyDirectory, 'minutes-2026-10-10.jsonl'), 'utf8');
+            const persisted: unknown[] = serialized.trim().split('\n').map(line => JSON.parse(line));
+            expect(persisted.map(record => MachineVitalsMinuteRecordV1Schema.parse(record))).toEqual(sampler.minutes(initialTime));
             await sampler.stop();
             const restored = await createMinuteHistoryStore({ directory: historyDirectory, nowMs: Date.now });
             expect(restored.minutes(initialTime)).toEqual(sampler.minutes(initialTime));

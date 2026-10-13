@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import { MachineVitalsAlertEpisodeV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import { MachineVitalsAlertsPolicyV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsAlertsV1';
+import { MachineVitalsSampleV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
+import { evaluateMachineVitalsAlertsV1 } from '@happier-dev/protocol/machines/vitals/evaluateMachineVitalsAlertsV1';
 
 import { createMinuteHistoryStore } from './minuteHistoryStore';
 
@@ -50,5 +54,46 @@ describe('minute history store', () => {
     await restored.append(minute(now));
     expect(restored.minutes(0)).toEqual([minute(now)]);
     expect(await readdir(directory)).toEqual(['minutes-2026-10-11.jsonl']);
+  });
+
+  it('retains only open old episodes in the same journal across pruning, downtime and recovery', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-minute-open-alert-'));
+    roots.push(directory);
+    let now = Date.UTC(2026, 9, 1);
+    const store = await createMinuteHistoryStore({ directory, nowMs: () => now });
+    const open = { kind: 'alert' as const, rule: 'disk' as const, volumeId: 'data', state: 'fired' as const, at: now };
+    await store.append(minute(now));
+    await store.appendAlert(open);
+    await store.appendAlert({ ...open, volumeId: 'closed' });
+    await store.appendAlert({ ...open, volumeId: 'closed', state: 'recovered', at: now + 60_000 });
+    now += 8 * 86_400_000;
+    // Startup must recover the active truth before removing its original day file.
+    let restored = await createMinuteHistoryStore({ directory, nowMs: () => now });
+    expect(restored.alerts()).toEqual([open]);
+    expect(restored.minutes(0)).toEqual([]);
+    expect(await readdir(directory)).toEqual(['minutes-2026-10-09.jsonl']);
+    now += 8 * 86_400_000;
+    await restored.prune();
+    restored = await createMinuteHistoryStore({ directory, nowMs: () => now });
+    expect(restored.alerts()).toEqual([open]);
+    const policy = MachineVitalsAlertsPolicyV1Schema.parse({ disk: { enabled: true } });
+    const sample = MachineVitalsSampleV1Schema.parse({ v: 1, sampledAt: now, intervalMs: 60_000,
+      cpu: { reported: false, reason: 'unavailable' }, memory: { reported: false, reason: 'unavailable' },
+      network: { reported: false, reason: 'unavailable' }, disk: { reported: true,
+        volumes: [{ id: 'data', label: 'Data', mount: '/data', totalBytes: 1000, availableBytes: 0 }] } });
+    expect(evaluateMachineVitalsAlertsV1({ policy, now, records: [], episodes: restored.alerts(), disk: sample.disk })).toEqual([]);
+    const recoveredDisk = MachineVitalsSampleV1Schema.parse({ ...sample, disk: { reported: true,
+      volumes: [{ id: 'data', label: 'Data', mount: '/data', totalBytes: 1000, availableBytes: 500 }] } }).disk;
+    const recovery = evaluateMachineVitalsAlertsV1({ policy, now, records: [], episodes: restored.alerts(), disk: recoveredDisk });
+    expect(recovery).toHaveLength(1);
+    const recovered = MachineVitalsAlertEpisodeV1Schema.parse(recovery[0].episode);
+    expect(recovered).toEqual({ ...open, state: 'recovered', at: now });
+    await restored.appendAlert(recovered);
+    restored = await createMinuteHistoryStore({ directory, nowMs: () => now });
+    expect(restored.alerts().at(-1)).toEqual(recovered);
+    now += 8 * 86_400_000;
+    await restored.prune();
+    expect(restored.alerts()).toEqual([]);
+    expect(await readdir(directory)).toEqual([]);
   });
 });

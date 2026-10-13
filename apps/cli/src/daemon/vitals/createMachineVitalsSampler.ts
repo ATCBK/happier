@@ -49,8 +49,11 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     const monotonicMs = input.monotonicMs ?? (() => performance.now());
     const onError = input.onError ?? ((error: unknown) => logger.debug('[machine vitals] sampling failed', error));
     // The daemon's real clock is Node's; shared UI ambient types also declare a numeric browser timer.
-    const setTimeoutFn = input.setTimeoutFn ?? (setTimeout as typeof import('node:timers').setTimeout);
-    const clearTimeoutFn = input.clearTimeoutFn ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    const setTimeoutFn = input.setTimeoutFn ?? ((callback, delayMs) => {
+        const schedule: (callback: () => void, delayMs: number) => NodeJS.Timeout = globalThis.setTimeout;
+        return schedule(callback, delayMs);
+    });
+    const clearTimeoutFn = input.clearTimeoutFn ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
     const listeners = new Set<(event: SampleEvent) => void>();
     const ring: MachineVitalsSampleV1[] = [];
     let currentState: MachineVitalsSamplerState = { state: 'reporting' };
