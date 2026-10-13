@@ -20,6 +20,7 @@ import {
   resolveSessionRunnerEntrypointIdentityFromProcessCommand,
 } from '@/daemon/sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import type { TrackedSession } from '@/daemon/types';
+import { resolveTrackedSessionRunnerIdentity } from '@/daemon/sessions/sessionReportCorrelation';
 import {
   readSessionMarkerForPid,
   updateSessionMarkerRunnerAgentSourceCustody,
@@ -83,12 +84,8 @@ async function resolveTrackedRunnerIdentity(input: Readonly<{
     );
   }
   const processCommandHash = hashProcessCommand(identity.command);
-  const expectedIdentity = input.tracked.runnerProcessIdentity ?? {
-    pid: runnerPid,
-    processStartTimeMs: input.tracked.processStartTimeMs,
-    processCommandHash: input.tracked.processCommandHash,
-  };
-  if (!processIdentityMatches(expectedIdentity, {
+  const expectedIdentity = resolveTrackedSessionRunnerIdentity(input.tracked);
+  if (!expectedIdentity || !processIdentityMatches(expectedIdentity, {
     pid: identity.pid,
     processStartTimeMs,
     processCommandHash,

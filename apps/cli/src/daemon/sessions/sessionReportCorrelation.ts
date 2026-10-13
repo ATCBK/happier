@@ -4,7 +4,7 @@ import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract
 import type { Metadata } from '@/api/types';
 import type { TrackedSession } from '../types';
 import { readProcessCensus } from '@/processes/census/processCensus';
-import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
+import { processIdentityMatches, type ProcessIdentityWitness } from '@happier-dev/cli-common/processInstance';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { captureExactWindowsTerminalLaunchProcess, readAllWindowsProcessFacts, type ExactWindowsProcessCancellationIdentity } from '../platform/windows/windowsProcessCustody';
 import type { ProcessCensusProcessFact } from '@/processes/census/processFacts';
@@ -162,7 +162,7 @@ export async function resolveOrdinaryDaemonParentCorrelation(params: Readonly<{
   pidToAwaiter: ReadonlyMap<number, unknown>;
   getParentPidFn: (pid: number) => number | null | Promise<number | null>;
 }>) {
-  const parentPid = params.metadata.startedBy === 'daemon' && params.pidToAwaiter.size > 0
+  const parentPid = params.metadata.startedBy === 'daemon'
     ? await params.getParentPidFn(params.pid) : null;
   const tracked = typeof parentPid === 'number' ? params.pidToTrackedSession.get(parentPid) ?? null : null;
   const hasAwaiter = typeof parentPid === 'number' && params.pidToAwaiter.has(parentPid);
@@ -198,6 +198,20 @@ export async function resolveSessionReportTrackedCorrelation(params: Readonly<{
   });
   if (runner && (windows.kind !== 'matched' || windows.tracked !== runner)) return { kind: 'refused' as const };
   return windows;
+}
+
+/** A launcher's birth witness cannot establish a distinct runner PID. */
+export function resolveTrackedSessionRunnerIdentity(tracked: TrackedSession): ProcessIdentityWitness | null {
+  const pid = tracked.sessionRunnerPid ?? tracked.pid;
+  if (tracked.runnerProcessIdentity) {
+    return tracked.runnerProcessIdentity.pid === pid ? tracked.runnerProcessIdentity : null;
+  }
+  if (pid !== tracked.pid) return null;
+  return {
+    pid,
+    processStartTimeMs: tracked.processStartTimeMs,
+    processCommandHash: tracked.processCommandHash,
+  };
 }
 
 export function adoptTrackedSessionRunnerIdentity(

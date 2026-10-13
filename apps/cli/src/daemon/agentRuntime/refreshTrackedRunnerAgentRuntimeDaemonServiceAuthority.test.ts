@@ -103,6 +103,7 @@ describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority', () => {
       const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir, publicReleaseRing: 'stable' });
       const tracked: TrackedSession = {
         startedBy: 'daemon', pid: 4201, sessionRunnerPid: 4202,
+        runnerProcessIdentity: { pid: 4202, processStartTimeMs: 12_346, processCommandHash },
         happySessionId: 'session-a', processCommandHash, processStartTimeMs: 12_346,
         agentRuntimeDaemonServiceAuthorityFilePath: authorityPath,
         runnerAgentBootstrapIdentity: { agentId: 'antigravity', backendId: 'antigravity' },
@@ -230,6 +231,7 @@ describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority', () => {
             startedBy: 'daemon',
             pid: 4201,
             sessionRunnerPid: 4202,
+            runnerProcessIdentity: { pid: 4202, processStartTimeMs: 12_346, processCommandHash: commandHash },
             happySessionId: 'session-mismatch',
             processCommandHash: commandHash,
             processStartTimeMs: 12_346,

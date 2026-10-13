@@ -45,7 +45,7 @@ function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath 
 }
 
 describe('createOnHappySessionWebhook', () => {
-  it('publishes the captured runner marker before fresh wrapper startup readiness without retiring wrapper custody', async () => {
+  it.each(['current', 'reused'] as const)('qualifies the captured runner marker before fresh wrapper startup readiness (%s)', async (generation) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'happier-wrapper-startup-marker-'));
     const originalHome = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
     Object.defineProperty(configuration, 'happyHomeDir', { ...originalHome, value: dir });
@@ -69,8 +69,24 @@ describe('createOnHappySessionWebhook', () => {
         processStartTimeMs: 12_345,
         respawn: { version: 1, directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'wrapper-launch' },
       });
+      if (generation === 'reused') {
+        await writeSessionMarker({
+          pid: runnerPid, happySessionId: sessionId, startedBy: 'daemon', cwd: dir, processStartTimeMs: 23_455,
+          respawn: { version: 1, directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'wrapper-launch' },
+        });
+      }
       const sessions = new Map([[wrapperPid, tracked]]);
       const awaiter = vi.fn();
+      const onTrackedSessionReady = vi.fn(async () => {
+        expect(await readSessionMarkerForPid(runnerPid)).toMatchObject({
+          pid: runnerPid, happySessionId: sessionId, processStartTimeMs: 23_456,
+          agentRuntimeDaemonServiceAuthorityFilePath: tracked.agentRuntimeDaemonServiceAuthorityFilePath,
+        });
+        expect(sessions.get(wrapperPid)).toBe(tracked);
+        expect(tracked.pid).toBe(wrapperPid);
+        expect(tracked.processStartTimeMs).toBe(12_345);
+        expect(tracked.runnerProcessIdentity).toMatchObject({ pid: runnerPid, processStartTimeMs: 23_456 });
+      });
       const report = createOnHappySessionWebhook({
         pidToTrackedSession: sessions, pidToAwaiter: new Map([[wrapperPid, awaiter]]),
         getParentPidFn: () => wrapperPid,
@@ -78,18 +94,16 @@ describe('createOnHappySessionWebhook', () => {
         // The OS identity read is the boundary; the marker promotion and persistence remain real.
         promoteSessionMarkerFn: (fromPid, toPid) => promoteSessionMarkerPid(fromPid, toPid, { readProcessIdentityByPidFn: readIdentity }),
         readCredentialsFn: async () => null,
-        onTrackedSessionReady: async () => {
-          expect(await readSessionMarkerForPid(runnerPid)).toMatchObject({
-            pid: runnerPid, happySessionId: sessionId, processStartTimeMs: 23_456,
-            agentRuntimeDaemonServiceAuthorityFilePath: tracked.agentRuntimeDaemonServiceAuthorityFilePath,
-          });
-          expect(sessions.get(wrapperPid)).toBe(tracked);
-          expect(tracked.pid).toBe(wrapperPid);
-          expect(tracked.processStartTimeMs).toBe(12_345);
-          expect(tracked.runnerProcessIdentity).toMatchObject({ pid: runnerPid, processStartTimeMs: 23_456 });
-        },
+        onTrackedSessionReady,
       });
-      await report(sessionId, createMetadata(runnerPid, 'daemon', dir));
+      const reporting = report(sessionId, createMetadata(runnerPid, 'daemon', dir));
+      if (generation === 'reused') {
+        await expect(reporting).rejects.toThrow('Canonical Session runner marker identity changed');
+        expect(onTrackedSessionReady).not.toHaveBeenCalled();
+      } else {
+        await reporting;
+        expect(onTrackedSessionReady).toHaveBeenCalledOnce();
+      }
       expect(awaiter).toHaveBeenCalledOnce();
       expect((await readSessionMarkerForPid(wrapperPid))?.happySessionId).toBe(sessionId);
     } finally {
@@ -473,7 +487,7 @@ describe('createOnHappySessionWebhook', () => {
     expect(tracked.spawnStartupReadinessFailure).toBeUndefined();
   });
 
-  it('registers an externally started session when PID is unknown', () => {
+  it('registers an externally started session when PID is unknown', async () => {
     const pidToTrackedSession = new Map<number, TrackedSession>();
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
 
@@ -485,7 +499,7 @@ describe('createOnHappySessionWebhook', () => {
       writeSessionMarkerFn: async () => {},
     });
 
-    onWebhook('PID-123', createMetadata(123, 'terminal'));
+    await onWebhook('PID-123', createMetadata(123, 'terminal'));
 
     const tracked = pidToTrackedSession.get(123);
     expect(tracked).toBeDefined();

@@ -16,6 +16,7 @@ import type {
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { TrackedSession } from '@/daemon/types';
+import { resolveTrackedSessionRunnerIdentity } from '@/daemon/sessions/sessionReportCorrelation';
 import {
   updateSessionMarkerAgentRuntimeSessionOpenAttestation,
 } from '@/daemon/sessionRegistry';
@@ -76,6 +77,7 @@ export async function recordTrackedRunnerAgentSessionOpenAttestation(
   const sessionId = input.tracked.happySessionId?.trim() ?? '';
   const runnerPid =
     input.tracked.sessionRunnerPid ?? input.tracked.pid;
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(input.tracked);
   const authorityFilePath =
     input.tracked
       .agentRuntimeDaemonServiceAuthorityFilePath?.trim() ?? '';
@@ -92,11 +94,8 @@ export async function recordTrackedRunnerAgentSessionOpenAttestation(
       input.tracked.runnerAgentSourceCustodyV1,
       input.retainedAgent.sourceCustody,
     )
-    || !processIdentityMatches({
-      pid: runnerPid,
-      processStartTimeMs: input.tracked.processStartTimeMs,
-      processCommandHash: input.tracked.processCommandHash,
-    }, input.runner)
+    || !runnerIdentity
+    || !processIdentityMatches(runnerIdentity, input.runner)
     || !authorityFilePath
     || (
       request.kind === 'resume'

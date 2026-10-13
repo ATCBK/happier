@@ -10,6 +10,7 @@ import type {
 } from './sessionBridgeAuthorization';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
+import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
 
 export function authorizeTrackedRunnerAgentDaemonServiceOperation(
   input: Readonly<{
@@ -22,6 +23,7 @@ export function authorizeTrackedRunnerAgentDaemonServiceOperation(
     allowIdleCurrentGeneration: boolean;
   }>,
 ): boolean {
+  const runnerIdentity = resolveTrackedSessionRunnerIdentity(input.tracked);
   if (
     input.tracked.happySessionId !== input.sessionId
     || !input.tracked.runnerAgentSourceCustodyV1
@@ -29,11 +31,8 @@ export function authorizeTrackedRunnerAgentDaemonServiceOperation(
       input.tracked.runnerAgentSourceCustodyV1,
       input.retainedAgent.sourceCustody,
     )
-    || !processIdentityMatches({
-      pid: input.tracked.sessionRunnerPid ?? input.tracked.pid,
-      processStartTimeMs: input.tracked.processStartTimeMs,
-      processCommandHash: input.tracked.processCommandHash,
-    }, input.runner)
+    || !runnerIdentity
+    || !processIdentityMatches(runnerIdentity, input.runner)
   ) {
     return false;
   }

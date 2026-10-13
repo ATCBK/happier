@@ -55,6 +55,7 @@ function tracked(): TrackedSession {
     runnerAgentSourceCustodyV1: binding.sourceCustody,
     processStartTimeMs: 123,
     processCommandHash: '5'.repeat(64),
+    runnerProcessIdentity: { pid: runner.pid, processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash },
     agentRuntimeDaemonServiceAdmittedTurnId:
       witness.turnId,
     agentRuntimeDaemonServiceAdmittedInputId:
@@ -67,6 +68,20 @@ function tracked(): TrackedSession {
 }
 
 describe('tracked Runner Agent daemon-service operation authority', () => {
+  it('refuses an unwitnessed child role even when wrapper and child birth samples coincide', () => {
+    const unwitnessed = tracked();
+    delete unwitnessed.runnerProcessIdentity;
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation({
+      tracked: unwitnessed, ...direct, witness, allowIdleCurrentGeneration: false,
+    })).toBe(false);
+    unwitnessed.pid = runner.pid;
+    delete unwitnessed.sessionRunnerPid;
+    unwitnessed.reattachedFromDiskMarker = true;
+    expect(authorizeTrackedRunnerAgentDaemonServiceOperation({
+      tracked: unwitnessed, ...direct, witness, allowIdleCurrentGeneration: false,
+    })).toBe(true);
+  });
+
   it('admits the captured runner behind a live wrapper and refuses a replaced runner generation', () => {
     const admitted = tracked();
     admitted.processStartTimeMs = 100;
@@ -105,6 +120,7 @@ describe('tracked Runner Agent daemon-service operation authority', () => {
       allowIdleCurrentGeneration: false,
     })).toBe(true);
     reattached.processStartTimeMs = runner.processStartTimeMs + 1;
+    reattached.runnerProcessIdentity = { ...runner, processStartTimeMs: runner.processStartTimeMs + 1 };
     expect(authorizeTrackedRunnerAgentDaemonServiceOperation({
       tracked: reattached,
       ...direct,
