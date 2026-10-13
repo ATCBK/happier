@@ -6,6 +6,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { inTx } from '@/storage/inTx';
+import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { listPromptLibraryRowsInTx, mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from './promptLibraryRows';
 
 const params = z.object({ key: asServerProtocolZod(PromptLibraryCatalogKeyV1Schema) }).strict();
@@ -25,7 +26,7 @@ export function registerPromptLibraryRoutes(app: Fastify): void {
       response: { 200: asServerProtocolZod(PromptLibraryRowMutationResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
     try { return reply.send(await inTx(tx => mutatePromptLibraryRowInTx(tx, {
-      accountId: request.userId, key: request.params.key, ...request.body,
+      accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), key: request.params.key, ...request.body,
     }))); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });

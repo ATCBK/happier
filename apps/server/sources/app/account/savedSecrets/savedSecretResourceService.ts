@@ -20,6 +20,7 @@ import { SavedSecretReferenceCensusV1Schema, SavedSecretPromoteReferenceCensusV1
     type SavedSecretReferenceCensusV1, type SavedSecretPromoteReferenceCensusV1, type SavedSecretCatalogMutationsV1,
     type SavedSecretCatalogRevisionsV1, type SavedSecretPersonalPromotionsV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { deriveSavedSecretImportResourceIdV1, listAccountSettingsSavedSecretReferences,
+    rewriteSavedSecretReferenceCatalogsV1,
     type SavedSecretReferenceCatalogsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { openMcpServerCatalogContentV1, parseMcpServerCatalogMigrationContentV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { openAcpCatalogContentV1, listAcpCatalogEnvelopeSavedSecretDiagnosticsV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -109,7 +110,7 @@ type StoredResourceRow = Readonly<{
 type SavedSecretResourceReferenceCaptureInput = Readonly<{
     references: readonly string[];
     savedSecretRevisions: readonly Readonly<{ resourceId: string; expectedRevision: number }>[];
-    /** Only the genuine Profile importer can retain personal ids before S2 promotion. */
+    /** Private Account catalogs may retain personal ids; shared-only catalogs omit this. */
     allowPersonal?: boolean;
 }>;
 
@@ -1506,7 +1507,7 @@ export async function updateSavedSecretResourceInTx(
 }
 
 type SavedSecretCatalogReferenceFacets = Pick<SavedSecretReferenceCatalogsV1,
-    'mcp' | 'acp' | 'providerConnections' | 'connectedConfigurations' | 'connectedPurposes'>;
+    'mcp' | 'acp' | 'providerConnections' | 'connectedConfigurations' | 'connectedPurposes' | 'registrySources'>;
 type SavedSecretCatalogCapturedContents = Partial<Record<keyof SavedSecretCatalogRevisionsV1,
     Readonly<{ revision: number | 'absent'; content: unknown | null }>>>;
 
@@ -1606,6 +1607,20 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
             }
         } else if (row.status === 'deleted') { catalogs.connectedPurposes = null; contents.connectedPurposes = { revision: row.revision, content: null }; }
         else contents.connectedPurposes = { revision: 'absent', content: null };
+    }
+    if (!input.destinationOnly || input.captures?.registrySources !== undefined) {
+        const { readPromptLibraryRowInTx } = await import('@/app/account/prompts/promptLibraryRows');
+        const row = await readPromptLibraryRowInTx(tx, { accountId: input.accountId, key: 'registry-sources' });
+        const error = savedSecretCatalogCaptureError(row, input.captures?.registrySources);
+        if (error) return { ok: false, error };
+        if (row.status === 'present') {
+            contents.registrySources = { revision: row.revision, content: row.content };
+            if (input.accountMode === 'plain') {
+                if (row.content.t !== 'plain' || row.content.v.key !== 'registry-sources') return { ok: false, error: 'references_invalid' };
+                catalogs.registrySources = row.content.v.value;
+            }
+        } else if (row.status === 'deleted') { catalogs.registrySources = null; contents.registrySources = { revision: row.revision, content: null }; }
+        else contents.registrySources = { revision: 'absent', content: null };
     }
     return { ok: true, value: { catalogs, contents } };
 }
@@ -1826,7 +1841,7 @@ export async function deleteSavedSecretResourceInTx(
     return { ok: true, value: { resourceId: input.resourceId } };
 }
 
-const savedSecretCatalogMutationKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes'] as const;
+const savedSecretCatalogMutationKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes', 'registrySources'] as const;
 
 function rejectSavedSecretCatalogMutation(result: Readonly<{ status: string }>): void {
     if (result.status !== 'updated') throw new SavedSecretResourceTransactionAbort(result.status === 'conflict'
@@ -1872,6 +1887,11 @@ async function mutateSavedSecretCatalogsInTx(tx: Tx, input: Readonly<{
         capture('connectedPurposes', await mutateConnectedAccountCatalogRowInTx(tx,
             { ...actor, key: 'purposes', ...input.mutations.connectedPurposes }));
     }
+    if (input.mutations.registrySources) {
+        const mutation = input.mutations.registrySources;
+        const { mutatePromptLibraryRowInTx } = await import('@/app/account/prompts/promptLibraryRows');
+        capture('registrySources', await mutatePromptLibraryRowInTx(tx, { ...actor, key: 'registry-sources', ...mutation }));
+    }
     return revisions;
 }
 
@@ -1891,7 +1911,8 @@ async function validateNotificationPromotionReferencesInTx(tx: Tx, input: Promot
         }) });
 }
 
-async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedSecretResourceInput, removesSettingsSources = false): Promise<boolean> {
+async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedSecretResourceInput, removesSettingsSources = false,
+    catalogs?: SavedSecretCatalogReferenceFacets, savedSecretRefs?: ReadonlyMap<string, string>): Promise<boolean> {
     if (!input.personalSecretPromotions?.length && !removesSettingsSources) return true;
     const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
     if (fence.status !== 'ready') return false;
@@ -1908,6 +1929,20 @@ async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedS
         && !nextSecrets.some(next => next !== null && typeof next === 'object' && !Array.isArray(next) && 'id' in next && next.id === secret.id)
         ? [secret.id] : []) : [];
     if (mapped.size === 0 && removed.length === 0) return true;
+    if (catalogs?.registrySources) {
+        const registrySources = catalogs.registrySources;
+        if (registrySources.sources.some(source => source.token && removed.includes(source.token.secretRef)
+            && !savedSecretRefs?.has(source.token.secretRef))) return false;
+        let rewritten: SavedSecretReferenceCatalogsV1 = { profileRecords: [], registrySources };
+        for (const [sourceRef, targetRef] of savedSecretRefs ?? []) {
+            rewritten = rewriteSavedSecretReferenceCatalogsV1(rewritten, sourceRef, targetRef);
+        }
+        if (!sameStrictJsonValue(rewritten.registrySources, registrySources)) {
+            const proposed = input.catalogMutations?.registrySources?.content;
+            if (proposed?.t !== 'plain' || proposed.v.key !== 'registry-sources'
+                || !sameStrictJsonValue(proposed.v.value, rewritten.registrySources)) return false;
+        }
+    }
     const controllers = await tx.machine.findMany({ where: { accountId: input.accountId }, select: { id: true } });
     const presets = await tx.managedMachinePreset.findMany({ where: { controllerMachineId: { in: controllers.map(machine => machine.id) } }, select: { environment: true } });
     const machines = await tx.managedMachine.findMany({ where: { custodianAccountId: input.accountId }, select: { environmentSetup: true } });
@@ -1967,7 +2002,7 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
         if (typeof capture !== 'number' || mutation.expectedRevision !== capture || mutation.sourceSettingsVersion !== undefined
             || 'source' in mutation && mutation.source !== undefined) return { ok: false, error: 'references_invalid' };
         postCaptures[key] = capture + 1;
-        mutation.referencedSavedSecretIds.forEach(reference => declaredReferences.add(reference));
+        (mutation.referencedSavedSecretIds ?? []).forEach(reference => declaredReferences.add(reference));
     }
     const remote = input.remoteHostMutation;
     if (remote) {
@@ -2031,7 +2066,7 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
         for (const key of savedSecretCatalogMutationKeys) {
             const mutation = mutations[key];
             if (mutation && !await validateSavedSecretResourceReferencesInTx(tx, { accountId: input.accountId,
-                authentication: input.authentication, references: mutation.referencedSavedSecretIds,
+                authentication: input.authentication, references: mutation.referencedSavedSecretIds ?? [],
                 savedSecretRevisions: mutation.savedSecretRevisions ?? [] })) return { ok: false, error: 'references_invalid' };
         }
         return { ok: true, value: receiptValue(fence.account.settingsVersion) };
@@ -2252,16 +2287,18 @@ export async function promoteSavedSecretResourceInTx(
     if (census.value.settingsContent?.t === 'plain' && sourceCleanup?.t === 'plain' && proposedSettings
         && Object.keys(census.value.settingsContent.v).some(key => !Object.hasOwn(sourceCleanup.v, key)
             && Object.hasOwn(proposedSettings, key))) return { ok: false, error: 'references_invalid' };
-    if (!await validatePersonalPromotionSourcesInTx(tx, input, true)) return { ok: false, error: 'references_invalid' };
-    const savedSecretRefs = new Map<string, string>();
+    const savedSecretRefs = new Map((input.personalSecretPromotions ?? []).map(promotion =>
+        [promotion.personalSecretId, formatSharedSavedSecretRefV1(promotion.resourceId)] as const));
     if (census.value.settingsContent?.t === 'plain' && Array.isArray(census.value.settingsContent.v.secrets)) {
         for (const secret of census.value.settingsContent.v.secrets) {
             if (secret === null || typeof secret !== 'object' || Array.isArray(secret) || !('id' in secret) || typeof secret.id !== 'string') continue;
             const destination = deriveSavedSecretImportResourceIdV1({ accountId: input.accountId,
                 source: { kind: 'personal-saved-secret', secretId: secret.id } });
-            if (savedSecretPromotionResources(input).some(resource => resource.resourceId === destination)) savedSecretRefs.set(secret.id, formatSharedSavedSecretRefV1(destination));
+            if (!savedSecretRefs.has(secret.id) && savedSecretPromotionResources(input).some(resource => resource.resourceId === destination))
+                savedSecretRefs.set(secret.id, formatSharedSavedSecretRefV1(destination));
         }
     }
+    if (!await validatePersonalPromotionSourcesInTx(tx, input, true, census.value.catalogs, savedSecretRefs)) return { ok: false, error: 'references_invalid' };
     for (const key of savedSecretCatalogMutationKeys) if (parsedCatalogMutations.data[key]
         && parsedCensus.data.catalogs?.[key] !== parsedCatalogMutations.data[key]!.expectedRevision) return { ok: false, error: 'references_invalid' };
     await createSavedSecretPromotionResourcesInTx(tx, input);

@@ -75,6 +75,7 @@ export async function mutateMcpServerCatalogRowInTx(tx: Tx, input: Readonly<{
     }
     if (!(await (await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferencesInTx(tx, {
         accountId: input.accountId, authentication: input.authentication, references,
+        allowPersonal: true,
         savedSecretRevisions: mutation.savedSecretRevisions,
     }))) return { status: 'invalid-reference' };
     return mutateReservedAccountScopedKvRowInTx(tx, { accountId: input.accountId,

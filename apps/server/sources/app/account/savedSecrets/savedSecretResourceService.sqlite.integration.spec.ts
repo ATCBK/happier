@@ -29,7 +29,7 @@ import {
 } from "./savedSecretResourceService";
 import { hashPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
 import { buildProfilePhysicalKey, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY } from '@/app/kv/accountScopedKv';
-import { resolveEffectiveProfileSecretBindingsV1, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { ProfileRecordV1Schema, resolveEffectiveProfileSecretBindingsV1, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import * as resourceService from './savedSecretResourceService';
 import { createArtifactTx, updateArtifactTx } from '@/app/artifacts/artifactWriteService';
@@ -48,6 +48,8 @@ import { readProviderConnectionsRowInTx } from '@/app/account/providers/connecti
 import { readConnectedAccountCatalogRowInTx } from '@/app/account/connectedAccounts/configurationRows';
 import type { SavedSecretCatalogRevisionsV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1, NotificationChannelCatalogRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from '@/app/account/prompts/promptLibraryRows';
 
 const ACCEPTED_EMAIL_PASSWORD = { kind: "home_method" as const, methodId: "email_password" };
 const EMAIL_PASSWORD_EVIDENCE = [ACCEPTED_EMAIL_PASSWORD];
@@ -147,17 +149,48 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         ]);
     });
 
-    it('admits current owned MCP resources while refusing dangling personal and missing shared references', async () => {
+    it('retains registry token resources and fences deletion with the captured source revision', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' }, select: { id: true } });
-        const danglingContent = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: { v: 1,
+        const resourceId = 'registry-delete-token';
+        await inTx(tx => createSavedSecretResourceInTx(tx, { accountId: owner.id, resourceId,
+            displayName: 'Token', kind: 'token', encryptionMode: 'plain', storedContent: {
+                t: 'plain', v: { v: 1, name: 'Token', kind: 'token', value: 'private' } } }));
+        const content = sealPromptLibraryContentV1({ mode: 'plain', material: null, record: { key: 'registry-sources', value: {
+            v: 2, disabledSourceIds: [], sources: [{ id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'],
+                url: 'https://github.com/acme/private', enabled: false, addedAt: 1, token: { secretRef: formatSharedSavedSecretRefV1(resourceId) } }] } } });
+        expect(await inTx(tx => mutatePromptLibraryRowInTx(tx, { accountId: owner.id, key: 'registry-sources',
+            expectedRevision: 'absent', sourceSettingsVersion: 0, content, referencedSavedSecretIds: [formatSharedSavedSecretRefV1(resourceId)],
+            savedSecretRevisions: [{ resourceId, expectedRevision: 1 }] }))).toMatchObject({ status: 'updated', revision: 0 });
+        const base = { accountId: owner.id, resourceId, expectedRevision: 1, expectedSettingsVersion: 0,
+            referenceCensus: { accountMode: 'plain' as const, profiles: { referenceGuardRevision: 'absent' as const, rows: [] } } };
+        expect(await inTx(tx => deleteSavedSecretResourceInTx(tx, base))).toEqual({ ok: false, error: 'references_conflict' });
+        const catalogs = { mcp: 'absent' as const, acp: 'absent' as const, providerConnections: 'absent' as const,
+            connectedConfigurations: 'absent' as const, connectedPurposes: 'absent' as const, registrySources: 0 };
+        expect(await inTx(tx => deleteSavedSecretResourceInTx(tx, { ...base,
+            referenceCensus: { ...base.referenceCensus, catalogs } }))).toEqual({ ok: false, error: 'resource_in_use' });
+        expect(await db.savedSecretResource.count()).toBe(1);
+        expect(await inTx(tx => readPromptLibraryRowInTx(tx, { accountId: owner.id, key: 'registry-sources' })))
+            .toMatchObject({ status: 'present', revision: 0, content });
+        expect(await inTx(tx => mutatePromptLibraryRowInTx(tx, { accountId: owner.id, key: 'registry-sources',
+            expectedRevision: 0, content: null }))).toMatchObject({ status: 'updated', revision: 1 });
+        expect(await inTx(tx => deleteSavedSecretResourceInTx(tx, { ...base,
+            referenceCensus: { ...base.referenceCensus, catalogs } }))).toEqual({ ok: false, error: 'references_conflict' });
+        expect(await inTx(tx => deleteSavedSecretResourceInTx(tx, { ...base,
+            referenceCensus: { ...base.referenceCensus, catalogs: { ...catalogs, registrySources: 1 } } })))
+            .toEqual({ ok: true, value: { resourceId } });
+    });
+
+    it('admits personal MCP references and current owned resources while refusing missing shared references', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' }, select: { id: true } });
+        const personalContent = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: { v: 1,
             servers: [{ id: 'personal', name: 'personal', transport: 'stdio', stdio: { command: 'server', args: [] },
                 env: { TOKEN: { t: 'savedSecret', secretId: 'personal-key' } }, createdAt: 1, updatedAt: 1 }], bindings: [],
         } });
         expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 'absent',
-            sourceSettingsVersion: 0, content: danglingContent, referencedSavedSecretIds: ['personal-key'] })))
-            .toEqual({ status: 'invalid-reference' });
+            sourceSettingsVersion: 0, content: personalContent, referencedSavedSecretIds: ['personal-key'] })))
+            .toMatchObject({ status: 'updated', revision: 0 });
         expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
-            .toMatchObject({ status: 'absent' });
+            .toMatchObject({ status: 'present', revision: 0, content: personalContent });
 
         const resource = await inTx(tx => createSavedSecretResourceInTx(tx, {
             accountId: owner.id, resourceId: 'owned_mcp_secret', displayName: 'MCP token', kind: 'token',
@@ -166,30 +199,30 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             },
         }));
         expect(resource).toEqual({ ok: true, value: { resourceId: 'owned_mcp_secret', revision: 1 } });
-        if (!resource.ok || danglingContent.t !== 'plain') throw new Error('Expected a plain owned resource fixture');
+        if (!resource.ok || personalContent.t !== 'plain') throw new Error('Expected a plain owned resource fixture');
         const ownedRef = formatSharedSavedSecretRefV1(resource.value.resourceId);
         const content = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: {
-            ...danglingContent.v, servers: danglingContent.v.servers.map(server => ({ ...server,
+            ...personalContent.v, servers: personalContent.v.servers.map(server => ({ ...server,
                 env: { TOKEN: { t: 'savedSecret' as const, secretId: ownedRef } },
             })),
         } });
-        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 'absent',
-            sourceSettingsVersion: 0, content, referencedSavedSecretIds: [ownedRef],
+        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 0,
+            content, referencedSavedSecretIds: [ownedRef],
             savedSecretRevisions: [{ resourceId: resource.value.resourceId, expectedRevision: resource.value.revision }] })))
-            .toMatchObject({ status: 'updated', revision: 0 });
+            .toMatchObject({ status: 'updated', revision: 1 });
         expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
-            .toMatchObject({ status: 'present', revision: 0, content });
+            .toMatchObject({ status: 'present', revision: 1, content });
         if (content.t !== 'plain') throw new Error('Fixture must be plain');
         const sharedRef = formatSharedSavedSecretRefV1('missing-shared');
         const shared = { ...content, v: { ...content.v, servers: content.v.servers.map(server => ({ ...server,
             env: { TOKEN: { t: 'savedSecret' as const, secretId: sharedRef } },
         })) } };
-        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 0,
+        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 1,
             content: shared, referencedSavedSecretIds: [sharedRef],
             savedSecretRevisions: [{ resourceId: 'missing-shared', expectedRevision: 1 }] })))
             .toEqual({ status: 'invalid-reference' });
         expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
-            .toMatchObject({ status: 'present', revision: 0, content });
+            .toMatchObject({ status: 'present', revision: 1, content });
     });
 
     it('commits two new credentials and their connected catalog despite unrelated Settings drift and refuses a stale catalog', async () => {
@@ -711,7 +744,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         await db.artifactAccountGrant.create({ data: { artifactId, accountId: owner.id, accessLevel: 'view', createdByAccountId: foreign.id } });
         const capturedStoredArtifact = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } });
         const content = { t: 'plain' as const, v: { v: 1 as const, id: 'selected',
-            definition: { kind: 'artifact' as const, artifactId }, enabled: true, promptStack: [], secretBindings: {} } };
+            definition: { kind: 'artifact' as const, artifactId }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } };
         await db.userKVStore.createMany({ data: [
             { accountId: owner.id, key: buildProfilePhysicalKey('selected'), version: 0, value: new TextEncoder().encode(JSON.stringify(content)) },
             { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 0, value: null },
@@ -785,7 +818,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             await db.userKVStore.createMany({ data: [
                 { accountId: owner.id, key: buildProfilePhysicalKey('selected'), version: 0, value: new TextEncoder().encode(JSON.stringify({
                     t: 'plain', v: { v: 1, id: 'selected', definition: { kind: 'artifact', artifactId },
-                        enabled: true, promptStack: [], secretBindings: {} },
+                        enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} },
                 })) },
                 { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 0, value: null },
             ] });
@@ -802,7 +835,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         expect(await db.artifact.findUnique({ where: { id: artifactId } })).toMatchObject({ bodyVersion: 1 });
         if (!selected) {
             const record = { v: 1 as const, id: 'selected', definition: { kind: 'artifact' as const, artifactId },
-                enabled: true, promptStack: [], secretBindings: {} };
+                enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} };
             const before = await db.userKVStore.findMany({ where: { accountId: owner.id }, orderBy: { key: 'asc' } });
             const attached = await inTx(tx => mutateProfileRowsInTx(tx, { accountId: owner.id,
                 expectedReferenceGuardRevision: 0, mutations: [{ id: record.id, operation: 'create', expectedRevision: 'absent',
@@ -860,8 +893,8 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const bindings = { TOKEN: 'source-secret', OTHER: 'other-secret' };
         const raw = { profiles: [profile], secrets, secretBindingsByProfileId: { [profile.id]: bindings } };
         const owner = await db.account.create({ data: { encryptionMode: 'plain', settings: JSON.stringify({ t: 'plain', v: raw }) }, select: { id: true } });
-        const record = { v: 1 as const, id: profile.id, definition: { kind: 'legacy' as const, profile },
-            enabled: true, promptStack: [], secretBindings: bindings };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id, definition: { kind: 'legacy', profile },
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: bindings });
         const inventory = [{ kind: 'account_row' as const, id: record.id, revision: 0 }];
         const control = { v: 1 as const, phase: 'prepared' as const, sourceSettingsVersion: 0, migratedLogicalRevision: 0, inventory };
         expect(await inTx(tx => mutateProfileTransferInTx(tx, { accountId: owner.id, mutation: {
@@ -912,7 +945,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         await inTx(tx => createSavedSecretResourceInTx(tx, { accountId: owner.id, resourceId, displayName: 'Token', kind: 'token',
             encryptionMode: 'plain', storedContent: { t: 'plain', v: { v: 1, name: 'Token', kind: 'token', value: 'private' } } }));
         const record = { v: 1 as const, id: profile.id, definition: { kind: 'legacy' as const, profile },
-            enabled: true, promptStack: [], secretBindings: { TOKEN: ref } };
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: { TOKEN: ref } };
         const inventory = [{ kind: 'account_row' as const, id: profile.id, revision: 0 },
             { kind: 'saved_secret' as const, id: resourceId, revision: 1 }];
         const control = { v: 1 as const, phase: 'prepared' as const, sourceSettingsVersion: 0, migratedLogicalRevision: 0, inventory };
@@ -943,7 +976,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const raw = { profiles: [profile], secretBindingsByProfileId: {} };
         const owner = await db.account.create({ data: { encryptionMode: 'plain', settings: JSON.stringify({ t: 'plain', v: raw }) }, select: { id: true } });
         const record = { v: 1 as const, id: profile.id, definition: { kind: 'legacy' as const, profile },
-            enabled: true, promptStack: [], secretBindings: {} };
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} };
         const inventory = [{ kind: 'account_row' as const, id: profile.id, revision: 0 }];
         const control = { v: 1 as const, phase: 'prepared' as const, sourceSettingsVersion: 0, migratedLogicalRevision: 0, inventory };
         expect(await inTx(tx => mutateProfileTransferInTx(tx, { accountId: owner.id, mutation: {
@@ -981,7 +1014,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const captured = { accountMode: 'e2ee' as const, profiles: { referenceGuardRevision: 'absent' as const, rows: [] } };
         const content = sealProfileRecordContentV1({ mode: 'e2ee', material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(4) },
             record: { v: 1, id: 'inserted-profile', definition: { kind: 'artifact', artifactId: 'profile-artifact' },
-                enabled: true, promptStack: [], secretBindings: { TOKEN: formatSharedSavedSecretRefV1('phantom-reference') } } });
+                enabled: true, promptStack: [], skillSeeds: [], secretBindings: { TOKEN: formatSharedSavedSecretRefV1('phantom-reference') } } });
         await db.userKVStore.createMany({ data: [
             { accountId: owner.id, key: buildProfilePhysicalKey('inserted-profile'), version: 0, value: new TextEncoder().encode(JSON.stringify(content)) },
             { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 0, value: null },
@@ -1002,7 +1035,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const record = { v: 1 as const, id, definition: { kind: 'inline' as const, profile: {
             v: 2 as const, id, name: 'Opaque inline', extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {},
             defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {}, createdAt: 1, updatedAt: 1,
-        } }, enabled: true, promptStack: [], secretBindings: {} };
+        } }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} };
         const content = sealProfileRecordContentV1({ mode: 'e2ee', material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(4) }, record });
         const mutation = { id, operation: 'create' as const, expectedRevision: 'absent' as const, content, referencedSavedSecretIds: [] };
         expect(await inTx(tx => mutateProfileRowsInTx(tx, { accountId: owner.id, mutations: [mutation] })))
@@ -1019,7 +1052,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' }, select: { id: true } });
         const content = { t: 'plain' as const, v: { v: 1 as const, id: 'inserted-profile',
             definition: { kind: 'artifact' as const, artifactId: 'profile-artifact' }, enabled: true,
-            promptStack: [], secretBindings: {} } };
+            promptStack: [], skillSeeds: [], secretBindings: {} } };
         await db.userKVStore.createMany({ data: [
             { accountId: owner.id, key: buildProfilePhysicalKey('inserted-profile'), version: 0, value: new TextEncoder().encode(JSON.stringify(content)) },
             { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 0, value: null },
@@ -1093,9 +1126,9 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain', settings: JSON.stringify(originalSettings) }, select: { id: true } });
         const resourceId = 'private-row-promotion';
         const ref = formatSharedSavedSecretRefV1(resourceId);
-        const record = { v: 1 as const, id: 'private-profile', definition: { kind: 'legacy' as const,
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'private-profile', definition: { kind: 'legacy',
             profile: AIBackendProfileSchema.parse({ id: 'private-profile', name: 'Private', environmentVariables: [], createdAt: 1, updatedAt: 1 }) },
-            enabled: true, promptStack: [], secretBindings: { TOKEN: 'personal-token' } };
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: { TOKEN: 'personal-token' } });
         await db.userKVStore.createMany({ data: [
             { accountId: owner.id, key: buildProfilePhysicalKey(record.id), version: 3, value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: record })) },
             { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 6, value: null },
@@ -1143,7 +1176,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const ref = formatSharedSavedSecretRefV1(resourceId);
         const record = { v: 1 as const, id: 'private-profile', definition: { kind: 'legacy' as const,
             profile: AIBackendProfileSchema.parse({ id: 'private-profile', name: 'Private', environmentVariables: [], createdAt: 1, updatedAt: 1 }) },
-            enabled: true, promptStack: [], secretBindings: { TOKEN: 'personal-token' } };
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: { TOKEN: 'personal-token' } };
         await db.userKVStore.createMany({ data: [
             { accountId: owner.id, key: buildProfilePhysicalKey(record.id), version: 3, value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: record })) },
             { accountId: owner.id, key: PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, version: 6, value: null },

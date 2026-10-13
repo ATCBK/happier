@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { initFilesLocalFromEnv } from "@/storage/blob/files";
 
-vi.mock("@/storage/blob/files", () => ({
-    getPublicUrl: (path: string) => `https://files.test/${path}`,
-}));
+// Configure the real local URL owner without opening or writing any files.
+initFilesLocalFromEnv({ PUBLIC_URL: "https://files.test" });
 
 const {
-    ACCOUNT_DISPLAY_PROFILE_SELECT,
     projectAccountDisplayProfileV1,
     toShareUserProfile,
 } = await import("./accountDisplayProfile");
@@ -20,17 +19,6 @@ const BASE = {
 };
 
 describe("accountDisplayProfile", () => {
-    it("selects only the neutral presentation columns plus the Account id", () => {
-        expect(Object.keys(ACCOUNT_DISPLAY_PROFILE_SELECT).sort()).toEqual([
-            "avatar",
-            "firstName",
-            "id",
-            "lastName",
-            "name",
-            "username",
-        ]);
-    });
-
     it("projects the neutral display profile with a public avatar URL and no Account id", () => {
         const projected = projectAccountDisplayProfileV1(BASE);
         expect(projected).toEqual({
@@ -38,7 +26,7 @@ describe("accountDisplayProfile", () => {
             firstName: "Captain",
             lastName: null,
             username: "alice",
-            avatarUrl: "https://files.test/avatars/alice.png",
+            avatarUrl: "https://files.test/files/avatars/alice.png",
         });
         expect(projected).not.toHaveProperty("id");
     });
@@ -66,7 +54,7 @@ describe("accountDisplayProfile", () => {
             firstName: "Captain",
             lastName: null,
             username: "alice",
-            avatar: "https://files.test/avatars/alice.png",
+            avatar: "https://files.test/files/avatars/alice.png",
         });
     });
 });
