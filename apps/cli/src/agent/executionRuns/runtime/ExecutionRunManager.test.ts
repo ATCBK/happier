@@ -723,10 +723,8 @@ describe('ExecutionRunManager (review intent)', () => {
 
     const first = await start();
     const second = await start();
-    expect(contribution.reports).toEqual([
-      { state: 'active', activeCount: 1 },
-      { state: 'active', activeCount: 2 },
-    ]);
+    expect(contribution.reports).toContainEqual({ state: 'active', activeCount: 1 });
+    expect(contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
 
     completions[0]!();
     await manager.waitForTerminal(first.runId);
@@ -1576,6 +1574,80 @@ describe('ExecutionRunManager (streaming sidechain)', () => {
 });
 
 describe('ExecutionRunManager (long-lived runs)', () => {
+  it('reports current work while retaining idle handles across sibling turns and resume', async () => {
+    const contribution = createRuntimeActivityContributionHarness();
+    const completions: Array<() => void> = [];
+    const observedTurns = new Map<string, boolean | undefined>();
+    const createBackend = (): AgentBackend => {
+      let complete: (() => void) | undefined;
+      let response = Promise.resolve();
+      return {
+        async startSession() { return { sessionId: `child-${completions.length}` as SessionId }; },
+        async loadSessionWithReplayCapture(sessionId) { return { sessionId, replay: [] }; },
+        async sendPrompt() {
+          response = new Promise<void>((resolve) => { complete = resolve; });
+          completions.push(() => complete?.());
+        },
+        async waitForResponseComplete() { await response; },
+        async cancel() { complete?.(); },
+        onMessage() {},
+        async dispose() {},
+      };
+    };
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: process.cwd(),
+      createBackend,
+      sendAcp: () => {},
+      runtimeActivityContributionHandle: contribution.handle,
+      onPublicStateUpdated: (run) => { observedTurns.set(run.runId, run.turnInFlight); },
+    });
+    const start = () => manager.start({
+      sessionId: 'parent_session_1',
+      intent: 'delegate',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      instructions: 'Work on this turn.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'long_lived',
+      ioMode: 'request_response',
+    });
+    const first = await start();
+    const second = await start();
+    try {
+      await expect.poll(() => completions.length).toBe(2);
+      expect(contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
+
+      completions[0]!();
+      await expect.poll(() => manager.getPublic(first.runId)?.turnInFlight).toBe(false);
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+      expect(observedTurns.get(first.runId)).toBe(false);
+      expect(manager.getPublic(first.runId)?.status).toBe('running');
+
+      completions[1]!();
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+      expect(manager.listPublic().every((run) => run.status === 'running' && run.turnInFlight === false)).toBe(true);
+
+      await expect(manager.send(first.runId, { message: 'Next turn.' })).resolves.toEqual({ ok: true });
+      expect(contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+      expect(observedTurns.get(first.runId)).toBe(true);
+      completions[2]!();
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+
+      await manager.stop(first.runId);
+      await expect(manager.ensure(first.runId, { resume: true })).resolves.toEqual({ ok: true });
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+      expect(manager.getPublic(first.runId)?.status).toBe('running');
+      await expect(manager.send(first.runId, { message: 'Resumed turn.' })).resolves.toEqual({ ok: true });
+      expect(contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+      await manager.stop(first.runId);
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    } finally {
+      await manager.stop(first.runId);
+      await manager.stop(second.runId);
+    }
+  });
+
   function createPromptEchoBackend(): AgentBackend {
     let handler: AgentMessageHandler | null = null;
     const sessionId: SessionId = 'child_session_1' as SessionId;
@@ -1708,6 +1780,58 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     await expect
       .poll(() => sent.filter((m) => (m.body as any)?.type === 'tool-result').length, { timeout: 1_000 })
       .toBe(1);
+  });
+
+  it('publishes Voice current work independently of an unread completed stream', async () => {
+    const contribution = createRuntimeActivityContributionHarness();
+    let completeTurn: (() => void) | undefined;
+    const backend = createPromptEchoBackend();
+    const sendPrompt = backend.sendPrompt.bind(backend);
+    let response = Promise.resolve();
+    backend.sendPrompt = async (sessionId, prompt) => {
+      await sendPrompt(sessionId, prompt);
+      response = new Promise<void>((resolve) => { completeTurn = resolve; });
+    };
+    backend.waitForResponseComplete = async () => { await response; };
+    backend.cancel = async () => { completeTurn?.(); };
+    const observedTurns: Array<boolean | undefined> = [];
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: process.cwd(),
+      createBackend: () => backend,
+      sendAcp: () => {},
+      runtimeActivityContributionHandle: contribution.handle,
+      onPublicStateUpdated: (run) => { observedTurns.push(run.turnInFlight); },
+    });
+    const started = await manager.start({
+      sessionId: 'parent_session_1',
+      intent: 'voice_agent',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'long_lived',
+      ioMode: 'streaming',
+    });
+    try {
+      expect(manager.getPublic(started.runId)?.turnInFlight).toBe(false);
+      expect(contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+      const stream = await manager.startTurnStream(started.runId, { message: 'Next Voice turn.' });
+      expect(stream.ok).toBe(true);
+      if (!stream.ok) throw new Error('Expected Voice stream admission');
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
+      expect(manager.getPublic(started.runId)?.turnInFlight).toBe(true);
+      expect(observedTurns.at(-1)).toBe(true);
+      await expect.poll(() => typeof completeTurn).toBe('function');
+      completeTurn?.();
+      await expect.poll(() => contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+      expect(manager.getPublic(started.runId)?.status).toBe('running');
+      expect(observedTurns.at(-1)).toBe(false);
+      await expect(manager.readTurnStream(started.runId, { streamId: stream.streamId, cursor: 0, maxEvents: 128 }))
+        .resolves.toMatchObject({ ok: true, done: true });
+      expect(contribution.reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+    } finally {
+      await manager.stop(started.runId);
+    }
   });
 
   it('surfaces transcript persistence in public state for voice_agent runs', async () => {

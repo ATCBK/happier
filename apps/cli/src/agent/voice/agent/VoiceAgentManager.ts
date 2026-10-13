@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentBackend, SessionId } from '@/agent/core/AgentBackend';
+import { logger } from '@/ui/logger';
 import { extractVoiceActionsFromAssistantText, type ExecutionRunResumeHandle, type VoiceAssistantAction } from '@happier-dev/protocol';
 
 import { appendVoiceAgentHistoryTurn } from './voiceAgentHistory';
@@ -48,6 +49,7 @@ export class VoiceAgentManager {
   private readonly resolveSystemAppendBlocks: (args: ResolveVoiceSystemAppendBlocksArgs) => Promise<readonly string[]>;
   private readonly responseTimeoutMs: number;
   private readonly getNowMs: () => number;
+  private readonly onActivityChanged: ((voiceAgentId: string) => void) | undefined;
   private readonly voiceAgents = new Map<string, VoiceAgentInstance>();
   private readonly reaper: NodeJS.Timeout;
   private disposed = false;
@@ -76,6 +78,7 @@ export class VoiceAgentManager {
     responseTimeoutMs?: number;
     getNowMs?: () => number;
     reaperIntervalMs?: number;
+    onActivityChanged?: (voiceAgentId: string) => void;
   }>) {
     this.createBackend = opts.createBackend;
     this.resolveSystemAppendBlocks = opts.resolveSystemAppendBlocks ?? (async () => []);
@@ -84,11 +87,34 @@ export class VoiceAgentManager {
         ? Math.floor(opts.responseTimeoutMs)
         : 120_000;
     this.getNowMs = opts.getNowMs ?? (() => Date.now());
+    this.onActivityChanged = opts.onActivityChanged;
     const intervalMs = Math.max(5_000, Math.floor(opts.reaperIntervalMs ?? 30_000));
     this.reaper = setInterval(() => {
       void this.reapIdle();
     }, intervalMs);
     this.reaper.unref?.();
+  }
+
+  isTurnInFlight(voiceAgentId: string): boolean {
+    return this.voiceAgents.get(voiceAgentId)?.inFlight != null;
+  }
+
+  private notifyActivityChanged(voiceAgentId: string): void {
+    try {
+      this.onActivityChanged?.(voiceAgentId);
+    } catch (error) {
+      logger.infoFile('[VOICE AGENT] Failed to publish work activity', { voiceAgentId, error });
+    }
+  }
+
+  private trackInFlight<T>(voiceAgent: VoiceAgentInstance, run: Promise<T>): Promise<T> {
+    voiceAgent.inFlight = run;
+    this.notifyActivityChanged(voiceAgent.id);
+    return run.finally(() => {
+      if (voiceAgent.inFlight !== run) return;
+      voiceAgent.inFlight = null;
+      if (this.voiceAgents.get(voiceAgent.id) === voiceAgent) this.notifyActivityChanged(voiceAgent.id);
+    });
   }
 
   getResumeHandle(voiceAgentId: string): ExecutionRunResumeHandle | null {
@@ -287,31 +313,33 @@ export class VoiceAgentManager {
       this.voiceAgents.set(voiceAgentId, instance);
 
       if (resume.commitSessionId) {
-        await this.ensureCommitBackendSession(instance);
+        await this.trackInFlight(instance, this.ensureCommitBackendSession(instance));
       }
 
       const bootstrapMode = params.bootstrapMode ?? 'none';
       if (!resume.chatSessionId && bootstrapMode === 'ready_handshake') {
-        const shouldDeferInitialContextUntilFirstTurn = params.initialContextMode === 'first_turn';
-        instance.clearChatBuffer();
-        const prompt = buildVoiceAgentBootstrapPrompt({
-          verbosity: instance.verbosity,
-          initialContext: shouldDeferInitialContextUntilFirstTurn ? '' : instance.initialContext,
-          mode: 'ready_handshake',
-          disabledActionIds: instance.disabledActionIds,
-          memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
-          systemAppendBlocks: instance.systemAppendBlocks,
-        });
-        await instance.chatBackend.sendPrompt(instance.chatSessionId, prompt);
-        if (instance.chatBackend.waitForResponseComplete) {
-          await instance.chatBackend.waitForResponseComplete(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
-        }
-        const response = instance.chatBuffer.trim();
-        if (response.toUpperCase() !== 'READY') {
-          throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Bootstrap failed');
-        }
-        instance.clearChatBuffer();
-        instance.bootstrapped = !shouldDeferInitialContextUntilFirstTurn;
+        await this.trackInFlight(instance, (async () => {
+          const shouldDeferInitialContextUntilFirstTurn = params.initialContextMode === 'first_turn';
+          instance.clearChatBuffer();
+          const prompt = buildVoiceAgentBootstrapPrompt({
+            verbosity: instance.verbosity,
+            initialContext: shouldDeferInitialContextUntilFirstTurn ? '' : instance.initialContext,
+            mode: 'ready_handshake',
+            disabledActionIds: instance.disabledActionIds,
+            memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
+            systemAppendBlocks: instance.systemAppendBlocks,
+          });
+          await instance.chatBackend.sendPrompt(instance.chatSessionId, prompt);
+          if (instance.chatBackend.waitForResponseComplete) {
+            await instance.chatBackend.waitForResponseComplete(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
+          }
+          const response = instance.chatBuffer.trim();
+          if (response.toUpperCase() !== 'READY') {
+            throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Bootstrap failed');
+          }
+          instance.clearChatBuffer();
+          instance.bootstrapped = !shouldDeferInitialContextUntilFirstTurn;
+        })());
       }
 
       return {
@@ -351,6 +379,9 @@ export class VoiceAgentManager {
 
     const toStop = [...this.voiceAgents.values()];
     this.voiceAgents.clear();
+    for (const voiceAgent of toStop) {
+      if (voiceAgent.inFlight) this.notifyActivityChanged(voiceAgent.id);
+    }
 
     await Promise.allSettled(
       toStop.map(async (m) => {
@@ -394,12 +425,7 @@ export class VoiceAgentManager {
 		      return extracted.actions.length > 0 ? { assistantText, actions: extracted.actions } : { assistantText };
 		    })();
 
-    voiceAgent.inFlight = run;
-    try {
-      return await run;
-    } finally {
-      if (voiceAgent.inFlight === run) voiceAgent.inFlight = null;
-    }
+    return await this.trackInFlight(voiceAgent, run);
   }
 
   async welcome(params: Readonly<{ voiceAgentId: string; welcomeText?: string }>): Promise<Readonly<{ assistantText: string }>> {
@@ -432,12 +458,7 @@ export class VoiceAgentManager {
       return { assistantText };
     })();
 
-    voiceAgent.inFlight = run;
-    try {
-      return await run;
-    } finally {
-      if (voiceAgent.inFlight === run) voiceAgent.inFlight = null;
-    }
+    return await this.trackInFlight(voiceAgent, run);
   }
 
   async startTurnStream(params: Readonly<{ voiceAgentId: string; userText: string }>): Promise<VoiceAgentTurnStreamStartResult> {
@@ -512,11 +533,7 @@ export class VoiceAgentManager {
       }
     })();
 
-	    stream.run = run;
-	    voiceAgent.inFlight = run;
-	    void run.finally(() => {
-	      if (voiceAgent.inFlight === run) voiceAgent.inFlight = null;
-	    });
+    stream.run = this.trackInFlight(voiceAgent, run);
 
     return { streamId };
   }
@@ -606,12 +623,7 @@ export class VoiceAgentManager {
       const commitText = voiceAgent.commitBuffer.trim();
       return { commitText };
     })();
-    voiceAgent.inFlight = run;
-    try {
-      return await run;
-    } finally {
-      if (voiceAgent.inFlight === run) voiceAgent.inFlight = null;
-    }
+    return await this.trackInFlight(voiceAgent, run);
   }
 
   async stop(params: Readonly<{ voiceAgentId: string }>): Promise<{ ok: true }> {
@@ -619,6 +631,7 @@ export class VoiceAgentManager {
     if (!voiceAgent) throw new VoiceAgentError('VOICE_AGENT_NOT_FOUND', 'Voice agent not found');
     // Remove from registry first to prevent new operations from starting while we await in-flight work.
     this.voiceAgents.delete(params.voiceAgentId);
+    if (voiceAgent.inFlight) this.notifyActivityChanged(voiceAgent.id);
     if (voiceAgent.activeTurnStream) {
       await this.cancelActiveTurnStream(voiceAgent, voiceAgent.activeTurnStream, { awaitCompletion: false });
     }
