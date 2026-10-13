@@ -65,6 +65,7 @@ describe('isPublicRouteForUnauthenticated', () => {
         { name: 'grouped account connect route', segments: ['(app)', 'account'], expected: true },
         { name: 'oauth return route', segments: ['oauth', 'github'], expected: true },
         { name: 'grouped oauth return route', segments: ['(app)', 'oauth', 'github'], expected: true },
+        { name: 'signed-out MCP OAuth callback', segments: ['(app)', 'oauth', 'mcp', 'callback'], expected: true },
         { name: 'Team invitation route', segments: ['join', 'opaque-invitation'], expected: true },
         { name: 'grouped Team invitation route', segments: ['(app)', 'join', 'opaque-invitation'], expected: true },
         { name: 'nested Team invitation route stays private', segments: ['join', 'opaque-invitation', 'admin'], expected: false },
